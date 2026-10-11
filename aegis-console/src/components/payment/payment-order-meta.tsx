@@ -87,3 +87,50 @@ export function callbackVerified(status: string) {
   const normalized = status.toLowerCase();
   return normalized === "ok" || normalized.includes("success") || normalized === "verified";
 }
+
+// ── 退款单 ──────────────────────────
+
+export const REFUND_STATUS_FILTERS = [
+  { value: "", label: "全部" },
+  { value: "processing", label: "处理中" },
+  { value: "success", label: "已退款" },
+  { value: "failed", label: "失败" },
+  { value: "pending", label: "待提交" },
+  { value: "closed", label: "已关闭" }
+];
+
+const REFUND_STATUS: Record<string, { label: string; variant: "success" | "warning" | "secondary" | "danger" | "outline" }> = {
+  success: { label: "已退款", variant: "success" },
+  processing: { label: "处理中", variant: "warning" },
+  pending: { label: "待提交", variant: "secondary" },
+  failed: { label: "失败", variant: "danger" },
+  closed: { label: "已关闭", variant: "outline" }
+};
+
+export function refundStatusBadge(status: string) {
+  const meta = REFUND_STATUS[status] ?? { label: status, variant: "outline" as const };
+  return (
+    <Badge variant={meta.variant} size="sm">
+      {meta.label}
+    </Badge>
+  );
+}
+
+/**
+ * 履约冲正状态徽标。
+ *
+ * `failed` 是最需要被看见的状态：钱已经退出去了，但权益没收回来，
+ * 必须人工介入，因此用 danger 变体而不是默认灰。没有冲正记录时返回 null。
+ */
+export function reversalBadge(refund: { reversal_status?: string; reversal_message?: string }) {
+  switch (refund.reversal_status) {
+    case "done":
+      return <Badge variant="success" size="sm">权益已回收</Badge>;
+    case "skipped":
+      return <Badge variant="outline" size="sm" title={refund.reversal_message}>未回收权益</Badge>;
+    case "failed":
+      return <Badge variant="danger" size="sm" title={refund.reversal_message}>权益回收失败</Badge>;
+    default:
+      return null;
+  }
+}

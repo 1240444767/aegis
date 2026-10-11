@@ -142,7 +142,12 @@ function CommercePageInner() {
           />
         </TabsContent>
         <TabsContent value="refunds" className="pt-4">
-          <PaymentRefundsPanel appId={appId} />
+          <PaymentRefundsPanel
+            appId={appId}
+            appKey={appKey}
+            receiptLocale={receiptLocale}
+            receiptLocaleLabel={receiptLocaleLabel}
+          />
         </TabsContent>
         <TabsContent value="wallet" className="pt-4">
           <WalletTransactionsPanel

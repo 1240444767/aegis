@@ -1,18 +1,18 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, Copy, Eye, EyeOff, ExternalLink, Settings2 } from "lucide-react";
+import { Check, ChevronDown, Copy, Eye, EyeOff, ExternalLink } from "lucide-react";
 import type { PaymentConfigField, PaymentProviderMeta } from "@/lib/api/types";
 import { appConfig } from "@/lib/env";
 import { useOrigin } from "@/lib/use-client-value";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 type ChangeHandler = (key: string, value: unknown) => void;
 
@@ -28,20 +28,15 @@ const GROUPS: Array<{ key: string; title: string; hint?: string }> = [
 
 // ── 单字段渲染 ──────────────────────────
 
-function FieldShell({
-  field,
-  children
-}: {
-  field: PaymentConfigField;
-  children: React.ReactNode;
-}) {
+function FieldShell({ field, children }: { field: PaymentConfigField; children: React.ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">
+      <Label htmlFor={`pf-${field.key}`} className="text-xs font-medium">
         {field.label}
-        {field.required && <span className="text-destructive"> *</span>}
+        {field.required ? <span className="text-destructive">*</span> : null}
       </Label>
       {children}
+      {field.help ? <p className="text-[11px] leading-relaxed text-muted-foreground">{field.help}</p> : null}
     </div>
   );
 }
@@ -49,42 +44,46 @@ function FieldShell({
 function SecretInput({ field, value, onChange }: { field: PaymentConfigField; value: string; onChange: (v: string) => void }) {
   const [show, setShow] = useState(false);
   return (
-    <div className="flex gap-1">
+    <div className="relative">
       <Input
+        id={`pf-${field.key}`}
         type={show ? "text" : "password"}
-        className="h-8 font-mono text-xs"
+        autoComplete="off"
+        className="h-9 pr-9 font-mono text-xs"
         placeholder={field.placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
       />
-      <Button type="button" size="icon" variant="ghost" className="size-8 shrink-0" onClick={() => setShow(!show)}>
-        {show ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
-      </Button>
+      <button
+        type="button"
+        aria-label={show ? "隐藏" : "显示"}
+        className="absolute top-1/2 right-2.5 -translate-y-1/2 text-muted-foreground transition-colors hover:text-foreground"
+        onClick={() => setShow(!show)}
+      >
+        {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      </button>
     </div>
   );
 }
 
 /** 按后端下发的字段类型动态渲染控件 */
-function DynamicField({
-  field,
-  data,
-  onChange
-}: {
-  field: PaymentConfigField;
-  data: Record<string, unknown>;
-  onChange: ChangeHandler;
-}) {
+function DynamicField({ field, data, onChange }: { field: PaymentConfigField; data: Record<string, unknown>; onChange: ChangeHandler }) {
   const raw = data[field.key];
+  const id = `pf-${field.key}`;
 
   switch (field.type) {
     case "switch": {
       const checked = raw === undefined ? field.default === true : !!raw;
       return (
-        <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border px-3 py-2.5 transition-colors hover:bg-muted/40">
-          <Switch checked={checked} onCheckedChange={(v) => onChange(field.key, v)} className="mt-0.5 shrink-0" />
+        <label
+          htmlFor={id}
+          className="flex h-full cursor-pointer items-start justify-between gap-3 rounded-xl border px-3 py-2.5 transition-colors hover:bg-muted/40"
+        >
           <span className="min-w-0 space-y-0.5">
-            <span className="block text-xs">{field.label}</span>
+            <span className="block text-xs font-medium">{field.label}</span>
+            {field.help ? <span className="block text-[11px] leading-relaxed text-muted-foreground">{field.help}</span> : null}
           </span>
+          <Switch id={id} checked={checked} onCheckedChange={(v) => onChange(field.key, v)} className="mt-0.5 shrink-0" />
         </label>
       );
     }
@@ -94,7 +93,7 @@ function DynamicField({
       return (
         <FieldShell field={field}>
           <Select value={current} onValueChange={(v) => onChange(field.key, v)}>
-            <SelectTrigger className="h-8 text-sm">
+            <SelectTrigger id={id} className="h-9 w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -113,8 +112,9 @@ function DynamicField({
       return (
         <FieldShell field={field}>
           <Input
+            id={id}
             type="number"
-            className="h-8 text-sm"
+            className="h-9 tabular-nums"
             placeholder={field.placeholder}
             value={raw === undefined || raw === null ? "" : String(raw)}
             onChange={(e) => onChange(field.key, e.target.value === "" ? "" : Number(e.target.value))}
@@ -126,7 +126,8 @@ function DynamicField({
       return (
         <FieldShell field={field}>
           <Textarea
-            className="font-mono text-xs"
+            id={id}
+            className="min-h-24 font-mono text-xs"
             rows={4}
             placeholder={field.placeholder}
             value={String(raw ?? "")}
@@ -140,7 +141,8 @@ function DynamicField({
       return (
         <FieldShell field={field}>
           <Textarea
-            className="text-xs"
+            id={id}
+            className="min-h-16 text-xs"
             rows={2}
             placeholder={field.placeholder}
             value={text}
@@ -167,7 +169,8 @@ function DynamicField({
       return (
         <FieldShell field={field}>
           <Input
-            className="h-8 text-sm"
+            id={id}
+            className={cn("h-9", field.type === "url" && "font-mono text-xs")}
             placeholder={field.placeholder}
             value={String(raw ?? "")}
             onChange={(e) => onChange(field.key, e.target.value)}
@@ -177,16 +180,20 @@ function DynamicField({
   }
 }
 
-// ── 回调地址卡片 ──────────────────────────
+/** 文本域与开关占满一行；其余字段在宽抽屉里两列排布。 */
+function fieldSpan(field: PaymentConfigField) {
+  return field.type === "textarea" || field.type === "tags" ? "@xl/form:col-span-2" : undefined;
+}
+
+// ── 回调地址 ──────────────────────────
 
 function CopyButton({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
-    <Button
+    <button
       type="button"
-      size="icon"
-      variant="ghost"
-      className="size-7 shrink-0"
+      aria-label="复制回调地址"
+      className="flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
       onClick={async () => {
         try {
           await navigator.clipboard.writeText(value);
@@ -197,18 +204,18 @@ function CopyButton({ value }: { value: string }) {
         }
       }}
     >
-      {copied ? <Check className="size-3 text-emerald-500" /> : <Copy className="size-3" />}
-    </Button>
+      {copied ? <Check className="size-4 text-emerald-500" /> : <Copy className="size-4" />}
+    </button>
   );
 }
 
 /**
- * 回调地址提示：把后端下发的 callbackPath 拼成完整地址供一键复制。
+ * 回调地址：把后端下发的 callbackPath 拼成完整地址供一键复制。
  *
  * 基址优先取显式配置的 API 直连地址，未配置（同源代理部署）时退回当前 origin，
  * 因此控制台与后端不同域时也不会给出错误的地址。
  */
-function CallbackCard({ meta }: { meta: PaymentProviderMeta }) {
+export function PaymentCallbackAddress({ meta }: { meta: PaymentProviderMeta }) {
   const origin = useOrigin();
   const base = appConfig.apiBaseUrl || origin;
   const url = meta.callbackPath ? `${base}${meta.callbackPath}` : "";
@@ -216,20 +223,15 @@ function CallbackCard({ meta }: { meta: PaymentProviderMeta }) {
   if (!url && !meta.callbackNote) return null;
 
   return (
-    <div className="space-y-2 rounded-lg border border-dashed bg-muted/40 px-3 py-2.5">
-      {url && (
-        <div className="flex items-start gap-1.5">
-          <span className="mt-1.5 shrink-0 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">回调地址</span>
-          {/* 地址要原样填进上游后台，截断会让人复制/核对时看不出差异，因此换行显示 */}
-          <code className="min-w-0 flex-1 rounded bg-background/70 px-2 py-1 font-mono text-[11px] leading-relaxed break-all">
-            {url}
-          </code>
+    <div className="space-y-2">
+      {url ? (
+        <div className="flex items-start gap-1 rounded-xl bg-muted/60 py-1 pr-1 pl-3">
+          {/* 地址要原样填进上游后台，截断会让人复制或核对时看不出差异，因此换行显示 */}
+          <code className="min-w-0 flex-1 py-1.5 font-mono text-xs leading-relaxed break-all">{url}</code>
           <CopyButton value={url} />
         </div>
-      )}
-      {meta.callbackNote && (
-        <p className="text-[11px] leading-relaxed text-muted-foreground">{meta.callbackNote}</p>
-      )}
+      ) : null}
+      {meta.callbackNote ? <p className="text-[11px] leading-relaxed text-muted-foreground">{meta.callbackNote}</p> : null}
     </div>
   );
 }
@@ -245,13 +247,13 @@ const CAPABILITY_LABELS: Array<{ key: keyof PaymentProviderMeta["capabilities"];
   { key: "subMerchant", label: "服务商模式" }
 ];
 
-export function PaymentCapabilityBadges({ meta }: { meta: PaymentProviderMeta }) {
+export function PaymentCapabilityBadges({ meta, className }: { meta: PaymentProviderMeta; className?: string }) {
   const active = CAPABILITY_LABELS.filter((c) => meta.capabilities?.[c.key]);
   if (!active.length) return null;
   return (
-    <div className="flex flex-wrap gap-1">
+    <div className={cn("flex flex-wrap gap-1", className)}>
       {active.map((c) => (
-        <Badge key={c.key} variant="secondary" size="sm" className="font-normal">
+        <Badge key={c.key} variant="outline" size="sm" className="font-normal text-muted-foreground">
           {c.label}
         </Badge>
       ))}
@@ -261,19 +263,25 @@ export function PaymentCapabilityBadges({ meta }: { meta: PaymentProviderMeta })
 
 // ── 导出：动态配置表单 ──────────────────────────
 
+/**
+ * 渠道参数表单，由后端字段 schema 驱动，按「凭据 / 网关 / 限额 / 其他」分区，
+ * 高级项折叠。分区标题与外层表单的分区标题同一套样式，由 `section` 渲染。
+ */
 export function PaymentProviderFields({
   meta,
   data,
-  onChange
+  onChange,
+  section
 }: {
-  meta?: PaymentProviderMeta | null;
+  meta: PaymentProviderMeta;
   data: Record<string, unknown>;
   onChange: ChangeHandler;
+  section: (props: { title: string; hint?: string; children: React.ReactNode }) => React.ReactNode;
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const { grouped, advancedFields } = useMemo(() => {
-    const all = meta?.fields ?? [];
+    const all = meta.fields ?? [];
     const adv = all.filter((f) => f.advanced);
     const groups = new Map<string, PaymentConfigField[]>();
     for (const field of all) {
@@ -286,82 +294,73 @@ export function PaymentProviderFields({
     return { grouped: groups, advancedFields: adv };
   }, [meta]);
 
-  if (!meta) {
-    return <p className="text-xs text-muted-foreground">加载中…</p>;
-  }
-
   if (!meta.fields?.length) {
-    return (
-      <div className="space-y-3">
-        <CallbackCard meta={meta} />
-        <div className="rounded-lg border bg-muted/30 px-3 py-3 text-xs leading-relaxed text-muted-foreground">
-          <p className="font-medium text-foreground">该渠道无需额外参数</p>
-          {meta.description && <p className="mt-1">{meta.description}</p>}
-        </div>
-      </div>
-    );
+    return section({
+      title: "渠道参数",
+      children: <p className="rounded-xl border border-dashed px-4 py-5 text-center text-xs text-muted-foreground">该渠道无需额外参数</p>
+    });
   }
 
   return (
-    // 分栏跟随抽屉宽度（@container/form），不跟随视口：
-    // 视口断点会在窄窗口里把抽屉也排成两列，每列只剩 200 余像素，标签与提示全被挤到换行
-    <div className="@container/form space-y-4">
-      <CallbackCard meta={meta} />
-
+    <>
       {GROUPS.map((group) => {
         const list = grouped.get(group.key);
         if (!list?.length) return null;
         return (
-          <div key={group.key} className="space-y-2.5">
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
-              <h5 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group.title}</h5>
-              {group.hint && <span className="text-[10px] text-muted-foreground/70">{group.hint}</span>}
-            </div>
-            <div className="grid gap-3 @xl/form:grid-cols-2">
-              {list.map((field) => (
-                <div key={field.key} className={field.type === "textarea" ? "@xl/form:col-span-2" : undefined}>
-                  <DynamicField field={field} data={data} onChange={onChange} />
+          <div key={group.key}>
+            {section({
+              title: group.title,
+              hint: group.hint,
+              children: (
+                <div className="grid gap-x-4 gap-y-4 @xl/form:grid-cols-2">
+                  {list.map((field) => (
+                    <div key={field.key} className={fieldSpan(field)}>
+                      <DynamicField field={field} data={data} onChange={onChange} />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              )
+            })}
           </div>
         );
       })}
 
-      {advancedFields.length > 0 && (
+      {advancedFields.length > 0 ? (
         <Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
           <CollapsibleTrigger asChild>
-            <Button type="button" size="sm" variant="ghost" className="h-7 w-full justify-start gap-1.5 px-2 text-xs">
-              <Settings2 className="size-3" />
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 rounded-xl border px-4 py-3 text-left text-sm font-medium transition-colors hover:bg-muted/40"
+            >
               高级选项
-              <span className="text-muted-foreground">({advancedFields.length})</span>
-              <ChevronDown className={`ml-auto size-3 transition-transform ${showAdvanced ? "rotate-180" : ""}`} />
-            </Button>
+              <span className="text-xs font-normal text-muted-foreground tabular-nums">{advancedFields.length}</span>
+              <ChevronDown className={cn("ml-auto size-4 text-muted-foreground transition-transform", showAdvanced && "rotate-180")} />
+            </button>
           </CollapsibleTrigger>
-          <CollapsibleContent className="pt-3">
-            <div className="grid gap-3 @xl/form:grid-cols-2">
+          <CollapsibleContent className="pt-4">
+            <div className="grid gap-x-4 gap-y-4 @xl/form:grid-cols-2">
               {advancedFields.map((field) => (
-                <div key={field.key} className={field.type === "textarea" ? "@xl/form:col-span-2" : undefined}>
+                <div key={field.key} className={fieldSpan(field)}>
                   <DynamicField field={field} data={data} onChange={onChange} />
                 </div>
               ))}
             </div>
           </CollapsibleContent>
         </Collapsible>
-      )}
+      ) : null}
 
-      {meta.docUrl && (
+      {meta.docUrl ? (
         <a
           href={meta.docUrl}
           target="_blank"
           rel="noreferrer noopener"
-          className="inline-flex items-center gap-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
         >
-          <ExternalLink className="size-3" />
-          官方文档
+          <ExternalLink className="size-3.5" />
+          {meta.name} 官方文档
         </a>
-      )}
-    </div>
+      ) : null}
+    </>
   );
 }
 
