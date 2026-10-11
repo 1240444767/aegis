@@ -111,6 +111,24 @@ func DefaultDocsOptions() DocsOptions {
 // 前后端分域时通过 DOCS_PORTAL_URL 配置绝对地址。
 const DefaultDocsPortalURL = "/developers"
 
+// resolveDocsPortalURL 求出门户的实际地址。
+//
+// 门户是控制台的 /developers 页，DOCS_PORTAL_URL 的默认值又是相对路径 ——
+// 控制台分域部署（console.example.com）而只配了 CONSOLE_BASE_URL 时，
+// 相对路径会落到 API 域名上直接 404。所以相对路径一律拼到控制台地址下；
+// 显式配的绝对地址原样使用。
+func resolveDocsPortalURL(portal, consoleBase string) string {
+	portal = strings.TrimRight(strings.TrimSpace(portal), "/")
+	if portal == "" {
+		portal = DefaultDocsPortalURL
+	}
+	consoleBase = strings.TrimRight(strings.TrimSpace(consoleBase), "/")
+	if strings.HasPrefix(portal, "/") && consoleBase != "" {
+		return consoleBase + portal
+	}
+	return portal
+}
+
 func RegisterDocsRoutes(router *gin.Engine, opts DocsOptions) error {
 	spec, err := BuildOpenAPISpec(router, opts)
 	if err != nil {

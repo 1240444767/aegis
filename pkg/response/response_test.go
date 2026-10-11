@@ -294,8 +294,13 @@ func TestWantsHTML_MozillaNoAccept(t *testing.T) {
 
 func TestRenderHomepage(t *testing.T) {
 	c, w := ctxWith(http.MethodGet, "/", "text/html")
-	c.Set("request_id", "home-req-1")
-	RenderHomepage(c, HomePageData{Version: "v1.2.3", CommitSHA: "abc1234", BuildTime: "2026-04-22"})
+	c.Request.Host = "aegis.example.com"
+	c.Request.Header.Set("X-Forwarded-Proto", "https")
+	RenderHomepage(c, HomePageData{
+		Version:    "v1.2.3",
+		ConsoleURL: "https://console.example.com",
+		DocsURL:    "https://console.example.com/developers",
+	})
 
 	if w.Code != 200 {
 		t.Fatalf("want 200, got %d", w.Code)
@@ -306,19 +311,15 @@ func TestRenderHomepage(t *testing.T) {
 	body := w.Body.String()
 	for _, want := range []string{
 		"<!DOCTYPE html>",
-		"Aegis",
-		"身份与访问",      // hero
-		"Core Capabilities", // section kicker
-		"身份与认证",        // capability
-		"多租户应用",
-		"运行态可观测",
-		"工作流引擎",
-		"多云存储",
-		"API 优先",
+		"统一用户平台",
+		"平台能力",
+		"账号与登录",
+		"安全与审计",
+		`href="https://console.example.com"`,
+		`href="https://console.example.com/developers"`,
+		"https://aegis.example.com",
+		"/openapi.json",
 		"v1.2.3",
-		"abc1234",
-		"All systems operational",
-		"home-req-1",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("homepage missing %q", want)
@@ -562,11 +563,30 @@ func TestRenderEnvPage_IncludesCSPForInlineJS(t *testing.T) {
 	}
 }
 
-func TestRenderHomepageDefaultVersion(t *testing.T) {
+func TestRenderHomepageWithoutConsole(t *testing.T) {
 	c, w := ctxWith(http.MethodGet, "/", "text/html")
 	RenderHomepage(c, HomePageData{})
-	if !strings.Contains(w.Body.String(), "Aegis dev") {
-		t.Fatalf("expected default 'dev' version fallback")
+	body := w.Body.String()
+	// 没配控制台地址时不放入口（/console 在 API 域名上是 404），文档退回 /docs，
+	// 也不展示空的版本行。
+	if strings.Contains(body, "进入控制台") || strings.Contains(body, "服务版本") {
+		t.Fatalf("unexpected console entry or empty version row")
+	}
+	if !strings.Contains(body, `href="/docs"`) {
+		t.Fatalf("expected /docs fallback")
+	}
+}
+
+func TestFormatUptime(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		30 * time.Second:              "不到 1 分钟",
+		12 * time.Minute:              "12 分钟",
+		5*time.Hour + 12*time.Minute:  "5 小时 12 分钟",
+		76*time.Hour + 30*time.Minute: "3 天 4 小时",
+	} {
+		if got := formatUptime(d); got != want {
+			t.Errorf("formatUptime(%v) = %q, want %q", d, got, want)
+		}
 	}
 }
 

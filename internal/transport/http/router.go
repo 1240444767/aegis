@@ -3,7 +3,6 @@ package httptransport
 import (
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"aegis/internal/middleware"
@@ -94,6 +93,9 @@ type Handler struct {
 	// aiAgentWSOrigin Agent WebSocket 通道的 Origin 闸门（复用 CORS 白名单，
 	// 与 /api/ws 同一套判定；见 service.WebSocketOriginChecker）。
 	aiAgentWSOrigin func(r *http.Request) bool
+	// consoleURL / docsURL 只给首页拼入口链接用。
+	consoleURL string
+	docsURL    string
 }
 
 // NewRouter 装配整张路由表。依赖以具名字段传入，理由见 RouterDeps 的注释。
@@ -115,7 +117,6 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 		log                 = deps.Logger
 		corsConfig          = deps.CORS
 		clientIPResolver    = deps.ClientIP
-		docsPortalURL       = deps.DocsPortalURL
 	)
 	// 接住 gin 的路由调试回调：既灭掉 debug 档下每条路由一行的滚屏，
 	// 也顺手把中间件链深度记下来（那个数只在这个回调里出现）。
@@ -200,9 +201,7 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 	registerOAuth2Routes(router, h, deps)
 
 	docsOptions := DefaultDocsOptions()
-	if trimmed := strings.TrimSpace(docsPortalURL); trimmed != "" {
-		docsOptions.PortalURL = trimmed
-	}
+	docsOptions.PortalURL = h.docsURL
 	if err := RegisterDocsRoutes(router, docsOptions); err != nil {
 		return nil, fmt.Errorf("register docs routes: %w", err)
 	}

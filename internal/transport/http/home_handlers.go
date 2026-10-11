@@ -10,7 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Homepage 渲染服务默认首页（Claude / Anthropic 风格）。
+// Homepage 渲染服务默认首页。
 func (h *Handler) Homepage(c *gin.Context) {
 	if wantsJSONStrict(c) {
 		response.OK(c, gin.H{
@@ -21,16 +21,17 @@ func (h *Handler) Homepage(c *gin.Context) {
 				"health":  "/healthz",
 				"ready":   "/readyz",
 				"status":  "/status",
-				"console": "/console",
-				"docs":    "/docs",
-				"login":   "/login",
-				"api":     "/api",
+				"console": h.consoleURL,
+				"docs":    h.docsURL,
+				"openapi": "/openapi.json",
 			},
 		})
 		return
 	}
 	response.RenderHomepage(c, response.HomePageData{
-		Version: resolveVersion(h),
+		Version:    resolveVersion(h),
+		ConsoleURL: h.consoleURL,
+		DocsURL:    h.docsURL,
 	})
 }
 

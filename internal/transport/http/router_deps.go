@@ -1,6 +1,8 @@
 package httptransport
 
 import (
+	"strings"
+
 	"aegis/internal/config"
 	"aegis/internal/middleware"
 	redisrepo "aegis/internal/repository/redis"
@@ -119,8 +121,11 @@ type RouterDeps struct {
 	// ClientIP 真实客户端 IP 判定器，由 middleware.ClientIP 挂在中间件栈首位。
 	// 为 nil 时（openapi / routes 等零依赖装配）退化为直接使用直连地址。
 	ClientIP *clientip.Resolver
-	// DocsPortalURL 是 /docs 的 302 目标；前后端分域部署时要填绝对地址。
+	// DocsPortalURL 是 /docs 的 302 目标；相对路径在配了 ConsoleBaseURL 时
+	// 会拼到控制台域名下（门户本就是控制台的一个页面），见 resolveDocsPortalURL。
 	DocsPortalURL string
+	// ConsoleBaseURL 控制台对外地址，首页的「控制台」入口用它；留空则首页不放入口。
+	ConsoleBaseURL string
 }
 
 // newHandler 把依赖装进 Handler。
@@ -196,5 +201,7 @@ func (d RouterDeps) newHandler() *Handler {
 		aiAgent:            d.AIAgent,
 		oauth2:             d.OAuth2Server,
 		aiAgentWSOrigin:    service.WebSocketOriginChecker(d.CORS.AllowOrigins),
+		consoleURL:         strings.TrimRight(strings.TrimSpace(d.ConsoleBaseURL), "/"),
+		docsURL:            resolveDocsPortalURL(d.DocsPortalURL, d.ConsoleBaseURL),
 	}
 }

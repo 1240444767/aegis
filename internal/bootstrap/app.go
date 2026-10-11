@@ -644,14 +644,15 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		MemoryManager:   memoryManager,
 		DatabaseManager: databaseManager,
 
-		Firewall:      firewall,
-		TrafficRamp:   trafficRamp,
-		ReplayGuard:   replayGuard,
-		CrashLog:      cl,
-		Logger:        log,
-		CORS:          cfg.CORS,
-		ClientIP:      clientIPResolver,
-		DocsPortalURL: cfg.DocsPortalURL,
+		Firewall:       firewall,
+		TrafficRamp:    trafficRamp,
+		ReplayGuard:    replayGuard,
+		CrashLog:       cl,
+		Logger:         log,
+		CORS:           cfg.CORS,
+		ClientIP:       clientIPResolver,
+		DocsPortalURL:  cfg.DocsPortalURL,
+		ConsoleBaseURL: cfg.ConsoleBaseURL,
 	})
 	if err != nil {
 		_ = accountBanService.Close(context.Background())
