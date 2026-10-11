@@ -15,10 +15,13 @@ import (
 //
 // 用 UPSERT 而不是「先查再插」：后者在同一用户并发领两张卡时会有一个撞唯一约束，
 // 而那次失败会把整个核销事务连带回滚 —— 用户看到的是「兑换失败」，卡却已经作废。
+//
+// $3 显式转成 bigint：它同时落进 INTEGER 的 balance 与 BIGINT 的 total_granted，
+// 不写类型时 Postgres 会对同一个参数推出两种类型，整条语句报 42P08。
 func grantLotteryDrawsTx(ctx context.Context, tx pgx.Tx, appID int64, userID int64, amount int64) (int64, error) {
 	var balance int64
 	err := tx.QueryRow(ctx, `INSERT INTO lottery_draw_grants (appid, user_id, balance, total_granted)
-VALUES ($1, $2, $3, $3)
+VALUES ($1, $2, $3::bigint, $3::bigint)
 ON CONFLICT (appid, user_id) DO UPDATE
 SET balance = lottery_draw_grants.balance + EXCLUDED.balance,
     total_granted = lottery_draw_grants.total_granted + EXCLUDED.total_granted,
