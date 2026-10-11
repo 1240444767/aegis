@@ -35,6 +35,7 @@ import {
 } from "@/lib/org-hooks";
 import { cn } from "@/lib/utils";
 import { flattenDeptOptions, OrgRoleBadge, useOrgCan } from "./org-shared";
+import { fromLocalInputValue, toLocalInputValue } from "@/lib/datetime";
 
 function errMsg(e: unknown, fallback: string) {
   return e instanceof ApiError ? e.message : fallback;
@@ -595,7 +596,7 @@ function DeptMemberSheet({
   const [jobTitle, setJobTitle] = useState(member.jobTitle ?? "");
   const [reportingTo, setReportingTo] = useState(member.reportingTo ? String(member.reportingTo) : "__none__");
   const [delegateTo, setDelegateTo] = useState(member.delegateTo ? String(member.delegateTo) : "__none__");
-  const [delegateUntil, setDelegateUntil] = useState(member.delegateExpiresAt?.slice(0, 16) ?? "");
+  const [delegateUntil, setDelegateUntil] = useState(toLocalInputValue(member.delegateExpiresAt));
   const [isLeader, setIsLeader] = useState(member.isLeader);
 
   const others = members.filter((m) => m.adminId !== member.adminId);
@@ -612,7 +613,7 @@ function DeptMemberSheet({
     if (delegateTo === "__none__") payload.clearDelegate = true;
     else {
       payload.delegateTo = Number(delegateTo);
-      if (delegateUntil) payload.delegateExpiresAt = new Date(delegateUntil).toISOString();
+      if (delegateUntil) payload.delegateExpiresAt = fromLocalInputValue(delegateUntil);
     }
 
     try {

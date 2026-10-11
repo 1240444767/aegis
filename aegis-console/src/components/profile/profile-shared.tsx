@@ -313,11 +313,10 @@ export function fromDateInput(value: string): Date | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date;
 }
 
+/** 生日是日历日（DATE 列序列化成 `…T00:00:00Z`），只取日期部分，不按时区换算。 */
 function normalizeBirthday(value?: string | null) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime()) || date.getUTCFullYear() <= 1) return "";
-  return toDateInput(date);
+  const day = value?.slice(0, 10) ?? "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !day.startsWith("0001") ? day : "";
 }
 
 export function seedForm(account?: AdminAccount): ProfileForm {

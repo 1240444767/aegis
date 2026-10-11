@@ -29,13 +29,15 @@ import {
 import { getReportExportUrl } from "@/lib/api/reports";
 import { useAuthStore } from "@/lib/auth-store";
 import { cn } from "@/lib/utils";
+import { fromLocalDateValue, startOfLocalDay } from "@/lib/datetime";
 
 const COLORS = ["#6366f1", "#06b6d4", "#f59e0b", "#ef4444", "#22c55e", "#8b5cf6", "#ec4899", "#14b8a6"];
 const fmt = (n: number) => new Intl.NumberFormat("zh-CN").format(n);
 const fmtAmt = (n: number) => `¥${(n / 100).toFixed(2)}`;
 
+/** 浏览器时区下 d 天前的零点，首个日桶才是完整的一天。 */
 function daysAgo(d: number): string {
-  const dt = new Date();
+  const dt = startOfLocalDay();
   dt.setDate(dt.getDate() - d);
   return dt.toISOString();
 }
@@ -53,8 +55,8 @@ function ReportsPageInner() {
 
   useEffect(() => { if (apps.length > 0 && !appKey) setAppKey(apps[0].appKey || ""); }, [apps, appKey]);
 
-  const start = range === "custom" ? (customStart ? new Date(customStart).toISOString() : "") : daysAgo(parseInt(range));
-  const end = range === "custom" ? (customEnd ? new Date(customEnd).toISOString() : "") : new Date().toISOString();
+  const start = range === "custom" ? fromLocalDateValue(customStart, "start") ?? "" : daysAgo(parseInt(range));
+  const end = range === "custom" ? fromLocalDateValue(customEnd, "end") ?? "" : new Date().toISOString();
   const ready = Boolean(appKey && start && end);
 
   return (

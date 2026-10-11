@@ -58,6 +58,7 @@ import { Separator } from "@/components/ui/separator";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
+import { fromLocalDateValue, toLocalDateInputValue } from "@/lib/datetime";
 
 const EASE: [number, number, number, number] = [0.32, 0.72, 0, 1];
 
@@ -144,7 +145,7 @@ export function LegalAdminPanel() {
         title: input.title,
         body: input.body,
         version: input.version,
-        effectiveAt: input.effectiveAt,
+        effectiveAt: fromLocalDateValue(input.effectiveAt) ?? "",
         published: input.published,
       }),
     onSuccess: () => {
@@ -190,7 +191,7 @@ export function LegalAdminPanel() {
           title: item.title,
           body: item.body,
           version: item.version,
-          effectiveAt: item.effectiveAt ? item.effectiveAt.slice(0, 10) : "",
+          effectiveAt: toLocalDateInputValue(item.effectiveAt),
           published: item.published,
         });
       }),

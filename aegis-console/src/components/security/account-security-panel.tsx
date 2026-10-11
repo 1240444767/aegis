@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { ChangePasswordSection } from "@/components/security/change-password-section";
+import { toLocalInputValue } from "@/lib/datetime";
 
 // ── 工具 ──
 
@@ -52,7 +53,7 @@ function dlCodes(b: CodeBundle) {
   const text = ["Aegis 管理员恢复码", `生成时间: ${fmtDate(b.generatedAt)}`, "", ...b.codes].join("\n");
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
-  a.download = `aegis-recovery-codes-${b.generatedAt.replace(/[:T]/g, "-").slice(0, 16)}.txt`;
+  a.download = `aegis-recovery-codes-${toLocalInputValue(b.generatedAt).replace(/[:T]/g, "-")}.txt`;
   document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(a.href);
 }
 

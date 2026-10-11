@@ -25,18 +25,27 @@ const RANGE_LABEL: Record<RangeKey, string> = {
   custom: "自定义"
 };
 
-function isoDate(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+/**
+ * 签到日是策略时区的日历日（后端按 `policy.timezone` 落 sign_date），
+ * 「今天」必须按同一时区取，这是控制台里唯一不跟浏览器时区走的日期。
+ */
+function isoDate(date: Date, timeZone: string) {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(date);
+  } catch {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
 }
 
-function rangeDates(range: RangeKey, from: string, to: string) {
-  const today = new Date();
-  if (range === "today") return { dateFrom: isoDate(today), dateTo: isoDate(today) };
-  if (range === "7d") return { dateFrom: isoDate(new Date(today.getTime() - 6 * 86_400_000)), dateTo: isoDate(today) };
-  if (range === "30d") return { dateFrom: isoDate(new Date(today.getTime() - 29 * 86_400_000)), dateTo: isoDate(today) };
+function rangeDates(range: RangeKey, from: string, to: string, timeZone: string) {
+  const now = Date.now();
+  const today = isoDate(new Date(now), timeZone);
+  if (range === "today") return { dateFrom: today, dateTo: today };
+  if (range === "7d") return { dateFrom: isoDate(new Date(now - 6 * 86_400_000), timeZone), dateTo: today };
+  if (range === "30d") return { dateFrom: isoDate(new Date(now - 29 * 86_400_000), timeZone), dateTo: today };
   if (range === "custom") return { dateFrom: from || undefined, dateTo: to || undefined };
   return { dateFrom: undefined, dateTo: undefined };
 }
@@ -60,7 +69,7 @@ export function SignInRecords({ appKey, policy }: { appKey: string; policy: Sign
     return [...keys];
   }, [policy]);
 
-  const dates = rangeDates(range, from, to);
+  const dates = rangeDates(range, from, to, policy.timezone);
   const query = useAdminAppSignInRecordsQuery(appKey, {
     keyword: deferredKeyword || undefined,
     source: source === "all" ? undefined : source,

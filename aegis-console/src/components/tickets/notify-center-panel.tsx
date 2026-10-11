@@ -53,6 +53,7 @@ import type {
   NotifyTemplate
 } from "@/lib/api/notify-channels";
 import { formatDateTime, formatRelativeTime } from "./ticket-shared";
+import { browserTimeZone } from "@/lib/datetime";
 
 // 统一通知出口控制台。
 //
@@ -523,7 +524,7 @@ function SubscriptionsSection({ canWrite }: { canWrite: boolean }) {
     quietEnabled: false,
     quietStart: "23:00",
     quietEnd: "08:00",
-    timezone: "Asia/Shanghai",
+    timezone: browserTimeZone(),
     enabled: true
   });
 
@@ -574,7 +575,7 @@ function SubscriptionsSection({ canWrite }: { canWrite: boolean }) {
                 quietEnabled: false,
                 quietStart: "23:00",
                 quietEnd: "08:00",
-                timezone: "Asia/Shanghai",
+                timezone: browserTimeZone(),
                 enabled: true
               });
               setOpen(true);
@@ -637,7 +638,7 @@ function SubscriptionsSection({ canWrite }: { canWrite: boolean }) {
                             quietEnabled: Boolean(sub.quietHours),
                             quietStart: sub.quietHours?.start || "23:00",
                             quietEnd: sub.quietHours?.end || "08:00",
-                            timezone: sub.quietHours?.timezone || "Asia/Shanghai",
+                            timezone: sub.quietHours?.timezone || browserTimeZone(),
                             enabled: sub.enabled
                           });
                           setOpen(true);
@@ -758,7 +759,7 @@ function SubscriptionsSection({ canWrite }: { canWrite: boolean }) {
                   <Input
                     value={form.timezone}
                     onChange={(event) => setForm((prev) => ({ ...prev, timezone: event.target.value }))}
-                    placeholder="Asia/Shanghai"
+                    placeholder={browserTimeZone()}
                   />
                   <Input
                     value={form.quietStart}

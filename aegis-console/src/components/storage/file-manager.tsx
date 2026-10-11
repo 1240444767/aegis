@@ -27,6 +27,7 @@ import {
   FileKindIcon, FileThumbnail, FolderIcon, KIND_LABELS, MasqueradeBadge, ObjectStatusBadge,
   baseName, evictThumbnailCache, folderSegments, formatBytes, formatDate, parseSizeInput,
 } from "./file-shared";
+import { fromLocalDateValue } from "@/lib/datetime";
 
 /* ================================================================== */
 /*  常量                                                               */
@@ -115,8 +116,8 @@ export function FileManagerPanel({
     uploaderType: filters.uploaderType === "all" ? undefined : filters.uploaderType,
     minSize: parseSizeInput(filters.minSize),
     maxSize: parseSizeInput(filters.maxSize),
-    createdFrom: filters.createdFrom || undefined,
-    createdTo: filters.createdTo || undefined,
+    createdFrom: fromLocalDateValue(filters.createdFrom, "start"),
+    createdTo: fromLocalDateValue(filters.createdTo, "end"),
     sort, order, page, limit,
   }), [configId, folder, folderView, filters, sort, order, page, limit]);
 

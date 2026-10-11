@@ -54,7 +54,7 @@ func NewDashboardService(log *zap.Logger, pg *pgrepo.Repository) *DashboardServi
 }
 
 // GetDashboard 获取管理员工作台数据
-func (s *DashboardService) GetDashboard(ctx context.Context, adminID int64, isSuperAdmin bool) (*AdminDashboard, error) {
+func (s *DashboardService) GetDashboard(ctx context.Context, adminID int64, isSuperAdmin bool, loc *time.Location) (*AdminDashboard, error) {
 	dash := &AdminDashboard{}
 
 	// 待处理邀请
@@ -90,7 +90,7 @@ func (s *DashboardService) GetDashboard(ctx context.Context, adminID int64, isSu
 	}
 
 	// 快速统计
-	dash.Stats = s.collectStats(ctx, isSuperAdmin)
+	dash.Stats = s.collectStats(ctx, isSuperAdmin, loc)
 
 	return dash, nil
 }
@@ -119,12 +119,18 @@ func (s *DashboardService) collectAlerts(ctx context.Context) []DashboardAlert {
 	return alerts
 }
 
-func (s *DashboardService) collectStats(ctx context.Context, isSuperAdmin bool) DashboardStats {
+// collectStats 中「今日」按 loc 的零点起算。
+func (s *DashboardService) collectStats(ctx context.Context, isSuperAdmin bool, loc *time.Location) DashboardStats {
 	var stats DashboardStats
 	if isSuperAdmin {
+		if loc == nil {
+			loc = time.UTC
+		}
+		now := time.Now().In(loc)
+		startOfDay := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 		stats.TotalApps, _ = s.pg.CountApps(ctx)
 		stats.TotalUsers, _ = s.pg.CountUsers(ctx)
-		stats.TodayLogins, _ = s.pg.CountTodayLogins(ctx)
+		stats.TodayLogins, _ = s.pg.CountLoginsSince(ctx, startOfDay)
 	}
 	return stats
 }

@@ -40,6 +40,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "
 import { Switch } from "@/components/ui/switch";
 import { RichEditor, RichContent } from "@/components/ui/rich-editor";
 import { cn } from "@/lib/utils";
+import { fromLocalInputValue, toLocalInputValue } from "@/lib/datetime";
 
 /* ------------------------------------------------------------------ */
 /*  常量                                                               */
@@ -108,7 +109,7 @@ function toForm(a: SystemAnnouncement): FormData {
     content: a.content || "",
     level: a.level || "normal",
     pinned: a.pinned === true,
-    expiresAt: a.expiresAt ? new Date(a.expiresAt).toISOString().slice(0, 16) : "",
+    expiresAt: toLocalInputValue(a.expiresAt),
   };
 }
 
@@ -139,7 +140,7 @@ function AnnouncementDialog({
       content: form.content,
       level: form.level,
       pinned: form.pinned,
-      expiresAt: form.expiresAt || null,
+      expiresAt: fromLocalInputValue(form.expiresAt) ?? null,
     };
     try {
       if (mode === "edit" && item) {

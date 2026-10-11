@@ -10,6 +10,7 @@ import (
 	captchadomain "aegis/internal/domain/captcha"
 	systemdomain "aegis/internal/domain/system"
 	"aegis/pkg/response"
+	"aegis/pkg/timeutil"
 	"github.com/gin-gonic/gin"
 )
 
@@ -24,7 +25,14 @@ func (h *Handler) AdminDashboard(c *gin.Context) {
 		response.Error(c, http.StatusServiceUnavailable, 50001, "工作台服务未初始化")
 		return
 	}
-	data, err := h.dashboard.GetDashboard(c.Request.Context(), session.AdminID, session.IsSuperAdmin)
+	// 控制台按浏览器时区计「今日」，tz 为 IANA 时区名；缺省或无法识别时退回平台默认时区
+	loc := timeutil.DefaultLocation()
+	if tz := strings.TrimSpace(c.Query("tz")); tz != "" {
+		if parsed, err := timeutil.LoadLocation(tz); err == nil {
+			loc = parsed
+		}
+	}
+	data, err := h.dashboard.GetDashboard(c.Request.Context(), session.AdminID, session.IsSuperAdmin, loc)
 	if err != nil {
 		h.writeError(c, err)
 		return

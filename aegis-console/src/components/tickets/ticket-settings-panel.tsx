@@ -35,6 +35,7 @@ import {
 } from "@/lib/ticket-hooks";
 import type { TicketGroup, TicketKind, TicketPriority } from "@/lib/api/tickets";
 import { KIND_LABEL, PRIORITY_LABEL } from "./ticket-shared";
+import { browserTimeZone } from "@/lib/datetime";
 
 // 工单配置面板：分类 / 处理组 / SLA / 快捷回复。
 //
@@ -709,7 +710,7 @@ function SLASection({ appId }: { appId: number }) {
     resolve: { urgent: 240, high: 720, normal: 2880, low: 7200 } as Record<string, number>,
     warnRatio: 0.8,
     businessHoursEnabled: false,
-    timezone: "Asia/Shanghai",
+    timezone: browserTimeZone(),
     start: "09:00",
     end: "18:00",
     days: [1, 2, 3, 4, 5] as number[],
@@ -802,7 +803,7 @@ function SLASection({ appId }: { appId: number }) {
                           resolve: { ...policy.resolveMinutes },
                           warnRatio: policy.warnRatio,
                           businessHoursEnabled: Boolean(policy.businessHours),
-                          timezone: policy.businessHours?.timezone || "Asia/Shanghai",
+                          timezone: policy.businessHours?.timezone || browserTimeZone(),
                           start: policy.businessHours?.start || "09:00",
                           end: policy.businessHours?.end || "18:00",
                           days: policy.businessHours?.days || [1, 2, 3, 4, 5],

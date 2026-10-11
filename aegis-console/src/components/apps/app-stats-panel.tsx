@@ -9,8 +9,10 @@ import { useAdminAppStatsQuery, useAdminAppTrendQuery } from "@/lib/admin-hooks"
 
 const chartConfig: ChartConfig = { count: { label: "新增用户", color: "#3b82f6" } };
 
+/** 后端给的是日历日 `YYYY-MM-DD`，直接取月日；交给 Date 会被当成 UTC 零点，西半球显示成前一天。 */
 function fmtDate(v: string) {
-  try { return new Date(v).toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" }); } catch { return v; }
+  const matched = /^\d{4}-(\d{2})-(\d{2})/.exec(v);
+  return matched ? `${matched[1]}/${matched[2]}` : v;
 }
 
 export function AppStatsPanel({ appKey }: { appKey?: string | null }) {

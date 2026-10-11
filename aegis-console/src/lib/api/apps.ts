@@ -70,7 +70,7 @@ export type AdminAppUserListParams = {
   customId?: string;
   userId?: number;
   enabled?: boolean;
-  /** YYYY-MM-DD 或 RFC3339；只给日期时后端把 createdTo 补到当天 23:59:59.999 */
+  /** RFC3339 绝对时刻；控制台按浏览器时区把日期换成当天起止后再传 */
   createdFrom?: string;
   createdTo?: string;
   /** createdAt(默认) / updatedAt / id / account / integral / experience / vipExpireAt / registerTime / nickname / email */

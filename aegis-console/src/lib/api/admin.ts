@@ -1,4 +1,5 @@
 import { ApiError, apiRequest, buildQuery } from "./client";
+import { browserTimeZone } from "@/lib/datetime";
 import type {
   AdminAccount,
   AdminAccountAvailability,
@@ -28,7 +29,8 @@ export function getAdminAccounts(token: string) {
  * `components/overview/*` 的首屏指标与待处理、最近操作都依赖它。
  */
 export function getAdminDashboard(token: string) {
-  return apiRequest<AdminDashboard>("/api/admin/dashboard", { token });
+  // 「今日登录」按浏览器时区的零点起算
+  return apiRequest<AdminDashboard>(`/api/admin/dashboard${buildQuery({ tz: browserTimeZone() })}`, { token });
 }
 
 export function getAdminProfile(token: string) {

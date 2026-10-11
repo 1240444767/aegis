@@ -5561,8 +5561,9 @@ func (r *Repository) CountUsers(ctx context.Context) (int64, error) {
 	return count, err
 }
 
-func (r *Repository) CountTodayLogins(ctx context.Context) (int64, error) {
+// CountLoginsSince 统计 since 之后的管理员登录次数。「今日」的零点由调用方按时区算好传入。
+func (r *Repository) CountLoginsSince(ctx context.Context, since time.Time) (int64, error) {
 	var count int64
-	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM admin_audit_logs WHERE action = 'admin.login' AND created_at > $1`, time.Now().Truncate(24*time.Hour)).Scan(&count)
+	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM admin_audit_logs WHERE action = 'admin.login' AND created_at >= $1`, since).Scan(&count)
 	return count, err
 }

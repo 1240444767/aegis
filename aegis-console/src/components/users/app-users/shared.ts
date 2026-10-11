@@ -1,3 +1,5 @@
+import { fromLocalDateValue } from "@/lib/datetime";
+
 /**
  * 应用用户列表的**查询状态**：单一形状 + URL 编解码。
  *
@@ -165,8 +167,9 @@ export function toListParams(state: UserQueryState) {
     markcode: trim(state.markcode),
     customId: trim(state.customId),
     enabled: state.status === "all" ? undefined : state.status === "enabled",
-    createdFrom: trim(state.createdFrom),
-    createdTo: trim(state.createdTo),
+    // 地址栏里保留纯日期，发给后端前换成浏览器时区当天的起止时刻
+    createdFrom: fromLocalDateValue(state.createdFrom.trim(), "start"),
+    createdTo: fromLocalDateValue(state.createdTo.trim(), "end"),
     sort: state.sort,
     order: state.order,
     page: state.page,

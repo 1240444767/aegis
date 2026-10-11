@@ -36,6 +36,7 @@ import { WidgetBoundary } from "@/components/ui/error-boundary";
 import { ImageDropzone } from "@/components/ui/image-dropzone";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
+import { fromLocalInputValue, toLocalInputValue } from "@/lib/datetime";
 
 const TYPE_OPTIONS: { value: PlatformBannerType; label: string }[] = [
   { value: "info", label: "普通" },
@@ -83,8 +84,8 @@ function toForm(item: PlatformBannerItem): FormState {
     type: item.type,
     position: item.position,
     status: item.status,
-    startTime: item.startTime ? item.startTime.slice(0, 16) : "",
-    endTime: item.endTime ? item.endTime.slice(0, 16) : ""
+    startTime: toLocalInputValue(item.startTime),
+    endTime: toLocalInputValue(item.endTime)
   };
 }
 
@@ -97,8 +98,8 @@ function toMutation(form: FormState): PlatformBannerMutation {
     type: form.type,
     position: Number(form.position) || 0,
     status: form.status,
-    startTime: form.startTime ? new Date(form.startTime).toISOString() : null,
-    endTime: form.endTime ? new Date(form.endTime).toISOString() : null
+    startTime: fromLocalInputValue(form.startTime) ?? null,
+    endTime: fromLocalInputValue(form.endTime) ?? null
   };
 }
 

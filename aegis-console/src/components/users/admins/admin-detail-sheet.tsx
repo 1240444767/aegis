@@ -247,7 +247,7 @@ function AdminDetailBody({
             <Fact label="显示名称" value={admin.displayName} />
             <Fact label="邮箱" value={admin.email} />
             <Fact label="手机号" value={admin.phone} mono />
-            <Fact label="生日" value={formatDate(admin.birthday)} />
+            <Fact label="生日" value={calendarDay(admin.birthday)} />
             <Fact label="登录方式" value={authSourceLabel(admin)} hint={local ? undefined : "由外部身份源管理密码"} />
             {admin.previousAccount ? (
               <Fact label="曾用名" value={admin.previousAccount} mono hint={`改名于 ${formatTime(admin.accountChangedAt)}`} />
@@ -280,6 +280,12 @@ function AdminDetailBody({
       </div>
     </>
   );
+}
+
+/** 生日是日历日，只取日期部分；按时区换算会在西半球挪到前一天。 */
+function calendarDay(value?: string | null) {
+  const day = value?.slice(0, 10) ?? "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(day) && !day.startsWith("0001") ? day.replaceAll("-", "/") : EMPTY;
 }
 
 function MiniStat({ label, value, hint }: { label: string; value: string; hint?: string }) {
