@@ -125,7 +125,7 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 			"当前网络与上次登录不一致，该应用已开启登录 IP 校验，请联系管理员重置登录绑定")
 	}
 
-	if policy.LoginCheckUser && next.Region != "" && current.Region != "" && next.Region != current.Region {
+	if policy.LoginCheckUser && next.Region != "" && current.Region != "" && !sameLoginRegion(next.Region, current.Region) {
 		return apperrors.New(40322, http.StatusForbidden,
 			"当前登录属地与上次不一致，该应用已开启登录属地校验，请联系管理员重置登录绑定")
 	}
@@ -182,6 +182,33 @@ func (s *LoginConsistencyService) resolveRegion(ctx context.Context, ip string) 
 		return ""
 	}
 	return strings.ToLower(country + "/" + region)
+}
+
+// sameLoginRegion 比较两个「国家/省」属地标识。
+//
+// 省份按简称比较：数据源会更替（「广东」与「广东省」、「广西」与「广西壮族自治区」），
+// 同一个省不能因为写法不同就被当成换了属地。任一侧缺省份时只比国家 ——
+// 旧基线里不少国内地址只有国家，补全省份后不该因此拦截。
+func sameLoginRegion(a, b string) bool {
+	countryA, provinceA, _ := strings.Cut(a, "/")
+	countryB, provinceB, _ := strings.Cut(b, "/")
+	if countryA != countryB {
+		return false
+	}
+	if provinceA == "" || provinceB == "" {
+		return true
+	}
+	return shortProvince(provinceA) == shortProvince(provinceB)
+}
+
+func shortProvince(name string) string {
+	name = strings.TrimSpace(name)
+	for _, suffix := range []string{"壮族自治区", "回族自治区", "维吾尔自治区", "自治区", "特别行政区", "省", "市"} {
+		if trimmed := strings.TrimSuffix(name, suffix); trimmed != name && trimmed != "" {
+			return trimmed
+		}
+	}
+	return name
 }
 
 // sameLoginNetwork 判断两个 IP 是否落在同一收敛网段。

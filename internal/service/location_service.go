@@ -436,9 +436,9 @@ func (s *LocationService) persistAsync(ip string, loc IPLocation, ttl time.Durat
 
 func (s *LocationService) redisKey(ip string) string {
 	if s.keyPrefix == "" {
-		return "location:ip:" + ip
+		return "location:v2:ip:" + ip
 	}
-	return s.keyPrefix + ":location:ip:" + ip
+	return s.keyPrefix + ":location:v2:ip:" + ip
 }
 
 func (s *LocationService) getLocal(ip string) (IPLocation, bool) {
