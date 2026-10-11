@@ -414,6 +414,9 @@ export const SESSION_EVENT_LABEL: Record<string, string> = {
   revoked: "撤销",
   revoked_by_admin: "管理员撤销",
   revoked_all_by_user: "用户全部下线",
+  password_changed: "修改密码",
+  password_reset: "找回密码",
+  revoked_by_password_reset: "找回密码后下线",
   expired: "过期",
   replaced: "被顶替",
   logout: "登出"

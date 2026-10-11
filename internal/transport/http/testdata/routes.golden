@@ -1025,6 +1025,11 @@ POST	/api/v1/apps/:appkey/auth/passkey/login	AppPasskeyLogin
 POST	/api/v1/apps/:appkey/auth/passkey/options	AppPasskeyOptions
 POST	/api/v1/apps/:appkey/auth/password/change	ChangePassword
 POST	/api/v1/apps/:appkey/auth/password/forgot	AppPasswordForgot
+POST	/api/v1/apps/:appkey/auth/password/recovery/complete	AppPasswordRecoveryComplete
+POST	/api/v1/apps/:appkey/auth/password/recovery/send	AppPasswordRecoverySend
+POST	/api/v1/apps/:appkey/auth/password/recovery/start	AppPasswordRecoveryStart
+POST	/api/v1/apps/:appkey/auth/password/recovery/status	AppPasswordRecoveryStatus
+POST	/api/v1/apps/:appkey/auth/password/recovery/verify	AppPasswordRecoveryVerify
 POST	/api/v1/apps/:appkey/auth/password/reset/verify	AppPasswordResetVerify
 POST	/api/v1/apps/:appkey/auth/password/verify	VerifyPassword
 POST	/api/v1/apps/:appkey/auth/qr/cancel	AppQRLoginCancel
@@ -1056,6 +1061,7 @@ POST	/api/v1/apps/:appkey/me/avatar	UploadUserAvatar
 POST	/api/v1/apps/:appkey/me/avatar/restore	RestoreUserAvatar
 POST	/api/v1/apps/:appkey/me/passkeys	FinishPasskeyRegistration
 POST	/api/v1/apps/:appkey/me/passkeys/options	BeginPasskeyRegistration
+POST	/api/v1/apps/:appkey/me/password/recovery	AppMyPasswordRecoveryStart
 POST	/api/v1/apps/:appkey/me/profile/changes/confirm	ConfirmProfileChange
 POST	/api/v1/apps/:appkey/me/sessions/revoke-all	RevokeAllUserSessions
 POST	/api/v1/apps/:appkey/notifications/clear	ClearNotifications

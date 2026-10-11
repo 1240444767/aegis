@@ -56,12 +56,18 @@ func gatewayRequestModels() map[string]any {
 		"oauthBindURL":  OAuthBindURLRequest{},
 
 		// 邮箱验证码与密码
-		"emailCode":           AppEmailCodeRequest{},
-		"emailVerify":         AppEmailVerifyRequest{},
-		"passwordForgot":      AppPasswordForgotRequest{},
-		"passwordResetVerify": AppPasswordResetVerifyRequest{},
-		"passwordVerify":      VerifyPasswordRequest{},
-		"passwordChange":      ChangePasswordRequest{},
+		"emailCode":                AppEmailCodeRequest{},
+		"emailVerify":              AppEmailVerifyRequest{},
+		"passwordForgot":           AppPasswordForgotRequest{},
+		"passwordResetVerify":      AppPasswordResetVerifyRequest{},
+		"passwordRecoveryStart":    AppPasswordRecoveryStartRequest{},
+		"passwordRecoveryStatus":   AppPasswordRecoveryFlowRequest{},
+		"passwordRecoverySend":     AppPasswordRecoverySendRequest{},
+		"passwordRecoveryVerify":   AppPasswordRecoveryVerifyRequest{},
+		"passwordRecoveryComplete": AppPasswordRecoveryCompleteRequest{},
+		"passwordRecoveryMine":     AppPasswordRecoveryDeviceRequest{},
+		"passwordVerify":           VerifyPasswordRequest{},
+		"passwordChange":           ChangePasswordRequest{},
 
 		// Passkey
 		"passkeyOptions":  AppPasskeyOptionsRequest{},
@@ -294,6 +300,50 @@ type AppPasswordForgotRequest struct {
 type AppPasswordResetVerifyRequest struct {
 	Email string `json:"email" form:"email" binding:"required"`
 	Token string `json:"token" form:"token" binding:"required"`
+}
+
+// 找回密码。flowToken 由 /auth/password/recovery/start（或 /me/password/recovery）返回；
+// deviceId 缺省取 X-Device-Id 头，必须与发起时一致。
+
+type AppPasswordRecoveryStartRequest struct {
+	// Account 账号名、绑定的邮箱或手机号
+	Account       string `json:"account" form:"account" binding:"required"`
+	CaptchaID     string `json:"captchaId" form:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer" form:"captchaAnswer"`
+	DeviceID      string `json:"deviceId" form:"deviceId"`
+}
+
+type AppPasswordRecoveryDeviceRequest struct {
+	DeviceID string `json:"deviceId" form:"deviceId"`
+}
+
+type AppPasswordRecoveryFlowRequest struct {
+	FlowToken string `json:"flowToken" form:"flowToken" binding:"required"`
+	DeviceID  string `json:"deviceId" form:"deviceId"`
+}
+
+type AppPasswordRecoverySendRequest struct {
+	FlowToken string `json:"flowToken" form:"flowToken" binding:"required"`
+	// Channel email | phone
+	Channel string `json:"channel" form:"channel" binding:"required"`
+	// Target 完整的邮箱或手机号，必须与绑定的一致；未登录发起时必填
+	Target   string `json:"target" form:"target"`
+	DeviceID string `json:"deviceId" form:"deviceId"`
+}
+
+type AppPasswordRecoveryVerifyRequest struct {
+	FlowToken string `json:"flowToken" form:"flowToken" binding:"required"`
+	// Factor email | phone | totp | recovery（恢复码，可替代 totp）
+	Factor   string `json:"factor" form:"factor" binding:"required"`
+	Code     string `json:"code" form:"code" binding:"required"`
+	DeviceID string `json:"deviceId" form:"deviceId"`
+}
+
+type AppPasswordRecoveryCompleteRequest struct {
+	FlowToken   string `json:"flowToken" form:"flowToken" binding:"required"`
+	NewPassword string `json:"newPassword" form:"newPassword" binding:"required"`
+	DeviceID    string `json:"deviceId" form:"deviceId"`
+	Device      string `json:"device" form:"device"`
 }
 
 type AppPasskeyOptionsRequest struct {

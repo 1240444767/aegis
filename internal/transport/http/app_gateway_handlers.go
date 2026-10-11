@@ -73,8 +73,9 @@ func (h *Handler) AppCaptcha(c *gin.Context) {
 	if purpose == "" {
 		purpose = captchadomain.PurposeLogin
 	}
-	if purpose != captchadomain.PurposeLogin && purpose != captchadomain.PurposeRegister {
-		response.Error(c, http.StatusBadRequest, 40017, "验证码用途只能是 login 或 register")
+	if purpose != captchadomain.PurposeLogin && purpose != captchadomain.PurposeRegister &&
+		purpose != captchadomain.PurposeResetPassword {
+		response.Error(c, http.StatusBadRequest, 40017, "验证码用途只能是 login、register 或 reset_password")
 		return
 	}
 	captchaType, appCfg, err := h.resolveUserCaptchaType(c, app.ID)
@@ -533,6 +534,8 @@ func captchaEntryForPurpose(purpose captchadomain.Purpose) string {
 	switch purpose {
 	case captchadomain.PurposeRegister:
 		return authprotocol.CaptchaEntryRegister
+	case captchadomain.PurposeResetPassword:
+		return authprotocol.CaptchaEntryRecovery
 	default:
 		return authprotocol.CaptchaEntryLogin
 	}

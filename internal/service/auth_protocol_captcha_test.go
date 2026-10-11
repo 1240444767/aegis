@@ -45,19 +45,26 @@ func TestResolveCaptchaRequirementFoldsEverySwitch(t *testing.T) {
 			// 这一条就是线上撞到的那个组合。
 			name:   "策略没开但应用要求登录验证码",
 			appCfg: imageOnly(true, false),
-			want:   authprotocol.CaptchaRequirement{Login: true},
+			want:   authprotocol.CaptchaRequirement{Login: true, Recovery: true},
 		},
 		{
 			name:   "应用只要求注册验证码",
 			appCfg: imageOnly(false, true),
-			want:   authprotocol.CaptchaRequirement{Register: true},
+			want:   authprotocol.CaptchaRequirement{Register: true, Recovery: true},
+		},
+		{
+			// 找回密码没有自己的场景开关：启用了任一类型就要，登录 / 注册关掉也一样 ——
+			// 它是凭一个账号名就能发起的入口，比登录更需要挡住脚本。
+			name:   "场景开关全关但启用了验证码类型",
+			appCfg: imageOnly(false, false),
+			want:   authprotocol.CaptchaRequirement{Recovery: true},
 		},
 		{
 			// 策略上的强制开关不看场景，两个入口一起要求。
 			name:         "策略强制，应用场景开关全关",
 			policyForced: true,
 			appCfg:       imageOnly(false, false),
-			want:         authprotocol.CaptchaRequirement{Login: true, Register: true},
+			want:         authprotocol.CaptchaRequirement{Login: true, Register: true, Recovery: true},
 		},
 		{
 			// 一个类型都没启用时，签发验证码本身就不可能，场景开关再开也没用。
@@ -71,7 +78,7 @@ func TestResolveCaptchaRequirementFoldsEverySwitch(t *testing.T) {
 			name:         "策略强制且未启用任何类型",
 			policyForced: true,
 			appCfg:       &captchadomain.CaptchaAppConfig{},
-			want:         authprotocol.CaptchaRequirement{Login: true, Register: true},
+			want:         authprotocol.CaptchaRequirement{Login: true, Register: true, Recovery: true},
 		},
 		{
 			// 短信前置验证码是平台级的，与应用配置无关。
@@ -102,7 +109,7 @@ func TestResolveCaptchaRequirementFoldsEverySwitch(t *testing.T) {
 
 // 入口名是客户端用来索引结论的键，改了名等于把那个入口从客户端视野里抹掉。
 func TestCaptchaRequirementLooksUpByEntryName(t *testing.T) {
-	requirement := authprotocol.CaptchaRequirement{Login: true, Register: false, SMS: true}
+	requirement := authprotocol.CaptchaRequirement{Login: true, Register: false, SMS: true, Recovery: true}
 
 	if !requirement.Required(authprotocol.CaptchaEntryLogin) {
 		t.Error("login 入口应当要求验证码")
@@ -112,6 +119,9 @@ func TestCaptchaRequirementLooksUpByEntryName(t *testing.T) {
 	}
 	if !requirement.Required(authprotocol.CaptchaEntrySMS) {
 		t.Error("sms 入口应当要求验证码")
+	}
+	if !requirement.Required(authprotocol.CaptchaEntryRecovery) {
+		t.Error("recovery 入口应当要求验证码")
 	}
 	// 未知入口一律 false：宁可漏要求也不要凭空要求一个客户端拿不到答案的验证码。
 	if requirement.Required("something-else") {
@@ -135,6 +145,9 @@ func TestResolveCaptchaRequirementMatchesSceneRuleWhenNotForced(t *testing.T) {
 			}
 			if want := IsCaptchaRequiredForScene(cfg, captchadomain.PurposeRegister); got.Register != want {
 				t.Errorf("login=%v register=%v：注册结论 %v，场景判定 %v", login, register, got.Register, want)
+			}
+			if want := IsCaptchaRequiredForScene(cfg, captchadomain.PurposeResetPassword); got.Recovery != want {
+				t.Errorf("login=%v register=%v：找回结论 %v，场景判定 %v", login, register, got.Recovery, want)
 			}
 		}
 	}

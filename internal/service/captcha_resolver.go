@@ -99,6 +99,8 @@ func ResolveCaptchaRequirement(
 		Login:    forced || IsCaptchaRequiredForScene(appCfg, captchadomain.PurposeLogin),
 		Register: forced || IsCaptchaRequiredForScene(appCfg, captchadomain.PurposeRegister),
 		SMS:      smsPreCaptcha,
+		// 找回密码没有单独的场景开关：应用启用了任一图形验证码就要求（见 IsCaptchaRequiredForScene）
+		Recovery: forced || IsCaptchaRequiredForScene(appCfg, captchadomain.PurposeResetPassword),
 	}
 }
 

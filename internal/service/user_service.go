@@ -454,6 +454,11 @@ func (s *UserService) ConfirmSensitiveProfileChange(ctx context.Context, session
 	if err := s.persistProfileUpdate(ctx, session, user.ID, profile); err != nil {
 		return nil, err
 	}
+	// 换绑后的联系方式有一段冷静期不能用来找回密码：偷到会话的人可以先绑上自己的手机号，
+	// 再拿它把密码改掉（见 auth_password_recovery.go）
+	if err := s.sessions.MarkContactChanged(ctx, session.AppID, session.UserID, field, ContactChangeCooldown); err != nil {
+		s.log.Warn("mark contact changed failed", zap.Int64("appid", session.AppID), zap.Int64("userId", session.UserID), zap.String("field", field), zap.Error(err))
+	}
 	if err := s.sessions.DeletePendingProfileChange(ctx, session.AppID, session.UserID, field); err != nil {
 		s.log.Warn("delete pending profile change failed", zap.Int64("appid", session.AppID), zap.Int64("userId", session.UserID), zap.String("field", field), zap.Error(err))
 	}

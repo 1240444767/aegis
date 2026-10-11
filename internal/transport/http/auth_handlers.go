@@ -225,7 +225,11 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	if err := h.auth.ChangePassword(c.Request.Context(), session, req.CurrentPassword, req.NewPassword); err != nil {
+	current := req.CurrentPassword
+	if current == "" {
+		current = req.OldPassword
+	}
+	if err := h.auth.ChangePassword(c.Request.Context(), session, current, req.NewPassword); err != nil {
 		h.writeError(c, err)
 		return
 	}

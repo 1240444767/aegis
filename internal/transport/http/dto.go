@@ -96,7 +96,9 @@ type VerifyPasswordRequest struct {
 
 type ChangePasswordRequest struct {
 	CurrentPassword string `json:"currentPassword" form:"currentPassword"`
-	NewPassword     string `json:"newPassword" form:"newPassword" binding:"required"`
+	// OldPassword currentPassword 的别名：旧版 Kotlin SDK 发的是这个名字，读不到就会被当成「当前密码错误」
+	OldPassword string `json:"oldPassword" form:"oldPassword"`
+	NewPassword string `json:"newPassword" form:"newPassword" binding:"required"`
 }
 
 type LegacyModifyPasswordRequest struct {

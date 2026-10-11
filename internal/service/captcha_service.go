@@ -512,6 +512,11 @@ func (s *CaptchaService) RequiresPreCaptchaForSMS() bool {
 		s.cfg.Captcha.SMS.RequireCaptcha
 }
 
+// SMSAvailable 平台是否开着短信验证码。应用自己的服务商配置另由 BuildSMSProviderConfig 判断。
+func (s *CaptchaService) SMSAvailable() bool {
+	return s != nil && s.cfg.Captcha.Enabled && s.cfg.Captcha.SMS.Enabled
+}
+
 // SendTrustedSMSCode 发送受信任链路短信验证码（跳过图形验证码前置校验）
 func (s *CaptchaService) SendTrustedSMSCode(ctx context.Context, req captchadomain.SMSSendRequest, providerCfg *captchadomain.SMSProviderConfig) (*captchadomain.SMSSendResult, error) {
 	return s.sendSMSCode(ctx, req, providerCfg, true)

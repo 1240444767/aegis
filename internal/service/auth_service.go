@@ -62,6 +62,10 @@ type AuthService struct {
 	devices *DeviceMarketingService
 	// cardKey 卡密登录。未注入时 cardkey 登录方式直接报「未启用」而不是空指针
 	cardKey        *CardKeyService
+	// recoveryEmail / recoveryCaptcha / recoveryUsers 找回密码的发信、短信与会话治理，见 SetPasswordRecovery
+	recoveryEmail   passwordRecoveryMailer
+	recoveryCaptcha *CaptchaService
+	recoveryUsers   *UserService
 	registerFlight singleflight.Group
 	// jwtSecret 预转换的签名密钥字节，避免每次签发/校验重复分配
 	jwtSecret []byte

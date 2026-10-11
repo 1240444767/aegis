@@ -414,6 +414,76 @@ func (s *EmailService) SendPasswordResetEmail(ctx context.Context, appID int64, 
 	return &emaildomain.ResetResult{Success: true, Email: email, Token: token, ResetURL: resetURL, ExpireAt: expireAt, MessageID: messageID}, nil
 }
 
+// RecoveryMailReady 这个应用能不能发信（有可用的邮件配置）。找回密码据此决定邮箱算不算一项可用的验证方式。
+func (s *EmailService) RecoveryMailReady(ctx context.Context, appID int64) bool {
+	_, err := s.resolveConfig(ctx, appID, "")
+	return err == nil
+}
+
+// SendRecoveryCode 找回密码流程里发往绑定邮箱的验证码。
+//
+// 码由找回流程生成并只保存摘要，这里只负责投递：不写 emailCodeKey ——
+// 那个 key 能被公开的 /auth/email/verify 逐个试探，找回用的码不能放在那里。
+func (s *EmailService) SendRecoveryCode(ctx context.Context, appID int64, email string, code string, expireMinutes int) error {
+	config, err := s.resolveConfig(ctx, appID, "")
+	if err != nil {
+		return err
+	}
+	_, _, err = s.sendCodeMail(ctx, appID, config, email, code, "reset_password", expireMinutes)
+	return err
+}
+
+// PasswordResetNotice 密码被重置之后告知信里的事实。
+type PasswordResetNotice struct {
+	Account   string
+	At        time.Time
+	IP        string
+	Location  string
+	Device    string
+	SignedOut int
+}
+
+// SendPasswordResetNotice 密码重置完成后寄往绑定邮箱的告知信。
+//
+// 这封信是唯一一个「不是本人操作」时还能被本人看到的信号：找回成功意味着
+// 对方已经拿到了验证码，此时能做的就是让真正的主人尽快知道、尽快再找回一次。
+func (s *EmailService) SendPasswordResetNotice(ctx context.Context, appID int64, email string, notice PasswordResetNotice) error {
+	config, err := s.resolveConfig(ctx, appID, "")
+	if err != nil {
+		return err
+	}
+	scopeName, err := s.scopeName(ctx, appID)
+	if err != nil {
+		return err
+	}
+	at := notice.At
+	if at.IsZero() {
+		at = timeutil.Now()
+	}
+	details := []emailDetail{
+		{Label: "账号", Value: notice.Account},
+		{Label: "时间", Value: at.In(timeutil.DefaultLocation()).Format("2006-01-02 15:04:05")},
+		{Label: "设备", Value: notice.Device},
+		{Label: "IP 地址", Value: notice.IP},
+		{Label: "位置", Value: notice.Location},
+	}
+	lead := "账号的登录密码已通过找回流程重新设置。"
+	if notice.SignedOut > 0 {
+		lead = fmt.Sprintf("账号的登录密码已通过找回流程重新设置，%d 个登录中的设备已退出。", notice.SignedOut)
+	}
+	subject := fmt.Sprintf("%s 的登录密码已重置", scopeName)
+	html, text := renderEmail(emailLayout{
+		AppName:    scopeName,
+		Title:      "密码已重置",
+		Lead:       lead,
+		Preheader:  fmt.Sprintf("%s 的登录密码刚刚被重置", scopeName),
+		Blocks:     []mailBlock{mailDetails(details...)},
+		FooterNote: "不是您本人操作的话，请立即再次找回密码，并检查绑定的邮箱、手机号与两步验证。",
+	})
+	_, err = s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "password_reset_notice")
+	return err
+}
+
 func (s *EmailService) VerifyResetToken(ctx context.Context, appID int64, email string, token string) (bool, error) {
 	stored, err := s.redis.Get(ctx, s.resetTokenKey(appID, email)).Result()
 	if err != nil {

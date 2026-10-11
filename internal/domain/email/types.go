@@ -250,10 +250,11 @@ type VerificationResult struct {
 }
 
 type ResetResult struct {
-	Success   bool      `json:"success"`
-	Email     string    `json:"email"`
-	Token     string    `json:"token,omitempty"`
-	ResetURL  string    `json:"resetUrl,omitempty"`
+	Success bool   `json:"success"`
+	Email   string `json:"email"`
+	// Token / ResetURL 只进邮件，不进响应：回传给调用方等于让任何人凭一个邮箱地址拿到重置凭据
+	Token     string    `json:"-"`
+	ResetURL  string    `json:"-"`
 	ExpireAt  time.Time `json:"expireAt"`
 	MessageID string    `json:"messageId,omitempty"`
 }

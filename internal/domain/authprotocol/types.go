@@ -216,6 +216,8 @@ type CaptchaRequirement struct {
 	// 这一项由平台级配置决定，不区分 login / register —— 如实反映现状，
 	// 而不是造两个恒等的字段让接入方以为它们会不同。
 	SMS bool `json:"sms"`
+	// Recovery 调 /auth/password/recovery/start 前是否必须先取验证码（purpose: reset_password）。
+	Recovery bool `json:"recovery"`
 }
 
 // Required 返回某个入口是否需要验证码，入口名与客户端调用的接口一一对应。
@@ -227,6 +229,8 @@ func (c CaptchaRequirement) Required(entry string) bool {
 		return c.Register
 	case CaptchaEntrySMS:
 		return c.SMS
+	case CaptchaEntryRecovery:
+		return c.Recovery
 	default:
 		return false
 	}
@@ -236,6 +240,7 @@ const (
 	CaptchaEntryLogin    = "login"
 	CaptchaEntryRegister = "register"
 	CaptchaEntrySMS      = "sms"
+	CaptchaEntryRecovery = "recovery"
 )
 
 // SignatureSpec signed 档需要的签名规格，字段齐全到可以直接照着实现。

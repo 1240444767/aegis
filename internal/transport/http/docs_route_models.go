@@ -560,6 +560,11 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/url"):                                     OAuthBindURLRequest{},                    // OAuthBindURL
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/exchange"):                                     OAuthMobileLoginRequest{},                // AppOAuthExchange
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/change"):                                    ChangePasswordRequest{},                  // ChangePassword
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/recovery/complete"):                         AppPasswordRecoveryCompleteRequest{},     // AppPasswordRecoveryComplete
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/recovery/send"):                             AppPasswordRecoverySendRequest{},         // AppPasswordRecoverySend
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/recovery/start"):                            AppPasswordRecoveryStartRequest{},        // AppPasswordRecoveryStart
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/recovery/status"):                           AppPasswordRecoveryFlowRequest{},         // AppPasswordRecoveryStatus
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/recovery/verify"):                           AppPasswordRecoveryVerifyRequest{},       // AppPasswordRecoveryVerify
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/verify"):                                    VerifyPasswordRequest{},                  // VerifyPassword
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/qr/cancel"):                                          AppQRLoginTicketRequest{},                // AppQRLoginCancel
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/qr/confirm"):                                         AppQRLoginTicketRequest{},                // AppQRLoginConfirm
@@ -590,6 +595,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/sessions"):                                       UserSessionAuditQuery{},                  // UserSessionAudits
 		routeKey("POST", "/api/v1/apps/{appkey}/me/avatar/restore"):                                       AvatarRestoreRequest{},                   // RestoreUserAvatar
 		routeKey("POST", "/api/v1/apps/{appkey}/me/passkeys"):                                             PasskeyRegistrationFinishRequest{},       // FinishPasskeyRegistration
+		routeKey("POST", "/api/v1/apps/{appkey}/me/password/recovery"):                                    AppPasswordRecoveryDeviceRequest{},       // AppMyPasswordRecoveryStart
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/profile"):                                               UpdateProfileRequest{},                   // UpdateProfile
 		routeKey("POST", "/api/v1/apps/{appkey}/me/profile/changes/confirm"):                              ConfirmProfileChangeRequest{},            // ConfirmProfileChange
 		routeKey("POST", "/api/v1/apps/{appkey}/me/sessions/revoke-all"):                                  UserSessionRevokeAllRequest{},            // RevokeAllUserSessions

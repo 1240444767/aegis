@@ -131,6 +131,15 @@ func (s *LoginGuardService) RegisterSuccess(ctx context.Context, appID int64, ac
 	}
 }
 
+// ResetAccount 本人完成找回密码后解除账号维度的锁定与计数（IP 维度不动：
+// 同一个 IP 上可能还有别人在猜别的账号）。
+func (s *LoginGuardService) ResetAccount(ctx context.Context, appID int64, account string) {
+	if s == nil || s.redis == nil || strings.TrimSpace(account) == "" {
+		return
+	}
+	_ = s.redis.ResetSubject(ctx, loginGuardKindAccount, appID, account)
+}
+
 // lock 触发一次锁定：指数退避定时长、清空计数、记录风控评估。
 func (s *LoginGuardService) lock(ctx context.Context, kind string, appID int64, subject, account, ip string, failCount int64) {
 	lvl, err := s.redis.EscalateLevel(ctx, kind, appID, subject, s.cfg.MaxLockDuration)

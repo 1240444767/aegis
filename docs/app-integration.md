@@ -67,7 +67,9 @@ val profile = client.me.profile()
 | `POST` | `/auth/oauth/bind/url` | 取第三方账号绑定授权地址（Bearer） |
 | `GET` `DELETE` | `/auth/oauth/bindings[/{provider}]` | 查询 / 解绑第三方账号（Bearer） |
 | `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码 |
-| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 找回密码 |
+| `POST` | `/auth/password/recovery/start`、`/status`、`/send`、`/verify`、`/complete` | 找回密码（见 1.10） |
+| `POST` | `/me/password/recovery` | 已登录时找回密码，后续步骤同上（Bearer，见 1.10） |
+| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 旧的邮件链接式重置：只寄信，响应不含令牌；新接入请用上一行 |
 | `POST` | `/auth/password/verify`、`/auth/password/change` | 校验 / 修改密码（Bearer） |
 | `POST` | `/auth/passkey/options`、`/auth/passkey/login` | Passkey 登录 |
 | `POST` | `/auth/qr/create`、`/auth/qr/poll` | 网页扫码登录：网页申请票据、轮询并领取会话（见 1.8） |
@@ -374,7 +376,7 @@ GET /api/v1/apps/demo_app/config
 ### `auth.captcha` —— 结论，不是配置
 
 ```json
-"captcha": { "login": true, "register": false, "sms": true }
+"captcha": { "login": true, "register": false, "sms": true, "recovery": true }
 ```
 
 「要不要图形验证码」在服务端由**三处独立开关**共同决定，分属三个管理入口：
@@ -391,6 +393,9 @@ GET /api/v1/apps/demo_app/config
 
 服务端的闸门与这里下发的结论出自同一个函数（`service.ResolveCaptchaRequirement`），
 因此不存在「config 说不用、服务端却拒」的情况。
+
+`recovery` 对应 `/auth/password/recovery/start`，取验证码时 `purpose` 传 `reset_password`。
+它没有单独的场景开关：应用启用了任一图形验证码类型（或策略强制）就要求。
 
 **`login` 与 `sms` 可能同时为 true**：那时短信登录需要两个验证码 ——
 一个用于 `/auth/sms/code`，一个用于 `/auth/login`。验证码是一次性消费，
@@ -575,6 +580,49 @@ POST /api/v1/apps/{appKey}/auth/login
 - 字典按 `平台 + 型号` 查询，结果在每个实例内缓存 10 分钟；字典有写入时本实例立即失效，
   多实例部署下其他实例最多滞后 10 分钟。
 - 本功能上线之前签发的会话、写入的登录记录没有原始型号，只能按当时翻译出的名称、`deviceId` 与 UA 尽量还原。
+
+## 1.10 找回密码
+
+一次找回是服务端保管的流程。客户端只拿到一个不透明的 `flowToken`；要过哪几项验证在发起时就按账号
+当时的绑定情况定好，客户端不能挑、不能跳，全部满足后才能设新密码，设完流程即作废。
+
+```text
+未登录  POST /auth/password/recovery/start { account, captchaId?, captchaAnswer? }
+已登录  POST /me/password/recovery          {}（Bearer，不要图形验证码）
+        ─▶ { flowToken, mode, account, channels[], totp, requirements[], ready, attemptsLeft, expiresAt }
+        POST /auth/password/recovery/send     { flowToken, channel: email|phone, target? } ─▶ { expiresAt, resendAt }
+        POST /auth/password/recovery/verify   { flowToken, factor: email|phone|totp|recovery, code } ─▶ 同 start
+        POST /auth/password/recovery/complete { flowToken, newPassword } ─▶ { account, signedOut, keptCurrentSession }
+        POST /auth/password/recovery/status   { flowToken }（页面重建时读状态）
+```
+
+**要过哪几项。** `requirements` 每项的 `any` 里任选一种通过即满足：
+
+| 发起方式 | 账号绑定 | 要求 |
+|---|---|---|
+| 未登录 | 只有邮箱或只有手机 | 那一项 |
+| 未登录 | 邮箱与手机，未开两步验证 | 两项都要 |
+| 未登录 | 开了两步验证 | 邮箱或手机任一，加动态码（恢复码可替代） |
+| 未登录 | 没有可用的邮箱或手机 | 不能自助找回（`40327`） |
+| 已登录 | 有邮箱或手机 | 任一；开了两步验证再加动态码 |
+| 已登录 | 只开了两步验证 | 动态码 |
+
+**安全规则。**
+
+- `account` 可以是账号名、绑定的邮箱或手机号；一个邮箱或手机号挂在多个账号上时要求改填账号名（`40986`）。
+  `account` 与 `channels[].masked` 都是打码后的样子，`complete` 才回完整账号名。
+- 未登录发码时 `target` 必填：**完整**的邮箱或手机号，必须与绑定的一致。证明「知道」也证明「收得到」，
+  这条接口因此不能被拿来给任意号码发短信。已登录时可省略。
+- 流程绑定发起它的设备（`deviceId` 或 `X-Device-Id`），换设备继续返回 `40121`。流程 15 分钟有效，
+  全部验证通过后再给 10 分钟设密码。
+- 联系方式对不上、验证码或动态码错误都计入失败，8 次即作废流程（`42909`）。同一联系方式 60 秒
+  内不能重发、一个流程最多发 5 次；每个 IP 每小时、每个账号每天的发起次数与每天的重置次数都有上限（`42908`）。
+- 刚换绑 72 小时之内的邮箱或手机号不能用于找回：偷到会话的人可以先绑上自己的手机号再来改密码。
+- 新密码走应用的密码策略（强度、不与当前相同、不与最近 N 个重复）；不合格时流程保留，换一个再交。
+
+**完成之后。** 其余会话与刷新令牌全部吊销（已登录发起时保留当前会话），第三方应用授权一并撤销，账号维度的
+登录锁定解除，站内信与绑定邮箱各收到一封告知（含时间、设备、IP 与位置）。响应不签发令牌：未登录找回的人
+用新密码重新登录一次。
 
 ## 2. standard 档
 
@@ -765,19 +813,32 @@ aegis-transport-v2
 | `40174` | 签名格式无效 | 必须是 `v2=` + 64 位十六进制 |
 | `40175` | 签名校验失败 | 核对 canonical 的换行与字段顺序、确认用的是最新 appSecret |
 | `40176` | 带 query 的请求用了 v1 签名 | 改用 v2：待签名字符串在 path 之后加一行原样 query |
+| `40120` | 找回流程不存在、已过期或已用完 | 回到第一步重新发起 |
+| `40121` | 换了设备继续找回 | 在发起找回的设备上继续 |
+| `40122` | 填写的联系方式与绑定的不一致 | 提示用户核对；计入失败次数 |
+| `40123` | 这一项不在本次要求里或已验证过 | 按 `requirements` 里未满足的项操作 |
+| `40124` | 找回验证码错误 | 计入失败次数 |
+| `40125` | 验证尚未全部完成 | 先满足所有 `requirements` |
+| `40126` | 还没发码或验证码已失效 | 重新获取验证码 |
+| `40327` | 账号没有可用于找回的验证方式 | 未绑定邮箱或手机、或刚换绑仍在冷静期，引导联系客服 |
 | `40370` | 未启用该认证方式 | 在控制台的认证策略里勾选 |
 | `40372` | 访问令牌不属于该应用 | 用本应用的登录结果换取令牌，不要跨应用复用令牌 |
 | `40391` | 该渠道仅开放绑定，未开放直接登录 | 在渠道配置里打开「允许登录」 |
 | `40393` | 第三方账号未绑定且渠道未开放自动注册 | 引导用户先用已有账号登录再绑定 |
 | `40394` | 手机号尚未注册且应用未开放短信注册 | 在注册方式里勾选短信，或引导改用其他方式 |
 | `40405` | 登录二维码无效 | 票据不存在，或轮询时 `pollToken` 与票据不符 |
+| `40414` | 找回密码：未找到该账号 | 提示核对账号、邮箱或手机号 |
 | `40470` | 应用不存在或已停用 | 核对 appKey 与应用状态 |
 | `40906` | 该二维码已被其他账号扫描 | 提示用户在网页上刷新二维码 |
 | `40907` | 尚未扫码 | 确认与拒绝之前先调 `/auth/qr/scan` |
 | `40908` | 二维码已失效 | 票据已确认、已拒绝或已被领取，在网页上刷新 |
 | `40970` | nonce 已使用 | 每个请求换一个新的随机 nonce |
+| `40986` | 该邮箱或手机号关联了多个账号 | 改用账号名找回 |
 | `41005` | 登录二维码已过期 | 票据两分钟有效，在网页上刷新后重新扫描 |
 | `42670` | 该应用要求加密载荷 | 应用处于 sealed 档，不能发明文 |
+| `42907` | 找回验证码发送过于频繁 | 等 `resendAt` 之后再发 |
+| `42908` | 找回次数已达上限 | 按提示稍后或次日再试 |
+| `42909` | 找回验证失败次数过多 | 流程已作废，重新发起 |
 | `50372` | 尚未签发应用密钥 | 让管理员在控制台轮换一次密钥 |
 
 网关层错误（`4007x` / `4017x` / `42670` / `40970`）表示请求还没进到业务逻辑

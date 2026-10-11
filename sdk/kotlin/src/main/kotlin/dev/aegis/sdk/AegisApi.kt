@@ -211,6 +211,10 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     fun verifyEmailCode(email: String, code: String, purpose: String = "register"): JsonElement =
         client.call("POST", "/auth/email/verify", mapOf("email" to email, "code" to code, "purpose" to purpose))
 
+    /**
+     * 旧的邮件链接式重置：只寄信，响应里不再带令牌。App 请改用下面的 passwordRecovery 系列 ——
+     * 它按账号的绑定情况要求邮箱 / 短信 / 身份验证器，并在完成后吊销其余登录。
+     */
     @Throws(IOException::class)
     @JvmOverloads
     fun forgotPassword(email: String, resetUrl: String? = null): JsonElement =
@@ -220,6 +224,65 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     fun verifyResetToken(email: String, token: String): JsonElement =
         client.call("POST", "/auth/password/reset/verify", mapOf("email" to email, "token" to token))
 
+    // ── 找回密码 ──
+    //
+    // 一次找回是服务端保管的流程：passwordRecoveryStart（已登录时用 AegisMeApi.passwordRecoveryStart）
+    // 返回 flowToken 与要完成的验证 `requirements`（每项 `any` 里任选一种通过即可），按要求
+    // send / verify，`ready` 为真后 complete。流程绑定在发起它的设备上：SDK 配了 device 时
+    // X-Device-Id 头会自动带上，换设备继续会被拒（40121）。
+
+    /**
+     * 未登录发起找回。[account] 可以是账号名、绑定的邮箱或手机号。
+     *
+     * `/config` 的 `auth.captcha.recovery` 为真时先用 `captcha("reset_password")` 取图形验证码。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun passwordRecoveryStart(
+        account: String,
+        captchaId: String? = null,
+        captchaAnswer: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/auth/password/recovery/start",
+        buildBody("account" to account, "captchaId" to captchaId, "captchaAnswer" to captchaAnswer),
+    )
+
+    /** 读流程当前状态（页面重建时用）。 */
+    @Throws(IOException::class)
+    fun passwordRecoveryStatus(flowToken: String): JsonElement =
+        client.call("POST", "/auth/password/recovery/status", mapOf("flowToken" to flowToken))
+
+    /**
+     * 向 [channel]（`email` | `phone`）发验证码。未登录发起时 [target] 必填：完整的邮箱或手机号，
+     * 必须与绑定的一致，对不上算一次失败。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun passwordRecoverySend(flowToken: String, channel: String, target: String? = null): JsonElement =
+        client.call(
+            "POST", "/auth/password/recovery/send",
+            buildBody("flowToken" to flowToken, "channel" to channel, "target" to target),
+        )
+
+    /** 核验一项：[factor] 为 `email` | `phone` | `totp` | `recovery`（恢复码，可替代 totp）。 */
+    @Throws(IOException::class)
+    fun passwordRecoveryVerify(flowToken: String, factor: String, code: String): JsonElement =
+        client.call(
+            "POST", "/auth/password/recovery/verify",
+            mapOf("flowToken" to flowToken, "factor" to factor, "code" to code),
+        )
+
+    /**
+     * 设新密码。成功后其余登录全部下线（已登录发起时保留当前会话），不签发新令牌：
+     * 未登录找回的人用新密码重新登录一次。
+     */
+    @Throws(IOException::class)
+    fun passwordRecoveryComplete(flowToken: String, newPassword: String): JsonElement =
+        client.call(
+            "POST", "/auth/password/recovery/complete",
+            mapOf("flowToken" to flowToken, "newPassword" to newPassword),
+        )
+
     @Throws(IOException::class)
     fun verifyPassword(password: String): JsonElement =
         client.call("POST", "/auth/password/verify", mapOf("password" to password), requireAuth = true)
@@ -227,7 +290,8 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun changePassword(oldPassword: String, newPassword: String): JsonElement = client.call(
         "POST", "/auth/password/change",
-        mapOf("oldPassword" to oldPassword, "newPassword" to newPassword),
+        // 网关读的是 currentPassword；这里曾经发 oldPassword，于是改密码一律被当成「当前密码错误」
+        mapOf("currentPassword" to oldPassword, "newPassword" to newPassword),
         requireAuth = true,
     )
 
@@ -318,6 +382,14 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun confirmProfileChange(field: String, code: String): JsonElement =
         client.call("POST", "/me/profile/changes/confirm", mapOf("field" to field, "code" to code), requireAuth = true)
+
+    /**
+     * 已登录时找回密码（忘了原密码）：发起与 [AegisAuthApi.passwordRecoveryStart] 同一套流程，
+     * 当前会话算一项验证，完成后保留当前登录。后续步骤用 AegisAuthApi 的 passwordRecovery 系列。
+     */
+    @Throws(IOException::class)
+    fun passwordRecoveryStart(): JsonElement =
+        client.call("POST", "/me/password/recovery", emptyMap<String, Any?>(), requireAuth = true)
 
     /**
      * 上传头像。sealed 档下整个 multipart 体会被加密，调用方式不变。

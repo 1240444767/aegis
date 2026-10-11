@@ -41,6 +41,12 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGateway.POST("/auth/email/verify", h.AppEmailVerify)
 		appGateway.POST("/auth/password/forgot", h.AppPasswordForgot)
 		appGateway.POST("/auth/password/reset/verify", h.AppPasswordResetVerify)
+		// 找回密码：流程令牌贯穿四步，规则见 service/auth_password_recovery.go
+		appGateway.POST("/auth/password/recovery/start", h.AppPasswordRecoveryStart)
+		appGateway.POST("/auth/password/recovery/status", h.AppPasswordRecoveryStatus)
+		appGateway.POST("/auth/password/recovery/send", h.AppPasswordRecoverySend)
+		appGateway.POST("/auth/password/recovery/verify", h.AppPasswordRecoveryVerify)
+		appGateway.POST("/auth/password/recovery/complete", h.AppPasswordRecoveryComplete)
 		appGateway.POST("/auth/passkey/options", h.AppPasskeyOptions)
 		appGateway.POST("/auth/passkey/login", h.AppPasskeyLogin)
 		// 免登录的内容接口
@@ -85,6 +91,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/releases/channels/:code/leave", h.AppReleaseChannelLeave)
 		appGatewayAuthed.POST("/auth/password/verify", h.VerifyPassword)
 		appGatewayAuthed.POST("/auth/password/change", h.ChangePassword)
+		// 已登录时忘了原密码：发起同一套找回流程，后续步骤走 /auth/password/recovery/*
+		appGatewayAuthed.POST("/me/password/recovery", h.AppMyPasswordRecoveryStart)
 		appGatewayAuthed.POST("/auth/oauth/bind/url", h.OAuthBindURL)
 		appGatewayAuthed.GET("/auth/oauth/bindings", h.ListMyOAuthBindings)
 		appGatewayAuthed.DELETE("/auth/oauth/bindings/:provider", h.UnbindMyOAuthProvider)

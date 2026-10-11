@@ -77,3 +77,15 @@ func (r *LoginGuardRepository) LockRemaining(ctx context.Context, kind string, a
 	}
 	return d, nil
 }
+
+// ResetSubject 清掉一个主体的失败计数、退避级别与锁定。
+//
+// 只给「已经证明是本人」的场景用（找回密码完成）：锁定是为了挡住猜密码的人，
+// 主人换了新密码之后还让他等锁到期，只会把人推去找客服。
+func (r *LoginGuardRepository) ResetSubject(ctx context.Context, kind string, appID int64, subject string) error {
+	return r.client.Del(ctx,
+		r.key("fail", kind, appID, subject),
+		r.key("lvl", kind, appID, subject),
+		r.key("lock", kind, appID, subject),
+	).Err()
+}
