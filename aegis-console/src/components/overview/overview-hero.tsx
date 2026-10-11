@@ -100,6 +100,8 @@ function useOnlineDuration(token: string | null, now: Date) {
 
 // three.js 只在浏览器里加载，也不进首屏主包
 const HeroGlobe = dynamic(() => import("./hero-globe").then((mod) => mod.HeroGlobe), { ssr: false });
+// 彩蛋：只有触发时才加载
+const CosmosJourney = dynamic(() => import("./cosmos/cosmos-journey"), { ssr: false });
 
 /** 数值变化时从旧值缓动到新值；减少动态效果时直接跳到目标。 */
 function useCountUp(target: number | undefined, disabled: boolean) {
@@ -156,6 +158,9 @@ export function OverviewHero() {
   const [globeReady, setGlobeReady] = useState(false);
   // 时钟每秒重渲染首屏；回调保持稳定，地球组件（memo）才不会跟着重渲染
   const handleGlobeReady = useCallback(() => setGlobeReady(true), []);
+  const [cosmosOpen, setCosmosOpen] = useState(false);
+  const openCosmos = useCallback(() => setCosmosOpen(true), []);
+  const closeCosmos = useCallback(() => setCosmosOpen(false), []);
 
   const hour = now.getHours();
   const period = getPeriod(hour);
@@ -199,7 +204,8 @@ export function OverviewHero() {
           )}
         </div>
 
-        <div className="relative h-[280px] md:h-auto">
+        {/* 双指捏合留给地球的彩蛋手势，纵向滚动照常 */}
+        <div className="relative h-[280px] touch-pan-x touch-pan-y md:h-auto">
           {/* 贴图到位前的占位：与地球同位置同大小的圆 */}
           <div
             aria-hidden
@@ -213,6 +219,7 @@ export function OverviewHero() {
               theme={resolvedTheme === "light" ? "light" : "dark"}
               reducedMotion={reducedMotion}
               onReady={handleGlobeReady}
+              onCosmos={openCosmos}
               className="absolute inset-0"
             />
           ) : null}
@@ -234,6 +241,7 @@ export function OverviewHero() {
           />
         ))}
       </div>
+      {cosmosOpen ? <CosmosJourney zoneLongitude={(-new Date().getTimezoneOffset() / 60) * 15 * (Math.PI / 180)} onClose={closeCosmos} /> : null}
     </section>
   );
 }

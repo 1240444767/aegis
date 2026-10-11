@@ -120,7 +120,7 @@ void main() {
 
   // 云层：受光面偏白，晨昏线附近染一点暖色
   float twilight = exp(-pow(sunGeo / 0.16, 2.0));
-  vec3 cloudLit = mix(vec3(0.96), vec3(1.0, 0.72, 0.5), twilight * 0.55) * clamp(sunGeo * 1.2 + 0.12, 0.0, 1.0);
+  vec3 cloudLit = mix(vec3(0.96), vec3(1.0, 0.72, 0.5), twilight * 0.55) * clamp(sunGeo * 1.2 + 0.02, 0.0, 1.0);
   surface = mix(surface, cloudLit, cloud * 0.92);
 
   // 夜半球的城市灯光，云层会挡掉一部分
@@ -198,21 +198,26 @@ export const HeroGlobe = memo(function HeroGlobe({
   theme,
   reducedMotion,
   onReady,
+  onCosmos,
   className
 }: {
   theme: "dark" | "light";
   reducedMotion: boolean;
   onReady?: () => void;
+  /** 对着地球连续做缩小手势时触发（彩蛋） */
+  onCosmos?: () => void;
   className?: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef(theme);
   const onReadyRef = useRef(onReady);
+  const onCosmosRef = useRef(onCosmos);
   const applyThemeRef = useRef<((theme: "dark" | "light") => void) | null>(null);
 
   useEffect(() => {
     onReadyRef.current = onReady;
-  }, [onReady]);
+    onCosmosRef.current = onCosmos;
+  }, [onReady, onCosmos]);
 
   useEffect(() => {
     themeRef.current = theme;
@@ -398,6 +403,57 @@ export const HeroGlobe = memo(function HeroGlobe({
       hoverTarget.addEventListener("pointerleave", onPointerLeave);
     }
 
+    // ── 彩蛋：对着地球连续缩小（触控板捏合、Ctrl+滚轮、双指捏合）──
+    // 每次缩小地球退远一点，停手后慢慢回弹；累计过阈值就飞向宇宙。普通滚轮不算，以免滚动页面时误触。
+    let zoomOut = 0;
+    let lastZoomAt = 0;
+    const pushZoom = (amount: number) => {
+      if (!ready) return;
+      zoomOut = Math.max(0, zoomOut + amount);
+      lastZoomAt = performance.now();
+      if (zoomOut >= 1) {
+        zoomOut = 0.6;
+        onCosmosRef.current?.();
+      }
+      requestRender();
+    };
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault(); // 否则浏览器会缩放整页
+      const delta = Math.max(-120, Math.min(120, event.deltaY));
+      pushZoom((delta / 120) * 0.2);
+    };
+    let gestureScale = 1;
+    const onGestureStart = (event: Event) => {
+      event.preventDefault();
+      gestureScale = 1;
+    };
+    const onGestureChange = (event: Event) => {
+      event.preventDefault();
+      const scale = (event as Event & { scale: number }).scale;
+      pushZoom(Math.log(gestureScale / scale) * 0.55);
+      gestureScale = scale;
+    };
+    let touchDistance = 0;
+    const onTouchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 2) {
+        touchDistance = 0;
+        return;
+      }
+      const [a, b] = [event.touches[0]!, event.touches[1]!];
+      const distance = Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+      if (touchDistance > 0) pushZoom(Math.log(touchDistance / distance) * 0.55);
+      touchDistance = distance;
+    };
+    const onTouchEnd = () => {
+      touchDistance = 0;
+    };
+    hoverTarget.addEventListener("wheel", onWheel, { passive: false });
+    hoverTarget.addEventListener("gesturestart", onGestureStart);
+    hoverTarget.addEventListener("gesturechange", onGestureChange);
+    hoverTarget.addEventListener("touchmove", onTouchMove, { passive: true });
+    hoverTarget.addEventListener("touchend", onTouchEnd);
+
     const resize = () => {
       const width = Math.max(1, container.clientWidth);
       const height = Math.max(1, container.clientHeight);
@@ -427,7 +483,9 @@ export const HeroGlobe = memo(function HeroGlobe({
 
       globe.rotation.y = baseYaw + motion * (Math.sin(t * 0.06) * 0.35 + pointer.x * 0.2) + (1 - eased) * 1.1;
       tilt.rotation.x = 0.3 + motion * pointer.y * 0.07;
-      camera.position.set(0, 0, restDistance + (1 - eased) * 1.6);
+      // 停手 0.6 秒后开始回弹
+      if (zoomOut > 0 && time - lastZoomAt > 600) zoomOut = Math.max(0, zoomOut - 0.012);
+      camera.position.set(0, 0, restDistance + (1 - eased) * 1.6 + zoomOut * 2.6);
       camera.lookAt(0, 0, 0);
 
       earthUniforms.uReveal.value = eased;
@@ -449,7 +507,7 @@ export const HeroGlobe = memo(function HeroGlobe({
       haloUniforms.uSun.value.copy(sunLocal);
 
       renderer.render(scene, camera);
-      return ready && progress < 1;
+      return (ready && progress < 1) || zoomOut > 0;
     };
 
     // ── 帧循环：离开视野或标签页隐藏时暂停 ──
@@ -509,6 +567,11 @@ export const HeroGlobe = memo(function HeroGlobe({
       document.removeEventListener("visibilitychange", onVisibility);
       hoverTarget.removeEventListener("pointermove", onPointerMove);
       hoverTarget.removeEventListener("pointerleave", onPointerLeave);
+      hoverTarget.removeEventListener("wheel", onWheel);
+      hoverTarget.removeEventListener("gesturestart", onGestureStart);
+      hoverTarget.removeEventListener("gesturechange", onGestureChange);
+      hoverTarget.removeEventListener("touchmove", onTouchMove);
+      hoverTarget.removeEventListener("touchend", onTouchEnd);
       owned.forEach((texture) => texture.dispose());
       scene.traverse((object) => {
         const mesh = object as THREE.Mesh;
