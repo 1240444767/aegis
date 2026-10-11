@@ -28,6 +28,7 @@ import { AppSignInRewardPanel } from "@/components/apps/app-signin-reward-panel"
 import { AppStatsPanel } from "@/components/apps/app-stats-panel";
 import { AppUserSettingsPanel } from "@/components/apps/app-user-settings-panel";
 import { AppCardKeyPanel } from "@/components/apps/card-key/app-card-key-panel";
+import { AppPointsStorePanel } from "@/components/apps/points-store/app-points-store-panel";
 import { AppVipPanel } from "@/components/apps/vip/app-vip-panel";
 import { EmailChannelPanel } from "@/components/email/email-channel-panel";
 import { AIChannelPanel } from "@/components/ai/ai-channel-panel";
@@ -185,6 +186,8 @@ function AppSectionPanel({ section, app }: { section: string; app: AppSummary })
       return <AppRewardedAdPanel appKey={app.appKey} />;
     case "ad-policy":
       return <AppAdPolicyPanel appKey={app.appKey} />;
+    case "points-store":
+      return <AppPointsStorePanel appKey={app.appKey} />;
     default:
       return <AppInfoPanel appKey={app.appKey} />;
   }

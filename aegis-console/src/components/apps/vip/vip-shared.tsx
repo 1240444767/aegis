@@ -33,6 +33,7 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
   admin_grant: { label: "管理员授予", variant: "info" },
   card_key: { label: "卡密核销", variant: "info" },
   ad_reward: { label: "看广告领取", variant: "info" },
+  points_store: { label: "积分兑换", variant: "info" },
   // 只出现在开通记录里：扣减天数是一条负时长的账，取消永久会员是一条 lifetime 留痕，
   // 都不是一段会员期。具体收回了什么看时长列（formatVipTerm）
   admin_revoke: { label: "收回", variant: "warning" },

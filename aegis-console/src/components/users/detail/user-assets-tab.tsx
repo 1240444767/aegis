@@ -80,6 +80,7 @@ import {
   relativeTime,
   textValue
 } from "./user-detail-shared";
+import { UserFeatureUnlocksPanel } from "./user-feature-unlocks-panel";
 
 /** 金额输入：最多两位小数，允许前导负号。 */
 const AMOUNT_RE = /^-?\d+(\.\d{1,2})?$/;
@@ -91,6 +92,7 @@ const AMOUNT_RE = /^-?\d+(\.\d{1,2})?$/;
  *   积分 / 经验  —— points_service，整数，无小数
  *   钱包余额     —— wallet，decimal 字符串，带流水与幂等
  *   会员          —— vip，套餐 / 天数发放，功能权益跟随套餐当前配置
+ *   功能解锁      —— 积分兑换或管理员授予的单项功能，不让人成为会员
  * 放在一页是因为管理员的问题是"这人有什么"，而不是"平台有几张表"；
  * 但调整入口各自独立，绝不做成一个统一的"调整资产"表单 —— 那会掩盖它们不同的结算语义。
  */
@@ -158,6 +160,8 @@ export function UserAssetsTab({
       </div>
 
       <VipPanel appKey={appKey} userId={userId} />
+
+      <UserFeatureUnlocksPanel appKey={appKey} userId={userId} />
 
       <Panel
         title="钱包流水"

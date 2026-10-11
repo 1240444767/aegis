@@ -707,6 +707,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/rewarded-ad.ts` / `lib/rewarded-ad-hooks.ts` | 激励广告域 API 与 React Query hooks |
 | `components/apps/ad-policy/` | 广告服务区块：概览 / 用户 / 开屏 / 策略（见下节） |
 | `lib/api/ad-policy.ts` / `lib/ad-policy-hooks.ts` | 广告服务策略域 API 与 React Query hooks |
+| `components/apps/points-store/` | 积分商城区块：概览 / 商品 / 兑换记录（见下节） |
+| `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
 | `lib/api/vip.ts` / `lib/vip-hooks.ts` | 会员域 API 与 React Query hooks |
@@ -976,6 +978,29 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 `configured: false` 表示应用没保存过策略，客户端此时按自己内置的默认策略处理，界面上如实显示「未配置」。
 判定与接口见 [docs/ad-policy.md](../docs/ad-policy.md)。
+
+## 积分商城区块（/apps/{appKey}?tab=points-store）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/points-store/app-points-store-panel.tsx` | 骨架 + 概览 / 商品 / 兑换记录三个视图的内部切换，跨视图带筛选（商品的「记录」、待发放） |
+| `components/apps/points-store/points-store-overview-panel.tsx` | 开关 + 今日与窗口内的兑换笔数、人数、消耗积分、待发放、在售 + 两张柱状图 + 热门商品 |
+| `components/apps/points-store/points-store-items-panel.tsx` | 商品按分类分组：权益摘要、价格与限量限兑、兑换汇总、上下架、编辑、删除 |
+| `components/apps/points-store/points-store-item-editor.tsx` | 商品编辑抽屉：基本信息、权益（目录驱动，可增删行）、库存与限兑、兑换条件、上下架时间 |
+| `components/apps/points-store/points-store-redemptions-panel.tsx` | 兑换记录：实际发放、状态；待发放的在这里「发放」（写给用户的话）或「取消」（退积分） |
+| `components/apps/points-store/points-store-shared.tsx` | 周期 / 对象 / 状态文案、权益摘要、时长口径 |
+| `components/users/detail/user-feature-unlocks-panel.tsx` | 用户详情「资产」页签里的功能解锁：当前生效、授予、逐条收回 |
+
+四条硬约束：
+
+1. **权益表单由后端目录驱动**（`/points-store/catalog`）：哪一档能重复（功能解锁）、哪一档只能单独存在（人工发放）
+   都来自目录，编辑器据此决定「添加权益」里还能选什么。
+2. **可兑换判定只在后端**（`pointstore.Evaluate`），控制台不推演「这个人能不能兑」。
+3. **功能解锁不混进会员面板的「发放」**：它只加功能、不让人成为会员，放在一起会让人以为授予功能等于开了会员。
+   授予与收回之后会员权益的缓存一并失效（`features` 变了）。
+4. **只有待发放的兑换能处理**；已到账的权益已经被用上了，界面上不给取消入口。
+
+兑换语义（单事务、幂等、快照、顺延）见 [docs/points-store.md](../docs/points-store.md)。
 
 ## 用户云存储区块（/apps/{appKey}?tab=cloud-storage）
 

@@ -1360,13 +1360,15 @@ export type VipEntitlement = {
   /** 永久会员另有一段仍在期内的限时会员时，那段的到期时间 */
   timedExpireAt?: string | null;
   isTrial: boolean;
-  /** none / unknown / trial / wallet / payment_order / admin_grant / card_key / ad_reward */
+  /** none / unknown / trial / wallet / payment_order / admin_grant / card_key / ad_reward / points_store */
   source: string;
   planName?: string;
   expireAt?: string | null;
   remainingSeconds: number;
   remainingDays: number;
   features: string[];
+  /** 单独解锁的功能（积分兑换、管理员授予），与会员身份无关；features 已经包含它们 */
+  unlocks?: Array<{ tag: string; permanent: boolean; expireAt?: string | null }>;
   trial?: VipTrialState | null;
   trialOffer: VipTrialOffer;
 };

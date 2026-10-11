@@ -90,6 +90,7 @@ export type VipSource =
   | "admin_grant"
   | "card_key"
   | "ad_reward"
+  | "points_store"
   | "admin_revoke"
   | "legacy_import"
   | "unknown";
@@ -141,6 +142,8 @@ export type VipEntitlement = {
   remainingSeconds: number;
   remainingDays: number;
   features: string[];
+  /** 单独解锁的功能（积分兑换、管理员授予），与会员身份无关；features 已经包含它们 */
+  unlocks?: Array<{ tag: string; permanent: boolean; expireAt?: string }>;
   trial?: VipTrialState;
   trialOffer: VipTrialOffer;
 };

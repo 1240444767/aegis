@@ -389,7 +389,9 @@ export const WALLET_TXN_LABEL: Record<string, string> = {
   refund: "退款",
   admin_adjust: "管理员调整",
   vip_purchase: "购买会员",
-  order_pay: "订单支付"
+  order_pay: "订单支付",
+  card_key: "卡密入账",
+  points_exchange: "积分兑换"
 };
 
 export const LOGIN_STATUS_LABEL: Record<string, string> = {

@@ -40,7 +40,9 @@ export const walletTypeLabels: Record<string, string> = {
   refund: "退款入账",
   admin_adjust: "管理员调整",
   vip_purchase: "会员开通",
-  order_pay: "订单支付"
+  order_pay: "订单支付",
+  card_key: "卡密入账",
+  points_exchange: "积分兑换"
 };
 
 export function walletTypeLabel(type: string) {
