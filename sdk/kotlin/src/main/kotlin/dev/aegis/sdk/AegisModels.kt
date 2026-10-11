@@ -64,6 +64,8 @@ data class CaptchaRequirement(
      * 这里不造两个恒等的字段让人以为它们会不同。
      */
     val sms: Boolean = false,
+    /** 调 `/auth/password/recovery/start` 前是否必须先取验证码（purpose: `reset_password`）。 */
+    val recovery: Boolean = false,
 )
 
 @Serializable
