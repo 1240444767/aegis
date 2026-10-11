@@ -29,6 +29,7 @@ const (
 	SourceAdminGrant   = ChannelAdminGrant
 	SourceCardKey      = ChannelCardKey
 	SourceAdReward     = ChannelAdReward
+	SourcePointsStore  = ChannelPointsStore
 )
 
 // 试用资格判据。客户端按 reason 分支，不要匹配 message —— 后者会随文案调整变化。
@@ -154,9 +155,12 @@ type Entitlement struct {
 	// 客户端说不清「为什么 AI 功能下个月就没了」。不是永久会员时恒为空（那时看 expireAt）。
 	TimedExpireAt *time.Time `json:"timedExpireAt,omitempty"`
 	// Features 当前生效的功能标识：仍生效的各段按套餐**当前**配置取并集，
-	// 再与启用中的功能目录取交集（见 resolveFeatures）。
-	// 不是会员时恒为空数组 —— 过期用户的开通记录仍在账本里，但权益已经不在了。
+	// 再并上仍生效的功能解锁，最后与启用中的功能目录取交集（见 resolveFeatures / resolveUnlocks）。
+	// 不是会员、也没有解锁时恒为空数组 —— 过期用户的开通记录仍在账本里，但权益已经不在了。
 	Features []string `json:"features"`
+	// Unlocks 单独解锁的功能（积分兑换、管理员授予），与会员身份无关：
+	// 不是会员也可能有，有了也不会因此成为会员。features 已经包含它们。
+	Unlocks []UnlockView `json:"unlocks"`
 	// AdFree 会员身份是否免广告（免除广告服务的同意要求、不展示开屏广告）。
 	// 只有全部生效中的会员期都来自「看广告赠送」、且场景设置为不免广告时为 false；不是会员时恒为 false。
 	AdFree     bool        `json:"adFree"`
@@ -175,6 +179,8 @@ type EvalInput struct {
 	// FeatureCatalog 本应用**启用中**的功能标识。功能权益只在这个集合里取，
 	// 停用 / 删除一个标识即对所有人同时生效。
 	FeatureCatalog []string
+	// Unlocks 尚未结束、未被收回的功能解锁（与会员段并列的第三条线）
+	Unlocks []FeatureUnlock
 	// Claim 该用户在本应用的试用领取记录，没领过为 nil
 	Claim *TrialClaim
 	// TrialPlan 当前启用中的试用套餐，未配置为 nil
@@ -195,7 +201,7 @@ type EvalInput struct {
 // 永久会员的「当前套餐」「会员来源」取最近一笔永久开通 —— 那才是他的身份；
 // 另买的限时高级版只贡献功能，到期时间放在 timedExpireAt。
 func Evaluate(in EvalInput, now time.Time) Entitlement {
-	entitlement := Entitlement{Source: SourceNone, ExpireAt: in.ExpireAt, Features: []string{}}
+	entitlement := Entitlement{Source: SourceNone, ExpireAt: in.ExpireAt, Features: []string{}, Unlocks: []UnlockView{}}
 
 	timedActive := in.ExpireAt != nil && in.ExpireAt.After(now)
 	lifetime := in.LifetimeSince != nil
@@ -263,6 +269,10 @@ func Evaluate(in EvalInput, now time.Time) Entitlement {
 		}
 	}
 
+	// 功能解锁与会员身份无关：放在会员判定之后并进来，不改 isVip / adFree / 来源。
+	entitlement.Unlocks = resolveUnlocks(in.Unlocks, in.FeatureCatalog, now)
+	entitlement.Features = mergeFeatureTags(entitlement.Features, entitlement.Unlocks)
+
 	entitlement.TrialOffer = evaluateTrialOffer(in, entitlement)
 	return entitlement
 }
@@ -327,7 +337,7 @@ func LifetimeIncludes(lifetime bool, lifetimeFeatures []string, plan Plan) bool 
 func normalizeSource(channel string) string {
 	switch channel {
 	case ChannelTrial, ChannelWallet, ChannelPaymentOrder, ChannelAdminGrant, ChannelCardKey,
-		ChannelAdReward:
+		ChannelAdReward, ChannelPointsStore:
 		return channel
 	default:
 		return SourceUnknown

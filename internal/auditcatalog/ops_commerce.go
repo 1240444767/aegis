@@ -59,6 +59,20 @@ func init() {
 		View("GET /api/admin/apps/:appkey/ad-policy/splash-events", "查看开屏广告记录", ""),
 		View("GET /api/admin/apps/:appkey/ad-policy/stats", "查看广告服务统计", ""),
 
+		// 积分商城
+		View("GET /api/admin/apps/:appkey/points-store/catalog", "查看积分商城目录", ""),
+		View("GET /api/admin/apps/:appkey/points-store/settings", "查看积分商城开关", ""),
+		Write("PUT /api/admin/apps/:appkey/points-store/settings", "修改积分商城开关", "", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/points-store/items", "查看积分商城商品", ""),
+		Write("POST /api/admin/apps/:appkey/points-store/items", "新建积分商城商品", "积分商品", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/points-store/items/:itemId", "修改积分商城商品", "积分商品", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/points-store/items/:itemId/status", "上下架积分商城商品", "积分商品", SeverityMedium),
+		Write("DELETE /api/admin/apps/:appkey/points-store/items/:itemId", "删除积分商城商品", "积分商品", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/points-store/redemptions", "查看积分兑换记录", ""),
+		Write("POST /api/admin/apps/:appkey/points-store/redemptions/:redemptionId/fulfill", "发放积分兑换", "积分兑换", SeverityMedium),
+		Write("POST /api/admin/apps/:appkey/points-store/redemptions/:redemptionId/cancel", "取消积分兑换并退回积分", "积分兑换", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/points-store/stats", "查看积分商城统计", ""),
+
 		// 签到
 		View("GET /api/admin/apps/:appkey/signin/records", "查看签到记录", ""),
 		View("GET /api/admin/apps/:appkey/signin/stats", "查看签到统计", ""),

@@ -583,6 +583,37 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun experienceTransactions(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/points/experience-transactions", query = pageQuery(page, limit), requireAuth = true)
 
+    /**
+     * 积分商城首页：余额、等级、商品，以及每件商品对当前用户的可兑换判定（`availability`）。
+     *
+     * 未开启时 `enabled=false`、`items` 为空（不报错），入口应当整个隐藏。
+     */
+    @Throws(IOException::class)
+    fun pointsStore(): JsonElement = client.call("GET", "/points/store", requireAuth = true)
+
+    /**
+     * 用积分兑换一件商品。
+     *
+     * [requestId] 由调用方生成（建议 UUID），网络重试时带同一个值：服务端原样返回第一次的结果
+     * （`replayed=true`），不会重复扣积分。失败码与 `availability.reason` 一一对应：
+     * 40303 未开放 / 40304 暂不可兑换 / 40305 已兑完 / 40306 次数已满 / 40307 积分不足 /
+     * 40308 不满足条件 / 40309 已拥有 / 40443 商品不存在。
+     * 含人工发放的商品兑换后 `redemption.status` 为 `pending`，处理结果以站内信通知。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun redeemPointsStoreItem(itemId: Long, requestId: String? = null, deviceId: String? = null): JsonElement =
+        client.call(
+            "POST", "/points/store/redeem",
+            mapOf("itemId" to itemId, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
+        )
+
+    /** 我的积分兑换记录。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun pointsStoreRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/points/store/redemptions", query = pageQuery(page, limit), requireAuth = true)
+
     @Throws(IOException::class)
     fun leaderboardSummary(): JsonElement = client.call("GET", "/leaderboard/summary", requireAuth = true)
 

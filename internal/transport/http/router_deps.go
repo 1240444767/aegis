@@ -51,6 +51,7 @@ type RouterDeps struct {
 	CardKey          *service.CardKeyService
 	RewardedAd       *service.RewardedAdService
 	AdPolicy         *service.AdPolicyService
+	PointsStore      *service.PointsStoreService
 	CloudStorage     *service.CloudStorageService
 	Site             *service.SiteService
 	Version          *service.VersionService
@@ -178,6 +179,7 @@ func (d RouterDeps) newHandler() *Handler {
 		cardKey:            d.CardKey,
 		rewardedAd:         d.RewardedAd,
 		adPolicy:           d.AdPolicy,
+		pointsStore:        d.PointsStore,
 		cloudStorage:       d.CloudStorage,
 		authProtocol:       d.AuthProtocol,
 		dashboard:          d.Dashboard,

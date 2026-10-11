@@ -23,6 +23,7 @@ DELETE	/api/admin/apps/:appkey/notifications	DeleteAdminAppNotifications
 DELETE	/api/admin/apps/:appkey/oauth-bindings	AdminDeleteAppOAuthBinding
 DELETE	/api/admin/apps/:appkey/oauth-providers/:provider	AdminDeleteAppOAuthProvider
 DELETE	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminDeleteOAuth2Client
+DELETE	/api/admin/apps/:appkey/points-store/items/:itemId	AdminDeletePointsStoreItem
 DELETE	/api/admin/apps/:appkey/releases/:rid	AdminDeleteRelease
 DELETE	/api/admin/apps/:appkey/users/:userId	AdminDeleteUser
 DELETE	/api/admin/apps/:appkey/users/:userId/avatar	AdminRemoveAppUserAvatar
@@ -171,6 +172,11 @@ GET	/api/admin/apps/:appkey/oauth2/clients	AdminListOAuth2Clients
 GET	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminGetOAuth2Client
 GET	/api/admin/apps/:appkey/oauth2/overview	AdminOAuth2Overview
 GET	/api/admin/apps/:appkey/password-policy	AdminAppPasswordPolicy
+GET	/api/admin/apps/:appkey/points-store/catalog	AdminPointsStoreCatalog
+GET	/api/admin/apps/:appkey/points-store/items	AdminListPointsStoreItems
+GET	/api/admin/apps/:appkey/points-store/redemptions	AdminListPointsStoreRedemptions
+GET	/api/admin/apps/:appkey/points-store/settings	AdminPointsStoreSettings
+GET	/api/admin/apps/:appkey/points-store/stats	AdminPointsStoreStats
 GET	/api/admin/apps/:appkey/policy	AdminAppPolicy
 GET	/api/admin/apps/:appkey/releases	AdminListReleases
 GET	/api/admin/apps/:appkey/releases/:rid	AdminGetRelease
@@ -210,6 +216,7 @@ GET	/api/admin/apps/:appkey/users/:userId/cloud-storage	AdminCloudStorageUser
 GET	/api/admin/apps/:appkey/users/:userId/cloud-storage/items	AdminCloudStorageUserItems
 GET	/api/admin/apps/:appkey/users/:userId/cloud-storage/items/:itemId	AdminCloudStorageUserItem
 GET	/api/admin/apps/:appkey/users/:userId/cloud-storage/items/:itemId/revisions	AdminCloudStorageUserItemRevisions
+GET	/api/admin/apps/:appkey/users/:userId/feature-unlocks	AdminUserFeatureUnlocks
 GET	/api/admin/apps/:appkey/users/:userId/oauth2-grants	AdminListUserOAuth2Grants
 GET	/api/admin/apps/:appkey/users/:userId/sessions	AdminListUserSessions
 GET	/api/admin/apps/:appkey/users/:userId/wallet	AdminAppUserWallet
@@ -543,6 +550,8 @@ GET	/api/v1/apps/:appkey/points/integral-transactions	IntegralTransactions
 GET	/api/v1/apps/:appkey/points/level	MyLevel
 GET	/api/v1/apps/:appkey/points/levels	PointsLevels
 GET	/api/v1/apps/:appkey/points/overview	PointsOverview
+GET	/api/v1/apps/:appkey/points/store	AppPointsStore
+GET	/api/v1/apps/:appkey/points/store/redemptions	AppPointsStoreRedemptions
 GET	/api/v1/apps/:appkey/releases	AppReleaseHistory
 GET	/api/v1/apps/:appkey/releases/channels	AppReleaseChannels
 GET	/api/v1/apps/:appkey/releases/check	AppReleaseCheck
@@ -695,6 +704,9 @@ POST	/api/admin/apps/:appkey/oauth2/clients	AdminCreateOAuth2Client
 POST	/api/admin/apps/:appkey/oauth2/clients/:clientId/rotate-secret	AdminRotateOAuth2ClientSecret
 POST	/api/admin/apps/:appkey/password-policy/reset	ResetAdminAppPasswordPolicy
 POST	/api/admin/apps/:appkey/password-policy/test	TestAdminAppPasswordPolicy
+POST	/api/admin/apps/:appkey/points-store/items	AdminCreatePointsStoreItem
+POST	/api/admin/apps/:appkey/points-store/redemptions/:redemptionId/cancel	AdminCancelPointsStoreRedemption
+POST	/api/admin/apps/:appkey/points-store/redemptions/:redemptionId/fulfill	AdminFulfillPointsStoreRedemption
 POST	/api/admin/apps/:appkey/releases	AdminCreateRelease
 POST	/api/admin/apps/:appkey/releases/:rid/pause	AdminPauseRelease
 POST	/api/admin/apps/:appkey/releases/:rid/publish	AdminPublishRelease
@@ -711,6 +723,8 @@ POST	/api/admin/apps/:appkey/users/:userId/bans/:banId/revoke	RevokeAdminAppUser
 POST	/api/admin/apps/:appkey/users/:userId/cloud-storage/items/:itemId/link	AdminCloudStorageUserItemLink
 POST	/api/admin/apps/:appkey/users/:userId/cloud-storage/items/:itemId/restore	AdminRestoreCloudStorageUserItem
 POST	/api/admin/apps/:appkey/users/:userId/cloud-storage/items/:itemId/rollback	AdminRollbackCloudStorageUserItem
+POST	/api/admin/apps/:appkey/users/:userId/feature-unlocks	AdminGrantFeatureUnlock
+POST	/api/admin/apps/:appkey/users/:userId/feature-unlocks/:unlockId/revoke	AdminRevokeFeatureUnlock
 POST	/api/admin/apps/:appkey/users/:userId/reset-password	AdminResetUserPassword
 POST	/api/admin/apps/:appkey/users/:userId/revoke-sessions	AdminRevokeUserSessions
 POST	/api/admin/apps/:appkey/users/:userId/sessions/revoke-batch	AdminRevokeUserSessionsBatch
@@ -1069,6 +1083,7 @@ POST	/api/v1/apps/:appkey/notifications/read	ReadNotification
 POST	/api/v1/apps/:appkey/notifications/read-all	ReadAllNotifications
 POST	/api/v1/apps/:appkey/notifications/read-batch	ReadNotificationsBatch
 POST	/api/v1/apps/:appkey/pay/orders	CreatePaymentOrder
+POST	/api/v1/apps/:appkey/points/store/redeem	AppRedeemPointsStoreItem
 POST	/api/v1/apps/:appkey/releases/channels/:code/join	AppReleaseChannelJoin
 POST	/api/v1/apps/:appkey/releases/channels/:code/leave	AppReleaseChannelLeave
 POST	/api/v1/apps/:appkey/releases/events	AppReleaseEvent
@@ -1115,6 +1130,9 @@ PUT	/api/admin/apps/:appkey/oauth-providers/:provider	AdminUpdateAppOAuthProvide
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider/enabled	AdminSetAppOAuthProviderEnabled
 PUT	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminUpdateOAuth2Client
 PUT	/api/admin/apps/:appkey/password-policy	UpdateAdminAppPasswordPolicy
+PUT	/api/admin/apps/:appkey/points-store/items/:itemId	AdminUpdatePointsStoreItem
+PUT	/api/admin/apps/:appkey/points-store/items/:itemId/status	AdminSetPointsStoreItemStatus
+PUT	/api/admin/apps/:appkey/points-store/settings	AdminSavePointsStoreSettings
 PUT	/api/admin/apps/:appkey/policy	UpdateAdminAppPolicy
 PUT	/api/admin/apps/:appkey/releases/:rid	AdminUpdateRelease
 PUT	/api/admin/apps/:appkey/releases/:rid/rollout	AdminSetReleaseRollout

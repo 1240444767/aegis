@@ -149,6 +149,13 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsLevels", Method: "GET", Path: "/points/levels", Auth: true, Summary: "等级配置"},
 	{Key: "integralTransactions", Method: "GET", Path: "/points/integral-transactions", Auth: true, Summary: "积分流水"},
 	{Key: "experienceTransactions", Method: "GET", Path: "/points/experience-transactions", Auth: true, Summary: "经验流水"},
+	// 积分商城：每件商品随附 availability（能不能兑、为什么不能），与兑换失败的错误码同一套判据。
+	// 未开启时 enabled=false、items 为空，不报错。
+	{Key: "pointsStore", Method: "GET", Path: "/points/store", Auth: true,
+		Summary: "积分商城：余额、等级、商品与每件商品对当前用户的可兑换判定"},
+	{Key: "pointsStoreRedeem", Method: "POST", Path: "/points/store/redeem", Auth: true,
+		Summary: "用积分兑换一件商品（requestId 幂等）；含人工发放的商品兑换后为 pending"},
+	{Key: "pointsStoreRedemptions", Method: "GET", Path: "/points/store/redemptions", Auth: true, Summary: "我的兑换记录"},
 	{Key: "leaderboardSummary", Method: "GET", Path: "/leaderboard/summary", Auth: true, Summary: "排行榜综合概览"},
 	{Key: "leaderboardMe", Method: "GET", Path: "/leaderboard/me", Auth: true, Summary: "我在各榜单的排名"},
 	{Key: "leaderboardPoints", Method: "GET", Path: "/leaderboard/points/{type}", Auth: true, Summary: "积分榜（type: integral | experience | level）"},
@@ -333,6 +340,24 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "授权卡走 /auth/login 的 cardkey 方式，兑换卡走 /card-keys/redeem"},
 	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可加设备位的授权卡",
 		Recovery: authprotocol.RecoveryNone},
+	// ── 积分商城 ──
+	// 与 /points/store 里每件商品的 availability.reason 一一对应：列表上灰着的原因与点了之后的报错是同一句话。
+	{Code: errCodePointsStoreDisabled, Name: "POINTS_STORE_DISABLED", Message: "积分商城暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/points/store 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodePointsStoreUnavailable, Name: "POINTS_STORE_ITEM_UNAVAILABLE", Message: "商品暂不可兑换",
+		Recovery: authprotocol.RecoveryNone, Hint: "已下架、未开始、已结束或配置的权益已失效（reason: inactive / not_started / ended / reward_unavailable），重新拉一次 /points/store"},
+	{Code: errCodePointsStoreSoldOut, Name: "POINTS_STORE_SOLD_OUT", Message: "已兑完", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePointsStoreLimitReached, Name: "POINTS_STORE_LIMIT_REACHED", Message: "已达到兑换次数上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "按商品的 limitPeriod 计：total 为累计，day / week / month 按应用时区的自然日、周、月"},
+	{Code: errCodePointsInsufficient, Name: "POINTS_INSUFFICIENT", Message: "积分不足", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePointsStoreRequirement, Name: "POINTS_STORE_REQUIREMENT_UNMET", Message: "不满足兑换条件",
+		Recovery: authprotocol.RecoveryNone, Hint: "等级门槛（minLevel）或兑换对象（audience: vip / non_vip）不符，message 说明具体是哪一条"},
+	{Code: errCodePointsStoreOwned, Name: "POINTS_STORE_OWNED", Message: "已拥有该权益，无需兑换",
+		Recovery: authprotocol.RecoveryNone, Hint: "永久会员已包含所兑的会员，或所兑功能已永久解锁"},
+	{Code: errCodePointsStoreItemNotFound, Name: "POINTS_STORE_ITEM_NOT_FOUND", Message: "商品不存在或已删除",
+		Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePointsStoreRedeeming, Name: "POINTS_STORE_REDEEMING", Message: "兑换正在处理",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
 	// ── 激励广告 ──
 	// 只有「这次上报本身不成立」才是错误；限额、冷却等「看了但不发」的结论
 	// 在 /ads/rewarded/claim 的返回体里（status=rejected + reason），不走错误码。

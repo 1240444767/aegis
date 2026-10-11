@@ -414,6 +414,10 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 广告服务策略：开屏广告与激励视频传给 SDK 的是同一个带签名的用户标识。
 	adPolicyService := service.NewAdPolicyService(log, pg, rewardedAdService)
 	adPolicyService.SetEventPublishers(realtimeService, realtimeService)
+	// 积分商城：人工发放的处理结果走站内信，兑换后通知用户的其它在线设备刷新积分与权益。
+	pointsStoreService := service.NewPointsStoreService(log, pg)
+	pointsStoreService.SetNotifier(notificationService)
+	pointsStoreService.SetEventPublisher(realtimeService)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
@@ -591,6 +595,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		CardKey:          cardKeyService,
 		RewardedAd:       rewardedAdService,
 		AdPolicy:         adPolicyService,
+		PointsStore:      pointsStoreService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
 		Version:          versionService,

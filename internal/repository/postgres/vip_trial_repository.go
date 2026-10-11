@@ -78,7 +78,8 @@ const vipEntitlementFactsSQL = `SELECT u.vip_expire_at, u.vip_lifetime_at,
        c.trial_ends_at, COALESCE(c.transaction_no, ''),
        COALESCE(c.device_id, ''), COALESCE(c.device_locked, FALSE), c.created_at,
        ` + vipLiveSegmentsSQL + `,
-       ` + vipFeatureCatalogSQL + `
+       ` + vipFeatureCatalogSQL + `,
+       ` + vipFeatureUnlocksSQL + `
 FROM users u
 LEFT JOIN vip_trial_claims c ON c.appid = u.appid AND c.user_id = u.id
 WHERE u.id = $1 AND u.appid = $2 LIMIT 1`
@@ -91,6 +92,7 @@ func (r *Repository) GetVipEntitlementFacts(ctx context.Context, appID int64, us
 	var (
 		facts        vipdomain.EvalInput
 		segmentsRaw  []byte
+		unlocksRaw   []byte
 		claimID      *int64
 		claimEndsAt  *time.Time
 		claimCreated *time.Time
@@ -100,7 +102,7 @@ func (r *Repository) GetVipEntitlementFacts(ctx context.Context, appID int64, us
 		Scan(&facts.ExpireAt, &facts.LifetimeSince,
 			&claimID, &claim.PlanID, &claim.PlanName, &claim.DurationDays, &claimEndsAt,
 			&claim.TransactionNo, &claim.DeviceID, &claim.DeviceLocked, &claimCreated,
-			&segmentsRaw, &facts.FeatureCatalog)
+			&segmentsRaw, &facts.FeatureCatalog, &unlocksRaw)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
@@ -108,6 +110,9 @@ func (r *Repository) GetVipEntitlementFacts(ctx context.Context, appID int64, us
 		return nil, err
 	}
 	if facts.Segments, err = decodeVipSegments(segmentsRaw); err != nil {
+		return nil, err
+	}
+	if facts.Unlocks, err = decodeFeatureUnlocks(unlocksRaw); err != nil {
 		return nil, err
 	}
 	// claim.id 是主键，非空即"这个人领过" —— 只有此时那批列才有意义
@@ -277,16 +282,17 @@ RETURNING `+vipTrialClaimColumns,
 // vipEntitlementFactsTxSQL 事务内那份（试用记录由调用方给出，因此不 JOIN 资格表）。
 const vipEntitlementFactsTxSQL = `SELECT u.vip_expire_at, u.vip_lifetime_at,
        ` + vipLiveSegmentsSQL + `,
-       ` + vipFeatureCatalogSQL + `
+       ` + vipFeatureCatalogSQL + `,
+       ` + vipFeatureUnlocksSQL + `
 FROM users u
 WHERE u.id = $1 AND u.appid = $2 LIMIT 1`
 
 // entitlementFactsTx 事务内取判定事实（试用记录由调用方给出，避免重复查一次）。
 func entitlementFactsTx(ctx context.Context, tx pgx.Tx, appID int64, userID int64, claim *vipdomain.TrialClaim) (*vipdomain.EvalInput, error) {
 	facts := vipdomain.EvalInput{Claim: claim}
-	var segmentsRaw []byte
+	var segmentsRaw, unlocksRaw []byte
 	if err := tx.QueryRow(ctx, vipEntitlementFactsTxSQL, userID, appID).
-		Scan(&facts.ExpireAt, &facts.LifetimeSince, &segmentsRaw, &facts.FeatureCatalog); err != nil {
+		Scan(&facts.ExpireAt, &facts.LifetimeSince, &segmentsRaw, &facts.FeatureCatalog, &unlocksRaw); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrUserNotFound
 		}
@@ -297,6 +303,9 @@ func entitlementFactsTx(ctx context.Context, tx pgx.Tx, appID int64, userID int6
 		return nil, err
 	}
 	facts.Segments = segments
+	if facts.Unlocks, err = decodeFeatureUnlocks(unlocksRaw); err != nil {
+		return nil, err
+	}
 	return &facts, nil
 }
 

@@ -18,6 +18,8 @@ const (
 	// 算进 total_recharged 会让充值报表凭空虚高（applyWalletChangeTx 只把
 	// recharge / refund 计入累计充值，这里正是靠类型区分开的）。
 	TxnTypeCardKey = "card_key"
+	// TxnTypePointsExchange 积分兑换余额入账。与卡密同理，不计入累计充值。
+	TxnTypePointsExchange = "points_exchange"
 )
 
 // Wallet 用户钱包

@@ -99,6 +99,8 @@ type MembershipView struct {
 	RemainingSeconds int64      `json:"remainingSeconds"`
 	RemainingDays    int        `json:"remainingDays"`
 	Features         []string   `json:"features"`
+	// Unlocks 单独解锁的功能（见 Entitlement.Unlocks）
+	Unlocks []UnlockView `json:"unlocks"`
 	// AdFree 会员身份是否免广告（见 Entitlement.AdFree）
 	AdFree bool `json:"adFree"`
 }
@@ -111,6 +113,10 @@ func (e Entitlement) View() MembershipView {
 	if features == nil {
 		features = []string{}
 	}
+	unlocks := e.Unlocks
+	if unlocks == nil {
+		unlocks = []UnlockView{}
+	}
 	return MembershipView{
 		IsVIP:            e.IsVIP,
 		IsLifetime:       e.IsLifetime,
@@ -122,18 +128,17 @@ func (e Entitlement) View() MembershipView {
 		RemainingSeconds: e.RemainingSeconds,
 		RemainingDays:    e.RemainingDays,
 		Features:         features,
+		Unlocks:          unlocks,
 		AdFree:           e.AdFree,
 	}
 }
 
-// HasFeature 当前会员权益是否覆盖某个功能标识。
+// HasFeature 当前权益是否覆盖某个功能标识。
 //
-// 不是会员就一律没有：过期用户的功能快照仍留在账本里，
-// 只按标签命中会让一个到期三个月的用户继续用着高级功能。
+// 只看 Features：它已经是「仍生效的会员段 + 仍生效的功能解锁」与启用中目录的交集，
+// 过期用户的功能快照留在账本里，但不会进 Features。不是会员也可能命中 ——
+// 那是单独解锁的功能（积分兑换、管理员授予），本来就不要求会员身份。
 func (e Entitlement) HasFeature(tag string) bool {
-	if !e.IsVIP {
-		return false
-	}
 	tag = strings.ToLower(strings.TrimSpace(tag))
 	if tag == "" {
 		return false

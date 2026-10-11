@@ -157,6 +157,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/oauth2/clients/{clientId}"):                             service.OAuth2ClientInput{},              // AdminUpdateOAuth2Client
 		routeKey("PUT", "/api/admin/apps/{appkey}/password-policy"):                                       AdminPasswordPolicyUpdateRequest{},       // UpdateAdminAppPasswordPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/password-policy/test"):                                 AdminPasswordPolicyTestRequest{},         // TestAdminAppPasswordPolicy
+		routeKey("POST", "/api/admin/apps/{appkey}/points-store/items"):                                   PointsStoreItemRequest{},                 // AdminCreatePointsStoreItem
+		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/items/{itemId}"):                           PointsStoreItemRequest{},                 // AdminUpdatePointsStoreItem
+		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/items/{itemId}/status"):                    PointsStoreItemStatusRequest{},           // AdminSetPointsStoreItemStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/points-store/redemptions/{redemptionId}/cancel"):       PointsStoreHandleRequest{},               // AdminCancelPointsStoreRedemption
+		routeKey("POST", "/api/admin/apps/{appkey}/points-store/redemptions/{redemptionId}/fulfill"):      PointsStoreHandleRequest{},               // AdminFulfillPointsStoreRedemption
+		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/settings"):                                 PointsStoreSettingsRequest{},             // AdminSavePointsStoreSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/policy"):                                                AdminAppPolicyRequest{},                  // UpdateAdminAppPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/releases"):                                             AdminReleaseSaveRequest{},                // AdminCreateRelease
 		routeKey("POST", "/api/admin/apps/{appkey}/releases/simulate"):                                    AdminReleaseSimulateRequest{},            // AdminSimulateRelease
@@ -199,6 +205,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/cloud-storage/items/{itemId}"):           CloudItemReadQuery{},                     // AdminCloudStorageUserItem
 		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/cloud-storage/items/{itemId}/link"):     CloudItemLinkRequest{},                   // AdminCloudStorageUserItemLink
 		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/cloud-storage/items/{itemId}/rollback"): AdminCloudRollbackRequest{},              // AdminRollbackCloudStorageUserItem
+		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/feature-unlocks"):                       FeatureUnlockGrantRequest{},              // AdminGrantFeatureUnlock
+		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/feature-unlocks/{unlockId}/revoke"):     FeatureUnlockRevokeRequest{},             // AdminRevokeFeatureUnlock
 		routeKey("PUT", "/api/admin/apps/{appkey}/users/{userId}/profile"):                                AdminUpdateUserProfileRequest{},          // AdminUpdateUserProfile
 		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/reset-password"):                        AdminResetUserPasswordRequest{},          // AdminResetUserPassword
 		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/sessions/revoke-batch"):                 AdminSessionRevokeBatchRequest{},         // AdminRevokeUserSessionsBatch
@@ -609,6 +617,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/pay/orders"):                                              CreatePaymentOrderRequest{},              // CreatePaymentOrder
 		routeKey("GET", "/api/v1/apps/{appkey}/points/experience-transactions"):                           PaginationQuery{},                        // ExperienceTransactions
 		routeKey("GET", "/api/v1/apps/{appkey}/points/integral-transactions"):                             PaginationQuery{},                        // IntegralTransactions
+		routeKey("POST", "/api/v1/apps/{appkey}/points/store/redeem"):                                     PointsStoreRedeemRequest{},               // AppRedeemPointsStoreItem
 		routeKey("POST", "/api/v1/apps/{appkey}/releases/events"):                                         AppReleaseEventRequest{},                 // AppReleaseEvent
 		routeKey("POST", "/api/v1/apps/{appkey}/signin"):                                                  SignInRequest{},                          // SignIn
 		routeKey("GET", "/api/v1/apps/{appkey}/signin/history"):                                           PaginationQuery{},                        // SignInHistory

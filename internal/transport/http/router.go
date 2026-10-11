@@ -58,6 +58,7 @@ type Handler struct {
 	cardKey         *service.CardKeyService
 	rewardedAd      *service.RewardedAdService
 	adPolicy        *service.AdPolicyService
+	pointsStore     *service.PointsStoreService
 	cloudStorage    *service.CloudStorageService
 	authProtocol    *service.AuthProtocolService
 	dashboard       *service.DashboardService

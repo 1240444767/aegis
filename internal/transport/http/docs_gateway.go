@@ -98,6 +98,10 @@ func gatewayRequestModels() map[string]any {
 		"integralTransactions":   PaginationQuery{},
 		"experienceTransactions": PaginationQuery{},
 
+		// 积分商城
+		"pointsStoreRedeem":      PointsStoreRedeemRequest{},
+		"pointsStoreRedemptions": PaginationQuery{},
+
 		// 站内信
 		"notifications":         NotificationQuery{},
 		"notificationRead":      NotificationReadRequest{},
