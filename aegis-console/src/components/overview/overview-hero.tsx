@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
-import { motion, useReducedMotion } from "motion/react";
+import { useReducedMotion } from "motion/react";
 import { useTheme } from "next-themes";
-import { Activity, ArrowUpRight, CloudSun, Globe2, LayoutGrid, LogIn, Moon, ShieldCheck, Sun, Sunrise, Sunset, Timer, Users } from "lucide-react";
+import { Activity, ArrowUpRight, CloudSun, LayoutGrid, LogIn, Moon, ShieldCheck, Sun, Sunrise, Sunset, Timer, Users } from "lucide-react";
 import { useAdminDashboardQuery } from "@/lib/admin-hooks";
 import { useAuthStore } from "@/lib/auth-store";
-import { browserTimeZone, browserUtcOffset, formatClockSeconds, formatWith } from "@/lib/datetime";
+import { HeroClock } from "./hero-clock";
+import { formatWith } from "@/lib/datetime";
 import { useIsClient } from "@/lib/use-client-value";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -187,20 +188,15 @@ export function OverviewHero() {
             </div>
           </div>
 
-          <div className="space-y-3">
-            {isClient ? (
-              <RollingClock text={formatClockSeconds(now)} animate={!reducedMotion} />
-            ) : (
-              <Skeleton className="h-11 w-56 md:h-14" />
-            )}
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-              <DayRail hour={isClient ? hour : -1} />
-              <span className="flex items-center gap-1 text-[11px] whitespace-nowrap text-muted-foreground">
-                <Globe2 className="size-3" />
-                {isClient ? `${browserTimeZone()} ${browserUtcOffset(now)}` : "本地时区"}
-              </span>
+          {isClient ? (
+            <HeroClock now={now} animate={!reducedMotion} />
+          ) : (
+            <div className="space-y-4">
+              <Skeleton className="h-12 w-60 md:h-[60px]" />
+              <Skeleton className="h-6 w-full max-w-[22rem]" />
+              <Skeleton className="h-4 w-48" />
             </div>
-          </div>
+          )}
         </div>
 
         <div className="relative h-[280px] md:h-auto">
@@ -282,95 +278,11 @@ function MetricCell({
   );
 }
 
-/**
- * 时钟：每一位是一条 0–9 的数字卷轴，由 motion 的弹簧推到当前数字；
- * 9→0 进位时卷轴绕回顶部而不是倒着滚过整列，看起来始终是向上翻。
- */
-function RollingClock({ text, animate }: { text: string; animate: boolean }) {
-  return (
-    <p className="flex font-data text-4xl leading-none font-semibold tracking-tight tabular-nums md:text-5xl" aria-label={text}>
-      {text.split("").map((char, index) =>
-        /\d/.test(char) ? (
-          <DigitReel key={index} digit={Number(char)} animate={animate} />
-        ) : (
-          <span key={index} aria-hidden className="inline-block w-[0.32em] text-center text-muted-foreground/60">
-            {char}
-          </span>
-        )
-      )}
-    </p>
-  );
-}
-
-const REEL = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0];
-
-function DigitReel({ digit, animate }: { digit: number; animate: boolean }) {
-  // 卷轴末尾多放一个 0：9→0 时先滚到这一格，落定后无动画跳回顶部的 0
-  const [position, setPosition] = useState(digit);
-  const [instant, setInstant] = useState(false);
-  const previous = useRef(digit);
-
-  useEffect(() => {
-    const from = previous.current;
-    previous.current = digit;
-    if (from === digit) return;
-    const wraps = animate && digit < from;
-    const id = requestAnimationFrame(() => {
-      setInstant(!animate);
-      setPosition(wraps ? 10 : digit);
-    });
-    return () => cancelAnimationFrame(id);
-  }, [digit, animate]);
-
-  return (
-    <span aria-hidden className="relative inline-block h-[1em] w-[0.62em] overflow-hidden">
-      <motion.span
-        className="absolute inset-x-0 top-0 flex flex-col items-center"
-        initial={false}
-        animate={{ y: `${-position}em` }}
-        transition={instant ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 26, mass: 0.9 }}
-        onAnimationComplete={() => {
-          if (position === 10) {
-            setInstant(true);
-            setPosition(0);
-          } else if (instant && animate) {
-            setInstant(false);
-          }
-        }}
-      >
-        {REEL.map((value, index) => (
-          <span key={index} className="flex h-[1em] items-center justify-center">
-            {value}
-          </span>
-        ))}
-      </motion.span>
-    </span>
-  );
-}
-
 function HeroChip({ icon: Icon, children }: { icon: React.ComponentType<{ className?: string }>; children: React.ReactNode }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-md border bg-muted/50 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
       <Icon className="size-3" />
       {children}
     </span>
-  );
-}
-
-/** 24 格日内时间轴：已过的小时浅色，当前小时实色。 */
-function DayRail({ hour }: { hour: number }) {
-  return (
-    <div aria-hidden className="flex items-end gap-[3px]">
-      {Array.from({ length: 24 }, (_, index) => (
-        <span
-          key={index}
-          className={cn(
-            "w-1 rounded-full transition-colors",
-            index % 6 === 0 ? "h-3" : "h-2",
-            index === hour ? "animate-pulse bg-foreground" : index < hour ? "bg-foreground/25" : "bg-border"
-          )}
-        />
-      ))}
-    </div>
   );
 }
