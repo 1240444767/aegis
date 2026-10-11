@@ -521,6 +521,7 @@ RETURNING `+inviteRelationColumns,
 	}
 	tx = nil
 	out.Relation = *relation
+	out.Code = relation.Code
 	return out, nil
 }
 

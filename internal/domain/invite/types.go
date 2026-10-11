@@ -301,7 +301,10 @@ type BindInput struct {
 
 // BindResult 填写的结果。
 type BindResult struct {
-	Relation Relation `json:"relation"`
+	// Relation 只在服务端流转：里面有邀请人的奖励结果与流水号，不该给填写的人看
+	Relation Relation `json:"-"`
+	// Code 填写的邀请码（规范化之后的原样）
+	Code string `json:"code"`
 	// Rewards 被邀请人这次拿到的
 	Rewards []RewardResult `json:"rewards"`
 	// Inviter 邀请人的展示信息（纯渠道码为空）

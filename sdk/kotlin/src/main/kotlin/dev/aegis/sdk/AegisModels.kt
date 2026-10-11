@@ -45,21 +45,22 @@ data class AuthCapability(
 /**
  * 注册表单上的邀请码字段。
  *
- * [field] 为 `hidden` 时不画输入框（注册后仍可能在 [bindWindowHours] 小时内到邀请页补填），
+ * [mode] 为 `hidden` 时不画输入框（注册后仍可能在 [bindWindowHours] 小时内到邀请页补填），
  * `optional` 为选填，`required` 为必填 —— 没有邀请码不能注册。填的码随
  * [AegisAuthApi.register] 的 `inviteCode` 提交。
  */
 @Serializable
 data class InviteCapability(
     val enabled: Boolean = false,
-    val field: String = "hidden",
+    /** `hidden` / `optional` / `required`（JSON 字段名为 `field`）。 */
+    @SerialName("field") val mode: String = "hidden",
     val label: String = "邀请码",
     val placeholder: String = "",
     val maxLength: Int = 32,
     val bindWindowHours: Int = 0,
 ) {
-    val shown: Boolean get() = enabled && field != "hidden"
-    val required: Boolean get() = enabled && field == "required"
+    val shown: Boolean get() = enabled && mode != "hidden"
+    val required: Boolean get() = enabled && mode == "required"
 }
 
 /**
