@@ -94,8 +94,6 @@ import {
   updateMessageTemplate,
   deleteMessageTemplate,
   getAdminDashboard,
-  getAppMonitor,
-  getAppMonitorComponents,
   getAppOnlineStats,
   getAppOnlineUsers,
   getAppStorageConfigDetail,
@@ -103,11 +101,6 @@ import {
   getGlobalStorageConfigDetail,
   getGlobalStorageConfigs,
   getSystemOnlineStats,
-  getSystemMonitor,
-  getSystemMonitorApps,
-  getSystemMonitorComponents,
-  getSystemMonitorHistory,
-  getAppMonitorHistory,
   getWorkflowDetail,
   getWorkflowEngineStatus,
   getWorkflowInstanceDetail,
@@ -843,81 +836,6 @@ export function useAdminSystemSettingsQuery(enabled = true) {
     queryKey: ["admin-system-settings", token],
     queryFn: () => getAdminSystemSettings(token as string),
     enabled: Boolean(token && enabled)
-  });
-}
-
-// 监控接口在后端是超管专属；控制台内带 token 请求，公开状态页 token 为空按匿名发出
-export function useSystemMonitorQuery() {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["system-monitor", token],
-    queryFn: () => getSystemMonitor(token),
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useSystemMonitorAppsQuery() {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["system-monitor-apps", token],
-    queryFn: () => getSystemMonitorApps(token),
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useSystemMonitorComponentsQuery() {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["system-monitor-components", token],
-    queryFn: () => getSystemMonitorComponents(token),
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useAppMonitorQuery(appId?: number | string | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["app-monitor", appId, token],
-    queryFn: () => getAppMonitor(appId as string | number, token),
-    enabled: Boolean(appId),
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useAppMonitorComponentsQuery(appId?: number | string | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["app-monitor-components", appId, token],
-    queryFn: () => getAppMonitorComponents(appId as string | number, token),
-    enabled: Boolean(appId),
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useSystemMonitorHistoryQuery(keys: string[], range_: import("@/lib/api/monitor").MonitorHistoryRange = "hour") {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["system-monitor-history", keys.join(","), range_, token],
-    queryFn: () => getSystemMonitorHistory(keys, range_, token),
-    enabled: keys.length > 0,
-    refetchInterval: 15_000,
-    staleTime: 10_000
-  });
-}
-
-export function useAppMonitorHistoryQuery(appId?: number | string | null, keys: string[] = [], range_: import("@/lib/api/monitor").MonitorHistoryRange = "hour") {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["app-monitor-history", appId, keys.join(","), range_, token],
-    queryFn: () => getAppMonitorHistory(appId as string | number, keys, range_, token),
-    enabled: Boolean(appId) && keys.length > 0,
-    refetchInterval: 15_000,
-    staleTime: 10_000
   });
 }
 

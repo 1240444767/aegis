@@ -84,11 +84,8 @@ function BrandPanel() {
           </ul>
         </div>
 
-        <div className="mt-10 flex items-center justify-between text-[12px] text-zinc-500">
+        <div className="mt-10 text-[12px] text-zinc-500">
           <span>&copy; {new Date().getFullYear()} {copyrightNotice}</span>
-          <Link href="/status" className="transition-colors hover:text-zinc-300">
-            服务状态
-          </Link>
         </div>
       </div>
     </aside>

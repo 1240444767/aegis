@@ -13,7 +13,6 @@ import {
   NavigationMenuLink,
   NavigationMenuList,
   NavigationMenuTrigger,
-  navigationMenuTriggerStyle,
 } from "@/components/ui/navigation-menu";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -30,7 +29,7 @@ import { useIsClient } from "@/lib/use-client-value";
 import { cn } from "@/lib/utils";
 
 type PublicHeaderProps = {
-  current?: "home" | "status" | "developers" | "login" | "console";
+  current?: "home" | "developers" | "login" | "console";
   navLabel?: string;
 };
 
@@ -63,7 +62,6 @@ const MOBILE_LINKS = [
   ...PRODUCT_LINKS,
   { href: "/developers", label: "快速接入" },
   { href: "/developers/api", label: "接口文档" },
-  { href: "/status", label: "服务状态" },
 ] as const;
 
 export function PublicHeader({ current, navLabel = "公开导航" }: PublicHeaderProps) {
@@ -161,16 +159,6 @@ export function PublicHeader({ current, navLabel = "公开导航" }: PublicHeade
                 </ul>
               </NavigationMenuContent>
             </NavigationMenuItem>
-
-            <NavigationMenuItem>
-              <NavigationMenuLink
-                asChild
-                active={current === "status"}
-                className={cn(navigationMenuTriggerStyle(), "bg-transparent")}
-              >
-                <Link href="/status">服务状态</Link>
-              </NavigationMenuLink>
-            </NavigationMenuItem>
           </NavigationMenuList>
         </NavigationMenu>
 
@@ -209,16 +197,10 @@ export function PublicHeader({ current, navLabel = "公开导航" }: PublicHeade
                     key={item.href}
                     href={item.href}
                     onClick={() => setMenuOpen(false)}
-                    aria-current={
-                      (item.href === "/" && current === "home") ||
-                      (item.href === "/status" && current === "status")
-                        ? "page"
-                        : undefined
-                    }
+                    aria-current={item.href === "/" && current === "home" ? "page" : undefined}
                     className={cn(
                       "rounded-md px-3 py-2.5 text-sm transition-colors",
-                      (item.href === "/" && current === "home") ||
-                        (item.href === "/status" && current === "status")
+                      item.href === "/" && current === "home"
                         ? "bg-muted font-medium text-foreground"
                         : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
                     )}

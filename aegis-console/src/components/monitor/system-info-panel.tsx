@@ -15,7 +15,6 @@ import {
 import { useAuthStore } from "@/lib/auth-store";
 import { getSystemRuntimeInfo, type SystemRuntimeInfo } from "@/lib/api/system";
 import { LoadingState } from "@/components/ui/data-state";
-import { Separator } from "@/components/ui/separator";
 
 // ── OS 图标映射 ──
 
@@ -45,9 +44,9 @@ function fmtUptime(seconds: number): string {
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  if (d > 0) return `${d}d ${h}h ${m}m`;
-  if (h > 0) return `${h}h ${m}m`;
-  return `${m}m`;
+  if (d > 0) return `${d} 天 ${h} 小时`;
+  if (h > 0) return `${h} 小时 ${m} 分钟`;
+  return `${m} 分钟`;
 }
 
 // ── 进度条 ──
@@ -84,28 +83,29 @@ export function SystemInfoPanel() {
   const goHeapPct = info.memSys > 0 ? (info.memAlloc / info.memSys) * 100 : 0;
 
   return (
-    <div className="space-y-4 rounded-xl border p-5">
-      <div className="flex items-center gap-2">
-        <Monitor className="size-5 text-muted-foreground" />
-        <h2 className="text-base font-semibold">系统运行信息</h2>
-        <span className="text-xs text-muted-foreground ml-auto">PID {info.pid} · {fmtUptime(info.uptimeSeconds)}</span>
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Monitor className="size-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">主机与进程</h3>
+        <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
+          <span>进程号 <span className="font-data text-foreground">{info.pid}</span></span>
+          <span>已运行 <span className="text-foreground">{fmtUptime(info.uptimeSeconds)}</span></span>
+        </span>
       </div>
-
-      <Separator />
 
       {/* 资源概览 */}
       <div className="grid gap-3 grid-cols-2 lg:grid-cols-4">
         {/* 操作系统 */}
-        <div className="flex items-center gap-3 rounded-xl border px-4 py-3">
+        <div className="flex items-center gap-3 rounded-lg border px-4 py-3">
           <OSIcon className="size-8 shrink-0" style={osColor ? { color: osColor } : undefined} />
           <div className="min-w-0">
             <div className="text-sm font-semibold truncate">{info.platform || info.os}</div>
-            <div className="text-[10px] text-muted-foreground truncate">{info.platformVersion} · {info.kernelArch}</div>
+            <div className="text-[10px] text-muted-foreground truncate">{info.platformVersion} {info.kernelArch}</div>
           </div>
         </div>
 
         {/* CPU */}
-        <div className="space-y-2 rounded-xl border px-4 py-3">
+        <div className="space-y-2 rounded-lg border px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <Cpu className="size-4 text-muted-foreground" />
@@ -119,7 +119,7 @@ export function SystemInfoPanel() {
         </div>
 
         {/* 内存 */}
-        <div className="space-y-2 rounded-xl border px-4 py-3">
+        <div className="space-y-2 rounded-lg border px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <MemoryStick className="size-4 text-muted-foreground" />
@@ -132,7 +132,7 @@ export function SystemInfoPanel() {
         </div>
 
         {/* 磁盘 */}
-        <div className="space-y-2 rounded-xl border px-4 py-3">
+        <div className="space-y-2 rounded-lg border px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               <HardDrive className="size-4 text-muted-foreground" />
@@ -157,9 +157,9 @@ export function SystemInfoPanel() {
 
       {/* Go 堆使用率 */}
       <div className="flex items-center gap-3 text-xs text-muted-foreground">
-        <span>Go 堆占用: {fmtBytes(info.memAlloc)} / {fmtBytes(info.memSys)} ({goHeapPct.toFixed(1)}%)</span>
+        <span>Go 堆占用：{fmtBytes(info.memAlloc)} / {fmtBytes(info.memSys)} ({goHeapPct.toFixed(1)}%)</span>
         <div className="flex-1"><ProgressBar value={goHeapPct} color="bg-sky-500" /></div>
-        <span>累计分配: {fmtBytes(info.memTotalAlloc)}</span>
+        <span>累计分配：{fmtBytes(info.memTotalAlloc)}</span>
       </div>
     </div>
   );
@@ -175,7 +175,7 @@ function InfoCell({ icon: Icon, iconColor, label, value, sub }: {
   sub?: string;
 }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-xl border px-3 py-2.5">
+    <div className="flex items-center gap-2.5 rounded-lg border px-3 py-2.5">
       <Icon className="size-4 shrink-0 text-muted-foreground" style={iconColor ? { color: iconColor } : undefined} />
       <div className="min-w-0">
         <div className="text-[10px] text-muted-foreground">{label}</div>

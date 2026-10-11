@@ -25,7 +25,7 @@ export function getAdminAccounts(token: string) {
  * 控制台首页工作台数据（待办、告警、近期审计、全站指标）。
  *
  * 后端 `/api/admin/dashboard` 不挂权限点，任意已登录管理员可读；
- * `components/dashboard/*` 的三个面板与问候语都依赖它。
+ * `components/overview/*` 的首屏指标与待处理、最近操作都依赖它。
  */
 export function getAdminDashboard(token: string) {
   return apiRequest<AdminDashboard>("/api/admin/dashboard", { token });

@@ -39,8 +39,7 @@ type UserMenuProps = {
 /** 控制台之外的公开页面：换的是整个外壳，因此新标签页打开 */
 const HELP_LINKS = [
   { href: "/developers", label: "开发者门户", icon: LifeBuoy },
-  { href: "/developers/api", label: "接口文档", icon: BookText },
-  { href: "/status", label: "服务状态", icon: ShieldCheck }
+  { href: "/developers/api", label: "接口文档", icon: BookText }
 ] as const;
 
 /**

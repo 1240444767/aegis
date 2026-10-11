@@ -638,7 +638,6 @@ export const footerColumns: FooterColumn[] = [
     title: "平台",
     links: [
       { label: "首页", href: "/" },
-      { label: "服务状态", href: "/status" },
       { label: "控制台", href: "/overview" },
     ],
   },

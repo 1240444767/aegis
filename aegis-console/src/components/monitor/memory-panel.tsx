@@ -28,7 +28,10 @@ import {
   type MemoryAlert,
   type LeakIndicator,
 } from "@/lib/api/system";
+import { formatClockSeconds } from "@/lib/datetime";
+import { Button } from "@/components/ui/button";
 import { LoadingState } from "@/components/ui/data-state";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
@@ -99,7 +102,7 @@ export function MemoryPanel() {
   const gogcMutation = useMutation({
     mutationFn: (value: number) => setGOGC(accessToken!, value),
     onSuccess: (data) => {
-      toast.success(`GOGC 已更新: ${data.old} → ${data.new}`);
+      toast.success(`GOGC 已从 ${data.old} 调整为 ${data.new}`);
       setGogcInput("");
       queryClient.invalidateQueries({ queryKey: ["memory-snapshot"] });
     },
@@ -124,15 +127,15 @@ export function MemoryPanel() {
   const heapPct = metrics && metrics.sys > 0 ? (metrics.heapAlloc / metrics.sys) * 100 : 0;
 
   return (
-    <div className="space-y-4 rounded-xl border p-5">
+    <div className="space-y-4">
       {/* 标题栏 */}
-      <div className="flex items-center gap-2">
-        <MemoryStick className="size-5 text-muted-foreground" />
-        <h2 className="text-base font-semibold">内存管理</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        <MemoryStick className="size-4 text-muted-foreground" />
+        <h3 className="text-sm font-semibold">内存管理</h3>
         <div className="ml-auto flex items-center gap-2">
           {snap.gcTuner && (
             <Badge variant="outline" className="text-[10px]">
-              GOGC {snap.gcTuner.gogc} · 调优 {fmtNumber(snap.gcTuner.tuneCount)} 次
+              GOGC {snap.gcTuner.gogc}，已调优 {fmtNumber(snap.gcTuner.tuneCount)} 次
             </Badge>
           )}
           <Badge variant="outline" className="text-[10px]">
@@ -140,8 +143,6 @@ export function MemoryPanel() {
           </Badge>
         </div>
       </div>
-
-      <Separator />
 
       {/* 核心指标概览 */}
       {metrics && (
@@ -177,7 +178,7 @@ export function MemoryPanel() {
       {/* 堆使用率 */}
       {metrics && (
         <div className="flex items-center gap-3 text-xs text-muted-foreground">
-          <span>堆: {fmtBytes(metrics.heapInuse)} 使用 / {fmtBytes(metrics.heapIdle)} 空闲</span>
+          <span>堆：{fmtBytes(metrics.heapInuse)} 使用 / {fmtBytes(metrics.heapIdle)} 空闲</span>
           <div className="flex-1"><ProgressBar value={heapPct} color="bg-sky-500" /></div>
           <span>{fmtPercent(heapPct)}</span>
         </div>
@@ -185,44 +186,38 @@ export function MemoryPanel() {
 
       {/* GC 调优器 + 操作按钮 */}
       <div className="flex flex-wrap items-center gap-2">
-        <button
-          onClick={() => gcMutation.mutate()}
-          disabled={gcMutation.isPending}
-          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={`size-3.5 ${gcMutation.isPending ? "animate-spin" : ""}`} />
+        <Button size="sm" variant="outline" className="text-xs" onClick={() => gcMutation.mutate()} disabled={gcMutation.isPending}>
+          <RefreshCw className={gcMutation.isPending ? "animate-spin" : undefined} />
           强制 GC
-        </button>
-        <button
-          onClick={() => flushMutation.mutate()}
-          disabled={flushMutation.isPending}
-          className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
-        >
-          <Trash2 className="size-3.5" />
+        </Button>
+        <Button size="sm" variant="outline" className="text-xs" onClick={() => flushMutation.mutate()} disabled={flushMutation.isPending}>
+          <Trash2 />
           清空缓存
-        </button>
+        </Button>
         <div className="flex items-center gap-1.5">
-          <input
+          <Input
             type="number"
             min={10}
             max={500}
             placeholder="GOGC"
             value={gogcInput}
             onChange={(e) => setGogcInput(e.target.value)}
-            className="w-20 rounded-lg border px-2 py-1.5 text-xs bg-transparent"
+            className="h-8 w-24 text-xs"
           />
-          <button
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-xs"
             onClick={() => {
               const v = parseInt(gogcInput);
               if (v >= 10 && v <= 500) gogcMutation.mutate(v);
-              else toast.error("GOGC 值必须在 10~500 之间");
+              else toast.error("GOGC 值必须在 10 到 500 之间");
             }}
             disabled={gogcMutation.isPending}
-            className="inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-medium hover:bg-muted transition-colors disabled:opacity-50"
           >
-            <Settings2 className="size-3.5" />
+            <Settings2 />
             设置 GOGC
-          </button>
+          </Button>
         </div>
       </div>
 
@@ -309,11 +304,11 @@ export function MemoryPanel() {
       {/* 配置信息 */}
       <Separator />
       <div className="flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-muted-foreground">
-        <span>监控间隔: {snap.config.monitorInterval}</span>
-        <span>GC 调优间隔: {snap.config.gcTuneInterval}</span>
-        <span>内存上限: {snap.config.memoryLimitMB > 0 ? `${snap.config.memoryLimitMB} MB` : "自动"}</span>
-        <span>缓存 TTL: {snap.config.cacheTTL}</span>
-        <span>泄漏窗口: {snap.config.leakWindow} 点</span>
+        <span>监控间隔：{snap.config.monitorInterval}</span>
+        <span>GC 调优间隔：{snap.config.gcTuneInterval}</span>
+        <span>内存上限：{snap.config.memoryLimitMB > 0 ? `${snap.config.memoryLimitMB} MB` : "自动"}</span>
+        <span>缓存 TTL：{snap.config.cacheTTL}</span>
+        <span>泄漏窗口：{snap.config.leakWindow} 点</span>
       </div>
     </div>
   );
@@ -329,7 +324,7 @@ function MetricCard({ icon: Icon, label, value, sub, progress }: {
   progress?: number;
 }) {
   return (
-    <div className="space-y-2 rounded-xl border px-4 py-3">
+    <div className="space-y-2 rounded-lg border px-4 py-3">
       <div className="flex items-center gap-1.5">
         <Icon className="size-4 text-muted-foreground" />
         <span className="text-xs font-medium">{label}</span>
@@ -394,7 +389,7 @@ function MiniStat({ label, value }: { label: string; value: string }) {
 }
 
 function AlertRow({ alert }: { alert: MemoryAlert }) {
-  const time = new Date(alert.time).toLocaleTimeString("zh-CN", { hour12: false });
+  const time = formatClockSeconds(alert.time);
   return (
     <div className="flex items-center gap-2 text-xs">
       <AlertTriangle className={`size-3 shrink-0 ${alert.level === "critical" ? "text-destructive" : "text-amber-500"}`} />
