@@ -12,6 +12,12 @@ import {
 } from "@/components/apps/points-store/points-store-shared";
 import { vipPlanTerm } from "@/components/apps/vip/vip-shared";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -345,20 +351,26 @@ export function PointsStoreItemEditor({
                   );
                 })}
                 {addable.length > 0 ? (
-                  <Select value="" onValueChange={addReward}>
-                    <SelectTrigger className="h-8 w-full border-dashed text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1.5">
+                  // 「添加」是动作不是选值：用菜单而不是 Select。Select 没有选中值时
+                  // 默认的 item-aligned 定位找不到对齐项，弹层会偏出视野。
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 w-full justify-start border-dashed text-xs font-normal text-muted-foreground"
+                      >
                         <Plus className="size-3.5" /> 添加权益
-                      </span>
-                    </SelectTrigger>
-                    <SelectContent>
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
                       {addable.map((spec) => (
-                        <SelectItem key={spec.type} value={spec.type}>
+                        <DropdownMenuItem key={spec.type} onSelect={() => addReward(spec.type)}>
                           {spec.label}
-                        </SelectItem>
+                        </DropdownMenuItem>
                       ))}
-                    </SelectContent>
-                  </Select>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                 ) : null}
               </div>
             </FieldGroup>
@@ -544,7 +556,8 @@ function RewardRow({
                 <SelectTrigger className="h-8 w-full sm:w-52">
                   <SelectValue placeholder="选择功能" />
                 </SelectTrigger>
-                <SelectContent>
+                {/* 还没选功能时没有对齐项，弹层改为贴着触发器向下展开 */}
+                <SelectContent position="popper">
                   {features.map((feature) => (
                     <SelectItem
                       key={feature.tag}
