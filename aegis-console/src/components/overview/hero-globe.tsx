@@ -103,7 +103,7 @@ void main() {
 
   float sunGeo = dot(n, uSun);
   float daylight = smoothstep(-0.16, 0.2, sunGeo);
-  float diffuse = clamp(dot(bumped, uSun) * 1.05 + 0.04, 0.0, 1.0);
+  float diffuse = clamp(dot(bumped, uSun) * 1.05, 0.0, 1.0);
 
   vec3 day = texture2D(uDay, vUv).rgb;
   vec2 cloudUv = vec2(vUv.x + uCloudShift, vUv.y);
@@ -115,8 +115,8 @@ void main() {
 
   // 海面高光
   vec3 halfway = normalize(uSun + view);
-  float spec = pow(max(dot(n, halfway), 0.0), 70.0) * water * (1.0 - cloud) * daylight;
-  surface += vec3(1.0, 0.94, 0.82) * spec * 0.85;
+  float spec = pow(max(dot(n, halfway), 0.0), 160.0) * water * (1.0 - cloud) * daylight;
+  surface += vec3(1.0, 0.95, 0.86) * spec * 0.28;
 
   // 云层：受光面偏白，晨昏线附近染一点暖色
   float twilight = exp(-pow(sunGeo / 0.16, 2.0));
@@ -124,14 +124,17 @@ void main() {
   surface = mix(surface, cloudLit, cloud * 0.92);
 
   // 夜半球的城市灯光，云层会挡掉一部分
-  vec3 lights = pow(texture2D(uNight, vUv).rgb, vec3(1.9)) * vec3(2.6, 2.1, 1.5);
+  // 夜景图的陆地底色是灰蓝，只取明显亮于底色的城市像素，否则整个夜半球会发浑
+  vec3 nightTex = texture2D(uNight, vUv).rgb;
+  float glow = smoothstep(0.16, 0.6, dot(nightTex, vec3(0.299, 0.587, 0.114)));
+  vec3 lights = vec3(1.0, 0.78, 0.48) * glow * 1.4;
   float night = 1.0 - smoothstep(-0.22, 0.04, sunGeo);
-  surface += lights * night * (1.0 - cloud * 0.75);
+  surface += lights * night * (1.0 - cloud * 0.8);
 
   // 晨昏线散射与边缘大气
-  surface += vec3(1.0, 0.45, 0.18) * twilight * 0.06;
-  float rim = pow(1.0 - max(dot(n, view), 0.0), 3.0);
-  surface += uAtmosphere * rim * (0.15 + 0.85 * smoothstep(-0.35, 0.5, sunGeo)) * 0.9;
+  surface += vec3(1.0, 0.5, 0.25) * twilight * daylight * 0.035;
+  float rim = pow(1.0 - max(dot(n, view), 0.0), 4.0);
+  surface += uAtmosphere * rim * smoothstep(-0.25, 0.5, sunGeo) * 0.35;
 
   gl_FragColor = vec4(surface, uReveal);
   #include <tonemapping_fragment>
@@ -157,8 +160,8 @@ uniform float uReveal;
 varying vec3 vNormal;
 varying vec3 vWorldNormal;
 void main() {
-  float rim = pow(clamp(0.74 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 0.0, 1.0), 3.2);
-  float lit = 0.25 + 0.75 * smoothstep(-0.45, 0.55, dot(vWorldNormal, uSun));
+  float rim = pow(clamp(0.62 - dot(vNormal, vec3(0.0, 0.0, 1.0)), 0.0, 1.0), 4.5);
+  float lit = 0.1 + 0.9 * smoothstep(-0.3, 0.6, dot(vWorldNormal, uSun));
   gl_FragColor = vec4(uColor, clamp(rim * lit * uIntensity * uReveal, 0.0, 1.0));
 }
 `;
@@ -267,7 +270,7 @@ export const HeroGlobe = memo(function HeroGlobe({
       uCloudShift: { value: 0 },
       uBump: { value: 0.9 },
       uReveal: { value: 0 },
-      uAtmosphere: { value: new THREE.Color("#4f8cff") }
+      uAtmosphere: { value: new THREE.Color("#9cc3ff") }
     };
     const earthMaterial = new THREE.ShaderMaterial({
       uniforms: earthUniforms,
@@ -281,9 +284,9 @@ export const HeroGlobe = memo(function HeroGlobe({
     globe.add(earth);
 
     const haloUniforms = {
-      uColor: { value: new THREE.Color("#3d7bff") },
+      uColor: { value: new THREE.Color("#8bb8ff") },
       uSun: { value: new THREE.Vector3(0, 0, 1) },
-      uIntensity: { value: 1.25 },
+      uIntensity: { value: 0.9 },
       uReveal: { value: 0 }
     };
     const haloMaterial = new THREE.ShaderMaterial({
@@ -295,7 +298,7 @@ export const HeroGlobe = memo(function HeroGlobe({
       depthWrite: false,
       blending: THREE.AdditiveBlending
     });
-    const halo = new THREE.Mesh(new THREE.SphereGeometry(1.16, 64, 48), haloMaterial);
+    const halo = new THREE.Mesh(new THREE.SphereGeometry(1.1, 64, 48), haloMaterial);
     // 地球先画并写深度，挡住辉光球正对镜头的那片背面
     earth.renderOrder = 0;
     halo.renderOrder = 1;
@@ -327,8 +330,8 @@ export const HeroGlobe = memo(function HeroGlobe({
 
     const applyTheme = (name: "dark" | "light") => {
       // 浅色底上加法混合的辉光会被吃掉，改用普通混合的深一点的蓝
-      haloUniforms.uColor.value.set(name === "dark" ? "#3d7bff" : "#3b82f6");
-      haloUniforms.uIntensity.value = name === "dark" ? 1.25 : 0.7;
+      haloUniforms.uColor.value.set(name === "dark" ? "#8bb8ff" : "#60a5fa");
+      haloUniforms.uIntensity.value = name === "dark" ? 0.9 : 0.55;
       haloMaterial.blending = name === "dark" ? THREE.AdditiveBlending : THREE.NormalBlending;
       haloMaterial.needsUpdate = true;
       ringMaterial.color.set(name === "dark" ? "#a1a1aa" : "#52525b");
@@ -430,7 +433,7 @@ export const HeroGlobe = memo(function HeroGlobe({
       earthUniforms.uReveal.value = eased;
       haloUniforms.uReveal.value = eased;
       earthUniforms.uCloudShift.value = motion * t * 0.0009;
-      meridianMaterial.opacity = (0.28 + 0.22 * (0.5 + 0.5 * Math.sin(t * 2)) * motion) * eased;
+      meridianMaterial.opacity = (0.14 + 0.12 * (0.5 + 0.5 * Math.sin(t * 2)) * motion) * eased;
       ringMaterial.opacity = 0.16 * eased;
       satelliteMaterial.opacity = eased;
 
