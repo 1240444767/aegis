@@ -267,7 +267,7 @@ func HasManual(rewards []Reward) bool {
 	return false
 }
 
-// DescribeReward 一句话说清这项权益，供兑换结果、用户端与控制台摘要共用。
+// DescribeReward 一句话说清这项权益（Detail 不依赖 Label 也能单独成立），供兑换结果与用户端共用。
 // plans / features 用于把引用翻成名字，缺失时退回标识本身。
 func DescribeReward(reward Reward, plans map[int64]PlanRef, features map[string]FeatureRef) ClientReward {
 	spec, ok := FindRewardSpec(reward.Type)
@@ -287,7 +287,7 @@ func DescribeReward(reward Reward, plans map[int64]PlanRef, features map[string]
 		}
 	case RewardVipDays:
 		out.Days = int(reward.Amount)
-		out.Detail = termLabel(int(reward.Amount), false)
+		out.Detail = "会员 " + termLabel(int(reward.Amount), false)
 	case RewardFeature:
 		out.Tag = reward.Tag
 		out.Days = int(reward.Amount)
@@ -298,13 +298,20 @@ func DescribeReward(reward Reward, plans map[int64]PlanRef, features map[string]
 		}
 		out.Detail = name + " " + termLabel(int(reward.Amount), reward.Amount == 0)
 	case RewardBalance:
-		out.Detail = reward.Money.StringFixed(2)
+		out.Detail = "余额 " + reward.Money.StringFixed(2)
 	case RewardManual:
 		out.Detail = reward.Text
 	default:
-		out.Detail = strconv.FormatInt(reward.Amount, 10) + " " + spec.Unit
+		out.Detail = detailNoun[reward.Type] + " " + strconv.FormatInt(reward.Amount, 10) + " " + spec.Unit
 	}
 	return out
+}
+
+// detailNoun 数量型权益在一句话摘要里的名词：「经验 500 点」「抽奖 3 次」。
+// 摘要要能脱离标签单独成立 —— 客户端常把几项摘要连成一行，只写「500 点」读不出是什么。
+var detailNoun = map[string]string{
+	RewardExperience:   "经验",
+	RewardLotteryDraws: "抽奖",
 }
 
 // termLabel 时长的展示口径：永久 / 1 年 / 3 个月 / 7 天。

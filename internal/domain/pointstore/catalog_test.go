@@ -208,3 +208,23 @@ func TestValidateItemInput(t *testing.T) {
 		t.Errorf("清洗与默认值不对：%+v", input)
 	}
 }
+
+// 摘要要能脱离标签单独成立：客户端把几项摘要连成一行时，「3 天」「500 点」读不出是什么。
+func TestDescribeRewardIsSelfContained(t *testing.T) {
+	plans := map[int64]PlanRef{1: {ID: 1, Name: "月度会员", DurationDays: 30}}
+	features := map[string]FeatureRef{"online_music": {Tag: "online_music", Name: "在线音乐", IsActive: true}}
+	cases := map[string]Reward{
+		"月度会员 1 个月": {Type: RewardVipPlan, RefID: 1},
+		"会员 3 天":    {Type: RewardVipDays, Amount: 3},
+		"在线音乐 永久":   {Type: RewardFeature, Tag: "online_music"},
+		"经验 500 点":  {Type: RewardExperience, Amount: 500},
+		"余额 1.50":   {Type: RewardBalance, Money: decimal.RequireFromString("1.5")},
+		"抽奖 3 次":    {Type: RewardLotteryDraws, Amount: 3},
+		"定制贴纸":      {Type: RewardManual, Text: "定制贴纸"},
+	}
+	for want, reward := range cases {
+		if got := DescribeReward(reward, plans, features).Detail; got != want {
+			t.Errorf("%s：期望「%s」，实际「%s」", reward.Type, want, got)
+		}
+	}
+}
