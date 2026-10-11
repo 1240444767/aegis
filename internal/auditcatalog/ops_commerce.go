@@ -73,6 +73,20 @@ func init() {
 		Write("POST /api/admin/apps/:appkey/points-store/redemptions/:redemptionId/cancel", "取消积分兑换并退回积分", "积分兑换", SeverityHigh),
 		View("GET /api/admin/apps/:appkey/points-store/stats", "查看积分商城统计", ""),
 
+		// 邀请
+		View("GET /api/admin/apps/:appkey/invite/catalog", "查看邀请配置目录", ""),
+		View("GET /api/admin/apps/:appkey/invite/settings", "查看邀请配置", ""),
+		Write("PUT /api/admin/apps/:appkey/invite/settings", "修改邀请配置", "", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/invite/codes", "查看邀请码", ""),
+		Write("POST /api/admin/apps/:appkey/invite/codes", "创建活动邀请码", "邀请码", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/invite/codes/:codeId", "修改活动邀请码", "邀请码", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/invite/codes/:codeId/status", "启用或停用邀请码", "邀请码", SeverityMedium),
+		Write("DELETE /api/admin/apps/:appkey/invite/codes/:codeId", "删除活动邀请码", "邀请码", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/invite/relations", "查看邀请记录", ""),
+		Write("POST /api/admin/apps/:appkey/invite/relations/:relationId/settle", "发放邀请人奖励", "邀请记录", SeverityHigh),
+		Write("POST /api/admin/apps/:appkey/invite/relations/:relationId/cancel", "取消邀请人奖励", "邀请记录", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/invite/stats", "查看邀请统计", ""),
+
 		// 签到
 		View("GET /api/admin/apps/:appkey/signin/records", "查看签到记录", ""),
 		View("GET /api/admin/apps/:appkey/signin/stats", "查看签到统计", ""),

@@ -161,6 +161,17 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsStoreRedeem", Method: "POST", Path: "/points/store/redeem", Auth: true,
 		Summary: "用积分兑换一件商品（requestId 幂等）；含人工发放的商品兑换后为 pending"},
 	{Key: "pointsStoreRedemptions", Method: "GET", Path: "/points/store/redemptions", Auth: true, Summary: "我的兑换记录"},
+	// 邀请：未开启时 /invite 回 enabled=false（不报错），入口整个隐藏。注册表单上的邀请码字段由
+	// /config 的 auth.invite 决定，填了的码随 /auth/register 的 inviteCode 一起提交。
+	{Key: "invite", Method: "GET", Path: "/invite", Auth: true,
+		Summary: "邀请页：我的邀请码、分享文案、奖励规则、统计，以及我还能不能填写邀请码（bind）"},
+	{Key: "inviteInvitees", Method: "GET", Path: "/invite/invitees", Auth: true, Summary: "我邀请的人"},
+	{Key: "inviteBind", Method: "POST", Path: "/invite/bind", Auth: true,
+		Summary: "注册后在时限内补填邀请码（默认 72 小时，按应用配置）"},
+	{Key: "inviteCode", Method: "PUT", Path: "/invite/code", Auth: true,
+		Summary: "换我的邀请码：code 非空为自定义（应用允许时），为空则重新生成"},
+	{Key: "invitePreview", Method: "POST", Path: "/invite/preview",
+		Summary: "注册页预览邀请码：能不能用、邀请人、填了能拿什么（不需要登录）"},
 	{Key: "leaderboardSummary", Method: "GET", Path: "/leaderboard/summary", Auth: true, Summary: "排行榜综合概览"},
 	{Key: "leaderboardMe", Method: "GET", Path: "/leaderboard/me", Auth: true, Summary: "我在各榜单的排名"},
 	{Key: "leaderboardPoints", Method: "GET", Path: "/leaderboard/points/{type}", Auth: true, Summary: "积分榜（type: integral | experience | level）"},
@@ -369,6 +380,24 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRedeeming, Name: "POINTS_STORE_REDEEMING", Message: "兑换正在处理",
 		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	// ── 邀请 ──
+	// 与 /invite 的 bind.reason、/invite/preview 的 reason 同一套判据。
+	{Code: errCodeInviteDisabled, Name: "INVITE_DISABLED", Message: "邀请活动暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/invite 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodeInviteWindowClosed, Name: "INVITE_WINDOW_CLOSED", Message: "已超过填写期限",
+		Recovery: authprotocol.RecoveryNone, Hint: "注册后只能在 auth.invite.bindWindowHours 小时内补填；为 0 时只能在注册时填写"},
+	{Code: errCodeInviteAlreadyBound, Name: "INVITE_ALREADY_BOUND", Message: "已填写过邀请码", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeInviteCodeInvalid, Name: "INVITE_CODE_INVALID", Message: "邀请码不可用",
+		Recovery: authprotocol.RecoveryNone, Hint: "不存在、已停用、未生效、已过期、次数已满或邀请人暂不满足邀请条件，message 说明是哪一种"},
+	{Code: errCodeInviteSelf, Name: "INVITE_SELF", Message: "不能填写自己或由你邀请的用户的邀请码", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeInviteLimited, Name: "INVITE_LIMITED", Message: "当前设备或网络的填写次数已满", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeInviteRequired, Name: "INVITE_REQUIRED", Message: "请填写邀请码",
+		Recovery: authprotocol.RecoveryNone, Hint: "auth.invite.field 为 required 时注册必须带 inviteCode"},
+	{Code: errCodeInviteRewardUnavailable, Name: "INVITE_REWARD_UNAVAILABLE", Message: "邀请奖励配置已失效", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeInviteCustomForbidden, Name: "INVITE_CUSTOM_FORBIDDEN", Message: "当前应用不支持自定义邀请码", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeInviteNotEligible, Name: "INVITE_NOT_ELIGIBLE", Message: "暂不满足邀请条件",
+		Recovery: authprotocol.RecoveryNone, Hint: "/invite 的 canInvite 为 false，inviteMessage 说明还差什么"},
+	{Code: errCodeInviteCodeTaken, Name: "INVITE_CODE_TAKEN", Message: "邀请码已被占用", Recovery: authprotocol.RecoveryNone},
 	// ── 激励广告 ──
 	// 只有「这次上报本身不成立」才是错误；限额、冷却等「看了但不发」的结论
 	// 在 /ads/rewarded/claim 的返回体里（status=rejected + reason），不走错误码。

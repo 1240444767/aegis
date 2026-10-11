@@ -23,6 +23,7 @@ import (
 const (
 	UnlockSourcePointsStore = "points_store" // 积分兑换
 	UnlockSourceAdminGrant  = "admin_grant"  // 管理员授予
+	UnlockSourceInvite      = "invite"       // 邀请奖励
 )
 
 // FeatureUnlock 一条功能解锁记录（账本行）。

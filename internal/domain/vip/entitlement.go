@@ -30,6 +30,7 @@ const (
 	SourceCardKey      = ChannelCardKey
 	SourceAdReward     = ChannelAdReward
 	SourcePointsStore  = ChannelPointsStore
+	SourceInvite       = ChannelInvite
 )
 
 // 试用资格判据。客户端按 reason 分支，不要匹配 message —— 后者会随文案调整变化。
@@ -337,7 +338,7 @@ func LifetimeIncludes(lifetime bool, lifetimeFeatures []string, plan Plan) bool 
 func normalizeSource(channel string) string {
 	switch channel {
 	case ChannelTrial, ChannelWallet, ChannelPaymentOrder, ChannelAdminGrant, ChannelCardKey,
-		ChannelAdReward, ChannelPointsStore:
+		ChannelAdReward, ChannelPointsStore, ChannelInvite:
 		return channel
 	default:
 		return SourceUnknown

@@ -53,6 +53,15 @@ func NewAppService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.S
 	return &AppService{log: log, pg: pg, sessions: sessions, location: timeutil.DefaultLocation()}
 }
 
+// AppName 应用名（分享文案等展示用），取不到时为空串。
+func (s *AppService) AppName(ctx context.Context, appID int64) string {
+	app, err := s.GetApp(ctx, appID)
+	if err != nil || app == nil {
+		return ""
+	}
+	return app.Name
+}
+
 func (s *AppService) GetApp(ctx context.Context, appID int64) (*appdomain.App, error) {
 	if s.sessions != nil {
 		cached, err := s.sessions.GetAppByID(ctx, appID)

@@ -25,6 +25,9 @@ type SignInService struct {
 	publisher *event.Publisher
 	location  *time.Location
 	inFlight  singleflight.Group
+	// afterSignIn 新签到落库之后的回调（邀请：被邀请人累计签到满 N 天后发邀请人奖励）。
+	// 回调自己负责不阻塞：签到链路不等它。
+	afterSignIn func(appID, userID int64)
 }
 
 const (
@@ -42,6 +45,9 @@ func NewSignInService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrep
 		location:  timeutil.DefaultLocation(),
 	}
 }
+
+// SetAfterSignIn 注册新签到之后的回调，见 afterSignIn。
+func (s *SignInService) SetAfterSignIn(fn func(appID, userID int64)) { s.afterSignIn = fn }
 
 func (s *SignInService) GetStatus(ctx context.Context, session *authdomain.Session) (*userdomain.SignInStatus, error) {
 	user, err := s.requireActiveUser(ctx, session)
@@ -240,6 +246,9 @@ func (s *SignInService) signInOnce(ctx context.Context, session *authdomain.Sess
 	}
 
 	_ = s.sessions.DeleteMyView(ctx, session.AppID, session.UserID)
+	if s.afterSignIn != nil {
+		s.afterSignIn(session.AppID, session.UserID)
+	}
 	_ = s.publisher.PublishJSON(ctx, event.SubjectUserSignedIn, map[string]any{
 		"user_id":           session.UserID,
 		"appid":             session.AppID,

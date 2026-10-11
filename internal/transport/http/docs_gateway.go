@@ -103,6 +103,12 @@ func gatewayRequestModels() map[string]any {
 		"pointsStoreRedeem":      PointsStoreRedeemRequest{},
 		"pointsStoreRedemptions": PaginationQuery{},
 
+		// 邀请
+		"inviteInvitees": PaginationQuery{},
+		"inviteBind":     InviteBindRequest{},
+		"inviteCode":     InviteCodeUpdateRequest{},
+		"invitePreview":  InvitePreviewRequest{},
+
 		// 站内信
 		"notifications":         NotificationQuery{},
 		"notificationRead":      NotificationReadRequest{},

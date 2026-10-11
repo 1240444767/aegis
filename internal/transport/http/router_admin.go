@@ -258,6 +258,19 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/points-store/redemptions/:redemptionId/fulfill", h.AdminFulfillPointsStoreRedemption)
 		admin.POST("/apps/:appkey/points-store/redemptions/:redemptionId/cancel", h.AdminCancelPointsStoreRedemption)
 		admin.GET("/apps/:appkey/points-store/stats", h.AdminPointsStoreStats)
+		// 邀请：配置 / 邀请码（个人码与活动码）/ 邀请关系与邀请人奖励的处理 / 统计
+		admin.GET("/apps/:appkey/invite/catalog", h.AdminInviteCatalog)
+		admin.GET("/apps/:appkey/invite/settings", h.AdminInviteSettings)
+		admin.PUT("/apps/:appkey/invite/settings", h.AdminSaveInviteSettings)
+		admin.GET("/apps/:appkey/invite/codes", h.AdminListInviteCodes)
+		admin.POST("/apps/:appkey/invite/codes", h.AdminCreateInviteCodes)
+		admin.PUT("/apps/:appkey/invite/codes/:codeId", h.AdminUpdateInviteCode)
+		admin.PUT("/apps/:appkey/invite/codes/:codeId/status", h.AdminSetInviteCodeStatus)
+		admin.DELETE("/apps/:appkey/invite/codes/:codeId", h.AdminDeleteInviteCode)
+		admin.GET("/apps/:appkey/invite/relations", h.AdminListInviteRelations)
+		admin.POST("/apps/:appkey/invite/relations/:relationId/settle", h.AdminSettleInviteRelation)
+		admin.POST("/apps/:appkey/invite/relations/:relationId/cancel", h.AdminCancelInviteRelation)
+		admin.GET("/apps/:appkey/invite/stats", h.AdminInviteStats)
 		// 用户云存储：应用级配置 / 概览 / 用户列表。单个用户的条目管理挂在 users/:userId 之下，
 		// 与资料、钱包同一组权限（app_user:read / write），因为那是在看某个人的数据。
 		admin.GET("/apps/:appkey/cloud-storage/config", h.AdminCloudStorageConfig)

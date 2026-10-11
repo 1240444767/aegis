@@ -135,6 +135,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/test"):                        testAppFunctionRequest{},                 // AdminTestAppFunction
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/versions"):                    createAppFunctionVersionRequest{},        // AdminCreateAppFunctionVersion
 		routeKey("POST", "/api/admin/apps/{appkey}/governance/appeals"):                                   GovernanceAppealRequest{},                // AdminAppSubmitGovernanceAppeal
+		routeKey("GET", "/api/admin/apps/{appkey}/invite/codes"):                                          InviteCodeQuery{},                        // AdminListInviteCodes
+		routeKey("POST", "/api/admin/apps/{appkey}/invite/codes"):                                         InviteCodeRequest{},                      // AdminCreateInviteCodes
+		routeKey("PUT", "/api/admin/apps/{appkey}/invite/codes/{codeId}"):                                 InviteCodeRequest{},                      // AdminUpdateInviteCode
+		routeKey("PUT", "/api/admin/apps/{appkey}/invite/codes/{codeId}/status"):                          InviteCodeStatusRequest{},                // AdminSetInviteCodeStatus
+		routeKey("GET", "/api/admin/apps/{appkey}/invite/relations"):                                      InviteRelationQuery{},                    // AdminListInviteRelations
+		routeKey("PUT", "/api/admin/apps/{appkey}/invite/settings"):                                       InviteSettingsRequest{},                  // AdminSaveInviteSettings
 		routeKey("GET", "/api/admin/apps/{appkey}/lottery/activities"):                                    LotteryActivityListQuery{},               // AdminListLotteryActivities
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                   LotteryActivityCreateRequest{},           // AdminCreateLotteryActivity
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{id}"):                               LotteryActivityUpdateRequest{},           // AdminUpdateLotteryActivity
@@ -594,6 +600,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/feedback/{feedbackId}/cancel"):                            TicketCancelRequest{},                    // AppCancelFeedback
 		routeKey("POST", "/api/v1/apps/{appkey}/feedback/{feedbackId}/rating"):                            TicketRatingRequest{},                    // AppRateFeedback
 		routeKey("POST", "/api/v1/apps/{appkey}/feedback/{feedbackId}/replies"):                           FeedbackReplyRequest{},                   // AppReplyFeedback
+		routeKey("POST", "/api/v1/apps/{appkey}/invite/bind"):                                             InviteBindRequest{},                      // AppBindInvite
+		routeKey("PUT", "/api/v1/apps/{appkey}/invite/code"):                                              InviteCodeUpdateRequest{},                // AppUpdateInviteCode
+		routeKey("POST", "/api/v1/apps/{appkey}/invite/preview"):                                          InvitePreviewRequest{},                   // AppPreviewInvite
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/points/{type}"):                                LeaderboardListQuery{},                   // LeaderboardPoints
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/signin/{type}"):                                LeaderboardListQuery{},                   // LeaderboardSignIn
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes"):                                   RecoveryCodesRegenerateRequest{},         // GenerateRecoveryCodes

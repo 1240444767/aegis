@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"aegis/internal/domain/invite"
 	oauthdomain "aegis/internal/domain/oauth"
 )
 
@@ -188,6 +189,8 @@ type AuthCapability struct {
 	RegisterEnabled    bool                         `json:"registerEnabled"`
 	LoginEnabled       bool                         `json:"loginEnabled"`
 	OAuthProviders     []oauthdomain.PublicProvider `json:"oauthProviders"`
+	// Invite 注册表单上的邀请码字段：enabled、field（hidden / optional / required）、label、placeholder
+	Invite invite.Capability `json:"invite"`
 }
 
 // CaptchaRequirement 各入口到底要不要图形验证码 —— 服务端算好的**结论**。
@@ -434,17 +437,20 @@ type LoginInput struct {
 }
 
 type RegisterInput struct {
-	Method        string          `json:"method"`
-	Account       string          `json:"account"`
-	Password      string          `json:"password"`
-	Phone         string          `json:"phone"`
-	Code          string          `json:"code"`
-	Nickname      string          `json:"nickname"`
-	Profile       json.RawMessage `json:"profile,omitempty"`
-	DeviceID      string          `json:"deviceId"`
-	Device        string          `json:"device"`
-	CaptchaID     string          `json:"captchaId"`
-	CaptchaAnswer string          `json:"captchaAnswer"`
+	Method   string          `json:"method"`
+	Account  string          `json:"account"`
+	Password string          `json:"password"`
+	Phone    string          `json:"phone"`
+	Code     string          `json:"code"`
+	Nickname string          `json:"nickname"`
+	Profile  json.RawMessage `json:"profile,omitempty"`
+	// InviteCode 邀请码。字段出不出现、是否必填由 /config 的 auth.invite 决定；
+	// 填了却不能用时在建号之前拒绝（40366 等），建号后填写的结论在响应的 invite 里
+	InviteCode    string `json:"inviteCode"`
+	DeviceID      string `json:"deviceId"`
+	Device        string `json:"device"`
+	CaptchaID     string `json:"captchaId"`
+	CaptchaAnswer string `json:"captchaAnswer"`
 }
 
 // SMSCodeInput 申请短信验证码。purpose 决定这串码只能用于登录还是注册。

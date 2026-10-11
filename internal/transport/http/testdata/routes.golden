@@ -14,6 +14,7 @@ DELETE	/api/admin/apps/:appkey/function-keys/:keyId	AdminRevokeAppFunctionKey
 DELETE	/api/admin/apps/:appkey/function-kv	AdminDeleteAppFunctionKV
 DELETE	/api/admin/apps/:appkey/functions/:functionName	AdminDeleteAppFunction
 DELETE	/api/admin/apps/:appkey/functions/:functionName/versions/:version	AdminDeleteAppFunctionVersion
+DELETE	/api/admin/apps/:appkey/invite/codes/:codeId	AdminDeleteInviteCode
 DELETE	/api/admin/apps/:appkey/login-baseline/:userid	ResetAdminAppLoginBaseline
 DELETE	/api/admin/apps/:appkey/lottery/activities/:id	AdminDeleteLotteryActivity
 DELETE	/api/admin/apps/:appkey/lottery/prizes/:id	AdminDeleteLotteryPrize
@@ -156,6 +157,11 @@ GET	/api/admin/apps/:appkey/functions/:functionName/versions	AdminListAppFunctio
 GET	/api/admin/apps/:appkey/functions/:functionName/versions/:version	AdminGetAppFunctionVersion
 GET	/api/admin/apps/:appkey/governance	AdminAppGovernance
 GET	/api/admin/apps/:appkey/governance/history	AdminAppGovernanceHistory
+GET	/api/admin/apps/:appkey/invite/catalog	AdminInviteCatalog
+GET	/api/admin/apps/:appkey/invite/codes	AdminListInviteCodes
+GET	/api/admin/apps/:appkey/invite/relations	AdminListInviteRelations
+GET	/api/admin/apps/:appkey/invite/settings	AdminInviteSettings
+GET	/api/admin/apps/:appkey/invite/stats	AdminInviteStats
 GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
 GET	/api/admin/apps/:appkey/lottery/activities/:id	AdminGetLotteryActivity
@@ -525,6 +531,8 @@ GET	/api/v1/apps/:appkey/config	AppConfig
 GET	/api/v1/apps/:appkey/feedback	AppListFeedback
 GET	/api/v1/apps/:appkey/feedback/:feedbackId	AppGetFeedback
 GET	/api/v1/apps/:appkey/feedback/categories	AppFeedbackCategories
+GET	/api/v1/apps/:appkey/invite	AppInviteCenter
+GET	/api/v1/apps/:appkey/invite/invitees	AppInvitees
 GET	/api/v1/apps/:appkey/leaderboard/me	LeaderboardMe
 GET	/api/v1/apps/:appkey/leaderboard/points/:type	LeaderboardPoints
 GET	/api/v1/apps/:appkey/leaderboard/signin/:type	LeaderboardSignIn
@@ -692,6 +700,9 @@ POST	/api/admin/apps/:appkey/functions/:functionName/versions	AdminCreateAppFunc
 POST	/api/admin/apps/:appkey/functions/:functionName/versions/:version/activate	AdminActivateAppFunctionVersion
 POST	/api/admin/apps/:appkey/governance/appeals	AdminAppSubmitGovernanceAppeal
 POST	/api/admin/apps/:appkey/governance/appeals/:appealId/withdraw	AdminAppWithdrawGovernanceAppeal
+POST	/api/admin/apps/:appkey/invite/codes	AdminCreateInviteCodes
+POST	/api/admin/apps/:appkey/invite/relations/:relationId/cancel	AdminCancelInviteRelation
+POST	/api/admin/apps/:appkey/invite/relations/:relationId/settle	AdminSettleInviteRelation
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
 POST	/api/admin/apps/:appkey/lottery/activities/:id/prizes	AdminCreateLotteryPrize
 POST	/api/admin/apps/:appkey/lottery/activities/:id/seed/commit	AdminLotteryCommitSeed
@@ -1068,6 +1079,8 @@ POST	/api/v1/apps/:appkey/feedback/:feedbackId/cancel	AppCancelFeedback
 POST	/api/v1/apps/:appkey/feedback/:feedbackId/rating	AppRateFeedback
 POST	/api/v1/apps/:appkey/feedback/:feedbackId/replies	AppReplyFeedback
 POST	/api/v1/apps/:appkey/feedback/attachments	AppUploadFeedbackAttachment
+POST	/api/v1/apps/:appkey/invite/bind	AppBindInvite
+POST	/api/v1/apps/:appkey/invite/preview	AppPreviewInvite
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes	GenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes/regenerate	RegenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/totp/disable	DisableTOTP
@@ -1126,6 +1139,9 @@ PUT	/api/admin/apps/:appkey/cloud-storage/config	AdminSaveCloudStorageConfig
 PUT	/api/admin/apps/:appkey/commerce	UpdateAdminAppCommerceSettings
 PUT	/api/admin/apps/:appkey/encryption	UpdateAdminAppEncryption
 PUT	/api/admin/apps/:appkey/functions/:functionName	AdminUpdateAppFunction
+PUT	/api/admin/apps/:appkey/invite/codes/:codeId	AdminUpdateInviteCode
+PUT	/api/admin/apps/:appkey/invite/codes/:codeId/status	AdminSetInviteCodeStatus
+PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:id	AdminUpdateLotteryActivity
 PUT	/api/admin/apps/:appkey/lottery/prizes/:id	AdminUpdateLotteryPrize
 PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
@@ -1202,6 +1218,7 @@ PUT	/api/user/role/applications/:applicationId/cancel	CancelRoleApplication
 PUT	/api/user/settings	UpdateSettings
 PUT	/api/user/update-site	UpdateSite
 PUT	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppPutCloudItem
+PUT	/api/v1/apps/:appkey/invite/code	AppUpdateInviteCode
 PUT	/api/v1/apps/:appkey/me/auto-sign	AppUpdateAutoSign
 PUT	/api/v1/apps/:appkey/me/profile	UpdateProfile
 PUT	/api/v1/apps/:appkey/me/settings	UpdateSettings

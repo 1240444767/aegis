@@ -422,6 +422,13 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	pointsStoreService := service.NewPointsStoreService(log, pg)
 	pointsStoreService.SetNotifier(notificationService)
 	pointsStoreService.SetEventPublisher(realtimeService)
+	// 邀请：邀请人奖励到账走站内信，双方的在线设备收到 invite.changed 刷新积分与权益；
+	// 发放条件是「被邀请人签到满 N 天」时由签到回调结算。
+	inviteService := service.NewInviteService(log, pg)
+	inviteService.SetNotifier(notificationService)
+	inviteService.SetEventPublisher(realtimeService)
+	inviteService.SetAppNames(appService)
+	signInService.SetAfterSignIn(inviteService.OnSignIn)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
@@ -479,6 +486,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 「归属地异常」这类规则配了也永不命中 —— 那是最典型的"看起来防住了"。
 	riskService.SetLocationService(locationService)
 	authService.SetRiskService(riskService)
+	inviteService.SetRiskService(riskService)
 	adminService.SetRiskService(riskService)
 	// 对外 OAuth2 / OIDC 授权服务器（Ory Hydra 承载协议，Aegis 负责登录与同意页）
 	oauth2ServerService := service.NewOAuth2ServerService(cfg, log, pg, authService, appService, avatarService)
@@ -600,6 +608,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		RewardedAd:       rewardedAdService,
 		AdPolicy:         adPolicyService,
 		PointsStore:      pointsStoreService,
+		Invite:           inviteService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
 		Version:          versionService,

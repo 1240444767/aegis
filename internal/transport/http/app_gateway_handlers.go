@@ -47,6 +47,9 @@ func (h *Handler) AppConfig(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	if h.invite != nil {
+		config.Auth.Invite = h.invite.Capability(c.Request.Context(), app.ID)
+	}
 	// sealed 档的公钥有轮换窗口，缓存时间必须短于轮换后的 24h 兼容期。
 	c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
 	response.Success(c, http.StatusOK, "获取成功", config)
@@ -202,6 +205,13 @@ func (h *Handler) AppRegister(c *gin.Context) {
 		return
 	}
 	deviceID, device := h.resolveGatewayDevice(c, req.DeviceID, req.Device)
+	// 邀请码在建号之前核对：必填却没填、填了却不能用，都不该先留下一个账号
+	if h.invite != nil {
+		if err := h.invite.CheckRegisterCode(c.Request.Context(), app.ID, req.InviteCode); err != nil {
+			h.writeError(c, err)
+			return
+		}
+	}
 
 	var result *authdomain.LoginResult
 	var err error
@@ -245,7 +255,17 @@ func (h *Handler) AppRegister(c *gin.Context) {
 	if !policy.AutoLogin {
 		message = "注册成功，请登录"
 	}
-	response.Success(c, http.StatusOK, message, result)
+	payload := InviteRegisterResult{LoginResult: result}
+	if h.invite != nil && result != nil {
+		payload.Invite = h.invite.BindAfterRegister(c.Request.Context(), service.InviteBindRequest{
+			AppID: app.ID, UserID: result.UserID, Code: req.InviteCode,
+			DeviceID: deviceID, ClientIP: c.ClientIP(), UserAgent: c.Request.UserAgent(),
+		})
+		if payload.Invite != nil {
+			h.resolveInviteUser(c, app.ID, payload.Invite.Inviter)
+		}
+	}
+	response.Success(c, http.StatusOK, message, payload)
 }
 
 // AppSMSCode 申请短信验证码。

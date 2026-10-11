@@ -97,6 +97,10 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     /**
      * 注册。`profile` 里能放哪些字段由 `/config` 的 `auth.registrationSchema` 决定，
      * **不要在客户端硬编码表单** —— 管理员加一个必填字段就得发版。
+     *
+     * [inviteCode] 出不出现、是否必填由 `/config` 的 `auth.invite` 决定。填了却不能用时在建号之前
+     * 被拒（40366 不可用 / 40367 自己的码 / 40368 次数已满 / 40369 必填却没填）；
+     * 建号之后的填写结论在 [AegisSession.invite]。
      */
     @Throws(IOException::class)
     @JvmOverloads
@@ -110,14 +114,23 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
         method: String = "password",
         captchaId: String? = null,
         captchaAnswer: String? = null,
+        inviteCode: String? = null,
     ): AegisSession = login(
         buildBody(
             "method" to method, "account" to account, "password" to password,
             "phone" to phone, "code" to code, "nickname" to nickname, "profile" to profile,
-            "captchaId" to captchaId, "captchaAnswer" to captchaAnswer,
+            "captchaId" to captchaId, "captchaAnswer" to captchaAnswer, "inviteCode" to inviteCode,
         ),
         path = "/auth/register",
     )
+
+    /**
+     * 注册页预览邀请码：能不能用（`valid` / `reason` / `message`）、邀请人（`inviter`）、
+     * 填了能拿什么（`rewards`）。不需要登录；码不能用不报错。
+     */
+    @Throws(IOException::class)
+    fun previewInvite(code: String): JsonElement =
+        client.call("POST", "/invite/preview", mapOf("code" to code))
 
     /** 用保存的 refreshToken 换一对新令牌，并写回 tokenStore。 */
     @Throws(IOException::class)
@@ -646,6 +659,40 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     @JvmOverloads
     fun pointsStoreRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/points/store/redemptions", query = pageQuery(page, limit), requireAuth = true)
+
+    /**
+     * 邀请页：我的邀请码（`code`，不满足邀请条件时为空、原因在 `inviteMessage`）、分享文案与链接、
+     * 双方奖励与阶梯（`milestones`）、统计（`stats`），以及我还能不能填写邀请码（`bind`）。
+     *
+     * 未开启时 `enabled=false`（不报错），入口应当整个隐藏。
+     */
+    @Throws(IOException::class)
+    fun invite(): JsonElement = client.call("GET", "/invite", requireAuth = true)
+
+    /** 我邀请的人：昵称、头像、邀请人奖励的状态（`pending` / `granted` / `limited` / `cancelled`）与结果。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun invitees(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/invite/invitees", query = pageQuery(page, limit), requireAuth = true)
+
+    /**
+     * 注册后在时限内补填邀请码（时限见 `/invite` 的 `bind.deadline`）。
+     * 失败码：40363 未开放 / 40364 已过期限 / 40365 已填写过 / 40366 邀请码不可用 /
+     * 40367 自己的或下级的码 / 40368 设备或网络次数已满 / 40355 奖励配置已失效。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun bindInvite(code: String, deviceId: String? = null): JsonElement =
+        client.call("POST", "/invite/bind", mapOf("code" to code, "deviceId" to deviceId), requireAuth = true)
+
+    /**
+     * 换我的邀请码：[code] 非空为自定义（应用允许时，否则 40356；被占用 40948），
+     * 为空则按应用的格式重新生成。旧码立即失效，已经填写过旧码的人不受影响。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun updateInviteCode(code: String? = null): JsonElement =
+        client.call("PUT", "/invite/code", mapOf("code" to code), requireAuth = true)
 
     @Throws(IOException::class)
     fun leaderboardSummary(): JsonElement = client.call("GET", "/leaderboard/summary", requireAuth = true)

@@ -56,6 +56,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGateway.POST("/banners/:bannerId/click", h.AppBannerClick)
 		appGateway.GET("/notices", h.AppNotices)
 		appGateway.GET("/version/check", h.AppVersionCheck)
+		// 注册页填完邀请码后的预览（码能不能用、谁邀请的、填了能拿什么）
+		appGateway.POST("/invite/preview", h.AppPreviewInvite)
 	}
 
 	// 发布中心：免登录可用，带令牌时按用户定向（渠道、内测名单、灰度）。
@@ -167,6 +169,11 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/points/store", h.AppPointsStore)
 		appGatewayAuthed.POST("/points/store/redeem", h.AppRedeemPointsStoreItem)
 		appGatewayAuthed.GET("/points/store/redemptions", h.AppPointsStoreRedemptions)
+		// 邀请：邀请页 / 我邀请的人 / 注册后限时补填 / 换我的邀请码
+		appGatewayAuthed.GET("/invite", h.AppInviteCenter)
+		appGatewayAuthed.GET("/invite/invitees", h.AppInvitees)
+		appGatewayAuthed.POST("/invite/bind", h.AppBindInvite)
+		appGatewayAuthed.PUT("/invite/code", h.AppUpdateInviteCode)
 		appGatewayAuthed.GET("/leaderboard/summary", h.LeaderboardSummary)
 		appGatewayAuthed.GET("/leaderboard/me", h.LeaderboardMe)
 		appGatewayAuthed.GET("/leaderboard/points/:type", h.LeaderboardPoints)

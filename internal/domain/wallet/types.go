@@ -20,6 +20,8 @@ const (
 	TxnTypeCardKey = "card_key"
 	// TxnTypePointsExchange 积分兑换余额入账。与卡密同理，不计入累计充值。
 	TxnTypePointsExchange = "points_exchange"
+	// TxnTypeInvite 邀请奖励入账。同理不计入累计充值。
+	TxnTypeInvite = "invite"
 )
 
 // Wallet 用户钱包

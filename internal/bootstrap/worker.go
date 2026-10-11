@@ -167,6 +167,11 @@ func NewWorkerAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, man
 	// Worker 不持有 WebSocket 连接，实时推送经 NATS 广播由 API 实例分发给在线客户端
 	workerRealtimePublisher := service.NewNATSUserEventPublisher(log, natsConn)
 	workerAdminInboxService := service.NewAdminInboxService(log, pg, workerRealtimePublisher)
+	// 自动签到也算签到：被邀请人签满 N 天后结算邀请人奖励，与 API 实例同一条路径
+	workerInviteService := service.NewInviteService(log, pg)
+	workerInviteService.SetNotifier(workerNotificationService)
+	workerInviteService.SetEventPublisher(workerRealtimePublisher)
+	signInService.SetAfterSignIn(workerInviteService.OnSignIn)
 	workerNotifyHub := service.NewNotifyHub(log, pg, cfg, workerEmailService, workerNotificationService,
 		workerAdminInboxService, workerRealtimePublisher)
 	if base := strings.TrimSpace(cfg.ConsoleBaseURL); base != "" {

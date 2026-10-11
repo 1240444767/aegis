@@ -38,7 +38,29 @@ data class AuthCapability(
     val registerEnabled: Boolean = false,
     val loginEnabled: Boolean = false,
     val oauthProviders: List<JsonElement> = emptyList(),
+    /** 注册表单上的邀请码字段：出不出现、是否必填都由它决定，见 [InviteCapability]。 */
+    val invite: InviteCapability = InviteCapability(),
 )
+
+/**
+ * 注册表单上的邀请码字段。
+ *
+ * [field] 为 `hidden` 时不画输入框（注册后仍可能在 [bindWindowHours] 小时内到邀请页补填），
+ * `optional` 为选填，`required` 为必填 —— 没有邀请码不能注册。填的码随
+ * [AegisAuthApi.register] 的 `inviteCode` 提交。
+ */
+@Serializable
+data class InviteCapability(
+    val enabled: Boolean = false,
+    val field: String = "hidden",
+    val label: String = "邀请码",
+    val placeholder: String = "",
+    val maxLength: Int = 32,
+    val bindWindowHours: Int = 0,
+) {
+    val shown: Boolean get() = enabled && field != "hidden"
+    val required: Boolean get() = enabled && field == "required"
+}
 
 /**
  * 各入口到底要不要图形验证码 —— 服务端算好的**结论**，客户端照做即可。
@@ -211,6 +233,11 @@ data class AegisSession(
      * 为 true 时应当立刻引导用户改密，而不是放进主界面。
      */
     val passwordChangeRequired: Boolean = false,
+    /**
+     * 注册时填写的邀请码的结论（只有注册接口会带）：`bound`、`message`、`rewards`、`inviter`。
+     * 注册不因邀请码失败而失败，`bound=false` 时 `message` 说明原因。
+     */
+    val invite: JsonElement? = null,
 ) {
     /** 拿到可用令牌才算登录完成。 */
     val isAuthenticated: Boolean get() = accessToken.isNotEmpty()
