@@ -9,6 +9,8 @@ import type {
   AppLoginBaseline,
   AppSignInRecordItem,
   AppSignInStats,
+  AutoSignAdminOverview,
+  AutoSignPolicy,
   AppPolicy,
   AppStats,
   AppSummary,
@@ -501,6 +503,22 @@ export function updateAdminAppSignInReward(
   payload: { policy: SignInRewardPolicy }
 ) {
   return apiRequest<SignInRewardPolicyView>(`/api/admin/apps/${appKey}/signin-reward`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export function getAdminAppAutoSign(token: string, appKey: string) {
+  return apiRequest<AutoSignAdminOverview>(`/api/admin/apps/${appKey}/auto-sign`, { token });
+}
+
+export function updateAdminAppAutoSign(
+  token: string,
+  appKey: string,
+  payload: { policy: Omit<AutoSignPolicy, "isDefault"> }
+) {
+  return apiRequest<AutoSignAdminOverview>(`/api/admin/apps/${appKey}/auto-sign`, {
     method: "PUT",
     token,
     body: JSON.stringify(payload)

@@ -48,6 +48,7 @@ import {
   getAdminAppSignInRecords,
   getAdminAppSignInStats,
   getAdminAppSignInReward,
+  getAdminAppAutoSign,
   getAdminAppCommerceSettings,
   getAdminAppLoginBaseline,
   getAdminAppPolicy,
@@ -140,6 +141,7 @@ import {
   updateAdminAppCommerceSettings,
   updateAdminAppPasswordPolicy,
   updateAdminAppSignInReward,
+  updateAdminAppAutoSign,
   updateAdminAppPolicy,
   updateAdminProfile,
   updateAdminAppUserStatus,
@@ -1384,6 +1386,28 @@ export function useResetAdminAppSignInRewardMutation(appKey?: string | null) {
     mutationFn: () => resetAdminAppSignInReward(token as string, appKey as string),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["admin-app-signin-reward"] });
+    }
+  });
+}
+
+export function useAdminAppAutoSignQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: ["admin-app-auto-sign", token, appKey],
+    queryFn: () => getAdminAppAutoSign(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+/** 保存后直接用返回的策略与使用情况写回缓存，不再多拉一次。 */
+export function useUpdateAdminAppAutoSignMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: Parameters<typeof updateAdminAppAutoSign>[2]) =>
+      updateAdminAppAutoSign(token as string, appKey as string, payload),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["admin-app-auto-sign", token, appKey], data);
     }
   });
 }

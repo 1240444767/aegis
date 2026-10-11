@@ -561,6 +561,39 @@ export type SignInRewardPolicyView = {
   policy: SignInRewardPolicy;
 };
 
+/** 自动签到开放对象：所有用户 / 有效会员（含永久） / 仅永久会员 / 持有指定功能 */
+export type AutoSignAudience = "all" | "vip" | "lifetime" | "feature";
+
+/** 应用的自动签到开放策略（`apps.settings.autoSign`），未配置即不开放。 */
+export type AutoSignPolicy = {
+  enabled: boolean;
+  audience: AutoSignAudience;
+  /** audience 为 vip 时试用会员是否算在内 */
+  includeTrial: boolean;
+  /** audience 为 feature 时要求持有的功能标识，保存时后端核对必须已登记 */
+  featureTag?: string;
+  /** 应用从未配置过，返回的是默认策略 */
+  isDefault: boolean;
+};
+
+export type AutoSignDailyCount = {
+  date: string;
+  count: number;
+};
+
+export type AutoSignAdminOverview = {
+  appid: number;
+  policy: AutoSignPolicy;
+  featureName?: string;
+  timezone: string;
+  /** 开启了自动签到的用户数（不论当前有无资格） */
+  enabledUsers: number;
+  /** 今天自动签到成功的次数 */
+  todayCount: number;
+  /** 近 14 天，按 timezone 计日 */
+  trend: AutoSignDailyCount[];
+};
+
 export type SignInRewardAppliedRule = {
   key: string;
   name: string;

@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BarChart3, CalendarCheck2, Calculator, ListChecks, Loader2, RotateCcw, Save, Settings2, TriangleAlert, X } from "lucide-react";
+import { BarChart3, CalendarCheck2, Calculator, ListChecks, Loader2, RotateCcw, Save, Settings2, Timer, TriangleAlert, X } from "lucide-react";
 import { toast } from "sonner";
 import { NoAppSelected } from "@/components/apps/app-config-primitives";
+import { SignInAutoSign } from "@/components/apps/signin-reward/signin-auto-sign";
 import { SignInOverview } from "@/components/apps/signin-reward/signin-overview";
 import { SignInPolicyEditor } from "@/components/apps/signin-reward/signin-policy-editor";
 import { SignInRecords } from "@/components/apps/signin-reward/signin-records";
@@ -30,6 +31,7 @@ import { cn } from "@/lib/utils";
  * | 记录 | 某个用户某一天签到拿了什么、命中了哪条规则 |
  * | 策略 | 基础奖励、连签成长、加成规则、里程碑怎么配 |
  * | 试算 | 按草稿逐日推演，保存之前先看清每天会发多少 |
+ * | 自动签到 | 开放给谁、多少人开着、每天替多少人签了；单独保存，不走下面的保存条 |
  *
  * 草稿放在这一层而不是策略视图里：切到「试算」时算的正是正在编辑、尚未保存的那一份，
  * 切回来也不会丢。有未保存修改时底部常驻保存条，离开页面前浏览器会提示。
@@ -38,7 +40,8 @@ const VIEWS = [
   { key: "overview", label: "概览", icon: BarChart3 },
   { key: "records", label: "签到记录", icon: ListChecks },
   { key: "policy", label: "奖励策略", icon: Settings2 },
-  { key: "simulator", label: "试算", icon: Calculator }
+  { key: "simulator", label: "试算", icon: Calculator },
+  { key: "auto-sign", label: "自动签到", icon: Timer }
 ] as const;
 
 type ViewKey = (typeof VIEWS)[number]["key"];
@@ -163,6 +166,7 @@ export function AppSignInRewardPanel({ appKey }: { appKey?: string | null }) {
       {view === "records" ? <SignInRecords appKey={appKey} policy={saved} /> : null}
       {view === "policy" ? <SignInPolicyEditor draft={draft} update={update} onRequestReset={() => setResetOpen(true)} /> : null}
       {view === "simulator" ? <SignInSimulator appKey={appKey} draft={draft} saved={saved} dirty={dirty} /> : null}
+      {view === "auto-sign" ? <SignInAutoSign appKey={appKey} /> : null}
 
       {dirty ? (
         <div className="fixed inset-x-0 bottom-0 z-40 border-t bg-background/95 px-4 py-3 shadow-[0_-4px_16px_rgba(0,0,0,0.06)] md:sticky md:inset-x-auto md:bottom-4 md:rounded-2xl md:border md:shadow-lg">
