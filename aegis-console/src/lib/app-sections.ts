@@ -19,6 +19,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Ticket,
+  UserPlus,
   type LucideIcon
 } from "lucide-react";
 
@@ -95,6 +96,7 @@ export const appSectionGroups: AppSectionGroup[] = [
       { key: "card-key", title: "卡密", summary: "授权卡与兑换卡", icon: Ticket },
       { key: "signin-reward", title: "签到奖励", summary: "连签规则与奖励发放", icon: Gift },
       { key: "points-store", title: "积分商城", summary: "积分兑换会员、功能与福利", icon: ShoppingBag },
+      { key: "invite", title: "邀请", summary: "邀请码、双方奖励与邀请记录", icon: UserPlus },
       { key: "lottery", title: "抽奖", summary: "奖池、概率与限次", icon: Dices },
       { key: "rewarded-ad", title: "激励广告", summary: "看广告领奖励、回调验签与限次", icon: MonitorPlay },
       { key: "ad-policy", title: "广告服务", summary: "同意要求、基础服务与开屏广告", icon: ShieldHalf }

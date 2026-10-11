@@ -709,6 +709,9 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/ad-policy.ts` / `lib/ad-policy-hooks.ts` | 广告服务策略域 API 与 React Query hooks |
 | `components/apps/points-store/` | 积分商城区块：概览 / 商品 / 兑换记录（见下节） |
 | `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
+| `components/apps/invite/` | 邀请区块：概览 / 配置 / 邀请码 / 邀请记录（见下节） |
+| `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
+| `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品与邀请奖励共用 |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
 | `lib/api/vip.ts` / `lib/vip-hooks.ts` | 会员域 API 与 React Query hooks |
@@ -1001,6 +1004,29 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 4. **只有待发放的兑换能处理**；已到账的权益已经被用上了，界面上不给取消入口。
 
 兑换语义（单事务、幂等、快照、顺延）见 [docs/points-store.md](../docs/points-store.md)。
+
+## 邀请区块（/apps/{appKey}?tab=invite）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/invite/app-invite-panel.tsx` | 骨架 + 概览 / 配置 / 邀请码 / 邀请记录四个视图的内部切换，跨视图带筛选（某个码、某个邀请人、等待中） |
+| `components/apps/invite/invite-overview-panel.tsx` | 开关状态 + 累计与今日数字 + 邀请趋势柱状图 + 邀请排行与活动码排行（点进邀请记录） |
+| `components/apps/invite/invite-config-panel.tsx` | 开关与全部配置一次保存：注册表单、邀请码格式（含示例码）、邀请人资格、双方奖励与阶梯、发放时机与上限、防刷、文案（占位符插入） |
+| `components/apps/invite/invite-codes-panel.tsx` | 个人码与活动码同表：使用次数、有效期、启停；活动码可编辑、删除 |
+| `components/apps/invite/invite-code-editor.tsx` | 活动码弹窗：指定一个或批量生成（可加前缀）、推广人（UserPicker）、被邀请人奖励跟随默认或自定义、次数与有效期；批量创建后列出全部码供复制 |
+| `components/apps/invite/invite-relations-panel.tsx` | 邀请记录：双方实际所得、邀请人奖励状态；等待中的可立即发放或取消 |
+| `components/apps/invite/invite-shared.tsx` | 枚举文案、状态徽标、示例码生成、有效期口径、分页条 |
+
+四条硬约束：
+
+1. **表单由后端目录驱动**（`/invite/catalog`）：权益、各枚举、默认配置与上限都从目录来；目录里没有下发的几项上限
+   （字段名称、阶梯名称、等级门槛等）在配置面板顶部有一份常量，最终以后端校验（40000）为准，原因原样 toast。
+2. **活动码的 `rewards` 有三态**：`null` 跟随应用默认、`[]` 不发奖励、非空为自定义。编辑器里「跟随默认 / 自定义」切换的就是它，
+   自定义而列表为空即不发奖励，不要把空列表当成跟随默认。
+3. **个人码只能停用不能删除**：删了主人下次打开邀请页又会生成一个新的。删除入口只给活动码。
+4. **示例码在渲染期不调用随机数**：由种子确定性地取字符，「换一个」只换种子；字符集与后端 `invite/code.go` 保持一致。
+
+能否填写、奖励发放与结算全部在后端，规则见 [docs/invite.md](../docs/invite.md)。
 
 ## 用户云存储区块（/apps/{appKey}?tab=cloud-storage）
 

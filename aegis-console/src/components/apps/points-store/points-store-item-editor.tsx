@@ -1,23 +1,21 @@
 "use client";
 
 import { useState } from "react";
-import { Loader2, Plus, Save, Trash2 } from "lucide-react";
+import { Loader2, Save } from "lucide-react";
 import { toast } from "sonner";
 import { FieldGroup, NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import {
   AUDIENCE_LABEL,
   LIMIT_PERIOD_LABEL,
-  termLabel,
   toLocalInput
 } from "@/components/apps/points-store/points-store-shared";
-import { vipPlanTerm } from "@/components/apps/vip/vip-shared";
-import { Button } from "@/components/ui/button";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
+  RewardListEditor,
+  rewardDraftsFrom,
+  rewardsFromDrafts,
+  type RewardDraft
+} from "@/components/apps/rewards/reward-list-editor";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -36,27 +34,9 @@ import {
 } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
-import type {
-  PointsStoreAudience,
-  PointsStoreItem,
-  PointsStoreLimitPeriod,
-  PointsStoreReward,
-  PointsStoreRewardSpec
-} from "@/lib/api/points-store";
-import type { VipFeature, VipPlan } from "@/lib/api/vip";
+import type { PointsStoreAudience, PointsStoreItem, PointsStoreLimitPeriod } from "@/lib/api/points-store";
 import { usePointsStoreCatalogQuery, useSavePointsStoreItemMutation } from "@/lib/points-store-hooks";
 import { useAdminVipFeaturesQuery, useAdminVipPlansQuery } from "@/lib/vip-hooks";
-
-/** 一项权益的草稿。数字一律按字符串存，理由同卡密编辑器：存 number 的输入框清不空。 */
-type RewardDraft = {
-  key: number;
-  type: string;
-  amount: string;
-  money: string;
-  refId: number;
-  tag: string;
-  text: string;
-};
 
 type Form = {
   title: string;
@@ -78,9 +58,6 @@ type Form = {
   active: boolean;
   sortOrder: string;
 };
-
-/** 行键只在一份草稿内唯一即可：新加的一行取现有最大值加一 */
-const nextRewardKey = (rewards: RewardDraft[]) => rewards.reduce((max, reward) => Math.max(max, reward.key), 0) + 1;
 
 function seed(item?: PointsStoreItem | null): Form {
   if (!item) {
@@ -113,15 +90,7 @@ function seed(item?: PointsStoreItem | null): Form {
     badge: item.badge ?? "",
     cost: String(item.cost),
     originalCost: item.originalCost ? String(item.originalCost) : "",
-    rewards: item.rewards.map((reward, index) => ({
-      key: index + 1,
-      type: reward.type,
-      amount: String(reward.amount ?? 0),
-      money: reward.money ?? "",
-      refId: reward.refId ?? 0,
-      tag: reward.tag ?? "",
-      text: reward.text ?? ""
-    })),
+    rewards: rewardDraftsFrom(item.rewards),
     limited: item.stock !== undefined && item.stock !== null,
     stock: String(item.stock ?? 100),
     limitPeriod: item.limitPeriod,
@@ -170,62 +139,6 @@ export function PointsStoreItemEditor({
   const categories = catalogQuery.data?.categories ?? [];
   const plans = (plansQuery.data ?? []).filter((plan) => plan.kind !== "trial");
   const features = featuresQuery.data ?? [];
-  const exclusiveChosen = form.rewards.some((reward) => catalog.find((spec) => spec.type === reward.type)?.exclusive);
-
-  const addable = catalog.filter((spec) => {
-    if (form.rewards.length >= maxRewards || exclusiveChosen) return false;
-    if (spec.exclusive && form.rewards.length > 0) return false;
-    if (!spec.repeatable && form.rewards.some((reward) => reward.type === spec.type)) return false;
-    return true;
-  });
-
-  const addReward = (type: string) => {
-    const spec = catalog.find((item) => item.type === type);
-    if (!spec) return;
-    const usedTags = form.rewards.map((reward) => reward.tag);
-    patch("rewards", [
-      ...form.rewards,
-      {
-        key: nextRewardKey(form.rewards),
-        type,
-        amount: String(spec.value === "feature" ? 7 : spec.min ?? 1),
-        money: "1.00",
-        refId: plans[0]?.id ?? 0,
-        tag: features.find((feature) => feature.isActive && !usedTags.includes(feature.tag))?.tag ?? "",
-        text: ""
-      }
-    ]);
-  };
-
-  const patchReward = (key: number, next: Partial<RewardDraft>) =>
-    patch(
-      "rewards",
-      form.rewards.map((reward) => (reward.key === key ? { ...reward, ...next } : reward))
-    );
-
-  const removeReward = (key: number) =>
-    patch(
-      "rewards",
-      form.rewards.filter((reward) => reward.key !== key)
-    );
-
-  const buildRewards = (): PointsStoreReward[] =>
-    form.rewards.map((reward) => {
-      const spec = catalog.find((item) => item.type === reward.type);
-      switch (spec?.value) {
-        case "money":
-          return { type: reward.type, money: reward.money.trim() };
-        case "ref":
-          return { type: reward.type, refId: Number(reward.refId) };
-        case "feature":
-          return { type: reward.type, tag: reward.tag, amount: Number(reward.amount) || 0 };
-        case "text":
-          return { type: reward.type, text: reward.text.trim() };
-        default:
-          return { type: reward.type, amount: Number(reward.amount) || 0 };
-      }
-    });
-
   const close = () => {
     setDraft(null);
     onOpenChange(false);
@@ -251,7 +164,7 @@ export function PointsStoreItemEditor({
           badge: form.badge.trim(),
           cost: Number(form.cost) || 0,
           originalCost: form.originalCost ? Number(form.originalCost) : null,
-          rewards: buildRewards(),
+          rewards: rewardsFromDrafts(form.rewards, catalog),
           stock: form.limited ? Number(form.stock) || 0 : null,
           limitPeriod: form.limitPeriod,
           limitCount: Number(form.limitCount) || 0,
@@ -329,50 +242,14 @@ export function PointsStoreItemEditor({
             </div>
 
             <FieldGroup label="权益" hint={`${form.rewards.length}/${maxRewards}`}>
-              <div className="space-y-2">
-                {form.rewards.length === 0 ? (
-                  <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-xs text-muted-foreground">
-                    暂无权益
-                  </p>
-                ) : null}
-                {form.rewards.map((reward) => {
-                  const spec = catalog.find((item) => item.type === reward.type);
-                  return (
-                    <RewardRow
-                      key={reward.key}
-                      reward={reward}
-                      spec={spec}
-                      plans={plans}
-                      features={features}
-                      takenTags={form.rewards.filter((other) => other.key !== reward.key).map((other) => other.tag)}
-                      onChange={(next) => patchReward(reward.key, next)}
-                      onRemove={() => removeReward(reward.key)}
-                    />
-                  );
-                })}
-                {addable.length > 0 ? (
-                  // 「添加」是动作不是选值：用菜单而不是 Select。Select 没有选中值时
-                  // 默认的 item-aligned 定位找不到对齐项，弹层会偏出视野。
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-8 w-full justify-start border-dashed text-xs font-normal text-muted-foreground"
-                      >
-                        <Plus className="size-3.5" /> 添加权益
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width)">
-                      {addable.map((spec) => (
-                        <DropdownMenuItem key={spec.type} onSelect={() => addReward(spec.type)}>
-                          {spec.label}
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                ) : null}
-              </div>
+              <RewardListEditor
+                catalog={catalog}
+                maxRewards={maxRewards}
+                rewards={form.rewards}
+                plans={plans}
+                features={features}
+                onChange={(rewards: RewardDraft[]) => patch("rewards", rewards)}
+              />
             </FieldGroup>
 
             <FieldGroup label="库存与限兑">
@@ -474,130 +351,5 @@ export function PointsStoreItemEditor({
         </div>
       </SheetContent>
     </Sheet>
-  );
-}
-
-function RewardRow({
-  reward,
-  spec,
-  plans,
-  features,
-  takenTags,
-  onChange,
-  onRemove
-}: {
-  reward: RewardDraft;
-  spec?: PointsStoreRewardSpec;
-  plans: VipPlan[];
-  features: VipFeature[];
-  takenTags: string[];
-  onChange: (next: Partial<RewardDraft>) => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-border p-3">
-      <div className="min-w-0 flex-1 space-y-2">
-        <span className="block text-xs font-medium">{spec?.label ?? reward.type}</span>
-
-        {spec?.value === "amount" ? (
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              className="h-8 w-32"
-              value={reward.amount}
-              min={spec.min}
-              max={spec.max}
-              onChange={(event) => onChange({ amount: event.target.value })}
-            />
-            <span className="text-xs text-muted-foreground">
-              {spec.unit}（{spec.min}–{spec.max}）
-            </span>
-          </div>
-        ) : null}
-
-        {spec?.value === "money" ? (
-          <div className="flex items-center gap-2">
-            {/* 金额按字符串走：JSON number 是双精度浮点，0.1 会失真 */}
-            <Input
-              className="h-8 w-32"
-              value={reward.money}
-              inputMode="decimal"
-              onChange={(event) => onChange({ money: event.target.value })}
-            />
-            <span className="text-xs text-muted-foreground">元</span>
-          </div>
-        ) : null}
-
-        {spec?.value === "ref" ? (
-          plans.length === 0 ? (
-            <p className="text-xs text-muted-foreground">暂无会员套餐</p>
-          ) : (
-            <Select value={String(reward.refId || plans[0].id)} onValueChange={(next) => onChange({ refId: Number(next) })}>
-              <SelectTrigger className="h-8 w-full sm:w-64">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {plans.map((plan) => (
-                  <SelectItem key={plan.id} value={String(plan.id)}>
-                    {plan.name}（{vipPlanTerm(plan)}）
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )
-        ) : null}
-
-        {spec?.value === "feature" ? (
-          features.length === 0 ? (
-            <p className="text-xs text-muted-foreground">暂无功能标识</p>
-          ) : (
-            <div className="flex flex-wrap items-center gap-2">
-              <Select value={reward.tag} onValueChange={(next) => onChange({ tag: next })}>
-                <SelectTrigger className="h-8 w-full sm:w-52">
-                  <SelectValue placeholder="选择功能" />
-                </SelectTrigger>
-                {/* 还没选功能时没有对齐项，弹层改为贴着触发器向下展开 */}
-                <SelectContent position="popper">
-                  {features.map((feature) => (
-                    <SelectItem
-                      key={feature.tag}
-                      value={feature.tag}
-                      disabled={!feature.isActive || takenTags.includes(feature.tag)}
-                    >
-                      {feature.name || feature.tag}
-                      <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{feature.tag}</span>
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Input
-                type="number"
-                className="h-8 w-24"
-                value={reward.amount}
-                min={0}
-                max={spec.max}
-                onChange={(event) => onChange({ amount: event.target.value })}
-              />
-              <span className="text-xs text-muted-foreground">
-                天（{termLabel(Number(reward.amount) || 0)}）
-              </span>
-            </div>
-          )
-        ) : null}
-
-        {spec?.value === "text" ? (
-          <Input
-            className="h-8"
-            value={reward.text}
-            maxLength={64}
-            placeholder="例如：定制贴纸一套"
-            onChange={(event) => onChange({ text: event.target.value })}
-          />
-        ) : null}
-      </div>
-      <Button size="icon" variant="ghost" className="size-8 shrink-0" onClick={onRemove} aria-label="移除权益">
-        <Trash2 className="size-3.5" />
-      </Button>
-    </div>
   );
 }
