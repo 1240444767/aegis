@@ -73,6 +73,7 @@ type RouterDeps struct {
 
 	// ── 增值能力 ──────────────────────────────────────────────────────
 	SignIn       *service.SignInService
+	AutoSign     *service.AutoSignService
 	Points       *service.PointsService
 	Lottery      *service.LotteryService
 	Wallet       *service.WalletService
@@ -140,6 +141,7 @@ func (d RouterDeps) newHandler() *Handler {
 		admin:              d.Admin,
 		user:               d.User,
 		signin:             d.SignIn,
+		autoSign:           d.AutoSign,
 		points:             d.Points,
 		notifications:      d.Notification,
 		app:                d.App,

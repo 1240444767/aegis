@@ -153,14 +153,28 @@ func (h *Handler) LegacyAutoSignStatus(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "获取成功", gin.H{
+	payload := gin.H{
 		"enabled":   settings.Settings["enabled"],
 		"category":  settings.Category,
 		"settings":  settings.Settings,
 		"version":   settings.Version,
 		"isActive":  settings.IsActive,
 		"updatedAt": settings.UpdatedAt,
-	})
+	}
+	// 老接口保留原字段，追加开放策略与资格的结论（与 /me/auto-sign 同一份）
+	if h.autoSign != nil {
+		if status, err := h.autoSign.Status(c.Request.Context(), session.AppID, session.UserID); err == nil {
+			payload["available"] = status.Available
+			payload["reason"] = status.Reason
+			payload["message"] = status.Message
+			payload["active"] = status.Active
+			payload["access"] = status.Access
+			payload["timezone"] = status.Timezone
+			payload["nextRunAt"] = status.NextRunAt
+			payload["lastRun"] = status.LastRun
+		}
+	}
+	response.Success(c, 200, "获取成功", payload)
 }
 
 func (h *Handler) LegacyAutoSignTestNotification(c *gin.Context) {

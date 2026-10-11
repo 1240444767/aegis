@@ -450,6 +450,39 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
         mapOf("category" to category, "settings" to settings), requireAuth = true,
     )
 
+    // ── 自动签到 ──
+
+    /**
+     * 自动签到状态：应用的开放策略（access）、当前用户的资格（available / reason / message）、
+     * 个人设置（settings）、下一次执行时刻（nextRunAt）与最近一次结果（lastRun）。
+     */
+    @Throws(IOException::class)
+    fun autoSignStatus(): JsonElement = client.call("GET", "/me/auto-sign", requireAuth = true)
+
+    /**
+     * 修改自动签到设置，只改传了非空值的字段，返回修改后的状态。
+     *
+     * [time] 为 HH:MM，按状态里的 timezone 解释；[maxRetries] 为 0–10。
+     * 从关到开时服务端校验应用的开放策略：未开放返回 40353，不满足开放对象返回 40354。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun updateAutoSign(
+        enabled: Boolean? = null,
+        time: String? = null,
+        retryOnFail: Boolean? = null,
+        maxRetries: Int? = null,
+        notifyOnSuccess: Boolean? = null,
+        notifyOnFail: Boolean? = null,
+    ): JsonElement = client.call(
+        "PUT", "/me/auto-sign",
+        buildBody(
+            "enabled" to enabled, "time" to time, "retryOnFail" to retryOnFail,
+            "maxRetries" to maxRetries, "notifyOnSuccess" to notifyOnSuccess, "notifyOnFail" to notifyOnFail,
+        ),
+        requireAuth = true,
+    )
+
     @Throws(IOException::class)
     fun security(): JsonElement = client.call("GET", "/me/security", requireAuth = true)
 

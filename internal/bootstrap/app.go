@@ -233,6 +233,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	adminUserSearch.StartWarmup(ctx)
 	signInService := service.NewSignInService(log, pg, sessions, publisher)
 	autoSignService := service.NewAutoSignService(cfg.AutoSign, log, pg, schedules, signInService)
+	// 开启自动签到前按应用的开放策略校验资格
+	userService.SetAutoSignGuard(autoSignService)
 	pointsService := service.NewPointsService(log, pg, sessions)
 	realtimeService, err := service.NewRealtimeService(log, authService, realtimeRepo, natsConn, cfg.CORS.AllowOrigins)
 	if err != nil {
@@ -247,6 +249,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	realtimeService.SetIdentityRepository(pg)
 	appService.SetAppEventPublisher(realtimeService)
 	notificationService := service.NewNotificationService(log, pg, sessions, realtimeService)
+	// 自动签到的成功、失败与暂停走站内信
+	autoSignService.SetNotifier(notificationService)
 	siteService := service.NewSiteService(pg)
 	versionService := service.NewVersionService(pg)
 	releaseService := service.NewReleaseService(log, pg, redisClient, nil)
@@ -615,6 +619,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		RoleApplication: roleApplicationService,
 
 		SignIn:       signInService,
+		AutoSign:     autoSignService,
 		Points:       pointsService,
 		Lottery:      lotteryService,
 		Wallet:       walletService,

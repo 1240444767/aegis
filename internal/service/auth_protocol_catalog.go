@@ -113,6 +113,11 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "avatarRestore", Method: "POST", Path: "/me/avatar/restore", Auth: true, Summary: "恢复历史头像"},
 	{Key: "settings", Method: "GET", Path: "/me/settings", Auth: true, Summary: "读取用户设置"},
 	{Key: "settingsUpdate", Method: "PUT", Path: "/me/settings", Auth: true, Summary: "更新用户设置"},
+	// 自动签到：应用的开放策略决定谁能开，个人设置决定几点签；available=false 时 reason / message 说明原因
+	{Key: "autoSignStatus", Method: "GET", Path: "/me/auto-sign", Auth: true,
+		Summary: "自动签到状态：开放策略、资格、个人设置、下一次执行时刻与最近一次结果"},
+	{Key: "autoSignUpdate", Method: "PUT", Path: "/me/auto-sign", Auth: true,
+		Summary: "修改自动签到设置（只改传了的字段）；从关到开时校验开放策略，返回修改后的状态"},
 	{Key: "security", Method: "GET", Path: "/me/security", Auth: true, Summary: "账户安全概览"},
 
 	// ── 二次认证 ──
@@ -340,6 +345,12 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "授权卡走 /auth/login 的 cardkey 方式，兑换卡走 /card-keys/redeem"},
 	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可加设备位的授权卡",
 		Recovery: authprotocol.RecoveryNone},
+	// ── 自动签到 ──
+	// 与 /me/auto-sign 的 reason 一一对应：状态里说「为什么不能开」，开启时报同一句话。
+	{Code: errCodeAutoSignDisabled, Name: "AUTO_SIGN_DISABLED", Message: "自动签到暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "应用未开放自动签到（reason: disabled），入口应当隐藏或置灰"},
+	{Code: errCodeAutoSignNotEligible, Name: "AUTO_SIGN_NOT_ELIGIBLE", Message: "不满足自动签到的开放条件",
+		Recovery: authprotocol.RecoveryNone, Hint: "开放对象为会员 / 永久会员 / 指定功能而当前用户不满足（reason: vip_required / trial_excluded / lifetime_required / feature_required），message 说明具体是哪一条"},
 	// ── 积分商城 ──
 	// 与 /points/store 里每件商品的 availability.reason 一一对应：列表上灰着的原因与点了之后的报错是同一句话。
 	{Code: errCodePointsStoreDisabled, Name: "POINTS_STORE_DISABLED", Message: "积分商城暂未开放",

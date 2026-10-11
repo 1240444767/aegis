@@ -79,6 +79,7 @@ func gatewayRequestModels() map[string]any {
 		"profileConfirm": ConfirmProfileChangeRequest{},
 		"settings":       SettingsCategoryQuery{},
 		"settingsUpdate": UpdateSettingsRequest{},
+		"autoSignUpdate": AutoSignUpdateRequest{},
 		"avatarRestore":  AvatarRestoreRequest{},
 
 		// 二次认证

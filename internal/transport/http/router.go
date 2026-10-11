@@ -19,6 +19,7 @@ type Handler struct {
 	admin           *service.AdminService
 	user            *service.UserService
 	signin          *service.SignInService
+	autoSign        *service.AutoSignService
 	points          *service.PointsService
 	notifications   *service.NotificationService
 	app             *service.AppService

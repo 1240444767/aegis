@@ -166,6 +166,23 @@ func (r *SessionRepository) DeleteUserSettings(ctx context.Context, appID int64,
 	return r.client.Del(ctx, r.settingsKey(appID, userID, category)).Err()
 }
 
+// settingsInitVersion 默认设置的版本。新增设置分类时调高，让已初始化过的用户再补一次。
+const settingsInitVersion = 1
+
+// SettingsInitialized 该用户的默认设置是否已经落过库（标记 30 天过期，过期后再补一次也只是空操作）。
+func (r *SessionRepository) SettingsInitialized(ctx context.Context, appID int64, userID int64) (bool, error) {
+	count, err := r.client.Exists(ctx, r.settingsInitKey(appID, userID)).Result()
+	return count > 0, err
+}
+
+func (r *SessionRepository) MarkSettingsInitialized(ctx context.Context, appID int64, userID int64) error {
+	return r.client.Set(ctx, r.settingsInitKey(appID, userID), "1", 30*24*time.Hour).Err()
+}
+
+func (r *SessionRepository) settingsInitKey(appID int64, userID int64) string {
+	return fmt.Sprintf("%s:user:settings-init:v%d:%d:%d", r.keyPrefix, settingsInitVersion, appID, userID)
+}
+
 func (r *SessionRepository) GetSecurityStatus(ctx context.Context, appID int64, userID int64) (*user.SecurityStatus, error) {
 	var status user.SecurityStatus
 	found, err := r.getJSON(ctx, r.securityKey(appID, userID), &status)

@@ -125,6 +125,7 @@ GET	/api/admin/apps/:appkey/audits/sessions	AdminAppSessionAudits
 GET	/api/admin/apps/:appkey/audits/sessions/export	ExportAdminAppSessionAudits
 GET	/api/admin/apps/:appkey/auth-protocol	AdminGetAppAuthProtocol
 GET	/api/admin/apps/:appkey/auth-protocol/transport/keys	AdminListAppTransportKeys
+GET	/api/admin/apps/:appkey/auto-sign	AdminAppAutoSign
 GET	/api/admin/apps/:appkey/banners	AdminBanners
 GET	/api/admin/apps/:appkey/banners/export	ExportAdminBanners
 GET	/api/admin/apps/:appkey/captcha-config	AdminGetCaptchaConfig
@@ -532,6 +533,7 @@ GET	/api/v1/apps/:appkey/me	AppMe
 GET	/api/v1/apps/:appkey/me/2fa/recovery-codes	ListRecoveryCodes
 GET	/api/v1/apps/:appkey/me/audits/login	UserLoginAudits
 GET	/api/v1/apps/:appkey/me/audits/sessions	UserSessionAudits
+GET	/api/v1/apps/:appkey/me/auto-sign	AppAutoSignStatus
 GET	/api/v1/apps/:appkey/me/avatar/history	ListUserAvatarHistory
 GET	/api/v1/apps/:appkey/me/oauth2/grants	AppMyOAuth2Grants
 GET	/api/v1/apps/:appkey/me/passkeys	ListPasskeys
@@ -1114,6 +1116,7 @@ PUT	/api/admin/apps/:appkey/ai/configs/:configId	AdminAppAIConfigUpdate
 PUT	/api/admin/apps/:appkey/ai/mcp-servers/:serverId	AdminAppAIMCPUpdate
 PUT	/api/admin/apps/:appkey/ai/skills/:skillId	AdminAppAISkillUpdate
 PUT	/api/admin/apps/:appkey/auth-protocol	AdminUpdateAppAuthProtocol
+PUT	/api/admin/apps/:appkey/auto-sign	UpdateAdminAppAutoSign
 PUT	/api/admin/apps/:appkey/banners/:bannerId	UpdateAdminBanner
 PUT	/api/admin/apps/:appkey/banners/order	ReorderAdminBanners
 PUT	/api/admin/apps/:appkey/captcha-config	AdminUpdateCaptchaConfig
@@ -1199,5 +1202,6 @@ PUT	/api/user/role/applications/:applicationId/cancel	CancelRoleApplication
 PUT	/api/user/settings	UpdateSettings
 PUT	/api/user/update-site	UpdateSite
 PUT	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppPutCloudItem
+PUT	/api/v1/apps/:appkey/me/auto-sign	AppUpdateAutoSign
 PUT	/api/v1/apps/:appkey/me/profile	UpdateProfile
 PUT	/api/v1/apps/:appkey/me/settings	UpdateSettings

@@ -139,6 +139,8 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.PUT("/apps/:appkey/signin-reward", h.UpdateAdminAppSignInReward)
 		admin.POST("/apps/:appkey/signin-reward/test", h.TestAdminAppSignInReward)
 		admin.POST("/apps/:appkey/signin-reward/reset", h.ResetAdminAppSignInReward)
+		admin.GET("/apps/:appkey/auto-sign", h.AdminAppAutoSign)
+		admin.PUT("/apps/:appkey/auto-sign", h.UpdateAdminAppAutoSign)
 		// 会员系统（管理端）
 		admin.GET("/apps/:appkey/vip/plans", h.AdminAppVipPlans)
 		admin.POST("/apps/:appkey/vip/plans", h.AdminSaveAppVipPlan)

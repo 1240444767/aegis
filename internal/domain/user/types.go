@@ -544,19 +544,14 @@ type AdminUserSearchSource struct {
 	SourceUpdatedAt time.Time `json:"sourceUpdatedAt"`
 }
 
+// AutoSignCandidate 调度器判定一个用户要不要自动签到所需的事实。
 type AutoSignCandidate struct {
-	UserID                  int64      `json:"userId"`
-	AppID                   int64      `json:"appid"`
-	Account                 string     `json:"account"`
-	VIPExpireAt             *time.Time `json:"vipExpireAt,omitempty"`
-	Enabled                 bool       `json:"enabled"`
-	SettingsEnabled         bool       `json:"settingsEnabled"`
-	Time                    string     `json:"time"`
-	RetryOnFail             bool       `json:"retryOnFail"`
-	MaxRetries              int        `json:"maxRetries"`
-	NotifyOnSuccess         bool       `json:"notifyOnSuccess"`
-	NotifyOnFail            bool       `json:"notifyOnFail"`
-	DisableLocationTracking bool       `json:"disableLocationTracking"`
+	UserID  int64  `json:"userId"`
+	AppID   int64  `json:"appid"`
+	Account string `json:"account"`
+	// Enabled 账号是否启用
+	Enabled  bool             `json:"enabled"`
+	Settings AutoSignSettings `json:"settings"`
 }
 
 type MyView struct {

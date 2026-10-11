@@ -80,6 +80,8 @@ func init() {
 		Write("PUT /api/admin/apps/:appkey/signin-reward", "修改签到奖励配置", "", SeverityMedium),
 		Write("POST /api/admin/apps/:appkey/signin-reward/reset", "重置签到奖励配置", "", SeverityHigh),
 		View("POST /api/admin/apps/:appkey/signin-reward/test", "试算签到奖励", ""),
+		View("GET /api/admin/apps/:appkey/auto-sign", "查看自动签到策略", ""),
+		Write("PUT /api/admin/apps/:appkey/auto-sign", "修改自动签到策略", "", SeverityMedium),
 
 		// 抽奖
 		View("GET /api/admin/apps/:appkey/lottery/activities", "查看抽奖活动列表", ""),

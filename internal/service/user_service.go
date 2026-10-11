@@ -120,7 +120,17 @@ type UserService struct {
 	search    *AdminUserSearchService
 	ban       *AccountBanService
 	app       *AppService
+	// autoSign 自动签到设置的清洗与资格校验；为空时 autoSign 分类按普通设置原样存
+	autoSign autoSignSettingsGuard
 }
+
+// autoSignSettingsGuard 写入自动签到设置前的清洗与资格校验（AutoSignService.PrepareSettings）。
+type autoSignSettingsGuard interface {
+	PrepareSettings(ctx context.Context, appID int64, userID int64, current map[string]any, patch map[string]any) (map[string]any, error)
+}
+
+// SetAutoSignGuard 接上自动签到：开启前校验应用的开放策略。
+func (s *UserService) SetAutoSignGuard(guard autoSignSettingsGuard) { s.autoSign = guard }
 
 const (
 	profileChangeTTL          = 15 * time.Minute
@@ -194,6 +204,7 @@ func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*
 	if err != nil {
 		return nil, err
 	}
+	s.ensureDefaultSettings(ctx, session, user.ID)
 
 	view := &userdomain.MyView{
 		ID:           user.ID,
@@ -235,6 +246,36 @@ func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*
 		"ip":        session.IP,
 	})
 	return view, nil
+}
+
+// ensureDefaultSettings 首次取用户信息时把各类个人设置的默认值落库。
+//
+// 以前默认值只在读取时临时拼出来、从不落库，于是「用户有哪些设置」在库里查不到，
+// 控制台看不到、统计也数不到，各端只能各自假设默认值。补上之后读取与统计都以库为准。
+// 已经存在的分类原样不动；失败只记日志，不影响取用户信息本身。
+func (s *UserService) ensureDefaultSettings(ctx context.Context, session *authdomain.Session, userID int64) {
+	if s.sessions != nil {
+		if done, err := s.sessions.SettingsInitialized(ctx, session.AppID, userID); err == nil && done {
+			return
+		}
+	}
+	defaults := make(map[string]map[string]any, len(s.ListSettingCategories()))
+	for _, category := range s.ListSettingCategories() {
+		defaults[category] = defaultSettings(category)
+	}
+	inserted, err := s.pg.EnsureDefaultUserSettings(ctx, userID, defaults)
+	if err != nil {
+		s.log.Warn("init default user settings failed", zap.Int64("userId", userID), zap.Error(err))
+		return
+	}
+	if inserted > 0 {
+		for category := range defaults {
+			_ = s.sessions.DeleteUserSettings(ctx, session.AppID, userID, category)
+		}
+	}
+	if s.sessions != nil {
+		_ = s.sessions.MarkSettingsInitialized(ctx, session.AppID, userID)
+	}
 }
 
 func (s *UserService) loadUnreadNotificationCount(ctx context.Context, session *authdomain.Session) (int64, error) {
@@ -1391,10 +1432,20 @@ func (s *UserService) UpdateSettings(ctx context.Context, session *authdomain.Se
 	if current != nil {
 		version = current.Version + 1
 	}
+	settings := cloneMap(payload)
+	if category == "autoSign" && s.autoSign != nil {
+		var existing map[string]any
+		if current != nil {
+			existing = current.Settings
+		}
+		if settings, err = s.autoSign.PrepareSettings(ctx, session.AppID, user.ID, existing, payload); err != nil {
+			return nil, err
+		}
+	}
 	item := userdomain.Settings{
 		UserID:    user.ID,
 		Category:  category,
-		Settings:  cloneMap(payload),
+		Settings:  settings,
 		Version:   version,
 		IsActive:  true,
 		UpdatedAt: time.Now().UTC(),
@@ -1902,7 +1953,7 @@ func defaultSettings(category string) map[string]any {
 	case "general":
 		return map[string]any{"language": "zh-CN", "displayName": "", "bio": "", "profileVisibility": "public"}
 	case "autoSign":
-		return map[string]any{"enabled": false, "time": "00:00", "retryOnFail": true, "maxRetries": 3, "notifyOnSuccess": true, "notifyOnFail": true, "disableLocationTracking": true}
+		return userdomain.DefaultAutoSignSettings().ToMap()
 	case "notifications":
 		return map[string]any{"enabled": true, "types": map[string]any{"payment": true, "system": true, "security": true, "promotion": false}, "methods": map[string]any{"websocket": true, "email": false, "sms": false}}
 	case "privacy":

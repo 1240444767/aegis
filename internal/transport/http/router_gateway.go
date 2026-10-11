@@ -121,6 +121,9 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/me/avatar/restore", h.RestoreUserAvatar)
 		appGatewayAuthed.GET("/me/settings", h.Settings)
 		appGatewayAuthed.PUT("/me/settings", h.UpdateSettings)
+		// 自动签到：状态（开放策略、资格、下一次执行、最近一次结果）与设置
+		appGatewayAuthed.GET("/me/auto-sign", h.AppAutoSignStatus)
+		appGatewayAuthed.PUT("/me/auto-sign", h.AppUpdateAutoSign)
 		appGatewayAuthed.GET("/me/security", h.Security)
 
 		// 二次认证

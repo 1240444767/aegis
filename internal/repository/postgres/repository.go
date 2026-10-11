@@ -1914,34 +1914,24 @@ func (r *Repository) DeleteUserSettingsByIDs(ctx context.Context, ids []int64) (
 	return result.RowsAffected(), nil
 }
 
-func (r *Repository) ListAutoSignCandidatesAfterUserID(ctx context.Context, lastUserID int64, limit int) ([]userdomain.AutoSignCandidate, error) {
+// ListAutoSignCandidatesAfterUserID 按用户 ID 翻页列出开启了自动签到的用户。appID 为 0 时不限应用。
+func (r *Repository) ListAutoSignCandidatesAfterUserID(ctx context.Context, appID int64, lastUserID int64, limit int) ([]userdomain.AutoSignCandidate, error) {
 	if limit <= 0 {
 		limit = 200
 	}
 	query := `
-SELECT
-    u.id,
-    u.appid,
-    u.account,
-    u.vip_expire_at,
-    u.enabled,
-    true AS settings_enabled,
-    COALESCE(us.settings->>'time', '00:00') AS sign_time,
-    COALESCE((us.settings->>'retryOnFail')::boolean, true) AS retry_on_fail,
-    COALESCE((us.settings->>'maxRetries')::integer, 3) AS max_retries,
-    COALESCE((us.settings->>'notifyOnSuccess')::boolean, true) AS notify_on_success,
-    COALESCE((us.settings->>'notifyOnFail')::boolean, true) AS notify_on_fail,
-    COALESCE((us.settings->>'disableLocationTracking')::boolean, true) AS disable_location_tracking
+SELECT u.id, u.appid, u.account, u.enabled, COALESCE(us.settings, '{}'::jsonb)
 FROM users u
 JOIN user_settings us ON us.user_id = u.id
 WHERE u.id > $1
+  AND ($3::bigint = 0 OR u.appid = $3)
   AND u.enabled = true
   AND us.category = 'autoSign'
   AND us.is_active = true
   AND COALESCE(us.settings->>'enabled', 'false') = 'true'
 ORDER BY u.id ASC
 LIMIT $2`
-	rows, err := r.pool.Query(ctx, query, lastUserID, limit)
+	rows, err := r.pool.Query(ctx, query, lastUserID, limit, appID)
 	if err != nil {
 		return nil, err
 	}
@@ -1949,40 +1939,103 @@ LIMIT $2`
 
 	items := make([]userdomain.AutoSignCandidate, 0, limit)
 	for rows.Next() {
-		var item userdomain.AutoSignCandidate
-		if err := rows.Scan(&item.UserID, &item.AppID, &item.Account, &item.VIPExpireAt, &item.Enabled, &item.SettingsEnabled, &item.Time, &item.RetryOnFail, &item.MaxRetries, &item.NotifyOnSuccess, &item.NotifyOnFail, &item.DisableLocationTracking); err != nil {
+		item, err := scanAutoSignCandidate(rows)
+		if err != nil {
 			return nil, err
 		}
-		items = append(items, item)
+		items = append(items, *item)
 	}
 	return items, rows.Err()
 }
 
+// GetAutoSignCandidate 单个用户的自动签到事实；用户不存在返回 nil。没有设置行时按默认设置（未开启）。
 func (r *Repository) GetAutoSignCandidate(ctx context.Context, userID int64, appID int64) (*userdomain.AutoSignCandidate, error) {
 	query := `
-SELECT
-    u.id,
-    u.appid,
-    u.account,
-    u.vip_expire_at,
-    u.enabled,
-    COALESCE((us.settings->>'enabled')::boolean, false) AS settings_enabled,
-    COALESCE(us.settings->>'time', '00:00') AS sign_time,
-    COALESCE((us.settings->>'retryOnFail')::boolean, true) AS retry_on_fail,
-    COALESCE((us.settings->>'maxRetries')::integer, 3) AS max_retries,
-    COALESCE((us.settings->>'notifyOnSuccess')::boolean, true) AS notify_on_success,
-    COALESCE((us.settings->>'notifyOnFail')::boolean, true) AS notify_on_fail,
-    COALESCE((us.settings->>'disableLocationTracking')::boolean, true) AS disable_location_tracking
+SELECT u.id, u.appid, u.account, u.enabled, COALESCE(us.settings, '{}'::jsonb)
 FROM users u
 LEFT JOIN user_settings us ON us.user_id = u.id AND us.category = 'autoSign' AND us.is_active = true
 WHERE u.id = $1 AND u.appid = $2
-LIMIT $3`
-	var item userdomain.AutoSignCandidate
-	err := r.pool.QueryRow(ctx, query, userID, appID, 1).Scan(&item.UserID, &item.AppID, &item.Account, &item.VIPExpireAt, &item.Enabled, &item.SettingsEnabled, &item.Time, &item.RetryOnFail, &item.MaxRetries, &item.NotifyOnSuccess, &item.NotifyOnFail, &item.DisableLocationTracking)
+LIMIT 1`
+	item, err := scanAutoSignCandidate(r.pool.QueryRow(ctx, query, userID, appID))
 	if err != nil {
 		return nil, normalizeNotFound(err)
 	}
+	return item, nil
+}
+
+func scanAutoSignCandidate(row pgx.Row) (*userdomain.AutoSignCandidate, error) {
+	var item userdomain.AutoSignCandidate
+	var raw []byte
+	if err := row.Scan(&item.UserID, &item.AppID, &item.Account, &item.Enabled, &raw); err != nil {
+		return nil, err
+	}
+	settings := map[string]any{}
+	_ = json.Unmarshal(raw, &settings)
+	item.Settings = userdomain.AutoSignSettingsFromMap(settings)
 	return &item, nil
+}
+
+// EnsureDefaultUserSettings 给还没有的设置分类补上默认值，已有的分类原样不动。返回补了几类。
+//
+// 不用 ON CONFLICT 兜全部：那样每次调用都会为每个已存在的分类白白消耗一个序列值。
+// 先排除已有的，只有真正要插的行才取号；并发的两次初始化撞上时由唯一约束兜底。
+func (r *Repository) EnsureDefaultUserSettings(ctx context.Context, userID int64, defaults map[string]map[string]any) (int64, error) {
+	if userID <= 0 || len(defaults) == 0 {
+		return 0, nil
+	}
+	payload, err := json.Marshal(defaults)
+	if err != nil {
+		return 0, err
+	}
+	query := `
+INSERT INTO user_settings (user_id, category, settings, version, is_active)
+SELECT $1, d.key, d.value, 1, TRUE
+FROM jsonb_each($2::jsonb) AS d
+WHERE NOT EXISTS (SELECT 1 FROM user_settings us WHERE us.user_id = $1 AND us.category = d.key)
+ON CONFLICT (user_id, category) DO NOTHING`
+	result, err := r.pool.Exec(ctx, query, userID, payload)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+// CountAutoSignEnabledUsers 应用内开启了自动签到的（未停用）用户数。
+func (r *Repository) CountAutoSignEnabledUsers(ctx context.Context, appID int64) (int64, error) {
+	var total int64
+	query := `SELECT COUNT(*)
+FROM user_settings us
+JOIN users u ON u.id = us.user_id
+WHERE u.appid = $1
+  AND u.enabled = true
+  AND us.category = 'autoSign'
+  AND us.is_active = true
+  AND COALESCE(us.settings->>'enabled', 'false') = 'true'`
+	if err := r.pool.QueryRow(ctx, query, appID).Scan(&total); err != nil {
+		return 0, err
+	}
+	return total, nil
+}
+
+// CountSignInsBySourceSince 应用内自 signDate（含）起按签到来源统计的签到次数，按日期分组。
+func (r *Repository) CountSignInsBySourceSince(ctx context.Context, appID int64, source string, signDate string) (map[string]int64, error) {
+	rows, err := r.pool.Query(ctx, `SELECT sign_date::text, COUNT(*) FROM daily_signins
+WHERE appid = $1 AND sign_in_source = $2 AND sign_date >= $3::date
+GROUP BY sign_date`, appID, source, signDate)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var date string
+		var count int64
+		if err := rows.Scan(&date, &count); err != nil {
+			return nil, err
+		}
+		out[date] = count
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) CreateUser(ctx context.Context, appID int64, account string, passwordHash string) (*userdomain.User, error) {

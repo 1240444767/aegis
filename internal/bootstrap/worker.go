@@ -162,6 +162,7 @@ func NewWorkerAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, man
 	// 但**管理员收件箱必须接**：SLA 预警/超时是纯处理侧事件，收件人全是管理员，
 	// 少了它这条链路会静默变成 skipped，正是早期实现的坑。
 	workerNotificationService := service.NewNotificationService(log, pg, sessions, nil)
+	autoSignService.SetNotifier(workerNotificationService)
 	workerEmailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
 	// Worker 不持有 WebSocket 连接，实时推送经 NATS 广播由 API 实例分发给在线客户端
 	workerRealtimePublisher := service.NewNATSUserEventPublisher(log, natsConn)

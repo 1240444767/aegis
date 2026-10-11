@@ -107,6 +107,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/audits/sessions/export"):                                AdminSessionAuditQuery{},                 // ExportAdminAppSessionAudits
 		routeKey("PUT", "/api/admin/apps/{appkey}/auth-protocol"):                                         authprotocol.PolicyPatch{},               // AdminUpdateAppAuthProtocol
 		routeKey("POST", "/api/admin/apps/{appkey}/auth-protocol/selftest"):                               AppIntegrationSelfTestRequest{},          // AdminAppIntegrationSelfTest
+		routeKey("PUT", "/api/admin/apps/{appkey}/auto-sign"):                                             AdminAutoSignPolicyRequest{},             // UpdateAdminAppAutoSign
 		routeKey("DELETE", "/api/admin/apps/{appkey}/banners"):                                            AdminBatchIDsRequest{},                   // DeleteAdminBanners
 		routeKey("GET", "/api/admin/apps/{appkey}/banners"):                                               AdminBannerListQuery{},                   // AdminBanners
 		routeKey("PUT", "/api/admin/apps/{appkey}/banners/order"):                                         AdminBannerReorderRequest{},              // ReorderAdminBanners
@@ -601,6 +602,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/totp/enable"):                                      TOTPEnableRequest{},                      // EnableTOTP
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/login"):                                          UserLoginAuditQuery{},                    // UserLoginAudits
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/sessions"):                                       UserSessionAuditQuery{},                  // UserSessionAudits
+		routeKey("PUT", "/api/v1/apps/{appkey}/me/auto-sign"):                                             AutoSignUpdateRequest{},                  // AppUpdateAutoSign
 		routeKey("POST", "/api/v1/apps/{appkey}/me/avatar/restore"):                                       AvatarRestoreRequest{},                   // RestoreUserAvatar
 		routeKey("POST", "/api/v1/apps/{appkey}/me/passkeys"):                                             PasskeyRegistrationFinishRequest{},       // FinishPasskeyRegistration
 		routeKey("POST", "/api/v1/apps/{appkey}/me/password/recovery"):                                    AppPasswordRecoveryDeviceRequest{},       // AppMyPasswordRecoveryStart
