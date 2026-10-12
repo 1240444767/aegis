@@ -1563,11 +1563,11 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
 @kotlinx.serialization.Serializable
 internal data class OAuthUrl(val url: String = "")
 
-/** 丢掉 null 值：服务端对「字段缺失」和「字段为 null」的处理不总是一致，不传最稳。 */
 /** 路径上的一段：按 URL 编码（空格编成 %20 而不是 +）。 */
 private fun encodePathSegment(value: String): String =
     java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
+/** 丢掉 null 值：服务端对「字段缺失」和「字段为 null」的处理不总是一致，不传最稳。 */
 private fun buildBody(vararg pairs: Pair<String, Any?>): Map<String, Any?> =
     pairs.filter { it.second != null }.toMap()
 
