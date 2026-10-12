@@ -64,7 +64,7 @@ export function describeRewards(
       if (spec.value === "ref") {
         return planNames[reward.refId ?? 0] ? `${spec.label}「${planNames[reward.refId ?? 0]}」` : spec.label;
       }
-      if (spec.value === "feature_amount") {
+      if (spec.value === "feature") {
         const feature = reward.feature ?? "";
         return `${featureNames[feature] || feature || spec.label} ${reward.amount ?? 0} ${spec.unit ?? ""}`.trim();
       }

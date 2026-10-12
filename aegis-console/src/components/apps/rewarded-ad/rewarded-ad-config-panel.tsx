@@ -54,7 +54,7 @@ type SceneDraft = {
   enabled: boolean;
   dailyLimit: string;
   cooldownSeconds: string;
-  /** feature 只对取值形态为 feature_amount 的档位（功能时长）有意义 */
+  /** feature 只对取值形态为 feature 的档位（功能时长）有意义 */
   rewards: Record<string, { amount: string; refId: number; feature: string }>;
   /** 会员权益：「会员天数」带的功能标识，以及送出的会员是否免广告 */
   features: string[];
@@ -165,7 +165,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
     const rewards = { ...scene.rewards };
     if (checked) {
       const amount =
-        spec.value === "feature_amount"
+        spec.value === "feature"
           ? Math.min(Math.max(DEFAULT_FEATURE_MINUTES, spec.min ?? 1), spec.max ?? DEFAULT_FEATURE_MINUTES)
           : spec.min ?? 1;
       rewards[spec.type] = {
@@ -187,7 +187,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
         switch (spec.value) {
           case "ref":
             return { type: spec.type, refId: Number(value.refId) };
-          case "feature_amount":
+          case "feature":
             return { type: spec.type, amount: Number(value.amount), feature: value.feature };
           default:
             return { type: spec.type, amount: Number(value.amount) };
@@ -205,7 +205,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
         return;
       }
       const featureless = catalog.find(
-        (spec) => spec.value === "feature_amount" && scene.rewards[spec.type] && !scene.rewards[spec.type].feature
+        (spec) => spec.value === "feature" && scene.rewards[spec.type] && !scene.rewards[spec.type].feature
       );
       if (featureless) {
         toast.error(`场景「${scene.name || scene.key}」的${featureless.label}未选择功能`);
@@ -524,7 +524,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
                                     </SelectContent>
                                   </Select>
                                 )
-                              ) : spec.value === "feature_amount" ? (
+                              ) : spec.value === "feature" ? (
                                 <FeatureAmountField
                                   spec={spec}
                                   value={value}
