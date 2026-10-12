@@ -23,20 +23,43 @@ var (
 	transIDPattern     = regexp.MustCompile(`^[A-Za-z0-9_.:-]{6,128}$`)
 )
 
-// RewardCatalog 激励广告可配的权益档位（卡密目录的子集，顺序沿用卡密目录）。
+// featureMinutesSpec 「功能时长」的自述。取值形态是功能标识 + 分钟数（Reward.Feature + Reward.Amount）。
+var featureMinutesSpec = cardkeydomain.RewardSpec{
+	Type:  RewardFeatureMinutes,
+	Label: "功能时长",
+	Hint:  "给一个功能加使用时长，按实际使用扣；会员或已拥有该功能的用户使用时不扣，余额保留",
+	Value: cardkeydomain.ValueFeature,
+	Unit:  "分钟",
+	Min:   1,
+	Max:   MaxFeatureMinutes,
+}
+
+// RewardCatalog 激励广告可配的权益档位：卡密目录的子集（顺序沿用卡密目录），末尾加上广告独有的「功能时长」。
 //
 // 「会员天数」的说明与卡密不同：卡密赠送的天数不带功能，激励广告的按场景的会员权益带。
 func RewardCatalog() []cardkeydomain.RewardSpec {
 	out := make([]cardkeydomain.RewardSpec, 0, len(allowedRewardTypes))
-	for _, spec := range cardkeydomain.RewardCatalog() {
-		if slices.Contains(allowedRewardTypes, spec.Type) {
-			if spec.Type == cardkeydomain.RewardVipDays {
-				spec.Hint = "不挂套餐，直接把会员到期时间往后顺延；功能标识按场景的会员权益配置，改配置对已领到的会员同样生效"
-			}
+	for _, kind := range allowedRewardTypes {
+		if spec, ok := FindRewardSpec(kind); ok {
 			out = append(out, spec)
 		}
 	}
 	return out
+}
+
+// FindRewardSpec 按类型取激励广告开放的权益自述；不开放给广告的档位返回 false。
+func FindRewardSpec(rewardType string) (cardkeydomain.RewardSpec, bool) {
+	if rewardType == RewardFeatureMinutes {
+		return featureMinutesSpec, true
+	}
+	if !slices.Contains(allowedRewardTypes, rewardType) {
+		return cardkeydomain.RewardSpec{}, false
+	}
+	spec, ok := cardkeydomain.FindRewardSpec(rewardType)
+	if ok && spec.Type == cardkeydomain.RewardVipDays {
+		spec.Hint = "不挂套餐，直接把会员到期时间往后顺延；功能标识按场景的会员权益配置，改配置对已领到的会员同样生效"
+	}
+	return spec, ok
 }
 
 // RewardTypes 激励广告可发的权益类型。
@@ -66,8 +89,14 @@ func ValidTransID(transID string) bool {
 	return transIDPattern.MatchString(transID)
 }
 
-// ValidateRewards 校验一个场景的权益：卡密目录的规则之上，再挡掉不开放给广告的档位。
+// ValidateRewards 校验一个场景的权益：卡密目录的规则之上，再挡掉不开放给广告的档位，
+// 并校验广告独有的「功能时长」（功能标识的形状与分钟数；是否在本应用的功能目录里由服务层核对）。
 func ValidateRewards(rewards []Reward) error {
+	if len(rewards) == 0 {
+		return fmt.Errorf("至少要配置一项权益")
+	}
+	shared := make([]Reward, 0, len(rewards))
+	featureMinutes := 0
 	for _, reward := range rewards {
 		if !slices.Contains(allowedRewardTypes, reward.Type) {
 			if spec, ok := cardkeydomain.FindRewardSpec(reward.Type); ok {
@@ -75,8 +104,64 @@ func ValidateRewards(rewards []Reward) error {
 			}
 			return fmt.Errorf("未登记的权益类型：%s", reward.Type)
 		}
+		if reward.Type != RewardFeatureMinutes {
+			shared = append(shared, reward)
+			continue
+		}
+		featureMinutes++
+		if featureMinutes > 1 {
+			return fmt.Errorf("「%s」重复配置了两次", featureMinutesSpec.Label)
+		}
+		if strings.TrimSpace(reward.Feature) == "" {
+			return fmt.Errorf("「%s」没有选择功能", featureMinutesSpec.Label)
+		}
+		if !vipdomain.FeatureTagPattern.MatchString(reward.Feature) {
+			return fmt.Errorf("「%s」的功能标识「%s」无效", featureMinutesSpec.Label, reward.Feature)
+		}
+		if reward.Amount < featureMinutesSpec.Min || reward.Amount > featureMinutesSpec.Max {
+			return fmt.Errorf("「%s」需要在 %d–%d %s之间", featureMinutesSpec.Label,
+				featureMinutesSpec.Min, featureMinutesSpec.Max, featureMinutesSpec.Unit)
+		}
 	}
-	return cardkeydomain.ValidateRewards(rewards)
+	if len(rewards) > cardkeydomain.MaxRewardsPerCard {
+		return fmt.Errorf("一个场景最多配置 %d 项权益", cardkeydomain.MaxRewardsPerCard)
+	}
+	if len(shared) == 0 {
+		return nil
+	}
+	return cardkeydomain.ValidateRewards(shared)
+}
+
+// NormalizeRewards 按目录顺序重排权益，并抹掉与取值形态无关的字段（卡密的规则），
+// 「功能时长」排在最后、只留功能标识（去空白、转小写）与分钟数。未开放的类型被丢掉。
+func NormalizeRewards(rewards []Reward) []Reward {
+	out := cardkeydomain.NormalizeRewards(rewards)
+	if out == nil {
+		out = []Reward{}
+	}
+	for _, reward := range rewards {
+		if reward.Type != RewardFeatureMinutes {
+			continue
+		}
+		out = append(out, Reward{
+			Type:    RewardFeatureMinutes,
+			Amount:  reward.Amount,
+			Feature: strings.ToLower(strings.TrimSpace(reward.Feature)),
+		})
+		break
+	}
+	return out
+}
+
+// FeatureMinutesTags 场景权益里「功能时长」用到的功能标识。
+func (s Scene) FeatureMinutesTags() []string {
+	tags := make([]string, 0, 1)
+	for _, reward := range s.Rewards {
+		if reward.Type == RewardFeatureMinutes && reward.Feature != "" {
+			tags = append(tags, reward.Feature)
+		}
+	}
+	return tags
 }
 
 // NormalizeScene 清洗一个场景（去空白、权益按目录排序），不做合法性判断。
@@ -84,10 +169,7 @@ func NormalizeScene(scene Scene) Scene {
 	scene.Key = strings.ToLower(strings.TrimSpace(scene.Key))
 	scene.Name = strings.TrimSpace(scene.Name)
 	scene.PlacementID = strings.TrimSpace(scene.PlacementID)
-	scene.Rewards = cardkeydomain.NormalizeRewards(scene.Rewards)
-	if scene.Rewards == nil {
-		scene.Rewards = []Reward{}
-	}
+	scene.Rewards = NormalizeRewards(scene.Rewards)
 	scene.Membership.Features = vipdomain.NormalizeFeatureTags(scene.Membership.Features)
 	return scene
 }
@@ -180,7 +262,7 @@ func ValidProviderAppID(value string) bool {
 // [featureNames] 是功能标识到展示名的映射，认不出的标识原样展示（停用的功能不会出现在
 // 会员的权益里，这里也不列）。
 func DescribeScene(scene Scene, planNames map[int64]string, featureNames map[string]string) string {
-	summary := DescribeRewards(scene.Rewards, planNames)
+	summary := DescribeRewards(scene.Rewards, planNames, featureNames)
 	if !scene.GrantsMembership() {
 		return summary
 	}
@@ -211,18 +293,32 @@ func DescribeScene(scene Scene, planNames map[int64]string, featureNames map[str
 }
 
 // DescribeRewards 一句话说清一组权益，客户端与核销结果直接展示。
-func DescribeRewards(rewards []Reward, planNames map[int64]string) string {
+//
+// 「功能时长」说成「在线听歌 60 分钟」：功能名取 [featureNames]，认不出时用标识本身。
+func DescribeRewards(rewards []Reward, planNames map[int64]string, featureNames map[string]string) string {
 	parts := make([]string, 0, len(rewards))
 	for _, reward := range rewards {
-		if reward.Type == cardkeydomain.RewardVipPlan {
+		switch reward.Type {
+		case cardkeydomain.RewardVipPlan:
 			if name := planNames[reward.RefID]; name != "" {
 				parts = append(parts, "会员套餐「"+name+"」")
 				continue
 			}
+		case RewardFeatureMinutes:
+			parts = append(parts, DescribeFeatureMinutes(reward, featureNames[reward.Feature]))
+			continue
 		}
 		parts = append(parts, cardkeydomain.DescribeReward(reward))
 	}
 	return strings.Join(parts, "、")
+}
+
+// DescribeFeatureMinutes 「功能时长」一项的说法：「在线听歌 60 分钟」。name 为空时用功能标识。
+func DescribeFeatureMinutes(reward Reward, name string) string {
+	if name == "" {
+		name = reward.Feature
+	}
+	return fmt.Sprintf("%s %d %s", name, reward.Amount, featureMinutesSpec.Unit)
 }
 
 // ReasonMessage 拒发原因的用户可读文案。

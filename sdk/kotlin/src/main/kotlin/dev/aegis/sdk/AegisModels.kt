@@ -251,3 +251,84 @@ data class SecondFactorChallenge(
     val methods: List<String> = emptyList(),
     val expiresAt: String = "",
 )
+
+/**
+ * 激励广告场景的一项奖励（`/ads/rewarded` 的 `scenes[].rewards[]`）。
+ *
+ * [amount] 的含义随 [type] 变：会员天数是天、积分是分、功能时长是分钟；
+ * [refId] 只有会员套餐用（套餐 ID），[feature] 只有功能时长用（功能标识）。
+ */
+@Serializable
+data class AegisRewardedAdReward(
+    val type: String = "",
+    val amount: Long = 0L,
+    val refId: Long = 0L,
+    val feature: String = "",
+) {
+    companion object {
+        const val VIP_PLAN = "vip_plan"
+        const val VIP_DAYS = "vip_days"
+        const val INTEGRAL = "integral"
+        const val EXPERIENCE = "experience"
+        const val LOTTERY_DRAWS = "lottery_draws"
+
+        /** 功能时长：给 [feature] 加 [amount] 分钟，用 [AegisEngagementApi.leaseFeatureTime] 按实际使用扣。 */
+        const val FEATURE_MINUTES = "feature_minutes"
+    }
+}
+
+/** `GET /features/time/{feature}`：一个功能上的时长。秒数都是整秒。 */
+@Serializable
+data class AegisFeatureTime(
+    val feature: String = "",
+    /** 功能目录里的展示名，目录里没有时为空串。 */
+    val name: String = "",
+    val balanceSeconds: Long = 0L,
+    /** 免扣：当前是会员，或单独拥有这个功能。免扣时租约不扣余额。 */
+    val exempt: Boolean = false,
+    val earnedSeconds: Long = 0L,
+    /** 实际用掉的：租出减去退回。 */
+    val usedSeconds: Long = 0L,
+)
+
+/** `POST /features/time/{feature}/leases`：一次租约。 */
+@Serializable
+data class AegisFeatureTimeLease(
+    /** 免扣时为 true：没有扣余额，[leaseNo] 与 [expiresAt] 为空，直接使用即可。 */
+    val exempt: Boolean = false,
+    val leaseNo: String = "",
+    /** 实际租到的秒数（余额不足时少于所求）。 */
+    val seconds: Int = 0,
+    /** 租出后的余额。 */
+    val balanceSeconds: Long = 0L,
+    /** 租约到期时间（RFC3339），到期后再结算不退款；免扣时为空串。 */
+    val expiresAt: String = "",
+)
+
+/** `POST /features/time/leases/{leaseNo}/settle`：一次结算。 */
+@Serializable
+data class AegisFeatureTimeSettlement(
+    val leaseNo: String = "",
+    val feature: String = "",
+    /** `settled` 已结算并退回没用完的部分；`expired` 过期后才结算，不退款。 */
+    val status: String = "",
+    val seconds: Int = 0,
+    val usedSeconds: Int = 0,
+    val refundedSeconds: Int = 0,
+    /** 结算后的当前余额。 */
+    val balanceSeconds: Long = 0L,
+) {
+    companion object {
+        const val STATUS_SETTLED = "settled"
+        const val STATUS_EXPIRED = "expired"
+    }
+}
+
+/** 功能时长的业务错误码，对应 /config 的 errors 目录。 */
+object AegisFeatureTimeCodes {
+    /** 余额为 0，租不出来：引导用户看激励广告领时长，或开通会员。 */
+    const val FEATURE_TIME_EXHAUSTED: Int = 40328
+
+    /** 租约不存在或不属于当前用户。 */
+    const val FEATURE_TIME_LEASE_NOT_FOUND: Int = 40406
+}

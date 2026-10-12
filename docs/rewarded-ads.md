@@ -84,7 +84,8 @@ GET /api/apps/{appKey}/ads/huijing/callback?userId=…&transId=…&sign=…&plac
 没有启用中的场景，或非 `client` 模式却没有 Security Key。
 
 权益复用卡密的权益目录与数据形态，但只开放 `vip_plan` / `vip_days` / `integral` / `experience` / `lottery_draws`
-（余额是真钱、设备位挂在授权卡上，都不该由广告发）。目录与发放分支由 `TestRewardedAdCatalogHasGrantBranch` 双向钉死。
+（余额是真钱、设备位挂在授权卡上，都不该由广告发），另加广告独有的 `feature_minutes`（功能时长，带 `feature`，
+按实际使用扣，见 [功能时长](feature-time.md)）。目录与发放分支由 `TestRewardedAdCatalogHasGrantBranch` 双向钉死。
 会员发放走同一套账本，渠道为 `ad_reward`。`vip_plan` 不能选永久套餐：广告可以每天反复看，
 永久会员看一次就到头了，之后每次观看只是白发套餐附赠的积分。
 

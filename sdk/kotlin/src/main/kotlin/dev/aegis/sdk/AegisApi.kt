@@ -761,6 +761,58 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun rewardedAdRecords(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/ads/rewarded/records", query = pageQuery(page, limit), requireAuth = true)
 
+    // ── 功能时长 ──
+
+    /**
+     * 当前用户在一个功能上的时长：余额、累计获得与用掉的秒数，以及当前是否免扣。
+     *
+     * 功能时长由激励广告的「功能时长」奖励发放（[AegisRewardedAdReward.FEATURE_MINUTES]），
+     * 按实际使用扣；会员或已拥有该功能的用户 `exempt = true`，使用时不扣。
+     */
+    @Throws(IOException::class)
+    fun featureTime(feature: String): AegisFeatureTime {
+        val tag = encodePathSegment(feature)
+        return client.decodeAs(
+            client.call("GET", "/features/time/$tag", requireAuth = true),
+            AegisFeatureTime.serializer(),
+        )
+    }
+
+    /**
+     * 开始使用前租一段时长（[seconds] 为 1–600，超过按 600 截断，余额不足时按余额给）。
+     *
+     * 这段时长立刻从余额里扣走，用完再租下一段；停下时用 [settleFeatureTimeLease] 结算，
+     * 没用完的退回。免扣时返回 `exempt = true`、不扣余额也没有租约号。
+     * 余额为 0 时抛 [AegisException]，code 为 [AegisFeatureTimeCodes.FEATURE_TIME_EXHAUSTED]。
+     */
+    @Throws(IOException::class)
+    fun leaseFeatureTime(feature: String, seconds: Int): AegisFeatureTimeLease {
+        val tag = encodePathSegment(feature)
+        return client.decodeAs(
+            client.call("POST", "/features/time/$tag/leases", mapOf("seconds" to seconds), requireAuth = true),
+            AegisFeatureTimeLease.serializer(),
+        )
+    }
+
+    /**
+     * 停止使用时结算租约，[usedSeconds] 为这段租约实际用了多少秒，没用完的退回余额。
+     *
+     * 重复结算是安全的，返回第一次的结论；租约过期（租出两小时后）再结算 `status = expired`、不退款。
+     * 租约不存在或不属于当前用户时抛 [AegisException]，code 为
+     * [AegisFeatureTimeCodes.FEATURE_TIME_LEASE_NOT_FOUND]。
+     */
+    @Throws(IOException::class)
+    fun settleFeatureTimeLease(leaseNo: String, usedSeconds: Int): AegisFeatureTimeSettlement {
+        val no = encodePathSegment(leaseNo)
+        return client.decodeAs(
+            client.call(
+                "POST", "/features/time/leases/$no/settle",
+                mapOf("usedSeconds" to usedSeconds), requireAuth = true,
+            ),
+            AegisFeatureTimeSettlement.serializer(),
+        )
+    }
+
     // ── 广告服务策略 ──
 
     /**
@@ -1512,6 +1564,10 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
 internal data class OAuthUrl(val url: String = "")
 
 /** 丢掉 null 值：服务端对「字段缺失」和「字段为 null」的处理不总是一致，不传最稳。 */
+/** 路径上的一段：按 URL 编码（空格编成 %20 而不是 +）。 */
+private fun encodePathSegment(value: String): String =
+    java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
 private fun buildBody(vararg pairs: Pair<String, Any?>): Map<String, Any?> =
     pairs.filter { it.second != null }.toMap()
 

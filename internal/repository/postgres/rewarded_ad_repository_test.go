@@ -18,14 +18,16 @@ func TestRewardedAdCatalogHasGrantBranch(t *testing.T) {
 	}
 	text := string(source)
 
+	// 「功能时长」是激励广告独有的一档，常量在 rewardedad 包里，所以这里写全限定名。
 	constNames := map[string]string{
-		cardkeydomain.RewardVipPlan:      "RewardVipPlan",
-		cardkeydomain.RewardVipDays:      "RewardVipDays",
-		cardkeydomain.RewardIntegral:     "RewardIntegral",
-		cardkeydomain.RewardExperience:   "RewardExperience",
-		cardkeydomain.RewardLotteryDraws: "RewardLotteryDraws",
-		cardkeydomain.RewardBalance:      "RewardBalance",
-		cardkeydomain.RewardDeviceSlots:  "RewardDeviceSlots",
+		cardkeydomain.RewardVipPlan:      "cardkeydomain.RewardVipPlan",
+		cardkeydomain.RewardVipDays:      "cardkeydomain.RewardVipDays",
+		cardkeydomain.RewardIntegral:     "cardkeydomain.RewardIntegral",
+		cardkeydomain.RewardExperience:   "cardkeydomain.RewardExperience",
+		cardkeydomain.RewardLotteryDraws: "cardkeydomain.RewardLotteryDraws",
+		cardkeydomain.RewardBalance:      "cardkeydomain.RewardBalance",
+		cardkeydomain.RewardDeviceSlots:  "cardkeydomain.RewardDeviceSlots",
+		rewardedad.RewardFeatureMinutes:  "rewardedad.RewardFeatureMinutes",
 	}
 	offered := map[string]bool{}
 	for _, spec := range rewardedad.RewardCatalog() {
@@ -34,12 +36,12 @@ func TestRewardedAdCatalogHasGrantBranch(t *testing.T) {
 		if !ok {
 			t.Fatalf("权益 %s 在测试的常量表里没有登记", spec.Type)
 		}
-		if !strings.Contains(text, "case cardkeydomain."+name+":") {
+		if !strings.Contains(text, "case "+name+":") {
 			t.Errorf("激励广告目录开放了 %s，但发放实现里没有对应分支", spec.Type)
 		}
 	}
 	for kind, name := range constNames {
-		if !offered[kind] && strings.Contains(text, "case cardkeydomain."+name+":") {
+		if !offered[kind] && strings.Contains(text, "case "+name+":") {
 			t.Errorf("发放实现处理了 %s，但激励广告目录没有开放它 —— 控制台配不出来", kind)
 		}
 	}

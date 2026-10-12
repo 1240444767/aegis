@@ -101,6 +101,10 @@ func TestCatalogExcludesManualAndHasPoints(t *testing.T) {
 	if len(RewardCatalog()) != len(types) {
 		t.Fatalf("catalog and types disagree")
 	}
+	// 「功能时长」只开放给激励广告
+	if _, ok := FindRewardSpec("feature_minutes"); ok {
+		t.Fatal("invites must not offer feature_minutes")
+	}
 }
 
 func TestCodes(t *testing.T) {

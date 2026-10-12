@@ -103,6 +103,10 @@ func gatewayRequestModels() map[string]any {
 		"pointsStoreRedeem":      PointsStoreRedeemRequest{},
 		"pointsStoreRedemptions": PaginationQuery{},
 
+		// 功能时长
+		"featureTimeLease":  FeatureTimeLeaseRequest{},
+		"featureTimeSettle": FeatureTimeSettleRequest{},
+
 		// 邀请
 		"inviteInvitees": PaginationQuery{},
 		"inviteBind":     InviteBindRequest{},

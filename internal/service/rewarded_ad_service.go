@@ -221,12 +221,12 @@ func (s *RewardedAdService) checkPlansExist(ctx context.Context, appID int64, sc
 	return nil
 }
 
-// checkFeaturesExist 场景会员权益里的功能标识必须是本应用功能目录里的（停用的也可以选，
+// checkFeaturesExist 场景会员权益与「功能时长」里的功能标识必须是本应用功能目录里的（停用的也可以选，
 // 停用期间不会落到任何人头上，重新启用即生效 —— 与套餐的功能配置同一口径）。
 func (s *RewardedAdService) checkFeaturesExist(ctx context.Context, appID int64, scenes []rewardedad.Scene) error {
 	needed := false
 	for _, scene := range scenes {
-		if len(scene.Membership.Features) > 0 {
+		if len(scene.Membership.Features) > 0 || len(scene.FeatureMinutesTags()) > 0 {
 			needed = true
 			break
 		}
@@ -247,6 +247,12 @@ func (s *RewardedAdService) checkFeaturesExist(ctx context.Context, appID int64,
 			if !known[tag] {
 				return apperrors.New(40000, http.StatusBadRequest,
 					"场景「"+scene.Key+"」的会员权益里有不存在的功能「"+tag+"」")
+			}
+		}
+		for _, tag := range scene.FeatureMinutesTags() {
+			if !known[tag] {
+				return apperrors.New(40000, http.StatusBadRequest,
+					"场景「"+scene.Key+"」的功能时长选择了不存在的功能「"+tag+"」")
 			}
 		}
 	}
@@ -710,11 +716,11 @@ func (s *RewardedAdService) planNames(ctx context.Context, appID int64, scenes [
 	return names
 }
 
-// featureNames 场景会员权益里用到的功能的展示名，只取启用中的：停用的功能不会落到会员头上，
-// 摘要里也不该说「会员可用」它。没有场景配了功能时不查库。
+// featureNames 场景会员权益与「功能时长」里用到的功能的展示名，只取启用中的：停用的功能不会落到会员头上，
+// 摘要里也不该说「会员可用」它（功能时长认不出名字时退回标识本身）。没有场景配了功能时不查库。
 func (s *RewardedAdService) featureNames(ctx context.Context, appID int64, scenes []rewardedad.Scene) map[string]string {
 	for _, scene := range scenes {
-		if len(scene.Membership.Features) == 0 {
+		if len(scene.Membership.Features) == 0 && len(scene.FeatureMinutesTags()) == 0 {
 			continue
 		}
 		features, err := s.pg.ListVipFeatures(ctx, appID, true)

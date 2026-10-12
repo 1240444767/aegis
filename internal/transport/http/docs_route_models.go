@@ -595,6 +595,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}"):                            CloudItemPutRequest{},                    // AppPutCloudItem
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/link"):                      CloudItemLinkRequest{},                   // AppCloudItemLink
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/rollback"):                  CloudItemRollbackRequest{},               // AppRollbackCloudItem
+		routeKey("POST", "/api/v1/apps/{appkey}/features/time/leases/{leaseNo}/settle"):                   FeatureTimeSettleRequest{},               // AppSettleFeatureTimeLease
+		routeKey("POST", "/api/v1/apps/{appkey}/features/time/{feature}/leases"):                          FeatureTimeLeaseRequest{},                // AppLeaseFeatureTime
 		routeKey("GET", "/api/v1/apps/{appkey}/feedback"):                                                 FeedbackListQuery{},                      // AppListFeedback
 		routeKey("POST", "/api/v1/apps/{appkey}/feedback"):                                                FeedbackCreateRequest{},                  // AppCreateFeedback
 		routeKey("POST", "/api/v1/apps/{appkey}/feedback/{feedbackId}/cancel"):                            TicketCancelRequest{},                    // AppCancelFeedback

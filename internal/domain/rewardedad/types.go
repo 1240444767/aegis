@@ -54,14 +54,26 @@ const (
 	MaxCooldownSeconds = 86400
 )
 
+// RewardFeatureMinutes 功能时长：激励广告独有的一档（卡密、积分商城、邀请都没有）。
+//
+// 看一次广告给某个功能加若干分钟的使用时长，按实际使用扣（见 internal/domain/featuretime）。
+// 只放在广告这里：它的设计前提是「反复看、少量给」，卡密与积分商城要卖「一段时间能用」
+// 用的是会员天数与功能解锁。
+const RewardFeatureMinutes = "feature_minutes"
+
+// MaxFeatureMinutes 一次观看最多给多少分钟（一天）。
+const MaxFeatureMinutes = 1440
+
 // 激励广告可发的权益。复用卡密的权益目录与数据形态（同一套账本、同一套控制台表单），
 // 但只开放适合「看一次广告」的几档：余额是真钱、设备位挂在授权卡上，都不该由广告发。
+// 末尾的「功能时长」是广告独有的，自述见 featureMinutesSpec。
 var allowedRewardTypes = []string{
 	cardkeydomain.RewardVipPlan,
 	cardkeydomain.RewardVipDays,
 	cardkeydomain.RewardIntegral,
 	cardkeydomain.RewardExperience,
 	cardkeydomain.RewardLotteryDraws,
+	RewardFeatureMinutes,
 }
 
 // Reward 一项权益，与卡密同构。

@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	cardkeydomain "aegis/internal/domain/cardkey"
+	"aegis/internal/domain/featuretime"
 	rewardedad "aegis/internal/domain/rewardedad"
 	vipdomain "aegis/internal/domain/vip"
 )
@@ -255,8 +256,8 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 		meta["adFree"] = scene.Membership.AdFreeOrDefault()
 	}
 
-	for _, reward := range cardkeydomain.NormalizeRewards(scene.Rewards) {
-		spec, _ := cardkeydomain.FindRewardSpec(reward.Type)
+	for _, reward := range rewardedad.NormalizeRewards(scene.Rewards) {
+		spec, _ := rewardedad.FindRewardSpec(reward.Type)
 		result := rewardedad.RewardResult{Type: reward.Type, Label: spec.Label}
 
 		switch reward.Type {
@@ -332,6 +333,20 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 				return nil, err
 			}
 			result.Detail = cardkeydomain.DescribeReward(reward) + "（剩余 " + strconv.FormatInt(balance, 10) + " 次）"
+
+		case rewardedad.RewardFeatureMinutes:
+			// 功能时长按秒记账；功能名取目录里的展示名，目录里删掉了也照发（标识本身就是账户的键）
+			name, err := featureNameTx(ctx, tx, view.AppID, reward.Feature)
+			if err != nil {
+				return nil, err
+			}
+			balance, err := grantFeatureTimeTx(ctx, tx, view.AppID, view.UserID, reward.Feature, reward.Amount*60,
+				featuretime.RefRewardedAd, strconv.FormatInt(view.ID, 10), source)
+			if err != nil {
+				return nil, err
+			}
+			result.Detail = rewardedad.DescribeFeatureMinutes(reward, name) +
+				"（余额 " + strconv.FormatInt(featuretime.FormatMinutes(balance), 10) + " 分钟）"
 
 		default:
 			// 目录里有、这里没有 —— 由测试挡在合并之前；运行期走到这里说明配置绕过了校验。

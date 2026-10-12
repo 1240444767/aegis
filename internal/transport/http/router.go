@@ -58,6 +58,7 @@ type Handler struct {
 	appFunction     *service.AppFunctionService
 	cardKey         *service.CardKeyService
 	rewardedAd      *service.RewardedAdService
+	featureTime     *service.FeatureTimeService
 	adPolicy        *service.AdPolicyService
 	pointsStore     *service.PointsStoreService
 	invite          *service.InviteService

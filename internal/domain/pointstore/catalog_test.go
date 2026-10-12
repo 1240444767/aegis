@@ -37,6 +37,10 @@ func TestRewardCatalogIsSelfConsistent(t *testing.T) {
 			t.Errorf("RewardTypes 里的 %s 在目录里查不到", rewardType)
 		}
 	}
+	// 「功能时长」是激励广告独有的一档，积分商城卖的是「一段时间能用」（功能解锁），不接纳它
+	if _, ok := FindRewardSpec("feature_minutes"); ok {
+		t.Error("积分商城不应接纳功能时长")
+	}
 }
 
 func TestValidateRewards(t *testing.T) {

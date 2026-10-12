@@ -112,6 +112,11 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		// 对广告服务的选择记在账号上；未登录时的选择由客户端在登录后用 ifAbsent 同步上来。
 		appGatewayAuthed.POST("/ads/consent", h.AppSaveAdConsent)
 
+		// 功能时长：余额、先租后用、停用时结算（看激励广告领到的「在线听歌 60 分钟」按实际使用扣）
+		appGatewayAuthed.GET("/features/time/:feature", h.AppFeatureTimeStatus)
+		appGatewayAuthed.POST("/features/time/:feature/leases", h.AppLeaseFeatureTime)
+		appGatewayAuthed.POST("/features/time/leases/:leaseNo/settle", h.AppSettleFeatureTimeLease)
+
 		// 当前用户：资料 / 设置 / 安全概览
 		appGatewayAuthed.GET("/me", h.AppMe)
 		appGatewayAuthed.GET("/me/profile", h.Profile)

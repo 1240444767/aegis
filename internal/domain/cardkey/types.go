@@ -62,6 +62,9 @@ type Reward struct {
 	Amount int64           `json:"amount,omitempty"`
 	Money  decimal.Decimal `json:"money,omitempty"`
 	RefID  int64           `json:"refId,omitempty"`
+	// Feature 功能标识，与 Amount 一起用（取值形态 ValueFeature）。卡密目录里没有这种档位，
+	// 目前只有激励广告的「功能时长」用它；卡密的 NormalizeRewards 会把它抹掉。
+	Feature string `json:"feature,omitempty"`
 }
 
 // RewardResult 一项权益的实际发放结果，写进核销流水。

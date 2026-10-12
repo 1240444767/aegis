@@ -26,6 +26,11 @@ const (
 	ValueMoney = "money"
 	// ValueRef 引用既有实体的 ID，走 Reward.RefID。
 	ValueRef = "ref"
+	// ValueFeature 功能标识 + 整数量，走 Reward.Feature 与 Reward.Amount。
+	//
+	// 卡密自己的目录里没有这种档位：它属于激励广告独有的「功能时长」（rewardedad.RewardFeatureMinutes），
+	// 登记在这里只是因为 RewardSpec 与 Reward 的形态由本包定义，控制台按同一套 value 渲染表单。
+	ValueFeature = "feature"
 )
 
 // MaxRewardsPerCard 一张卡最多挂几档权益。

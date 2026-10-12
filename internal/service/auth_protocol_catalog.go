@@ -90,6 +90,17 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "rewardedAdRecords", Method: "GET", Path: "/ads/rewarded/records", Auth: true,
 		Summary: "我的激励广告观看与领奖记录"},
 
+	// ── 功能时长 ──
+	//
+	// 看激励广告领到的「功能时长」按实际使用扣：开始使用前租一段（≤ 600 秒，先从余额里扣走），
+	// 用完再租下一段，停下时结算退回没用完的部分。会员或已拥有该功能的用户免扣（exempt=true）。
+	{Key: "featureTime", Method: "GET", Path: "/features/time/{feature}", Auth: true,
+		Summary: "功能时长：余额、累计获得与用掉的秒数、当前是否免扣"},
+	{Key: "featureTimeLease", Method: "POST", Path: "/features/time/{feature}/leases", Auth: true,
+		Summary: "开始使用前租一段时长（seconds 1–600）；免扣时不扣余额，余额为 0 返回 40328"},
+	{Key: "featureTimeSettle", Method: "POST", Path: "/features/time/leases/{leaseNo}/settle", Auth: true,
+		Summary: "停止使用时结算租约，没用完的退回余额；重复结算返回第一次的结论，过期租约不退款"},
+
 	// ── 广告服务策略 ──
 	//
 	// 是否同意广告服务记在账号上：拒绝或尚未选择的用户只能使用 basicTools 里的基础服务。
@@ -407,6 +418,11 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /ads/rewarded，按最新的场景列表展示"},
 	{Code: 40352, Name: "REWARDED_AD_USER_MISMATCH", Message: "这次观看不属于当前账号",
 		Recovery: authprotocol.RecoveryNone, Hint: "SDK 的 userId 必须用 /ads/rewarded 下发的那一个；切换账号后要重建广告对象"},
+	// ── 功能时长 ──
+	{Code: errCodeFeatureTimeExhausted, Name: "FEATURE_TIME_EXHAUSTED", Message: "使用时长已用完",
+		Recovery: authprotocol.RecoveryNone, Hint: "引导用户看激励广告领取功能时长，或开通会员（会员使用时不扣时长）"},
+	{Code: errCodeFeatureTimeLeaseNotFound, Name: "FEATURE_TIME_LEASE_NOT_FOUND", Message: "租约不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "租约号不存在或不属于当前用户；换了账号之后旧租约不能再结算"},
 	// ── 用户云存储 ──
 	{Code: 40360, Name: "CLOUD_STORAGE_DISABLED", Message: "云存储暂未开放",
 		Recovery: authprotocol.RecoveryNone, Hint: "管理员没有启用云存储，入口应当整个隐藏（/cloud 的 enabled 为 false）"},

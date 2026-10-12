@@ -42,11 +42,73 @@ func TestRewardCatalogOnlyOffersAllowedTypes(t *testing.T) {
 			t.Fatalf("%s 不应开放给激励广告", spec.Type)
 		}
 	}
-	// 每一档都必须是卡密目录里真实存在的，否则控制台配得出、发放处认不得。
+	// 除了广告独有的「功能时长」，每一档都必须是卡密目录里真实存在的，否则控制台配得出、发放处认不得。
 	for _, kind := range allowedRewardTypes {
+		if kind == RewardFeatureMinutes {
+			continue
+		}
 		if _, ok := cardkeydomain.FindRewardSpec(kind); !ok {
 			t.Fatalf("%s 不在卡密权益目录里", kind)
 		}
+	}
+	// 「功能时长」只开放给激励广告：卡密目录里出现它，卡密的发放分支就会缺一档。
+	if _, ok := cardkeydomain.FindRewardSpec(RewardFeatureMinutes); ok {
+		t.Fatal("功能时长不应出现在卡密的权益目录里")
+	}
+	spec, ok := FindRewardSpec(RewardFeatureMinutes)
+	if !ok || spec.Label != "功能时长" || spec.Unit != "分钟" || spec.Min != 1 || spec.Max != MaxFeatureMinutes ||
+		spec.Value != cardkeydomain.ValueFeature {
+		t.Fatalf("功能时长的自述不对：%+v", spec)
+	}
+	if catalog[len(catalog)-1].Type != RewardFeatureMinutes {
+		t.Fatal("功能时长应排在激励广告目录的末尾")
+	}
+}
+
+func TestFeatureMinutesReward(t *testing.T) {
+	scene := Scene{Key: "music", Name: "看广告听歌", PlacementID: "p1", Enabled: true,
+		Rewards: []Reward{{Type: RewardFeatureMinutes, Amount: 60, Feature: " Online_Music ", RefID: 9},
+			{Type: cardkeydomain.RewardIntegral, Amount: 5}}}
+	normalized := NormalizeScene(scene)
+	if len(normalized.Rewards) != 2 || normalized.Rewards[0].Type != cardkeydomain.RewardIntegral {
+		t.Fatalf("功能时长应排在卡密档位之后：%+v", normalized.Rewards)
+	}
+	got := normalized.Rewards[1]
+	if got.Feature != "online_music" || got.Amount != 60 || got.RefID != 0 {
+		t.Fatalf("功能时长应只留清洗过的功能标识与分钟数：%+v", got)
+	}
+	if err := ValidateScenes([]Scene{normalized}); err != nil {
+		t.Fatalf("合法的功能时长被拒：%v", err)
+	}
+	if tags := normalized.FeatureMinutesTags(); len(tags) != 1 || tags[0] != "online_music" {
+		t.Fatalf("FeatureMinutesTags = %v", tags)
+	}
+
+	cases := map[string]Reward{
+		"没有功能":   {Type: RewardFeatureMinutes, Amount: 60},
+		"功能标识非法": {Type: RewardFeatureMinutes, Amount: 60, Feature: "Bad Tag"},
+		"分钟为零":   {Type: RewardFeatureMinutes, Amount: 0, Feature: "online_music"},
+		"超过一天":   {Type: RewardFeatureMinutes, Amount: MaxFeatureMinutes + 1, Feature: "online_music"},
+	}
+	for name, reward := range cases {
+		if err := ValidateRewards([]Reward{reward}); err == nil {
+			t.Errorf("%s：应当被拒绝", name)
+		}
+	}
+	twice := []Reward{{Type: RewardFeatureMinutes, Amount: 1, Feature: "a1"}, {Type: RewardFeatureMinutes, Amount: 1, Feature: "b1"}}
+	if err := ValidateRewards(twice); err == nil {
+		t.Error("一个场景只能配一项功能时长")
+	}
+	if err := ValidateRewards(nil); err == nil {
+		t.Error("空权益应当被拒绝")
+	}
+
+	summary := DescribeScene(normalized, nil, map[string]string{"online_music": "在线听歌"})
+	if summary != "积分 5 分、在线听歌 60 分钟" {
+		t.Fatalf("摘要应说清功能时长：%q", summary)
+	}
+	if got := DescribeRewards(normalized.Rewards[1:], nil, nil); got != "online_music 60 分钟" {
+		t.Fatalf("认不出功能名时用标识：%q", got)
 	}
 }
 

@@ -19,17 +19,33 @@ import (
 
 // ── DTO ──
 
-// RewardedAdSceneRequest 一个奖励场景。权益沿用卡密的权益形态。
+// RewardedAdSceneRequest 一个奖励场景。权益沿用卡密的权益形态，另有广告独有的「功能时长」。
 type RewardedAdSceneRequest struct {
-	Key             string                 `json:"key"`
-	Name            string                 `json:"name"`
-	PlacementID     string                 `json:"placementId"`
-	Enabled         bool                   `json:"enabled"`
-	Rewards         []CardKeyRewardRequest `json:"rewards"`
-	DailyLimit      int                    `json:"dailyLimit"`
-	CooldownSeconds int                    `json:"cooldownSeconds"`
+	Key             string                    `json:"key"`
+	Name            string                    `json:"name"`
+	PlacementID     string                    `json:"placementId"`
+	Enabled         bool                      `json:"enabled"`
+	Rewards         []RewardedAdRewardRequest `json:"rewards"`
+	DailyLimit      int                       `json:"dailyLimit"`
+	CooldownSeconds int                       `json:"cooldownSeconds"`
 	// Membership 这个场景送出的会员带什么权益，跟随当前配置（对已领到的会员同样生效）。
 	Membership RewardedAdMembershipRequest `json:"membership"`
+}
+
+// RewardedAdRewardRequest 场景的一项权益：卡密的权益形态，加上「功能时长」要的功能标识。
+type RewardedAdRewardRequest struct {
+	Type   string `json:"type" binding:"required"`
+	Amount int64  `json:"amount"`
+	Money  string `json:"money"`
+	RefID  int64  `json:"refId"`
+	// Feature 功能标识，只有 type=feature_minutes（功能时长，amount 为分钟数）时用
+	Feature string `json:"feature"`
+}
+
+func (req RewardedAdRewardRequest) toDomain() rewardedad.Reward {
+	reward := CardKeyRewardRequest{Type: req.Type, Amount: req.Amount, Money: req.Money, RefID: req.RefID}.toDomain()
+	reward.Feature = req.Feature
+	return reward
 }
 
 // RewardedAdMembershipRequest 看广告赠送的会员的权益。
