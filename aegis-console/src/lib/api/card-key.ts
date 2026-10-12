@@ -11,8 +11,11 @@ export type CardKeyKind = "login" | "redeem";
 export type CardKeyStatus = "unused" | "active" | "used" | "disabled";
 export type CardKeyValidityMode = "permanent" | "fixed_until" | "days_from_first_use";
 
-/** 权益取值形态，决定 Reward 上用哪个字段承载数量 */
-export type CardKeyRewardValue = "amount" | "money" | "ref";
+/**
+ * 权益取值形态，决定 Reward 上用哪个字段承载数量。
+ * feature_amount 为数量加功能标识（Reward.amount + Reward.feature），目前只有激励广告的「功能时长」。
+ */
+export type CardKeyRewardValue = "amount" | "money" | "ref" | "feature_amount";
 
 /**
  * 一档权益的自述。**由后端目录下发**，前端不得另抄一份 ——
@@ -43,6 +46,8 @@ export type CardKeyReward = {
   /** 金额按字符串传输：JSON number 是双精度浮点，0.1 走一遍会变成 0.09999999999999999 */
   money?: string;
   refId?: number;
+  /** 功能标识，只在取值形态为 feature_amount 时携带 */
+  feature?: string;
 };
 
 export type CardKeyRewardResult = {

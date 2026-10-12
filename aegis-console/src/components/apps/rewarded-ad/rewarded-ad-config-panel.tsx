@@ -32,6 +32,7 @@ import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/lib/api/client";
 import type { CardKeyReward, CardKeyRewardSpec } from "@/lib/api/card-key";
 import type { RewardedAdConfig, RewardedAdScene, RewardedAdVerifyMode } from "@/lib/api/rewarded-ad";
+import type { VipFeature } from "@/lib/api/vip";
 import { useRewardedAdConfigQuery, useSaveRewardedAdConfigMutation } from "@/lib/rewarded-ad-hooks";
 import { cn } from "@/lib/utils";
 import { useAdminVipFeaturesQuery, useAdminVipPlansQuery } from "@/lib/vip-hooks";
@@ -53,7 +54,8 @@ type SceneDraft = {
   enabled: boolean;
   dailyLimit: string;
   cooldownSeconds: string;
-  rewards: Record<string, { amount: string; refId: number }>;
+  /** feature 只对取值形态为 feature_amount 的档位（功能时长）有意义 */
+  rewards: Record<string, { amount: string; refId: number; feature: string }>;
   /** 会员权益：「会员天数」带的功能标识，以及送出的会员是否免广告 */
   features: string[];
   adFree: boolean;
@@ -62,6 +64,9 @@ type SceneDraft = {
 /** 送会员的两档：会员权益只在场景勾了其中一档时才有意义。 */
 const VIP_DAYS = "vip_days";
 const VIP_PLAN = "vip_plan";
+
+/** 功能时长新勾选时的默认分钟数，再夹到目录给的上下界内 */
+const DEFAULT_FEATURE_MINUTES = 60;
 
 type Draft = {
   scope: string;
@@ -81,7 +86,11 @@ const nextUid = () => `scene-${++uidSeed}`;
 function sceneToDraft(scene: RewardedAdScene, index: number): SceneDraft {
   const rewards: SceneDraft["rewards"] = {};
   scene.rewards.forEach((reward) => {
-    rewards[reward.type] = { amount: String(reward.amount ?? 1), refId: reward.refId ?? 0 };
+    rewards[reward.type] = {
+      amount: String(reward.amount ?? 1),
+      refId: reward.refId ?? 0,
+      feature: reward.feature ?? ""
+    };
   });
   return {
     uid: `seed-${index}`,
@@ -119,7 +128,7 @@ function blankScene(index: number, placementId: string): SceneDraft {
     enabled: true,
     dailyLimit: "3",
     cooldownSeconds: "60",
-    rewards: { vip_days: { amount: "1", refId: 0 } },
+    rewards: { vip_days: { amount: "1", refId: 0, feature: "" } },
     features: [],
     adFree: true
   };
@@ -155,7 +164,15 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
   const toggleReward = (scene: SceneDraft, spec: CardKeyRewardSpec, checked: boolean) => {
     const rewards = { ...scene.rewards };
     if (checked) {
-      rewards[spec.type] = { amount: String(spec.min ?? 1), refId: plans[0]?.id ?? 0 };
+      const amount =
+        spec.value === "feature_amount"
+          ? Math.min(Math.max(DEFAULT_FEATURE_MINUTES, spec.min ?? 1), spec.max ?? DEFAULT_FEATURE_MINUTES)
+          : spec.min ?? 1;
+      rewards[spec.type] = {
+        amount: String(amount),
+        refId: plans[0]?.id ?? 0,
+        feature: vipFeatures.find((feature) => feature.isActive)?.tag ?? ""
+      };
     } else {
       delete rewards[spec.type];
     }
@@ -167,9 +184,14 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
       .filter((spec) => scene.rewards[spec.type])
       .map((spec) => {
         const value = scene.rewards[spec.type];
-        return spec.value === "ref"
-          ? { type: spec.type, refId: Number(value.refId) }
-          : { type: spec.type, amount: Number(value.amount) };
+        switch (spec.value) {
+          case "ref":
+            return { type: spec.type, refId: Number(value.refId) };
+          case "feature_amount":
+            return { type: spec.type, amount: Number(value.amount), feature: value.feature };
+          default:
+            return { type: spec.type, amount: Number(value.amount) };
+        }
       });
 
   const save = async () => {
@@ -180,6 +202,13 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
       }
       if (buildRewards(scene).length === 0) {
         toast.error(`场景「${scene.name || scene.key}」至少配置一项权益`);
+        return;
+      }
+      const featureless = catalog.find(
+        (spec) => spec.value === "feature_amount" && scene.rewards[spec.type] && !scene.rewards[spec.type].feature
+      );
+      if (featureless) {
+        toast.error(`场景「${scene.name || scene.key}」的${featureless.label}未选择功能`);
         return;
       }
     }
@@ -495,6 +524,17 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
                                     </SelectContent>
                                   </Select>
                                 )
+                              ) : spec.value === "feature_amount" ? (
+                                <FeatureAmountField
+                                  spec={spec}
+                                  value={value}
+                                  features={vipFeatures}
+                                  onChange={(next) =>
+                                    patchScene(scene.uid, {
+                                      rewards: { ...scene.rewards, [spec.type]: { ...value, ...next } }
+                                    })
+                                  }
+                                />
                               ) : (
                                 <div className="flex items-center gap-2">
                                   <Input
@@ -581,6 +621,67 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
           </div>
         )}
       </SectionCard>
+    </div>
+  );
+}
+
+/**
+ * 功能时长：选一个会员功能，再填分钟数。
+ * 已保存的标识若已从功能目录删除，仍列出来并标「未登记」，避免下拉框显示为空。
+ */
+function FeatureAmountField({
+  spec,
+  value,
+  features,
+  onChange
+}: {
+  spec: CardKeyRewardSpec;
+  value: { amount: string; feature: string };
+  features: VipFeature[];
+  onChange: (next: { amount?: string; feature?: string }) => void;
+}) {
+  const orphan = value.feature && !features.some((feature) => feature.tag === value.feature) ? value.feature : "";
+  if (features.length === 0 && !orphan) {
+    return <p className="text-xs text-muted-foreground">暂无功能标识</p>;
+  }
+  return (
+    <div className="space-y-2">
+      <Select value={value.feature} onValueChange={(next) => onChange({ feature: next })}>
+        <SelectTrigger className="h-8 w-full text-xs">
+          <SelectValue placeholder="选择功能" />
+        </SelectTrigger>
+        {/* 还没选功能时没有对齐项，弹层改为贴着触发器向下展开 */}
+        <SelectContent position="popper">
+          {orphan ? (
+            <SelectItem value={orphan} disabled>
+              {orphan}
+              <span className="ml-1.5 text-[10px] text-muted-foreground">未登记</span>
+            </SelectItem>
+          ) : null}
+          {features.map((feature) => (
+            <SelectItem
+              key={feature.tag}
+              value={feature.tag}
+              disabled={!feature.isActive && feature.tag !== value.feature}
+            >
+              {feature.name || feature.tag}
+              <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{feature.tag}</span>
+              {!feature.isActive ? <span className="ml-1.5 text-[10px] text-muted-foreground">已停用</span> : null}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <div className="flex items-center gap-2">
+        <Input
+          type="number"
+          className="h-8 w-28 font-mono text-xs"
+          value={value.amount}
+          min={spec.min}
+          max={spec.max}
+          onChange={(event) => onChange({ amount: event.target.value })}
+        />
+        <span className="text-xs text-muted-foreground">{spec.unit}</span>
+      </div>
     </div>
   );
 }

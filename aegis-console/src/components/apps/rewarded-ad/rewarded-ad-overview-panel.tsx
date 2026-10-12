@@ -178,7 +178,7 @@ export function RewardedAdOverviewPanel({ appKey, onOpenConfig }: { appKey: stri
                       <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{scene.key}</p>
                     </TableCell>
                     <TableCell className="text-xs">
-                      {describeRewards(scene.rewards, config?.catalog ?? [], planNames)}
+                      {describeRewards(scene.rewards, config?.catalog ?? [], planNames, featureNames)}
                       {describeMembership(scene, featureNames) ? (
                         <p className="mt-0.5 text-[11px] text-muted-foreground">
                           {describeMembership(scene, featureNames)}

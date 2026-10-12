@@ -49,11 +49,12 @@ export const VERIFY_MODE_META: Record<RewardedAdVerifyMode, { title: string; des
   client: { title: "仅客户端上报", description: "不验签，仅用于联调" }
 };
 
-/** 一组权益的一句话摘要（会员套餐显示套餐名）。 */
+/** 一组权益的一句话摘要（会员套餐显示套餐名，功能时长显示功能名，取不到名称时用标识）。 */
 export function describeRewards(
   rewards: CardKeyReward[],
   catalog: CardKeyRewardSpec[],
-  planNames: Record<number, string>
+  planNames: Record<number, string>,
+  featureNames: Record<string, string> = {}
 ) {
   if (rewards.length === 0) return "未配置权益";
   return rewards
@@ -62,6 +63,10 @@ export function describeRewards(
       if (!spec) return reward.type;
       if (spec.value === "ref") {
         return planNames[reward.refId ?? 0] ? `${spec.label}「${planNames[reward.refId ?? 0]}」` : spec.label;
+      }
+      if (spec.value === "feature_amount") {
+        const feature = reward.feature ?? "";
+        return `${featureNames[feature] || feature || spec.label} ${reward.amount ?? 0} ${spec.unit ?? ""}`.trim();
       }
       return `${spec.label} ${reward.amount ?? 0} ${spec.unit ?? ""}`.trim();
     })
