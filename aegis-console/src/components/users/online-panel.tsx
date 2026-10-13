@@ -1,130 +1,122 @@
 "use client";
 
 import { useState } from "react";
-import { useIsFetching, useQueryClient } from "@tanstack/react-query";
-import { AppWindow, RefreshCw, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
+import { AppWindow, LayoutDashboard, ShieldCheck } from "lucide-react";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
-import {
-  useAdminAppsQuery,
-  useAdminSessionQuery,
-  useOnlineAdminsQuery,
-  useSystemOnlineStatsQuery
-} from "@/lib/admin-hooks";
+import { useAdminAppsQuery, useAdminSessionQuery } from "@/lib/admin-hooks";
 import { useAuthStore } from "@/lib/auth-store";
-import { cn } from "@/lib/utils";
+import { OnlineLiveProvider, useLive, useLiveFocus } from "@/lib/online-live/hooks";
 import { AdminSessionsView } from "./online/admin-sessions-view";
 import { AppOnlineView } from "./online/app-online-view";
+import { AppRanking } from "./online/app-ranking";
+import { LiveFeed } from "./online/live-feed";
+import { LiveStatusBadge } from "./online/live-shared";
+import { NodeLoad } from "./online/node-load";
+import { OnlineDistribution } from "./online/online-distribution";
 import { OnlineOverview } from "./online/online-overview";
+import { OnlineTrend } from "./online/online-trend";
 
-type View = "apps" | "admins";
-
-const REFRESH_MS = 10_000;
-const ONLINE_QUERY_KEYS = ["system-online-stats", "app-online-stats", "app-online-users", "online-admins", "all-sessions", "admin-sessions"];
+type View = "overview" | "apps" | "admins";
 
 /**
- * 在线会话：上面是全站概览，下面按对象分两个视图。
+ * 在线会话。
  *
- *   应用用户 —— Redis presence 里的实时连接，按应用查看，可展开到每条连接、可强制下线。
- *   管理员   —— 控制台登录会话（仅超管），可撤销单个会话或让某位管理员整体下线。
+ * 整页数据来自一条加密 WebSocket（/api/admin/system/online/live）：快照约两秒一份、
+ * 上下线动态半秒一批，不再轮询。三个视图：
  *
- * 自动刷新默认开启（10 秒），翻页与刷新之间保留上一屏数据，不闪骨架。
+ *   总览     —— 全站（或可见应用）总量、在线趋势、实时动态、应用排行、连接分布、接入节点
+ *   应用用户 —— 单个应用的在线用户，可展开到每条连接、可强制下线
+ *   管理员   —— 此刻开着控制台的管理员与全部登录会话（仅超级管理员）
  */
 export function OnlinePanel() {
+  return (
+    <OnlineLiveProvider>
+      <OnlineWorkspace />
+    </OnlineLiveProvider>
+  );
+}
+
+function OnlineWorkspace() {
   const operator = useAuthStore((s) => s.operator);
-  const isSuperAdmin = operator?.isSuperAdmin ?? false;
   const selfId = operator?.id != null ? Number(operator.id) : null;
+  // 以服务端 ready 帧为准；连上之前先按本地资料显示入口
+  const isSuperAdmin = useLive((s) => s.ready?.admin.isSuperAdmin ?? operator?.isSuperAdmin ?? false);
 
-  const [view, setView] = useState<View>("apps");
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const interval = autoRefresh ? REFRESH_MS : false;
-
-  const queryClient = useQueryClient();
-  const fetching = useIsFetching({ predicate: (q) => ONLINE_QUERY_KEYS.includes(String(q.queryKey[0])) }) > 0;
-
-  const statsQuery = useSystemOnlineStatsQuery({ refetchInterval: interval });
+  const [view, setView] = useState<View>("overview");
+  const [appId, setAppId] = useState<number | null>(null);
   const appsQuery = useAdminAppsQuery();
-  const onlineAdminsQuery = useOnlineAdminsQuery({ enabled: isSuperAdmin });
   const sessionQuery = useAdminSessionQuery();
+  const activeView: View = view === "admins" && !isSuperAdmin ? "overview" : view;
+  const adminCount = useLive((s) => s.snapshot?.admins?.admins ?? 0);
 
-  const onlineAdmins = onlineAdminsQuery.data ?? [];
-  const activeView: View = isSuperAdmin ? view : "apps";
-
-  function refreshAll() {
-    void queryClient.invalidateQueries({
-      predicate: (q) => ONLINE_QUERY_KEYS.includes(String(q.queryKey[0]))
-    });
+  function openApp(id: number) {
+    setAppId(id);
+    setView("apps");
   }
 
   return (
     <div className="space-y-4">
-      <OnlineOverview
-        stats={statsQuery.data}
-        loading={statsQuery.isLoading}
-        admins={
-          isSuperAdmin
-            ? {
-                online: onlineAdmins.length,
-                sessions: onlineAdmins.reduce((sum, a) => sum + a.sessionCount, 0),
-                loading: onlineAdminsQuery.isLoading
-              }
-            : undefined
-        }
-      />
-
       <div className="flex flex-wrap items-center justify-between gap-2">
-        {isSuperAdmin ? (
-          <ToggleGroup
-            type="single"
-            value={activeView}
-            onValueChange={(v) => v && setView(v as View)}
-            className="rounded-lg border bg-muted/40 p-0.5"
-          >
-            <ToggleGroupItem value="apps" className="h-8 gap-1.5 rounded-md px-3 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
-              <AppWindow className="size-3.5" />
-              应用用户
-            </ToggleGroupItem>
+        <ToggleGroup
+          type="single"
+          value={activeView}
+          onValueChange={(v) => v && setView(v as View)}
+          className="rounded-lg border bg-muted/40 p-0.5"
+        >
+          <ToggleGroupItem value="overview" className="h-8 gap-1.5 rounded-md px-3 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
+            <LayoutDashboard className="size-3.5" />
+            总览
+          </ToggleGroupItem>
+          <ToggleGroupItem value="apps" className="h-8 gap-1.5 rounded-md px-3 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
+            <AppWindow className="size-3.5" />
+            应用用户
+          </ToggleGroupItem>
+          {isSuperAdmin ? (
             <ToggleGroupItem value="admins" className="h-8 gap-1.5 rounded-md px-3 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm">
               <ShieldCheck className="size-3.5" />
               管理员
-              {onlineAdmins.length > 0 ? (
+              {adminCount > 0 ? (
                 <span className="rounded-full bg-emerald-500/15 px-1.5 text-[10px] leading-4 text-emerald-700 tabular-nums dark:text-emerald-300">
-                  {onlineAdmins.length}
+                  {adminCount}
                 </span>
               ) : null}
             </ToggleGroupItem>
-          </ToggleGroup>
-        ) : (
-          <h2 className="flex items-center gap-2 text-sm font-semibold">
-            <AppWindow className="size-4 text-muted-foreground" />
-            应用在线用户
-          </h2>
-        )}
-
-        <div className="flex items-center gap-2">
-          <label className="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5 text-xs">
-            <Switch checked={autoRefresh} onCheckedChange={setAutoRefresh} aria-label="自动刷新" />
-            <span>自动刷新</span>
-            <span className="hidden text-muted-foreground sm:inline">{autoRefresh ? "10 秒" : "已暂停"}</span>
-          </label>
-          <Button variant="outline" size="icon" className="size-8" aria-label="立即刷新" onClick={refreshAll}>
-            <RefreshCw className={cn("size-3.5", fetching && "animate-spin")} />
-          </Button>
-        </div>
+          ) : null}
+        </ToggleGroup>
+        <LiveStatusBadge />
       </div>
 
-      {activeView === "apps" ? (
-        <AppOnlineView apps={appsQuery.data ?? []} appsLoading={appsQuery.isLoading} autoRefresh={interval} />
+      {activeView === "overview" ? (
+        <OverviewView onOpenApp={openApp} />
+      ) : activeView === "apps" ? (
+        <AppOnlineView apps={appsQuery.data ?? []} appsLoading={appsQuery.isLoading} appId={appId} onSelectApp={setAppId} />
       ) : (
-        <AdminSessionsView
-          onlineAdmins={onlineAdmins}
-          onlineLoading={onlineAdminsQuery.isLoading}
-          currentSessionId={sessionQuery.data?.tokenId}
-          selfId={selfId}
-          autoRefresh={interval}
-        />
+        <AdminsView currentSessionId={sessionQuery.data?.tokenId} selfId={selfId} />
       )}
     </div>
   );
+}
+
+function OverviewView({ onOpenApp }: { onOpenApp: (appId: number) => void }) {
+  useLiveFocus(0);
+  const dims = useLive((s) => s.snapshot?.dims);
+  return (
+    <div className="space-y-3">
+      <OnlineOverview />
+      <div className="grid gap-3 lg:grid-cols-3">
+        <OnlineTrend app={0} className="lg:col-span-2" />
+        <LiveFeed />
+      </div>
+      <div className="grid gap-3 lg:grid-cols-2">
+        <AppRanking onOpen={onOpenApp} />
+        <OnlineDistribution dims={dims} />
+      </div>
+      <NodeLoad />
+    </div>
+  );
+}
+
+function AdminsView({ currentSessionId, selfId }: { currentSessionId?: string; selfId: number | null }) {
+  useLiveFocus(0);
+  return <AdminSessionsView currentSessionId={currentSessionId} selfId={selfId} />;
 }

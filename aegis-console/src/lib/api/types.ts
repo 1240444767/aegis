@@ -3426,9 +3426,21 @@ export type OnlinePresenceConnection = {
   connectionId: string;
   appid: number;
   userId: number;
+  account?: string;
   tokenId?: string;
   deviceId?: string;
+  /** 设备字典翻译出的可读名称（如 Xiaomi 14） */
+  deviceName?: string;
+  deviceModel?: string;
+  platform?: string;
+  os?: string;
+  osVersion?: string;
+  appVersion?: string;
   ip?: string;
+  country?: string;
+  region?: string;
+  city?: string;
+  isp?: string;
   userAgent?: string;
   connectedAt: string;
   lastSeenAt: string;
@@ -3448,6 +3460,8 @@ export type OnlineUserItem = {
   account?: string;
   nickname?: string;
   ip?: string;
+  /** IP 归属地（国家 省份 城市） */
+  location?: string;
   connections: number;
   connectedAt?: string;
   lastSeenAt: string;
