@@ -3234,15 +3234,15 @@ export type AdminAppUserDetail = AdminAppUserItem & {
   security?: AdminAppUserSecurity;
 };
 
-// ── 账号封禁（app_user_bans）──────────────────────────
+// ── 账号封禁（user_account_bans）──────────────────────────
 //
-// 与 `users.enabled` / `disabledReason` 是两件事：后者是账号上的一个开关位，
-// 前者是一条有起止、有操作人、有证据、可撤销的**处置记录**。
-// 控制台上「限制用户」写的是开关位，「新建封禁」写的是这张表。
+// 一条有起止、有操作人、有证据、可解除的**处置记录**，是账号状态唯一的依据。
+// `users.enabled` / `disabledEndTime` / `disabledReason` 只是它的投影（给列表筛选用）；
+// 「限制用户」这类改状态的接口在后端也会落成一条全部访问的封禁。
 
-/** temporary=到期自动解除；permanent=永久，只能人工撤销 */
+/** temporary=到期自动解除；permanent=永久，只能人工解除 */
 export type AccountBanType = "temporary" | "permanent";
-/** login=只挡登录；all=挡登录 + 已签发会话 */
+/** login=只拦新的登录，已登录的设备照常使用；all=立即撤销全部会话并拒绝任何访问 */
 export type AccountBanScope = "login" | "all";
 export type AccountBanStatus = "active" | "expired" | "revoked";
 
@@ -3267,12 +3267,21 @@ export type AdminUserBan = {
   updatedAt: string;
 };
 
+/** 各状态的条数，不受列表的状态筛选影响 */
+export type AccountBanCounts = {
+  total: number;
+  active: number;
+  expired: number;
+  revoked: number;
+};
+
 export type AdminUserBanListResult = {
   items?: AdminUserBan[] | null;
   page: number;
   limit: number;
   total: number;
   totalPages: number;
+  counts?: AccountBanCounts;
 };
 
 export type AdminUserBanCreateInput = {

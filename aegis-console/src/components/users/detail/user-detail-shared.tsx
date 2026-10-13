@@ -370,7 +370,7 @@ export const BAN_SCOPE_LABEL: Record<string, string> = {
 export const BAN_STATUS_LABEL: Record<string, string> = {
   active: "生效中",
   expired: "已到期",
-  revoked: "已撤销"
+  revoked: "已解除"
 };
 
 export function BanStatusBadge({ status }: { status?: string }) {

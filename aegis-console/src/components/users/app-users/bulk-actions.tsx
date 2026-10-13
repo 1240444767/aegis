@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Ban, BellRing, CircleCheck, Loader2, ShieldX, X } from "lucide-react";
+import { Ban, BellRing, Loader2, Undo2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import {
   Select,
   SelectContent,
@@ -24,13 +23,20 @@ import {
   SelectValue
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  BanDurationField,
+  BanReasonField,
+  BanScopeField,
+  describeBanDraft,
+  useBanDraft,
+  useNow
+} from "@/components/users/ban-form";
 import { ApiError } from "@/lib/api-client";
 import {
   useBatchBanAppUsersMutation,
   useBatchUpdateAppUserStatusMutation,
   useBulkNotifyAppUsersMutation
 } from "@/lib/app-user-hooks";
-import type { AccountBanScope, AccountBanType } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -40,9 +46,9 @@ import { cn } from "@/lib/utils";
  * 不用「按当前筛选条件批量」那种写法 —— 后者在管理员看到的列表与实际执行
  * 之间存在时间差（翻页期间有人注册、有人改状态），会误伤到没被看过的账号。
  *
- * 「限制」与「封禁」分成两个按钮而不是合并：前者写 users.enabled 开关位、
- * 立即生效但不留处置记录；后者写 app_user_bans、有起止有操作人可申诉。
- * 合成一个按钮就等于替管理员做了这个选择。
+ * 处置只有「封禁」一个入口：旧版另有「限制」按钮翻 users.enabled，后端早把它
+ * 映射成永久封禁，却不让人填原因和时长，留着只会让人以为是两种处置。
+ * 「解除封禁」走状态接口，逐个解除选中账号生效中的封禁（含旧版的受限）。
  */
 export function BulkActionBar({
   appKey,
@@ -59,15 +65,14 @@ export function BulkActionBar({
 
   const count = selectedIds.length;
 
-  async function toggleStatus(enabled: boolean) {
+  async function liftBans() {
     try {
-      await statusMutation.mutateAsync({
+      const result = await statusMutation.mutateAsync({
         userIds: selectedIds,
-        enabled,
-        disabledReason: enabled ? undefined : "控制台批量限制",
-        clearDisabledEndTime: enabled
+        enabled: true,
+        clearDisabledEndTime: true
       });
-      toast.success(enabled ? `已启用 ${count} 个账号` : `已限制 ${count} 个账号`);
+      toast.success(`已解除 ${result?.updated ?? count} 个账号的封禁`);
       onClear();
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : "操作失败");
@@ -94,35 +99,25 @@ export function BulkActionBar({
             <Button
               size="sm"
               variant="ghost"
-              className="h-7 gap-1 text-xs"
-              disabled={statusMutation.isPending}
-              onClick={() => void toggleStatus(true)}
-            >
-              {statusMutation.isPending ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <CircleCheck className="size-3" />
-              )}
-              启用
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-7 gap-1 text-xs"
-              disabled={statusMutation.isPending}
-              onClick={() => void toggleStatus(false)}
-            >
-              <ShieldX className="size-3" />
-              限制
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
               className="h-7 gap-1 text-xs text-destructive hover:text-destructive"
               onClick={() => setShowBan(true)}
             >
               <Ban className="size-3" />
               封禁
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 gap-1 text-xs"
+              disabled={statusMutation.isPending}
+              onClick={() => void liftBans()}
+            >
+              {statusMutation.isPending ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Undo2 className="size-3" />
+              )}
+              解除封禁
             </Button>
             <Button
               size="sm"
@@ -166,12 +161,6 @@ export function BulkActionBar({
 
 // ── 批量封禁 ──────────────────────────
 
-function toRFC3339(local: string) {
-  if (!local) return undefined;
-  const date = new Date(local);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
-}
-
 function BulkBanDialog({
   open,
   onOpenChange,
@@ -186,29 +175,24 @@ function BulkBanDialog({
   onDone: () => void;
 }) {
   const mutation = useBatchBanAppUsersMutation(appKey);
-  const [banType, setBanType] = useState<AccountBanType>("temporary");
-  const [banScope, setBanScope] = useState<AccountBanScope>("login");
-  const [reason, setReason] = useState("");
-  const [endAt, setEndAt] = useState("");
-
-  const needsEnd = banType === "temporary";
-  const canSubmit = reason.trim().length > 0 && (!needsEnd || Boolean(endAt));
+  const draft = useBanDraft();
+  const now = useNow();
+  const problem = draft.validate(now);
 
   async function submit() {
+    const submitAt = Date.now();
+    const error = draft.validate(submitAt);
+    if (error) {
+      toast.error(error);
+      return;
+    }
     try {
-      const result = await mutation.mutateAsync({
-        userIds: selectedIds,
-        banType,
-        banScope,
-        reason: reason.trim(),
-        endAt: needsEnd ? toRFC3339(endAt) : null
-      });
+      const result = await mutation.mutateAsync({ userIds: selectedIds, ...draft.toPayload(submitAt) });
       const failed = result.failed ?? 0;
       toast.success(`已封禁 ${result.created ?? selectedIds.length} 个账号`, {
         description: failed ? `${failed} 个失败` : undefined
       });
-      setReason("");
-      setEndAt("");
+      draft.reset();
       onOpenChange(false);
       onDone();
     } catch (error) {
@@ -218,92 +202,29 @@ function BulkBanDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle className="text-sm">批量封禁 {selectedIds.length} 个账号</DialogTitle>
-          <DialogDescription>为每个账号新增一条封禁记录。</DialogDescription>
+          <DialogTitle>批量封禁 {selectedIds.length} 个账号</DialogTitle>
+          <DialogDescription>已有生效封禁的账号会被新的封禁替代。</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">类型</Label>
-              <RadioGroup
-                value={banType}
-                onValueChange={(value) => setBanType(value as AccountBanType)}
-                className="gap-1.5"
-              >
-                {[
-                  { value: "temporary", label: "临时" },
-                  { value: "permanent", label: "永久" }
-                ].map((option) => (
-                  <label
-                    key={option.value}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5"
-                  >
-                    <RadioGroupItem value={option.value} />
-                    <span className="text-xs">{option.label}</span>
-                  </label>
-                ))}
-              </RadioGroup>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">范围</Label>
-              <RadioGroup
-                value={banScope}
-                onValueChange={(value) => setBanScope(value as AccountBanScope)}
-                className="gap-1.5"
-              >
-                {[
-                  { value: "login", label: "仅登录", hint: "现有会话保留" },
-                  { value: "all", label: "全部访问", hint: "同时踢下线" }
-                ].map((option) => (
-                  <label
-                    key={option.value}
-                    className="flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-1.5"
-                  >
-                    <RadioGroupItem value={option.value} />
-                    <span className="text-xs">
-                      {option.label}
-                      <span className="ml-1 text-muted-foreground">{option.hint}</span>
-                    </span>
-                  </label>
-                ))}
-              </RadioGroup>
-            </div>
-          </div>
-
-          {needsEnd ? (
-            <div className="space-y-1.5">
-              <Label className="text-xs text-muted-foreground">到期时间</Label>
-              <Input
-                type="datetime-local"
-                value={endAt}
-                className="h-8 text-xs"
-                onChange={(event) => setEndAt(event.target.value)}
-              />
-            </div>
-          ) : null}
-
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">封禁原因（必填）</Label>
-            <Textarea
-              rows={3}
-              value={reason}
-              placeholder="例如：批量注册小号"
-              onChange={(event) => setReason(event.target.value)}
-            />
-          </div>
+        <div className="space-y-5">
+          <BanDurationField draft={draft} now={now} />
+          <BanScopeField draft={draft} />
+          <BanReasonField draft={draft} rows={3} />
         </div>
 
-        <DialogFooter>
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button size="sm" variant="destructive" disabled={!canSubmit || mutation.isPending} onClick={submit}>
-            {mutation.isPending ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-            确认封禁
-          </Button>
+        <DialogFooter className="items-center gap-3 sm:justify-between">
+          <span className="text-xs text-muted-foreground">{problem ?? describeBanDraft(draft)}</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
+              取消
+            </Button>
+            <Button size="sm" variant="destructive" disabled={Boolean(problem) || mutation.isPending} onClick={submit}>
+              {mutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Ban className="size-3.5" />}
+              确认封禁
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>

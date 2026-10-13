@@ -43,6 +43,7 @@ const USER_SCOPE_KEYS = [
   ["admin-user-active-ban"],
   ["admin-app-user"],
   ["admin-app-users"],
+  ["admin-app-stats"],
   ["admin-user-sessions"],
   ["admin-user-login-audits"],
   ["admin-user-session-audits"]
