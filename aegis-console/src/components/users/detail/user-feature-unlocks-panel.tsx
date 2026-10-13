@@ -15,6 +15,7 @@ import {
   DialogTitle
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -39,7 +40,20 @@ import {
   useUserFeatureUnlocksQuery
 } from "@/lib/points-store-hooks";
 import { useAdminVipFeaturesQuery } from "@/lib/vip-hooks";
+import { Segmented, type SegmentOption } from "./user-assets-adjust";
 import { EMPTY, EmptyRow, Panel, formatShortTime, formatTime, textValue } from "./user-detail-shared";
+
+type UnlockTerm = "7" | "30" | "90" | "365" | "permanent" | "custom";
+
+/** 天数为 0 即永久，与积分商城的权益期限同一约定。 */
+const UNLOCK_TERMS: Array<SegmentOption<UnlockTerm>> = [
+  { value: "7", label: "7 天" },
+  { value: "30", label: "30 天" },
+  { value: "90", label: "90 天" },
+  { value: "365", label: "1 年" },
+  { value: "permanent", label: "永久" },
+  { value: "custom", label: "自定义" }
+];
 
 const SOURCE_LABEL: Record<string, string> = {
   points_store: "积分兑换",
@@ -69,6 +83,7 @@ export function UserFeatureUnlocksPanel({ appKey, userId }: { appKey: string; us
   const revoke = useRevokeUserFeatureUnlockMutation(appKey, userId);
 
   const [tag, setTag] = useState("");
+  const [term, setTerm] = useState<UnlockTerm>("30");
   const [days, setDays] = useState("30");
   const [revoking, setRevoking] = useState<FeatureUnlock | null>(null);
   const [reason, setReason] = useState("");
@@ -135,32 +150,55 @@ export function UserFeatureUnlocksPanel({ appKey, userId }: { appKey: string; us
           </div>
         ) : null}
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Select value={selectedTag} onValueChange={setTag} disabled={!activeFeatures.length}>
-            <SelectTrigger className="h-8 w-52">
-              <SelectValue placeholder="暂无功能标识" />
-            </SelectTrigger>
-            <SelectContent>
-              {activeFeatures.map((feature) => (
-                <SelectItem key={feature.tag} value={feature.tag}>
-                  {feature.name || feature.tag}
-                  <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{feature.tag}</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Input
-            type="number"
-            min={0}
-            max={3650}
-            value={days}
-            onChange={(event) => setDays(event.target.value)}
-            className="h-8 w-24 font-mono text-xs tabular-nums"
-          />
-          <span className="text-xs text-muted-foreground">天（{termLabel(Number(days) || 0)}）</span>
-          <Button size="sm" className="h-8" onClick={submitGrant} disabled={grant.isPending || !selectedTag}>
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] lg:items-end">
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">功能</Label>
+            <Select value={selectedTag} onValueChange={setTag} disabled={!activeFeatures.length}>
+              <SelectTrigger className="h-8 w-full text-xs">
+                <SelectValue placeholder="暂无功能标识" />
+              </SelectTrigger>
+              <SelectContent>
+                {activeFeatures.map((feature) => (
+                  <SelectItem key={feature.tag} value={feature.tag}>
+                    {feature.name || feature.tag}
+                    <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{feature.tag}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs font-medium text-muted-foreground">期限</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Segmented
+                value={term}
+                onChange={(value) => {
+                  setTerm(value);
+                  if (value !== "custom") setDays(value === "permanent" ? "0" : value);
+                }}
+                options={UNLOCK_TERMS}
+                ariaLabel="解锁期限"
+              />
+              {term === "custom" ? (
+                <div className="relative">
+                  <Input
+                    autoFocus
+                    value={days}
+                    inputMode="numeric"
+                    aria-label="解锁天数"
+                    className="h-8 w-24 pr-7 text-xs tabular-nums"
+                    onChange={(event) => setDays(event.target.value.replace(/\D/g, ""))}
+                  />
+                  <span className="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-muted-foreground">
+                    天
+                  </span>
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <Button size="sm" className="h-8" onClick={submitGrant} disabled={grant.isPending || !selectedTag || days === ""}>
             {grant.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Unlock className="size-3.5" />}
-            解锁
+            {!selectedTag || days === "" ? "解锁" : Number(days) === 0 ? "永久解锁" : `解锁 ${termLabel(Number(days))}`}
           </Button>
         </div>
       </div>
