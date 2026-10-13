@@ -1005,6 +1005,23 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 兑换语义（单事务、幂等、快照、顺延）见 [docs/points-store.md](../docs/points-store.md)。
 
+## 接入区块（/apps/{appKey}?tab=auth-protocol）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/app-auth-protocol-panel.tsx` | 骨架：概览 / 认证策略 / 安全与密钥 / 代码示例四个视图的切换、共享草稿、底部保存条、自检与密钥轮换的状态 |
+| `components/apps/auth-protocol/auth-protocol-overview.tsx` | 四项状态（安全等级、登录方式、注册方式、自检）、接入凭据（复制 .env）、自检时间线 |
+| `components/apps/auth-protocol/auth-protocol-policy.tsx` | 登录 / 注册方式与登录标识的勾选卡、依赖提示（第三方渠道、短信服务商、手机号标识）、行为开关、注册字段 |
+| `components/apps/auth-protocol/auth-protocol-security.tsx` | 安全等级三选一、应用密钥（轮换、明文只显示一次）、加密档传输公钥、保留旧接口时的旧命名空间传输加密 |
+| `components/apps/auth-protocol/auth-protocol-shared.tsx` | 枚举与图标、草稿取值与比较、占位策略、勾选卡与行内提示 |
+
+三条约束：
+
+1. **概览与代码示例读已保存的策略，策略与安全视图读草稿。** 概览回答的是「客户端此刻看到什么」，拿草稿说话会让人以为改动已生效。
+2. **草稿只比较可写字段**（`draftOf` / `sameDraft`，集合按集合比）：密钥轮换会刷新 `signingSecretHint`，整份对象比较会把轮换误判成未保存的修改。
+3. **依赖提示放在勾选卡正下方**：勾了第三方却没有可用渠道、配了渠道却没勾第三方、开了短信却没把手机号列为登录标识。
+   这几种组合两边看上去都正常，客户端却一个入口都没有（Voyage 的 QQ 登录就卡在「没勾第三方」上）。
+
 ## 邀请区块（/apps/{appKey}?tab=invite）
 
 | 文件 | 职责 |
