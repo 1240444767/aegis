@@ -59,7 +59,7 @@ var oauthTemplates = []oauthdomain.Template{
 		},
 		Notes: []string{
 			"网站应用：回调地址必须与 QQ 互联后台登记的完全一致（含协议、端口与查询串）。",
-			"移动应用：端上 SDK 授权后调 /auth/oauth/exchange，服务端用 access_token 反查 openid 并核对 client_id 等于这里的 APP ID，不经过回调地址。",
+			"移动应用：端上 SDK 授权后调 /auth/oauth/exchange，服务端用 access_token 反查 openid 并核对 client_id 等于这里的 APP ID，不经过回调地址。核验先走 openmobile.qq.com，不通再退到 graph.qq.com。",
 			"unionid 需要向 QQ 互联申请接口权限；未开通时只按 openid 绑定。",
 		},
 	},

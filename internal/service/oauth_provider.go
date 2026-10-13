@@ -9,9 +9,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"aegis/internal/config"
 	authdomain "aegis/internal/domain/auth"
@@ -372,12 +374,27 @@ func lookupProfilePath(raw map[string]any, path string) string {
 	return scalarToString(current)
 }
 
-// QQ 互联用 access_token 反查身份与拉取资料的固定地址。
+// QQ 互联用 access_token 反查身份与拉取资料的接口。
+//
+// 两个域名提供同样的接口、同样的返回格式：openmobile.qq.com 是 QQ 移动 SDK 自己用的，
+// graph.qq.com 是网站接入文档里的。生产服务器在美国，实测连 graph.qq.com 能建 TCP 却卡在
+// TLS / 响应上，一直等到超时；openmobile.qq.com 可达。所以先走 openmobile，不通再退到 graph。
+var qqAPIBases = []string{"https://openmobile.qq.com", "https://graph.qq.com"}
+
 const (
-	qqOpenIDURL   = "https://graph.qq.com/oauth2.0/me"
-	qqUserInfoURL = "https://graph.qq.com/user/get_user_info"
+	qqOpenIDPath   = "/oauth2.0/me"
+	qqUserInfoPath = "/user/get_user_info"
+	// qqUserInfoURL 渠道模板里登记的资料地址（graph 域名），管理员没改过时就是它
+	qqUserInfoURL = "https://graph.qq.com" + qqUserInfoPath
 	// qqErrNoUnionIDPermission 应用没有 unionid 接口权限（要向 QQ 互联单独申请）
 	qqErrNoUnionIDPermission = "100048"
+)
+
+// 单个 QQ 地址的等待上限。出站客户端整体是 8 秒，一个地址卡住时要留出时间换下一个；
+// 资料只用来填昵称头像，等得更短。
+var (
+	qqIdentityAttemptTimeout = 4 * time.Second
+	qqUserInfoAttemptTimeout = 3 * time.Second
 )
 
 // qqIdentity /oauth2.0/me 的结果。
@@ -385,7 +402,12 @@ type qqIdentity struct {
 	ClientID string
 	OpenID   string
 	UnionID  string
+	// Base 答复了这次核验的域名。资料接口先走它：另一个刚被证明不通，再去试只是白等
+	Base string
 }
+
+// errQQUnreachable 这一个 QQ 地址没有给出可用的答复（连不上、超时、5xx、不是 JSON），换下一个地址。
+var errQQUnreachable = errors.New("qq endpoint unreachable")
 
 func (p *OAuthProvider) fetchQQProfile(ctx context.Context, client *http.Client, profile authdomain.ProviderProfile) (authdomain.ProviderProfile, error) {
 	accessToken := profile.Tokens["access_token"]
@@ -397,39 +419,128 @@ func (p *OAuthProvider) fetchQQProfile(ctx context.Context, client *http.Client,
 	profile.UnionID = identity.UnionID
 
 	// 身份到这里已经确定。资料只用来填昵称头像，拉不到（权限未开通、接口抖动）不该挡住登录
-	userInfoURL := strings.TrimSpace(p.cfg.UserInfoURL)
-	if userInfoURL == "" {
-		userInfoURL = qqUserInfoURL
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
-	if err != nil {
-		return profile, nil
-	}
-	query := request.URL.Query()
+	query := url.Values{}
 	query.Set("access_token", accessToken)
 	query.Set("oauth_consumer_key", identity.ClientID)
 	query.Set("openid", identity.OpenID)
-	request.URL.RawQuery = query.Encode()
+	for _, endpoint := range p.qqUserInfoURLs(identity.Base) {
+		raw, err := qqGetJSON(ctx, client, endpoint+"?"+query.Encode(), qqUserInfoAttemptTimeout)
+		if err != nil {
+			continue
+		}
+		if ret := firstString(raw, "ret"); ret != "" && ret != "0" {
+			return profile, nil
+		}
+		profile.Nickname = firstString(raw, "nickname")
+		profile.Avatar = secureQQAvatar(firstString(raw, "figureurl_qq_2", "figureurl_qq_1", "figureurl_2", "figureurl_1"))
+		profile.RawProfile = raw
+		return profile, nil
+	}
+	return profile, nil
+}
+
+// qqUserInfoURLs 资料接口的候选地址：答复了身份核验的域名最先，其余内置域名其次，
+// 管理员自定义的地址（若不同）最后。
+func (p *OAuthProvider) qqUserInfoURLs(preferred string) []string {
+	urls := make([]string, 0, len(qqAPIBases)+1)
+	if preferred != "" {
+		urls = append(urls, preferred+qqUserInfoPath)
+	}
+	for _, base := range qqAPIBases {
+		if !slices.Contains(urls, base+qqUserInfoPath) {
+			urls = append(urls, base+qqUserInfoPath)
+		}
+	}
+	if custom := strings.TrimSpace(p.cfg.UserInfoURL); custom != "" && !slices.Contains(urls, custom) {
+		urls = append(urls, custom)
+	}
+	return urls
+}
+
+// fetchQQIdentity 用 access_token 反查 openid / unionid，并核对令牌是签给本应用的。
+//
+// openid 按应用隔离，别的应用签出的令牌查出来的是那个应用下的 openid；
+// 不核对 client_id，就等于接受任何 QQ 应用的令牌，校验形同虚设。
+// 应用没开通 unionid 权限时 QQ 报 100048，这时退回只取 openid。
+// 依次尝试 [qqAPIBases]：一个地址不通就换下一个；拿到 QQ 的明确答复（包括令牌无效）就不再换。
+func (p *OAuthProvider) fetchQQIdentity(ctx context.Context, client *http.Client, accessToken string, withUnionID bool) (qqIdentity, error) {
+	query := url.Values{}
+	query.Set("access_token", accessToken)
+	query.Set("fmt", "json")
+	if withUnionID {
+		query.Set("unionid", "1")
+	}
+	var (
+		raw      map[string]any
+		answered string
+	)
+	for _, base := range qqAPIBases {
+		answer, err := qqGetJSON(ctx, client, base+qqOpenIDPath+"?"+query.Encode(), qqIdentityAttemptTimeout)
+		if err == nil {
+			raw, answered = answer, base
+			break
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	if raw == nil {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
+	}
+	if code := firstString(raw, "error"); code != "" && code != "0" {
+		if withUnionID && code == qqErrNoUnionIDPermission {
+			return p.fetchQQIdentity(ctx, client, accessToken, false)
+		}
+		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权已失效，请重新授权")
+	}
+	identity := qqIdentity{
+		ClientID: firstString(raw, "client_id"),
+		OpenID:   firstString(raw, "openid"),
+		UnionID:  firstString(raw, "unionid"),
+		Base:     answered,
+	}
+	if identity.OpenID == "" {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
+	}
+	if expected := strings.TrimSpace(p.cfg.ClientID); expected != "" && identity.ClientID != expected {
+		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权不属于本应用，请重新授权")
+	}
+	if identity.ClientID == "" {
+		identity.ClientID = p.cfg.ClientID
+	}
+	return identity, nil
+}
+
+// qqGetJSON 对一个 QQ 地址发 GET，单次最多等 timeout。
+// 不带 fmt=json 时 QQ 回的是 callback( {...} ); 这种 JSONP，两种都兼容。
+// 没拿到可解析的答复一律返回 errQQUnreachable，由调用方换下一个地址。
+func qqGetJSON(ctx context.Context, client *http.Client, target string, timeout time.Duration) (map[string]any, error) {
+	attemptCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(attemptCtx, http.MethodGet, target, nil)
+	if err != nil {
+		return nil, err
+	}
 	response, err := client.Do(request)
 	if err != nil {
-		return profile, nil
+		return nil, errQQUnreachable
 	}
 	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil || response.StatusCode >= http.StatusBadRequest {
-		return profile, nil
+	body, err := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+	if err != nil || response.StatusCode >= http.StatusInternalServerError {
+		return nil, errQQUnreachable
+	}
+	text := string(body)
+	begin := strings.Index(text, "{")
+	finish := strings.LastIndex(text, "}")
+	if begin == -1 || finish <= begin {
+		return nil, errQQUnreachable
 	}
 	raw := map[string]any{}
-	if json.Unmarshal(body, &raw) != nil {
-		return profile, nil
+	if err := json.Unmarshal([]byte(text[begin:finish+1]), &raw); err != nil {
+		return nil, errQQUnreachable
 	}
-	if ret := firstString(raw, "ret"); ret != "" && ret != "0" {
-		return profile, nil
-	}
-	profile.Nickname = firstString(raw, "nickname")
-	profile.Avatar = secureQQAvatar(firstString(raw, "figureurl_qq_2", "figureurl_qq_1", "figureurl_2", "figureurl_1"))
-	profile.RawProfile = raw
-	return profile, nil
+	return raw, nil
 }
 
 // secureQQAvatar QQ 资料里的头像是 http 地址，HTTPS 页面上会被浏览器当混合内容拦掉；
@@ -445,68 +556,6 @@ func secureQQAvatar(raw string) string {
 	}
 	parsed.Scheme = "https"
 	return parsed.String()
-}
-
-// fetchQQIdentity 用 access_token 反查 openid / unionid，并核对令牌是签给本应用的。
-//
-// openid 按应用隔离，别的应用签出的令牌查出来的是那个应用下的 openid；
-// 不核对 client_id，就等于接受任何 QQ 应用的令牌，校验形同虚设。
-// 应用没开通 unionid 权限时 QQ 报 100048，这时退回只取 openid。
-func (p *OAuthProvider) fetchQQIdentity(ctx context.Context, client *http.Client, accessToken string, withUnionID bool) (qqIdentity, error) {
-	query := url.Values{}
-	query.Set("access_token", accessToken)
-	query.Set("fmt", "json")
-	if withUnionID {
-		query.Set("unionid", "1")
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, qqOpenIDURL+"?"+query.Encode(), nil)
-	if err != nil {
-		return qqIdentity{}, err
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	if response.StatusCode >= http.StatusInternalServerError {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	// 不带 fmt=json 时 QQ 回的是 callback( {...} ); 这种 JSONP，两种都兼容
-	text := string(body)
-	begin := strings.Index(text, "{")
-	finish := strings.LastIndex(text, "}")
-	if begin == -1 || finish <= begin {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	raw := map[string]any{}
-	if err := json.Unmarshal([]byte(text[begin:finish+1]), &raw); err != nil {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	if code := firstString(raw, "error"); code != "" && code != "0" {
-		if withUnionID && code == qqErrNoUnionIDPermission {
-			return p.fetchQQIdentity(ctx, client, accessToken, false)
-		}
-		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权已失效，请重新授权")
-	}
-	identity := qqIdentity{
-		ClientID: firstString(raw, "client_id"),
-		OpenID:   firstString(raw, "openid"),
-		UnionID:  firstString(raw, "unionid"),
-	}
-	if identity.OpenID == "" {
-		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
-	}
-	if expected := strings.TrimSpace(p.cfg.ClientID); expected != "" && identity.ClientID != expected {
-		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权不属于本应用，请重新授权")
-	}
-	if identity.ClientID == "" {
-		identity.ClientID = p.cfg.ClientID
-	}
-	return identity, nil
 }
 
 // ProfileFromAccessToken 用原生 SDK 在端上拿到的 access_token，由服务端向服务商换回第三方身份。

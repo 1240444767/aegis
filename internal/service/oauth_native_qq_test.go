@@ -3,12 +3,14 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"aegis/internal/config"
 	oauthdomain "aegis/internal/domain/oauth"
@@ -25,6 +27,10 @@ type fakeQQ struct {
 	// userInfoBroken get_user_info 一律报错
 	userInfoBroken bool
 	meCalls        int
+	// down 连不上的域名；hang 能连上但一直不回的域名（生产上 graph.qq.com 就是这样）
+	down  map[string]bool
+	hang  map[string]bool
+	hosts []string
 }
 
 type fakeQQToken struct {
@@ -34,7 +40,10 @@ type fakeQQToken struct {
 }
 
 func newFakeQQ() *fakeQQ {
-	return &fakeQQ{tokens: map[string]fakeQQToken{}, unionPermission: true}
+	return &fakeQQ{
+		tokens: map[string]fakeQQToken{}, unionPermission: true,
+		down: map[string]bool{}, hang: map[string]bool{},
+	}
 }
 
 func (f *fakeQQ) issue(token, clientID, openID, nickname string) {
@@ -50,6 +59,18 @@ func (f *fakeQQ) client() *http.Client {
 type fakeQQTransport struct{ f *fakeQQ }
 
 func (t fakeQQTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	t.f.mu.Lock()
+	host := request.URL.Host
+	t.f.hosts = append(t.f.hosts, host)
+	down, hang := t.f.down[host], t.f.hang[host]
+	t.f.mu.Unlock()
+	if down {
+		return nil, errors.New("dial tcp: connection refused")
+	}
+	if hang {
+		<-request.Context().Done()
+		return nil, request.Context().Err()
+	}
 	recorder := httptest.NewRecorder()
 	t.f.serve(recorder, request)
 	return recorder.Result(), nil
@@ -63,7 +84,7 @@ func (f *fakeQQ) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(value)
 	}
-	if r.URL.Host != "graph.qq.com" {
+	if r.URL.Host != "graph.qq.com" && r.URL.Host != "openmobile.qq.com" {
 		w.WriteHeader(http.StatusBadGateway)
 		return
 	}
@@ -209,5 +230,78 @@ func TestSecureQQAvatar(t *testing.T) {
 		if got := secureQQAvatar(input); got != want {
 			t.Errorf("secureQQAvatar(%q) = %q，期望 %q", input, got, want)
 		}
+	}
+}
+
+// 生产服务器连 graph.qq.com 会卡到超时：先走 openmobile.qq.com，不通再退到 graph，
+// 一个地址卡住只等单次上限，不把整个出站超时耗光。
+func TestQQIdentityFallsBackAcrossDomains(t *testing.T) {
+	ctx := context.Background()
+	previous := qqIdentityAttemptTimeout
+	qqIdentityAttemptTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { qqIdentityAttemptTimeout = previous })
+	provider := newTestQQProvider()
+
+	// 默认走 openmobile
+	qq := newFakeQQ()
+	qq.issue("tok", testQQAppID, "OPENID_A", "小明")
+	profile, err := provider.ProfileFromAccessToken(ctx, qq.client(), "tok", "")
+	if err != nil || profile.ProviderUserID != "OPENID_A" || profile.Nickname != "小明" {
+		t.Fatalf("应当换出身份：%+v / %v", profile, err)
+	}
+	if qq.hosts[0] != "openmobile.qq.com" {
+		t.Fatalf("应先走 openmobile.qq.com，实际顺序 %v", qq.hosts)
+	}
+
+	// openmobile 连不上：退到 graph
+	qq = newFakeQQ()
+	qq.issue("tok", testQQAppID, "OPENID_A", "小明")
+	qq.down["openmobile.qq.com"] = true
+	profile, err = provider.ProfileFromAccessToken(ctx, qq.client(), "tok", "")
+	if err != nil || profile.ProviderUserID != "OPENID_A" || profile.Nickname != "小明" {
+		t.Fatalf("openmobile 不通时应退到 graph：%+v / %v", profile, err)
+	}
+
+	// graph 卡住不回（生产现场）：openmobile 正常时根本不碰 graph
+	qq = newFakeQQ()
+	qq.issue("tok", testQQAppID, "OPENID_A", "小明")
+	qq.hang["graph.qq.com"] = true
+	started := time.Now()
+	profile, err = provider.ProfileFromAccessToken(ctx, qq.client(), "tok", "")
+	if err != nil || profile.ProviderUserID != "OPENID_A" || time.Since(started) > time.Second {
+		t.Fatalf("graph 卡住时应直接用 openmobile：%+v / %v（%v）", profile, err, time.Since(started))
+	}
+	for _, host := range qq.hosts {
+		if host == "graph.qq.com" {
+			t.Fatalf("openmobile 正常时不该请求 graph：%v", qq.hosts)
+		}
+	}
+
+	// openmobile 卡住：单次等待到点就换 graph
+	qq = newFakeQQ()
+	qq.issue("tok", testQQAppID, "OPENID_A", "小明")
+	qq.hang["openmobile.qq.com"] = true
+	started = time.Now()
+	profile, err = provider.ProfileFromAccessToken(ctx, qq.client(), "tok", "")
+	if err != nil || profile.ProviderUserID != "OPENID_A" || time.Since(started) > 2*time.Second {
+		t.Fatalf("openmobile 卡住时应限时换 graph：%+v / %v（%v）", profile, err, time.Since(started))
+	}
+
+	// 都不通：明确报 50203，而不是挂到整体超时
+	qq = newFakeQQ()
+	qq.issue("tok", testQQAppID, "OPENID_A", "小明")
+	qq.down["openmobile.qq.com"] = true
+	qq.hang["graph.qq.com"] = true
+	if _, err := provider.ProfileFromAccessToken(ctx, qq.client(), "tok", ""); errCode(err) != 50203 {
+		t.Fatalf("两个域名都不通应报 50203，得到 %v", err)
+	}
+
+	// 令牌无效是 QQ 的明确答复，不该再去问另一个域名
+	qq = newFakeQQ()
+	if _, err := provider.ProfileFromAccessToken(ctx, qq.client(), "forged", ""); errCode(err) != errCodeOAuthTokenInvalid {
+		t.Fatalf("无效令牌应报 %d，得到 %v", errCodeOAuthTokenInvalid, err)
+	}
+	if len(qq.hosts) != 1 {
+		t.Fatalf("拿到明确答复后不应换域名重试：%v", qq.hosts)
 	}
 }
