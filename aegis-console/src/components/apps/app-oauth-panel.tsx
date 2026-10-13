@@ -449,6 +449,7 @@ export function AppOAuthPanel({ appKey }: Props) {
         draft={draft}
         setDraft={setDraft}
         callbackPrefix={callbackPrefix}
+        templates={templatesQuery.data?.items ?? []}
         saving={saveMutation.isPending}
         onSave={handleSave}
       />
@@ -578,7 +579,7 @@ function ProviderCard({
 
           <div className="flex flex-wrap items-center gap-1">
             <CapabilityChip active={item.allowLogin} label="登录" />
-            <CapabilityChip active={item.allowRegister} label="自动注册" />
+            <CapabilityChip active={item.allowRegister} label="注册新账号" />
             <CapabilityChip active={item.allowBind} label="账号绑定" />
           </div>
 
@@ -773,6 +774,7 @@ function ProviderEditor({
   draft,
   setDraft,
   callbackPrefix,
+  templates,
   saving,
   onSave
 }: {
@@ -782,6 +784,7 @@ function ProviderEditor({
   draft: ProviderDraft;
   setDraft: (updater: (prev: ProviderDraft) => ProviderDraft) => void;
   callbackPrefix: string;
+  templates: OAuthTemplate[];
   saving: boolean;
   onSave: () => void;
 }) {
@@ -793,6 +796,13 @@ function ProviderEditor({
     setDraft((prev) => ({ ...prev, [key]: value }));
 
   const suggestedRedirect = callbackPrefix ? `${callbackPrefix}${draft.provider.trim().toLowerCase()}` : "";
+  // 凭据的叫法各家不同（QQ 互联是 APP ID / APP Key）：按渠道标识找模板，找不到再按适配器找
+  const template =
+    templates.find((item) => item.key === draft.provider.trim().toLowerCase()) ??
+    (draft.kind === "generic" ? undefined : templates.find((item) => item.kind === draft.kind));
+  const credentialField = (key: string) => template?.fields?.find((field) => field.key === key);
+  const clientIdField = credentialField("clientId");
+  const clientSecretField = credentialField("clientSecret");
   const previewColor = draft.color || getBrandColor(draft.icon) || "#64748B";
 
   const addScope = () => {
@@ -895,16 +905,16 @@ function ProviderEditor({
             {/* 凭据 */}
             <section className="space-y-3">
               <SectionTitle title="应用凭据" />
-              <Field label="ClientID / AppID">
+              <Field label={clientIdField?.label ?? "ClientID / AppID"}>
                 <Input
                   className="h-8 font-mono text-sm"
                   value={draft.clientId}
-                  placeholder="wx0000000000000000"
+                  placeholder={clientIdField?.placeholder ?? "wx0000000000000000"}
                   onChange={(event) => set("clientId", event.target.value)}
                 />
               </Field>
               <Field
-                label="ClientSecret / AppSecret"
+                label={clientSecretField?.label ?? "ClientSecret / AppSecret"}
                 hint={draft.clientSecretSet ? undefined : "必填"}
               >
                 <div className="flex items-center gap-1.5">
@@ -912,7 +922,9 @@ function ProviderEditor({
                     className="h-8 flex-1 font-mono text-sm"
                     type={showSecret ? "text" : "password"}
                     value={draft.clientSecret}
-                    placeholder={draft.clientSecretSet ? "••••••••（留空不修改）" : "粘贴 Secret"}
+                    placeholder={
+                      draft.clientSecretSet ? "••••••••（留空不修改）" : `粘贴 ${clientSecretField?.label ?? "Secret"}`
+                    }
                     onChange={(event) => {
                       set("clientSecret", event.target.value);
                       if (event.target.value) set("clearClientSecret", false);
@@ -991,7 +1003,7 @@ function ProviderEditor({
                 onChange={(value) => set("allowLogin", value)}
               />
               <ToggleRow
-                label="允许自动注册"
+                label="允许注册新账号"
                 checked={draft.allowRegister}
                 onChange={(value) => set("allowRegister", value)}
               />

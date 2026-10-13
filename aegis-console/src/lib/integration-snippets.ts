@@ -977,43 +977,70 @@ curl -X POST "${base}/auth/oauth/url" \\
 # 2. 浏览器跳到返回的 url，用户授权后第三方回跳：
 #    ${base}/auth/oauth/callback?provider=wechat&code=..&state=..
 
-# 3. 原生 SDK 路线：端上拿到 profile 后换会话
+# 3. 原生 SDK 路线：端上授权拿到 accessToken 后换会话，身份由服务端核实
 curl -X POST "${base}/auth/oauth/exchange" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "provider": "wechat",
-    "providerUserId": "oGZUI0egBJY1zhBYw2KhdUfwVJJE",
-    "unionId": "o6_bmasdasdsad6_2sgVt7hMZOPfL",
-    "nickname": "Alice",
-    "avatar": "https://example.com/a.png"
-  }'`
+    "provider": "qq",
+    "accessToken": "<QQ SDK 返回的 access_token>",
+    "openId": "<QQ SDK 返回的 openid>",
+    "deferRegistration": true,
+    "deviceId": "device-001"
+  }'
+
+# 4. 返回 oauthLink（该 QQ 还没关联账号）时，让用户二选一：
+#    快速注册
+curl -X POST "${base}/auth/oauth/link/register" \\
+  -H "Content-Type: application/json" \\
+  -d '{"ticket":"<oauthLink.ticket>","deviceId":"device-001"}'
+#    绑定已有账号：先正常登录，再带新令牌
+curl -X POST "${base}/auth/oauth/link/bind" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer <accessToken>" \\
+  -d '{"ticket":"<oauthLink.ticket>"}'
+
+# 5. 已登录用户在设置里绑定
+curl -X POST "${base}/auth/oauth/bind/token" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer <accessToken>" \\
+  -d '{"provider":"qq","accessToken":"<QQ SDK 返回的 access_token>"}'`
     },
     {
       lang: "kotlin",
-      code: `// 原生 SDK（微信 / QQ / Apple…）在端上完成授权，拿到 profile 后换 Aegis 会话。
-// 这条路径走完整的安全等级包装，加密档下同样是加密的。
-suspend fun exchangeOAuth(profile: JSONObject): JSONObject = withContext(Dispatchers.IO) {
-    val request = Request.Builder()
-        .url("$BASE/api/v1/apps/$APP_KEY/auth/oauth/exchange")
-        .post(profile.toString().toRequestBody("application/json".toMediaType()))
-        .build()
-
-    OkHttpClient().newCall(request).execute().use { response ->
-        val envelope = JSONObject(response.body!!.string())
-        check(envelope.getInt("code") == 200) { envelope.getString("message") }
-        envelope.getJSONObject("data")
-    }
+      code: `// 官方 Kotlin SDK：QQ 互联 SDK 在端上授权，拿到 access_token / openid 后换 Aegis 会话。
+// 身份由服务端拿令牌向 QQ 核实（并核对令牌签给本应用），端上自报的昵称头像不作数。
+val session = aegis.auth.oauthExchange(
+    provider = "qq",
+    accessToken = qqAccessToken,
+    openId = qqOpenId,
+    deferRegistration = true,
+)
+val link = session.oauthLink
+when {
+    session.isAuthenticated -> enterApp()
+    session.requiresSecondFactor -> askSecondFactor(session.challenge!!)
+    // 这个 QQ 还没关联账号：显示昵称头像，让用户选
+    link != null -> chooseLink(
+        onQuickRegister = { aegis.auth.oauthLinkRegister(link.ticket) }.takeIf { link.allowRegister },
+        // 先用已有账号正常登录，成功后再绑定
+        onBindExisting = { aegis.auth.oauthLinkBind(link.ticket) },
+    )
 }
 
-// 该第三方账号首次登录时能否自动建号，由渠道配置里的「允许自动注册」决定；
-// 关闭时返回 40393，此时应引导用户先用已有账号登录再绑定。`
+// 已登录用户在设置里绑定 QQ
+aegis.auth.oauthBindToken(provider = "qq", accessToken = qqAccessToken)`
     },
     {
       lang: "text",
       code: `两条路径，按客户端形态选：
 
   Web / 系统浏览器   /auth/oauth/url → 跳转 → /auth/oauth/callback
-  原生 SDK          端上授权 → /auth/oauth/exchange
+  原生 SDK          端上授权 → /auth/oauth/exchange（accessToken，服务端核实）
+
+未关联账号（exchange 带 deferRegistration）
+  返回 oauthLink 一次性凭证（10 分钟），用户二选一：
+  快速注册         /auth/oauth/link/register
+  绑定已有账号     正常登录 → /auth/oauth/link/bind
 
 回跳注意
   /auth/oauth/callback 由第三方平台重定向浏览器发起，客户端无法为它签名或加密，
@@ -1022,7 +1049,7 @@ suspend fun exchangeOAuth(profile: JSONObject): JSONObject = withContext(Dispatc
 
 自动建号的判定分开配置
   短信    取决于应用的 registerMethods 是否包含 sms
-  第三方  取决于该渠道自身的「允许自动注册」开关
+  第三方  取决于该渠道自身的「允许注册新账号」开关
 
 第三方没有应用级注册开关，避免同一件事出现两处配置。`
     }

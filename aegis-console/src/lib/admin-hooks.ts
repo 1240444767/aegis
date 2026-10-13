@@ -3092,8 +3092,12 @@ export function useDeleteAppOAuthBindingMutation(appKey?: string | null) {
     mutationFn: (payload: { userId: number; provider: string; force?: boolean }) =>
       appOAuth.deleteAppOAuthBinding(token as string, appKey as string, payload),
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["app-oauth-bindings"] });
-      await queryClient.invalidateQueries({ queryKey: ["app-oauth-providers"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["app-oauth-bindings"] }),
+        queryClient.invalidateQueries({ queryKey: ["app-oauth-providers"] }),
+        // 用户详情的凭据矩阵与「无可用登录方式」提示都看绑定数
+        queryClient.invalidateQueries({ queryKey: ["admin-app-user"] })
+      ]);
     }
   });
 }

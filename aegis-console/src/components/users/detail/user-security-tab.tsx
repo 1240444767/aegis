@@ -43,6 +43,7 @@ import {
   textValue
 } from "./user-detail-shared";
 import { UserResetPasswordDialog } from "../user-reset-password-dialog";
+import { UserOAuthBindingsPanel } from "./user-oauth-bindings-panel";
 import { UserOAuth2GrantsPanel } from "./user-oauth2-grants-panel";
 
 type Credential = {
@@ -435,6 +436,8 @@ export function UserSecurityTab({
             </div>
           </Panel>
         ) : null}
+
+        <UserOAuthBindingsPanel appKey={appKey} userId={userId} />
 
         <UserOAuth2GrantsPanel appKey={appKey} userId={userId} />
 
