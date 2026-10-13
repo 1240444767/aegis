@@ -1,5 +1,7 @@
 package httptransport
 
+import "strings"
+
 // ── 应用级第三方登录（OAuth2）渠道配置 DTO ──
 
 // AppOAuthProviderRequest 管理端新建 / 更新渠道配置。
@@ -91,4 +93,29 @@ type OAuthBindTokenRequest struct {
 	Provider    string `json:"provider" binding:"required"`
 	AccessToken string `json:"accessToken" binding:"required"`
 	OpenID      string `json:"openId"`
+}
+
+// AppOAuthExchangeRequest v1 网关的原生 SDK 换会话。
+//
+// 应用由路径上的 appKey 决定，请求体里没有 appid —— 复用旧命名空间的 OAuthMobileLoginRequest
+// 会因为它的 appid 必填而一律 400「缺少必要的请求参数」。身份只认服务端拿 accessToken 核实的结果，
+// openId（或老字段 providerUserId）只用来核对。
+type AppOAuthExchangeRequest struct {
+	Provider       string `json:"provider" binding:"required"`
+	AccessToken    string `json:"accessToken" binding:"required"`
+	OpenID         string `json:"openId"`
+	ProviderUserID string `json:"providerUserId"`
+	// DeferRegistration 未绑定时返回关联凭证（oauthLink），由用户选择快速注册或绑定已有账号
+	DeferRegistration bool   `json:"deferRegistration"`
+	DeviceID          string `json:"deviceId"`
+	Device            string `json:"device"`
+	MarkCode          string `json:"markCode"`
+}
+
+// claimedOpenID 客户端声称的第三方 ID：新字段 openId 优先，兼容旧字段 providerUserId。
+func (r AppOAuthExchangeRequest) claimedOpenID() string {
+	if openID := strings.TrimSpace(r.OpenID); openID != "" {
+		return openID
+	}
+	return strings.TrimSpace(r.ProviderUserID)
 }

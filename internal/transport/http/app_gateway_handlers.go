@@ -427,7 +427,7 @@ func (h *Handler) AppOAuthExchange(c *gin.Context) {
 	if !h.requireAuthMethod(c, policy.LoginMethods, authprotocol.MethodOAuth) {
 		return
 	}
-	var req OAuthMobileLoginRequest
+	var req AppOAuthExchangeRequest
 	if err := bind(c, &req); err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return

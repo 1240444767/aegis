@@ -574,7 +574,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/login"):                                              authprotocol.LoginInput{},                // AppLogin
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/token"):                                   OAuthBindTokenRequest{},                  // OAuthBindToken
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/url"):                                     OAuthBindURLRequest{},                    // OAuthBindURL
-		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/exchange"):                                     OAuthMobileLoginRequest{},                // AppOAuthExchange
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/exchange"):                                     AppOAuthExchangeRequest{},                // AppOAuthExchange
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/link/bind"):                                    OAuthLinkBindRequest{},                   // OAuthLinkBind
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/link/register"):                                OAuthLinkRegisterRequest{},               // AppOAuthLinkRegister
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/password/change"):                                    ChangePasswordRequest{},                  // ChangePassword
