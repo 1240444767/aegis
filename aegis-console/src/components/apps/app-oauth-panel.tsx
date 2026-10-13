@@ -33,10 +33,12 @@ import type {
   UserInfoAuthStyle
 } from "@/lib/api/app-oauth";
 import {
+  useAppAuthProtocolQuery,
   useAppOAuthBindingsQuery,
   useAppOAuthProvidersQuery,
   useDeleteAppOAuthBindingMutation,
   useDeleteAppOAuthProviderMutation,
+  useEnableOAuthLoginMethodMutation,
   useOAuthTemplatesQuery,
   useReorderAppOAuthProvidersMutation,
   useSaveAppOAuthProviderMutation,
@@ -268,6 +270,8 @@ export function AppOAuthPanel({ appKey }: Props) {
   const deleteMutation = useDeleteAppOAuthProviderMutation(appKey);
   const reorderMutation = useReorderAppOAuthProvidersMutation(appKey);
   const testMutation = useTestAppOAuthProviderMutation(appKey);
+  const protocolQuery = useAppAuthProtocolQuery(appKey);
+  const enableOAuthMutation = useEnableOAuthLoginMethodMutation(appKey);
 
   const providers = useMemo(() => providersQuery.data?.items ?? [], [providersQuery.data]);
   const callbackPrefix = providersQuery.data?.callbackUrlPrefix ?? templatesQuery.data?.callbackUrlPrefix ?? "";
@@ -386,6 +390,19 @@ export function AppOAuthPanel({ appKey }: Props) {
       </TabsList>
 
       <TabsContent value="providers" className="space-y-4">
+        {protocolQuery.data && !protocolQuery.data.loginMethods.includes("oauth") ? (
+          <OAuthMethodOffHint
+            enabling={enableOAuthMutation.isPending}
+            onEnable={async () => {
+              try {
+                await enableOAuthMutation.mutateAsync(protocolQuery.data?.loginMethods ?? []);
+                toast.success("已启用第三方登录方式");
+              } catch (err) {
+                toast.error(errorMessage(err, "启用失败"));
+              }
+            }}
+          />
+        ) : null}
         <CallbackHint prefix={callbackPrefix} />
 
         <div className="flex items-center justify-between gap-2">
@@ -477,6 +494,23 @@ export function AppOAuthPanel({ appKey }: Props) {
 }
 
 /** 回调地址提示条：管理员最容易填错的一项，直接给出可复制的完整前缀 */
+/**
+ * 登录方式里没有「第三方」时，/config 不下发任何渠道，客户端一个入口都不显示。
+ * 渠道与登录方式分在两个页签里配置，这条提示把两处接上，并给一键启用。
+ */
+function OAuthMethodOffHint({ enabling, onEnable }: { enabling: boolean; onEnable: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-200 bg-amber-50/60 px-3 py-2 text-xs dark:border-amber-900/60 dark:bg-amber-950/30">
+      <AlertTriangle className="size-3.5 text-amber-600 dark:text-amber-400" />
+      <span className="font-medium text-amber-800 dark:text-amber-200">登录方式未启用第三方，客户端不显示以下渠道</span>
+      <Button size="sm" className="ml-auto h-6 gap-1 px-2 text-[11px]" disabled={enabling} onClick={onEnable}>
+        {enabling ? <Loader2 className="size-3 animate-spin" /> : null}
+        启用
+      </Button>
+    </div>
+  );
+}
+
 function CallbackHint({ prefix }: { prefix: string }) {
   if (!prefix) return null;
   return (

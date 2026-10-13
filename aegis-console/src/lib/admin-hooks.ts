@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { evictAvatarCache } from "@/components/ui/avatar";
 import * as appOAuth from "@/lib/api/app-oauth";
+import * as authProtocol from "@/lib/api/app-auth-protocol";
 import * as database from "@/lib/api/database";
 import * as reports from "@/lib/api/reports";
 import * as risk from "@/lib/api/risk";
@@ -3070,6 +3071,36 @@ export function useTestAppOAuthProviderMutation(appKey?: string | null) {
   return useMutation({
     mutationFn: (provider: string) =>
       appOAuth.testAppOAuthProvider(token as string, appKey as string, provider)
+  });
+}
+
+/** 应用的接入策略。与「接入」页同一个缓存键，两处改动互相可见。 */
+export function useAppAuthProtocolQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: ["app-auth-protocol", token, appKey],
+    queryFn: () => authProtocol.getAuthProtocol(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+/**
+ * 把「第三方」加进登录方式。
+ *
+ * 渠道配好了、登录方式里却没有 oauth 时，/config 不下发任何渠道，客户端一个入口都不显示，
+ * 而第三方登录页上看起来一切正常。只提交 loginMethods：后端按字段合并，其余策略不动。
+ */
+export function useEnableOAuthLoginMethodMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (current: string[]) =>
+      authProtocol.updateAuthProtocol(token as string, appKey as string, {
+        loginMethods: current.includes("oauth") ? current : [...current, "oauth"]
+      }),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["app-auth-protocol"] });
+    }
   });
 }
 
