@@ -33,6 +33,25 @@ func (h *Handler) WebSocket(c *gin.Context) {
 	}
 }
 
+// AdminOnlineLive 实时在线统计的加密长连接，协议见 docs/online-live.md。
+//
+// 走 adminSystem 组：AdminAccess 中间件已经用子协议里的令牌校验过会话与
+// system:admin:manage 权限，这里只负责升级与移交。
+func (h *Handler) AdminOnlineLive(c *gin.Context) {
+	if h.onlineLive == nil {
+		response.Error(c, http.StatusServiceUnavailable, 50300, "实时在线统计暂不可用")
+		return
+	}
+	session, ok := adminAccessSession(c)
+	if !ok || session.AdminID <= 0 {
+		response.Error(c, http.StatusUnauthorized, 40100, "管理员会话无效")
+		return
+	}
+	if err := h.onlineLive.Serve(c.Writer, c.Request, session); err != nil {
+		c.Error(err) //nolint:errcheck // gorilla 可能已写入 HTTP 响应
+	}
+}
+
 func (h *Handler) AdminOnlineStats(c *gin.Context) {
 	stats, err := h.realtime.OnlineStats(c.Request.Context())
 	if err != nil {

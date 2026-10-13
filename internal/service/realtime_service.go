@@ -48,6 +48,7 @@ type RealtimeService struct {
 	admin       *AdminService
 	repository  *redisrepo.RealtimeRepository
 	identities  *pgrepo.Repository
+	location    *LocationService
 	natsConn    *nats.Conn
 	serverID    string
 	upgrader    websocket.Upgrader
@@ -59,8 +60,11 @@ type RealtimeService struct {
 
 	mu      sync.RWMutex
 	clients map[int64]map[int64]map[string]*realtimeClient
-	sub     *nats.Subscription
+	subs    []*nats.Subscription
 	stopCh  chan struct{}
+
+	listenerMu        sync.RWMutex
+	presenceListeners []func(realtimedomain.PresenceEvent)
 }
 
 type realtimeClient struct {
@@ -72,7 +76,15 @@ type realtimeClient struct {
 	connectedAt  time.Time
 	conn         *websocket.Conn
 	send         chan []byte
+	// presence 建连时组装好的在线记录（含设备与地区），上下线事件也从它取字段
+	presence  realtimedomain.PresenceConnection
+	closeOnce sync.Once
 }
+
+// 实时连接被服务端主动断开时的关闭码（4000-4999 为应用自定义区间）。
+const (
+	realtimeCloseSessionRevoked = 4001
+)
 
 func NewRealtimeService(log *zap.Logger, auth *AuthService, repository *redisrepo.RealtimeRepository, natsConn *nats.Conn, allowedOrigins []string) (*RealtimeService, error) {
 	if log == nil {
@@ -136,8 +148,10 @@ func (s *RealtimeService) AuthenticateRequest(ctx context.Context, req *http.Req
 		access, adminErr := s.admin.ValidateAccessToken(ctx, token)
 		if adminErr == nil && access != nil {
 			return &authdomain.Session{
-				AppID:  0, // 管理员连接标识
-				UserID: access.AdminID,
+				AppID:   0, // 管理员连接标识
+				UserID:  access.AdminID,
+				Account: access.Account,
+				TokenID: access.TokenID,
 			}, token, nil
 		}
 	}
@@ -213,6 +227,122 @@ func (s *RealtimeService) SetIdentityRepository(pg *pgrepo.Repository) {
 	s.identities = pg
 }
 
+// SetLocationService 注入 IP 归属地解析：在线记录里的国家 / 省份 / 城市
+// 在建连时取一次，只读本地 IP 库与缓存，不为建连发远程请求。
+func (s *RealtimeService) SetLocationService(location *LocationService) {
+	if s == nil {
+		return
+	}
+	s.location = location
+}
+
+// ServerID 本实例的接入节点标识。
+func (s *RealtimeService) ServerID() string {
+	if s == nil {
+		return ""
+	}
+	return s.serverID
+}
+
+// Repository 在线记录仓储，供在线统计推送读取。
+func (s *RealtimeService) Repository() *redisrepo.RealtimeRepository {
+	if s == nil {
+		return nil
+	}
+	return s.repository
+}
+
+// OnPresence 订阅全集群的上线 / 下线事件（本实例与其他实例产生的都会收到）。
+func (s *RealtimeService) OnPresence(listener func(realtimedomain.PresenceEvent)) {
+	if s == nil || listener == nil {
+		return
+	}
+	s.listenerMu.Lock()
+	s.presenceListeners = append(s.presenceListeners, listener)
+	s.listenerMu.Unlock()
+}
+
+// DisconnectUser 断开某用户在某应用下的全部实时连接（所有实例）。
+//
+// 撤销会话只让令牌失效，已经建立的 WebSocket 不会因此断开 —— 旧实现里被
+// 强制下线的用户会一直挂在在线列表上，直到心跳超时。appID 为 0 时断开的是管理员。
+func (s *RealtimeService) DisconnectUser(ctx context.Context, appID int64, userID int64) {
+	if s == nil {
+		return
+	}
+	payload, err := json.Marshal(realtimeDisconnect{AppID: appID, UserID: userID})
+	if err != nil {
+		return
+	}
+	if s.natsConn != nil && s.natsConn.IsConnected() {
+		if err := s.natsConn.Publish(event.SubjectRealtimeDisconnect, payload); err == nil {
+			return
+		}
+	}
+	s.disconnectLocal(appID, userID)
+	_ = ctx
+}
+
+type realtimeDisconnect struct {
+	AppID  int64 `json:"appid"`
+	UserID int64 `json:"userId"`
+}
+
+func (s *RealtimeService) disconnectLocal(appID int64, userID int64) {
+	s.mu.RLock()
+	var targets []*realtimeClient
+	for _, client := range s.clients[appID][userID] {
+		targets = append(targets, client)
+	}
+	s.mu.RUnlock()
+	for _, client := range targets {
+		client.closeWith(realtimeCloseSessionRevoked, "session revoked")
+	}
+}
+
+func (s *RealtimeService) publishPresence(evt realtimedomain.PresenceEvent) {
+	payload, err := json.Marshal(evt)
+	if err != nil {
+		return
+	}
+	if s.natsConn != nil && s.natsConn.IsConnected() {
+		if err := s.natsConn.Publish(event.SubjectRealtimePresence, payload); err == nil {
+			return
+		}
+	}
+	s.emitPresence(evt)
+}
+
+func (s *RealtimeService) emitPresence(evt realtimedomain.PresenceEvent) {
+	s.listenerMu.RLock()
+	listeners := s.presenceListeners
+	s.listenerMu.RUnlock()
+	for _, listener := range listeners {
+		listener(evt)
+	}
+}
+
+func presenceEvent(kind string, conn realtimedomain.PresenceConnection, at time.Time) realtimedomain.PresenceEvent {
+	evt := realtimedomain.PresenceEvent{
+		Kind:         kind,
+		AppID:        conn.AppID,
+		UserID:       conn.UserID,
+		Account:      conn.Account,
+		ConnectionID: conn.ConnectionID,
+		IP:           conn.IP,
+		Location:     conn.Location(),
+		Platform:     conn.Platform,
+		DeviceName:   conn.DeviceName,
+		ServerID:     conn.ServerID,
+		At:           at.UTC(),
+		Admin:        conn.AppID == 0,
+	}
+	if kind == "offline" && !conn.ConnectedAt.IsZero() {
+		evt.Duration = int64(at.Sub(conn.ConnectedAt).Seconds())
+	}
+	return evt
+}
+
 // FillOnlineUserIdentities 给在线用户补上账号与昵称，原地修改。
 func (s *RealtimeService) FillOnlineUserIdentities(ctx context.Context, appID int64, items []realtimedomain.AppOnlineUser) error {
 	if s == nil || s.identities == nil || len(items) == 0 {
@@ -237,8 +367,8 @@ func (s *RealtimeService) Close(ctx context.Context) {
 	default:
 		close(s.stopCh)
 	}
-	if s.sub != nil {
-		_ = s.sub.Unsubscribe()
+	for _, sub := range s.subs {
+		_ = sub.Unsubscribe()
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -258,35 +388,55 @@ func (s *RealtimeService) subscribe() error {
 	if s.natsConn == nil {
 		return nil
 	}
-	// 订阅用户级事件
-	sub, err := s.natsConn.Subscribe(event.SubjectRealtimeUserPrefix+".*.*", func(msg *nats.Msg) {
-		appID, userID, ok := event.MatchRealtimeUserSubject(msg.Subject)
-		if !ok {
-			return
-		}
-		s.dispatchLocal(appID, userID, msg.Data)
-	})
-	if err != nil {
-		return err
+	handlers := []struct {
+		subject string
+		handle  func(*nats.Msg)
+	}{
+		// 用户级事件
+		{event.SubjectRealtimeUserPrefix + ".*.*", func(msg *nats.Msg) {
+			appID, userID, ok := event.MatchRealtimeUserSubject(msg.Subject)
+			if !ok {
+				return
+			}
+			s.dispatchLocal(appID, userID, msg.Data)
+		}},
+		// 应用级广播事件（应用公告变更等），转发给该应用下的所有连接
+		{event.SubjectRealtimeAppPrefix + ".*", func(msg *nats.Msg) {
+			appID, ok := event.MatchRealtimeAppSubject(msg.Subject)
+			if !ok {
+				return
+			}
+			s.dispatchApp(appID, msg.Data)
+		}},
+		// 全局广播事件（系统公告等），转发给所有已连接客户端
+		{event.SubjectSystemAnnouncement, func(msg *nats.Msg) {
+			s.broadcastAll(msg.Data)
+		}},
+		// 上线 / 下线事件：交给在线统计推送
+		{event.SubjectRealtimePresence, func(msg *nats.Msg) {
+			var evt realtimedomain.PresenceEvent
+			if err := json.Unmarshal(msg.Data, &evt); err != nil {
+				return
+			}
+			s.emitPresence(evt)
+		}},
+		// 强制下线：断开本实例上该用户的连接
+		{event.SubjectRealtimeDisconnect, func(msg *nats.Msg) {
+			var cmd realtimeDisconnect
+			if err := json.Unmarshal(msg.Data, &cmd); err != nil {
+				return
+			}
+			s.disconnectLocal(cmd.AppID, cmd.UserID)
+		}},
 	}
-	s.sub = sub
-
-	// 订阅应用级广播事件（应用公告变更等），转发给该应用下的所有连接
-	if _, err := s.natsConn.Subscribe(event.SubjectRealtimeAppPrefix+".*", func(msg *nats.Msg) {
-		appID, ok := event.MatchRealtimeAppSubject(msg.Subject)
-		if !ok {
-			return
+	for _, h := range handlers {
+		sub, err := s.natsConn.Subscribe(h.subject, h.handle)
+		if err != nil {
+			return err
 		}
-		s.dispatchApp(appID, msg.Data)
-	}); err != nil {
-		return err
+		s.subs = append(s.subs, sub)
 	}
-
-	// 订阅全局广播事件（系统公告等），转发给所有已连接客户端
-	_, err = s.natsConn.Subscribe(event.SubjectSystemAnnouncement, func(msg *nats.Msg) {
-		s.broadcastAll(msg.Data)
-	})
-	return err
+	return nil
 }
 
 // broadcastAll 向所有已连接的 WebSocket 客户端广播消息
@@ -325,11 +475,13 @@ func (s *RealtimeService) Upgrade(w http.ResponseWriter, req *http.Request, sess
 		conn:         conn,
 		send:         make(chan []byte, s.sendBuffer),
 	}
+	client.presence = s.buildPresence(client, now)
 	if err := s.touchPresence(req.Context(), client, now); err != nil {
 		_ = conn.Close()
 		return err
 	}
 	s.registerLocal(client)
+	s.publishPresence(presenceEvent("online", client.presence, now))
 	client.enqueue(realtimedomain.Event{
 		ID:        uuid.NewString(),
 		Type:      "system.welcome",
@@ -347,32 +499,87 @@ func (s *RealtimeService) Upgrade(w http.ResponseWriter, req *http.Request, sess
 	return nil
 }
 
+// buildPresence 组装一条连接的在线记录：身份与设备取自会话，地区取自 IP 库。
+func (s *RealtimeService) buildPresence(client *realtimeClient, at time.Time) realtimedomain.PresenceConnection {
+	session := client.session
+	conn := realtimedomain.PresenceConnection{
+		ConnectionID: client.connectionID,
+		AppID:        session.AppID,
+		UserID:       session.UserID,
+		Account:      session.Account,
+		TokenID:      session.TokenID,
+		DeviceID:     session.DeviceID,
+		DeviceName:   session.Device,
+		DeviceModel:  session.DeviceModel,
+		Platform:     session.DevicePlatform,
+		IP:           client.ip,
+		UserAgent:    client.userAgent,
+		ConnectedAt:  client.connectedAt,
+		LastSeenAt:   at.UTC(),
+		ServerID:     s.serverID,
+	}
+	if extra := session.DeviceExtra; extra != nil {
+		conn.OS = extra.OS
+		conn.OSVersion = extra.OSVersion
+		conn.AppVersion = extra.AppVersion
+	}
+	if strings.TrimSpace(conn.UserAgent) == "" && client.conn != nil {
+		conn.UserAgent = client.conn.RemoteAddr().String()
+	}
+	if conn.Platform == "" {
+		conn.Platform = platformFromUserAgent(conn.UserAgent)
+	}
+	if conn.OS == "" {
+		conn.OS = conn.Platform
+	}
+	if s.location != nil && conn.IP != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		if loc, ok := s.location.GetCached(ctx, conn.IP); ok {
+			conn.Country, conn.Region, conn.City, conn.ISP = loc.Country, loc.Region, loc.City, loc.ISP
+			if loc.IsPrivate && conn.Country == "" {
+				conn.Country = "内网"
+			}
+		} else {
+			// 缓存与本地库都没有：后台补查一次，下次建连就有了
+			s.location.RefreshAsync(conn.IP)
+		}
+		cancel()
+	}
+	return conn
+}
+
+// platformFromUserAgent 会话没有上报平台时，从 UA 粗分一个：控制台的浏览器、
+// 旧版 SDK 都属于这种情况。只分大类，细节交给前端解析 UA。
+func platformFromUserAgent(ua string) string {
+	lower := strings.ToLower(ua)
+	switch {
+	case lower == "":
+		return ""
+	case strings.Contains(lower, "harmonyos") || strings.Contains(lower, "openharmony"):
+		return "HarmonyOS"
+	case strings.Contains(lower, "android") || strings.Contains(lower, "okhttp") || strings.Contains(lower, "dalvik"):
+		return "Android"
+	case strings.Contains(lower, "iphone") || strings.Contains(lower, "ipad") || strings.Contains(lower, "cfnetwork") || strings.Contains(lower, "darwin"):
+		return "iOS"
+	case strings.Contains(lower, "windows"):
+		return "Windows"
+	case strings.Contains(lower, "mac os") || strings.Contains(lower, "macintosh"):
+		return "macOS"
+	case strings.Contains(lower, "linux") || strings.Contains(lower, "x11"):
+		return "Linux"
+	case strings.Contains(lower, "dart/"):
+		return "Flutter"
+	default:
+		return "Other"
+	}
+}
+
 func (s *RealtimeService) touchPresence(ctx context.Context, client *realtimeClient, lastSeen time.Time) error {
 	if s.repository == nil {
 		return nil
 	}
-	// 管理员连接（AppID=0）不记录在线状态
-	if client.session.AppID == 0 {
-		return nil
-	}
-	conn := realtimedomain.PresenceConnection{
-		ConnectionID: client.connectionID,
-		AppID:        client.session.AppID,
-		UserID:       client.session.UserID,
-		TokenID:      client.session.TokenID,
-		DeviceID:     client.session.DeviceID,
-		IP:           client.ip,
-		UserAgent:    client.userAgent,
-		ConnectedAt:  client.connectedAt,
-		LastSeenAt:   lastSeen.UTC(),
-		ServerID:     s.serverID,
-	}
-	if strings.TrimSpace(conn.UserAgent) == "" {
-		conn.UserAgent = client.conn.Subprotocol()
-	}
-	if strings.TrimSpace(conn.UserAgent) == "" {
-		conn.UserAgent = client.conn.RemoteAddr().String()
-	}
+	conn := client.presence
+	conn.LastSeenAt = lastSeen.UTC()
 	return s.repository.UpsertConnection(ctx, conn, s.presenceTTL)
 }
 
@@ -487,10 +694,16 @@ func (s *RealtimeService) presenceJanitor() {
 				continue
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			if err := s.repository.CleanupExpired(ctx); err != nil {
+			removed, err := s.repository.CleanupExpired(ctx)
+			if err != nil {
 				s.log.Debug("cleanup realtime presence failed", zap.Error(err))
 			}
 			cancel()
+			// 被清掉的是没有正常关闭的连接（实例崩溃、断网），补发下线事件；
+			// 下线时刻按最后一次心跳算，而不是清理的这一刻。
+			for _, conn := range removed {
+				s.publishPresence(presenceEvent("offline", conn, conn.LastSeenAt))
+			}
 		}
 	}
 }
@@ -506,6 +719,14 @@ func (c *realtimeClient) enqueue(event realtimedomain.Event) {
 	}
 }
 
+// closeWith 发送关闭帧后断开；读泵随之退出并走正常的下线流程。
+func (c *realtimeClient) closeWith(code int, reason string) {
+	c.closeOnce.Do(func() {
+		_ = c.conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(code, reason), time.Now().Add(time.Second))
+		_ = c.conn.Close()
+	})
+}
+
 func (c *realtimeClient) readPump() {
 	defer func() {
 		c.service.unregisterLocal(c)
@@ -513,6 +734,7 @@ func (c *realtimeClient) readPump() {
 		c.service.removePresence(ctx, c)
 		cancel()
 		_ = c.conn.Close()
+		c.service.publishPresence(presenceEvent("offline", c.presence, time.Now().UTC()))
 	}()
 	_ = c.conn.SetReadDeadline(time.Now().Add(c.service.pongWait))
 	c.conn.SetPongHandler(func(_ string) error {
@@ -580,6 +802,11 @@ func (c *realtimeClient) writePump() {
 			return
 		}
 	}
+}
+
+// ExtractRealtimeToken 取 WebSocket 握手里的访问令牌（Authorization 头或 aegis.jwt. 子协议）。
+func ExtractRealtimeToken(req *http.Request) string {
+	return extractRealtimeToken(req)
 }
 
 func extractRealtimeToken(req *http.Request) string {

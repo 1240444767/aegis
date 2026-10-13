@@ -17,6 +17,10 @@ const (
 	SubjectRealtimeUserPrefix      = "realtime.user"
 	// SubjectRealtimeAppPrefix 应用级广播：该应用下所有在线连接都会收到（如应用公告变更）
 	SubjectRealtimeAppPrefix = "realtime.app"
+	// SubjectRealtimePresence 连接上线 / 下线事件，各实例的在线统计推送据此生成动态
+	SubjectRealtimePresence = "realtime.presence"
+	// SubjectRealtimeDisconnect 要求所有实例断开某用户的实时连接（强制下线后）
+	SubjectRealtimeDisconnect = "realtime.control.disconnect"
 
 	// 系统公告事件
 	SubjectSystemAnnouncement = "system.announcement"

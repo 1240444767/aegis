@@ -44,6 +44,7 @@ type APIApp struct {
 	JetStream       nats.JetStreamContext
 	Temporal        client.Client
 	Realtime        *service.RealtimeService
+	OnlineLive      *service.OnlineLiveHub
 	Payment         *service.PaymentService
 	AutoSign        *service.AutoSignService
 	SessionMgmt     *service.SessionMgmtService
@@ -587,6 +588,10 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	}
 	logClientIPResolution(log, clientIPResolver)
 
+	// 在线记录带上 IP 归属地（建连时只读本地库与缓存）
+	realtimeService.SetLocationService(locationService)
+	// 管理端实时在线统计：加密长连接推送快照、曲线与上下线动态
+	onlineLiveHub := service.NewOnlineLiveHub(log, realtimeService, adminService, appService, pg, cfg.CORS.AllowOrigins)
 	router, err := httptransport.NewRouter(httptransport.RouterDeps{
 		Auth:               authService,
 		Admin:              adminService,
@@ -646,6 +651,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AdminInbox:   adminInboxService,
 		Email:        emailService,
 		Realtime:     realtimeService,
+		OnlineLive:   onlineLiveHub,
 
 		Storage:         storageService,
 		StorageResource: storageResourceService,
@@ -710,6 +716,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		JetStream:          js,
 		Temporal:           temporalClient,
 		Realtime:           realtimeService,
+		OnlineLive:         onlineLiveHub,
 		Payment:            paymentService,
 		AutoSign:           autoSignService,
 		SessionMgmt:        sessionMgmtService,
@@ -794,6 +801,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Server != nil {
 		_ = a.Server.Shutdown(ctx)
+	}
+	if a.OnlineLive != nil {
+		a.OnlineLive.Close()
 	}
 	if a.Realtime != nil {
 		a.Realtime.Close(ctx)

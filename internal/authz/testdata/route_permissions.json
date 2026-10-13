@@ -218,6 +218,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/system/online/live",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/system/online/stats",
     "permission": "system:admin:manage",
     "appScoped": false,

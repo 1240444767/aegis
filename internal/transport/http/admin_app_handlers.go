@@ -859,6 +859,8 @@ func (h *Handler) AdminRevokeUserSessions(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	// 令牌失效不会断开已建立的实时连接，这里一并断开，在线列表随即更新
+	h.realtime.DisconnectUser(c.Request.Context(), appID, userID)
 	response.Success(c, 200, "用户会话已全部踢出", nil)
 }
 

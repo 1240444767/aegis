@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"strings"
 
 	realtimedomain "aegis/internal/domain/realtime"
 )
@@ -63,3 +64,36 @@ WHERE u.appid = $1 AND u.id = ANY($2)`, appID, ids)
 	}
 	return nil
 }
+
+// MatchOnlineUsers 在给定的在线用户里按账号、昵称（不区分大小写的包含）或用户 ID（精确）筛人。
+//
+// 在线集合在 Redis，账号与昵称在 Postgres，关键字搜索只能两边各出一半：
+// Redis 给出候选 ID，这里一次查询筛完，返回命中的 ID 集合。
+func (r *Repository) MatchOnlineUsers(ctx context.Context, appID int64, ids []int64, keyword string) (map[int64]struct{}, error) {
+	found := make(map[int64]struct{})
+	keyword = strings.TrimSpace(keyword)
+	if len(ids) == 0 || keyword == "" {
+		return found, nil
+	}
+	pattern := "%" + likeEscaper.Replace(keyword) + "%"
+	rows, err := r.pool.Query(ctx, `
+SELECT u.id
+FROM users u
+LEFT JOIN user_profiles p ON p.user_id = u.id
+WHERE u.appid = $1 AND u.id = ANY($2)
+  AND (u.account ILIKE $3 ESCAPE '\' OR COALESCE(p.nickname, '') ILIKE $3 ESCAPE '\' OR u.id::text = $4)`, appID, ids, pattern, keyword)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		found[id] = struct{}{}
+	}
+	return found, rows.Err()
+}
+
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)

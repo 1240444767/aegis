@@ -337,6 +337,7 @@ GET	/api/admin/system/memory/pools	AdminMemoryPoolStats
 GET	/api/admin/system/memory/snapshot	AdminMemorySnapshot
 GET	/api/admin/system/online/apps/:appkey	AdminAppOnlineStats
 GET	/api/admin/system/online/apps/:appkey/users	AdminAppOnlineUsers
+GET	/api/admin/system/online/live	AdminOnlineLive
 GET	/api/admin/system/online/stats	AdminOnlineStats
 GET	/api/admin/system/org-approvals/pending	ListMyPendingApprovals
 GET	/api/admin/system/org-invitations	ListMyInvitations
