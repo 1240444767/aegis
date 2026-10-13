@@ -51,7 +51,7 @@ Authorization: Bearer <accessToken>
 - `40000`: 请求参数错误
 - `40001`: 不支持的 OAuth2 提供商
 - `40002`: OAuth2 状态无效或已过期
-- `40004`: `providerUserId` 不能为空
+- `40004`: 缺少第三方授权凭据（`accessToken`，微信另需 openid）
 - `40006`: 新密码不能与当前密码相同
 - `40010`: OAuth2 提供商未完成配置
 - `40013`: OAuth2 回调参数不完整
@@ -244,26 +244,22 @@ Authorization: Bearer <accessToken>
 ```json
 {
   "appid": 10000,
-  "provider": "wechat",
-  "providerUserId": "openid_xxx",
-  "unionId": "union_xxx",
-  "nickname": "张三",
-  "avatar": "https://...",
-  "email": "demo@example.com",
+  "provider": "qq",
   "accessToken": "provider_access_token",
-  "refreshToken": "provider_refresh_token",
-  "markcode": "device-001",
-  "rawProfile": {
-    "gender": 1
-  }
+  "openId": "openid_xxx",
+  "markcode": "device-001"
 }
 ```
 
 说明：
 
-- 适合移动端已经自行完成三方授权的场景
-- `providerUserId` 必填
-- 服务端会基于 `(appid, provider, providerUserId)` 查找或创建本地账号
+- 适合移动端已经用官方 SDK 自行完成三方授权的场景
+- `accessToken` 必填：服务端拿它向服务商查回身份（QQ 还会核对令牌签给本应用），
+  客户端自报的 `providerUserId`、昵称、头像不再采信；`openId`（或老字段 `providerUserId`）只用来核对，
+  微信、微博必填
+- 令牌无效、过期、不属于本应用或与 `openId` 不符时返回 `40380`
+- 服务端基于核实出的 `(appid, provider, openid)` 查找本地账号，未绑定时按渠道 `allowRegister` 建号
+- 让用户在「快速注册」与「绑定已有账号」之间选择的流程只在 v1 网关提供，见 `app-integration.md` 1.7
 
 ### 4.6 二次认证校验
 

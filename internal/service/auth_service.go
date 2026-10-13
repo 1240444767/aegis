@@ -703,32 +703,6 @@ func (s *AuthService) HandleOAuthCallback(ctx context.Context, provider, code, s
 	return &OAuthCallbackOutcome{Purpose: oauthPurposeLogin, Provider: resolved.Provider, Login: login}, nil
 }
 
-func (s *AuthService) MobileOAuthLogin(ctx context.Context, appID int64, provider string, profile authdomain.ProviderProfile, deviceID, device, ip, userAgent string) (*authdomain.LoginResult, error) {
-	if profile.ProviderUserID == "" {
-		return nil, apperrors.New(40004, http.StatusBadRequest, "providerUserId 不能为空")
-	}
-	_, resolved, err := s.resolveOAuthProvider(ctx, appID, provider)
-	if err != nil {
-		return nil, err
-	}
-	if !resolved.AllowLogin {
-		return nil, apperrors.New(40391, http.StatusForbidden, "该渠道仅开放账号绑定，未开放直接登录")
-	}
-	var app *appdomain.App
-	if s.app != nil {
-		loaded, err := s.app.EnsureLoginAllowed(ctx, appID)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.validateLoginPolicy(loaded, deviceID, device); err != nil {
-			return nil, err
-		}
-		app = loaded
-	}
-	profile.Provider = resolved.Provider
-	return s.loginWithOAuthProfile(ctx, app, appID, profile, deviceID, device, ip, userAgent, "oauth_mobile", resolved.AllowRegister)
-}
-
 // bindOAuthProfile 把第三方身份挂到已登录账号上。
 //
 // 冲突处理：同一 App 内一个第三方账号只能绑定一个用户 ——
@@ -746,7 +720,16 @@ func (s *AuthService) bindOAuthProfile(ctx context.Context, appID, userID int64,
 		return nil, err
 	}
 	if boundUserID > 0 && boundUserID != userID {
-		return nil, apperrors.New(40950, http.StatusConflict, "该第三方账号已绑定其他账号，请先解绑")
+		return nil, apperrors.New(errCodeOAuthIdentityTaken, http.StatusConflict, "该第三方账号已绑定其他账号，请先解绑")
+	}
+	// 同一渠道一个账号只挂一个第三方身份：表的唯一键管不到这一侧，
+	// 不拦的话换个 QQ 再绑一次，账号下就有两个 QQ，解绑、展示都对不上
+	existing, err := s.pg.FindUserOAuthBinding(ctx, appID, userID, profile.Provider)
+	if err != nil {
+		return nil, err
+	}
+	if existing != "" && existing != profile.ProviderUserID {
+		return nil, apperrors.New(errCodeOAuthProviderBound, http.StatusConflict, "当前账号已绑定该渠道的其他账号，请先解绑")
 	}
 	if err := s.pg.UpsertOAuthBinding(ctx, appID, userID, profile); err != nil {
 		return nil, err
@@ -1015,31 +998,11 @@ func (s *AuthService) loginWithOAuthProfile(ctx context.Context, app *appdomain.
 			return nil, apperrors.New(40393, http.StatusForbidden,
 				"该第三方账号尚未绑定，且当前渠道未开放自动注册，请先用已有账号登录后绑定")
 		}
-		account := pgrepo.LegacyOAuthAccount(profile.Provider, profile.ProviderUserID)
-		user, err = s.pg.CreateUser(ctx, appID, account, "")
+		user, err = s.createOAuthUser(ctx, appID, profile, deviceID, device, ip, userAgent)
 		if err != nil {
 			return nil, err
 		}
-	}
-	inviteCode := ""
-	if existingProfile, profileErr := s.pg.GetUserProfileByUserID(ctx, user.ID); profileErr == nil && existingProfile != nil {
-		inviteCode = strings.TrimSpace(existingProfile.InviteCode)
-	}
-	if _, err := s.upsertUserProfileWithInviteCode(ctx, userdomain.Profile{
-		UserID:   user.ID,
-		Nickname: profile.Nickname,
-		// 这里的 avatar 在原生 exchange 那条链路上来自**客户端请求体**
-		// （不是服务端从 userinfo 拉的），因此必须过一道闸门：
-		// 不挡的话可以填成 `storage://3/别人的私有文件.pdf`，注册完
-		// 再从自己的头像地址上把它读出来。不合规就是没头像，
-		// 服务端会画一个默认的，不该为此打断一次登录。
-		Avatar:     SanitizeExternalAvatar(profile.Avatar),
-		Email:      profile.Email,
-		InviteCode: inviteCode,
-		Extra: map[string]any{
-			"provider": profile.Provider,
-		},
-	}); err != nil {
+	} else if err := s.fillOAuthProfileBlanks(ctx, user.ID, profile); err != nil {
 		return nil, err
 	}
 	if err := s.pg.UpsertOAuthBinding(ctx, appID, user.ID, profile); err != nil {

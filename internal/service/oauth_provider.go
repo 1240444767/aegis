@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -371,74 +372,212 @@ func lookupProfilePath(raw map[string]any, path string) string {
 	return scalarToString(current)
 }
 
+// QQ 互联用 access_token 反查身份与拉取资料的固定地址。
+const (
+	qqOpenIDURL   = "https://graph.qq.com/oauth2.0/me"
+	qqUserInfoURL = "https://graph.qq.com/user/get_user_info"
+	// qqErrNoUnionIDPermission 应用没有 unionid 接口权限（要向 QQ 互联单独申请）
+	qqErrNoUnionIDPermission = "100048"
+)
+
+// qqIdentity /oauth2.0/me 的结果。
+type qqIdentity struct {
+	ClientID string
+	OpenID   string
+	UnionID  string
+}
+
 func (p *OAuthProvider) fetchQQProfile(ctx context.Context, client *http.Client, profile authdomain.ProviderProfile) (authdomain.ProviderProfile, error) {
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://graph.qq.com/oauth2.0/me?fmt=json&access_token="+url.QueryEscape(profile.Tokens["access_token"]), nil)
+	accessToken := profile.Tokens["access_token"]
+	identity, err := p.fetchQQIdentity(ctx, client, accessToken, true)
 	if err != nil {
 		return profile, err
 	}
+	profile.ProviderUserID = identity.OpenID
+	profile.UnionID = identity.UnionID
+
+	// 身份到这里已经确定。资料只用来填昵称头像，拉不到（权限未开通、接口抖动）不该挡住登录
+	userInfoURL := strings.TrimSpace(p.cfg.UserInfoURL)
+	if userInfoURL == "" {
+		userInfoURL = qqUserInfoURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, userInfoURL, nil)
+	if err != nil {
+		return profile, nil
+	}
+	query := request.URL.Query()
+	query.Set("access_token", accessToken)
+	query.Set("oauth_consumer_key", identity.ClientID)
+	query.Set("openid", identity.OpenID)
+	request.URL.RawQuery = query.Encode()
 	response, err := client.Do(request)
 	if err != nil {
-		return profile, err
+		return profile, nil
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil || response.StatusCode >= http.StatusBadRequest {
+		return profile, nil
+	}
+	raw := map[string]any{}
+	if json.Unmarshal(body, &raw) != nil {
+		return profile, nil
+	}
+	if ret := firstString(raw, "ret"); ret != "" && ret != "0" {
+		return profile, nil
+	}
+	profile.Nickname = firstString(raw, "nickname")
+	profile.Avatar = firstString(raw, "figureurl_qq_2", "figureurl_qq_1", "figureurl_2", "figureurl_1")
+	profile.RawProfile = raw
+	return profile, nil
+}
+
+// fetchQQIdentity 用 access_token 反查 openid / unionid，并核对令牌是签给本应用的。
+//
+// openid 按应用隔离，别的应用签出的令牌查出来的是那个应用下的 openid；
+// 不核对 client_id，就等于接受任何 QQ 应用的令牌，校验形同虚设。
+// 应用没开通 unionid 权限时 QQ 报 100048，这时退回只取 openid。
+func (p *OAuthProvider) fetchQQIdentity(ctx context.Context, client *http.Client, accessToken string, withUnionID bool) (qqIdentity, error) {
+	query := url.Values{}
+	query.Set("access_token", accessToken)
+	query.Set("fmt", "json")
+	if withUnionID {
+		query.Set("unionid", "1")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, qqOpenIDURL+"?"+query.Encode(), nil)
+	if err != nil {
+		return qqIdentity{}, err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return profile, err
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
 	}
-	if response.StatusCode >= http.StatusBadRequest {
-		return profile, fmt.Errorf("qq openid fetch http %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	if response.StatusCode >= http.StatusInternalServerError {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
 	}
+	// 不带 fmt=json 时 QQ 回的是 callback( {...} ); 这种 JSONP，两种都兼容
 	text := string(body)
-	start := strings.Index(text, "{")
-	end := strings.LastIndex(text, "}")
-	if start == -1 || end == -1 || end <= start {
-		return profile, apperrors.New(50203, http.StatusBadGateway, "QQ openid 获取失败")
-	}
-	openResp := map[string]any{}
-	if err := json.Unmarshal([]byte(text[start:end+1]), &openResp); err != nil {
-		return profile, err
-	}
-	if ret := firstString(openResp, "ret"); ret != "" && ret != "0" {
-		return profile, apperrors.New(50203, http.StatusBadGateway, "QQ openid 获取失败")
-	}
-	openid := firstString(openResp, "openid")
-	if openid == "" {
-		return profile, apperrors.New(50203, http.StatusBadGateway, "QQ openid 获取失败")
-	}
-	request, err = http.NewRequestWithContext(ctx, http.MethodGet, p.cfg.UserInfoURL, nil)
-	if err != nil {
-		return profile, err
-	}
-	query := request.URL.Query()
-	query.Set("access_token", profile.Tokens["access_token"])
-	query.Set("oauth_consumer_key", p.cfg.ClientID)
-	query.Set("openid", openid)
-	request.URL.RawQuery = query.Encode()
-	response, err = client.Do(request)
-	if err != nil {
-		return profile, err
-	}
-	defer response.Body.Close()
-	body, err = io.ReadAll(response.Body)
-	if err != nil {
-		return profile, err
-	}
-	if response.StatusCode >= http.StatusBadRequest {
-		return profile, fmt.Errorf("qq profile fetch http %d: %s", response.StatusCode, strings.TrimSpace(string(body)))
+	begin := strings.Index(text, "{")
+	finish := strings.LastIndex(text, "}")
+	if begin == -1 || finish <= begin {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
 	}
 	raw := map[string]any{}
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return profile, err
+	if err := json.Unmarshal([]byte(text[begin:finish+1]), &raw); err != nil {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
 	}
-	if ret := firstString(raw, "ret"); ret != "" && ret != "0" {
-		return profile, apperrors.New(50203, http.StatusBadGateway, "QQ 用户信息获取失败")
+	if code := firstString(raw, "error"); code != "" && code != "0" {
+		if withUnionID && code == qqErrNoUnionIDPermission {
+			return p.fetchQQIdentity(ctx, client, accessToken, false)
+		}
+		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权已失效，请重新授权")
 	}
-	profile.ProviderUserID = openid
-	profile.UnionID = firstString(openResp, "unionid")
-	profile.Nickname = firstString(raw, "nickname")
-	profile.Avatar = firstString(raw, "figureurl_qq_2", "figureurl_2", "figureurl_qq_1")
-	profile.RawProfile = raw
+	identity := qqIdentity{
+		ClientID: firstString(raw, "client_id"),
+		OpenID:   firstString(raw, "openid"),
+		UnionID:  firstString(raw, "unionid"),
+	}
+	if identity.OpenID == "" {
+		return qqIdentity{}, apperrors.New(50203, http.StatusBadGateway, "QQ 身份校验失败，请稍后重试")
+	}
+	if expected := strings.TrimSpace(p.cfg.ClientID); expected != "" && identity.ClientID != expected {
+		return qqIdentity{}, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "QQ 授权不属于本应用，请重新授权")
+	}
+	if identity.ClientID == "" {
+		identity.ClientID = p.cfg.ClientID
+	}
+	return identity, nil
+}
+
+// ProfileFromAccessToken 用原生 SDK 在端上拿到的 access_token，由服务端向服务商换回第三方身份。
+//
+// 客户端自报的 openid、昵称一概不作数，身份只认服务端拿令牌查回来的结果。
+// openID 只有微信、微博需要：它们的资料接口按 openid / uid 查，令牌本身反查不出是谁。
+// 客户端传了 openID 而与查回来的不一致时拒绝，免得拿 A 的令牌冒充 B。
+func (p *OAuthProvider) ProfileFromAccessToken(ctx context.Context, client *http.Client, accessToken, openID string) (authdomain.ProviderProfile, error) {
+	accessToken = strings.TrimSpace(accessToken)
+	openID = strings.TrimSpace(openID)
+	if accessToken == "" {
+		return authdomain.ProviderProfile{}, apperrors.New(40004, http.StatusBadRequest, "缺少第三方授权凭据 accessToken")
+	}
+	base := authdomain.ProviderProfile{
+		Provider: p.cfg.Name,
+		Tokens:   map[string]string{"access_token": accessToken},
+	}
+	var (
+		profile authdomain.ProviderProfile
+		err     error
+	)
+	switch p.kind() {
+	case oauthdomain.KindQQ:
+		profile, err = p.fetchQQProfile(ctx, client, base)
+	case oauthdomain.KindWechat:
+		if openID == "" {
+			return base, apperrors.New(40004, http.StatusBadRequest, "微信登录需要同时提供 openid")
+		}
+		profile, err = p.fetchWechatProfile(ctx, client, base, openID, "")
+	case oauthdomain.KindWeibo:
+		var uid string
+		uid, err = p.fetchWeiboTokenUID(ctx, client, accessToken)
+		if err == nil {
+			profile, err = p.fetchWeiboProfile(ctx, client, base, uid)
+		}
+	case oauthdomain.KindGitHub:
+		profile, err = p.fetchGitHubProfile(ctx, client, base)
+	default:
+		profile, err = p.fetchGenericProfile(ctx, client, base)
+	}
+	if err != nil {
+		var appErr *apperrors.AppError
+		if errors.As(err, &appErr) {
+			return profile, err
+		}
+		return profile, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "第三方授权校验失败，请重新授权")
+	}
+	if profile.ProviderUserID == "" {
+		return profile, apperrors.New(50202, http.StatusBadGateway, "第三方用户信息缺少唯一标识")
+	}
+	if openID != "" && openID != profile.ProviderUserID {
+		return profile, apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "第三方授权与账号不一致，请重新授权")
+	}
 	return profile, nil
+}
+
+// fetchWeiboTokenUID 微博的令牌自省：查出令牌属于哪个 uid，并核对是签给本应用的。
+func (p *OAuthProvider) fetchWeiboTokenUID(ctx context.Context, client *http.Client, accessToken string) (string, error) {
+	form := url.Values{}
+	form.Set("access_token", accessToken)
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.weibo.com/oauth2/get_token_info", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	response, err := client.Do(request)
+	if err != nil {
+		return "", apperrors.New(50205, http.StatusBadGateway, "微博身份校验失败，请稍后重试")
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", apperrors.New(50205, http.StatusBadGateway, "微博身份校验失败，请稍后重试")
+	}
+	raw := map[string]any{}
+	if json.Unmarshal(body, &raw) != nil || response.StatusCode >= http.StatusBadRequest || firstString(raw, "error") != "" {
+		return "", apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "微博授权已失效，请重新授权")
+	}
+	if expected := strings.TrimSpace(p.cfg.ClientID); expected != "" && firstString(raw, "appkey") != expected {
+		return "", apperrors.New(errCodeOAuthTokenInvalid, http.StatusForbidden, "微博授权不属于本应用，请重新授权")
+	}
+	uid := firstString(raw, "uid")
+	if uid == "" {
+		return "", apperrors.New(50205, http.StatusBadGateway, "微博 uid 获取失败")
+	}
+	return uid, nil
 }
 
 func (p *OAuthProvider) fetchGitHubProfile(ctx context.Context, client *http.Client, profile authdomain.ProviderProfile) (authdomain.ProviderProfile, error) {

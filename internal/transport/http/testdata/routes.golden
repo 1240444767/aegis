@@ -1046,8 +1046,11 @@ POST	/api/v1/apps/:appkey/auth/email/code	AppEmailCode
 POST	/api/v1/apps/:appkey/auth/email/verify	AppEmailVerify
 POST	/api/v1/apps/:appkey/auth/login	AppLogin
 POST	/api/v1/apps/:appkey/auth/logout	AppLogout
+POST	/api/v1/apps/:appkey/auth/oauth/bind/token	OAuthBindToken
 POST	/api/v1/apps/:appkey/auth/oauth/bind/url	OAuthBindURL
 POST	/api/v1/apps/:appkey/auth/oauth/exchange	AppOAuthExchange
+POST	/api/v1/apps/:appkey/auth/oauth/link/bind	OAuthLinkBind
+POST	/api/v1/apps/:appkey/auth/oauth/link/register	AppOAuthLinkRegister
 POST	/api/v1/apps/:appkey/auth/oauth/url	AppOAuthURL
 POST	/api/v1/apps/:appkey/auth/passkey/login	AppPasskeyLogin
 POST	/api/v1/apps/:appkey/auth/passkey/options	AppPasskeyOptions

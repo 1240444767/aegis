@@ -321,6 +321,9 @@ func authResultMessage(result *authdomain.LoginResult, successMessage string) st
 	if result != nil && result.RequiresSecondFactor {
 		return "需要完成二次认证"
 	}
+	if result != nil && result.OAuthLink != nil {
+		return "该第三方账号尚未关联，请选择注册新账号或绑定已有账号"
+	}
 	return successMessage
 }
 

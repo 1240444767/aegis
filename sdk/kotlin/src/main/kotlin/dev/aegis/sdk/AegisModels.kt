@@ -239,10 +239,31 @@ data class AegisSession(
      * 注册不因邀请码失败而失败，`bound=false` 时 `message` 说明原因。
      */
     val invite: JsonElement? = null,
+    /**
+     * 原生第三方登录（[AegisAuthApi.oauthExchange] 带 `deferRegistration`）核实的身份还没关联账号。
+     * 此时没有令牌，让用户选「快速注册」或「绑定已有账号」。
+     */
+    val oauthLink: OAuthLinkTicket? = null,
 ) {
     /** 拿到可用令牌才算登录完成。 */
     val isAuthenticated: Boolean get() = accessToken.isNotEmpty()
 }
+
+/**
+ * 待关联的第三方身份。[ticket] 一次性、10 分钟有效；[nickname] / [avatar] 只用于展示。
+ * [allowRegister] / [allowBind] 是此刻两条路能不能走的结论，据此决定显示哪个按钮。
+ */
+@Serializable
+data class OAuthLinkTicket(
+    val ticket: String = "",
+    val provider: String = "",
+    val displayName: String = "",
+    val nickname: String = "",
+    val avatar: String = "",
+    val allowRegister: Boolean = false,
+    val allowBind: Boolean = false,
+    val expiresAt: String = "",
+)
 
 @Serializable
 data class SecondFactorChallenge(

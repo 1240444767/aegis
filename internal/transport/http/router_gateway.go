@@ -36,6 +36,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		// 因此 AppGateway 对该路径放行（详见 AppOAuthCallback 的注释）
 		appGateway.GET("/auth/oauth/callback", h.AppOAuthCallback)
 		appGateway.POST("/auth/oauth/exchange", h.AppOAuthExchange)
+		// 原生登录核实的身份还没关联账号时，用户选「快速注册」；选「绑定已有账号」走 Bearer 组的 link/bind
+		appGateway.POST("/auth/oauth/link/register", h.AppOAuthLinkRegister)
 		// 登录之前就要用的入口：应用由路径注入（见 injectGatewayAppID）
 		appGateway.POST("/auth/email/code", h.AppEmailCode)
 		appGateway.POST("/auth/email/verify", h.AppEmailVerify)
@@ -96,6 +98,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		// 已登录时忘了原密码：发起同一套找回流程，后续步骤走 /auth/password/recovery/*
 		appGatewayAuthed.POST("/me/password/recovery", h.AppMyPasswordRecoveryStart)
 		appGatewayAuthed.POST("/auth/oauth/bind/url", h.OAuthBindURL)
+		appGatewayAuthed.POST("/auth/oauth/bind/token", h.OAuthBindToken)
+		appGatewayAuthed.POST("/auth/oauth/link/bind", h.OAuthLinkBind)
 		appGatewayAuthed.GET("/auth/oauth/bindings", h.ListMyOAuthBindings)
 		appGatewayAuthed.DELETE("/auth/oauth/bindings/:provider", h.UnbindMyOAuthProvider)
 

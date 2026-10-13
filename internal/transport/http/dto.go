@@ -66,20 +66,35 @@ type OAuthAuthURLRequest struct {
 	MarkCode string `json:"markcode" form:"markcode"` // Deprecated
 }
 
+// OAuthMobileLoginRequest 原生 SDK 拿到第三方令牌后换会话。
+//
+// 身份只认服务端拿 accessToken 向服务商查回来的结果；providerUserId / openId 只用来核对，
+// unionId、nickname、avatar、email、rawProfile 这些客户端自报的资料已不再采信，保留字段只为兼容旧客户端。
 type OAuthMobileLoginRequest struct {
-	AppID          int64          `json:"appid" form:"appid" binding:"required"`
-	Provider       string         `json:"provider" form:"provider" binding:"required"`
-	ProviderUserID string         `json:"providerUserId" form:"providerUserId" binding:"required"`
-	UnionID        string         `json:"unionId" form:"unionId"`
-	Nickname       string         `json:"nickname" form:"nickname"`
-	Avatar         string         `json:"avatar" form:"avatar"`
-	Email          string         `json:"email" form:"email"`
-	AccessToken    string         `json:"accessToken" form:"accessToken"`
-	RefreshToken   string         `json:"refreshToken" form:"refreshToken"`
-	DeviceID       string         `json:"deviceId" form:"deviceId"`
-	Device         string         `json:"device" form:"device"`
-	MarkCode       string         `json:"markcode" form:"markcode"` // Deprecated
-	RawProfile     map[string]any `json:"rawProfile"`
+	AppID          int64  `json:"appid" form:"appid" binding:"required"`
+	Provider       string `json:"provider" form:"provider" binding:"required"`
+	AccessToken    string `json:"accessToken" form:"accessToken"`
+	OpenID         string `json:"openId" form:"openId"`
+	ProviderUserID string `json:"providerUserId" form:"providerUserId"`
+	// DeferRegistration 未绑定时返回关联凭证（oauthLink），由用户选择快速注册或绑定已有账号
+	DeferRegistration bool           `json:"deferRegistration" form:"deferRegistration"`
+	UnionID           string         `json:"unionId" form:"unionId"`
+	Nickname          string         `json:"nickname" form:"nickname"`
+	Avatar            string         `json:"avatar" form:"avatar"`
+	Email             string         `json:"email" form:"email"`
+	RefreshToken      string         `json:"refreshToken" form:"refreshToken"`
+	DeviceID          string         `json:"deviceId" form:"deviceId"`
+	Device            string         `json:"device" form:"device"`
+	MarkCode          string         `json:"markcode" form:"markcode"` // Deprecated
+	RawProfile        map[string]any `json:"rawProfile"`
+}
+
+// claimedOpenID 客户端声称的第三方 ID：新字段 openId 优先，兼容旧字段 providerUserId。
+func (r OAuthMobileLoginRequest) claimedOpenID() string {
+	if openID := strings.TrimSpace(r.OpenID); openID != "" {
+		return openID
+	}
+	return strings.TrimSpace(r.ProviderUserID)
 }
 
 type RefreshRequest struct {

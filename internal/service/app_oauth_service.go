@@ -699,6 +699,11 @@ func (s *AppOAuthService) platformProvider(appID int64, name string, order int) 
 	}
 }
 
+// AttachProviderMeta 给单条或几条绑定记录补上渠道展示名与图标（绑定接口的返回用）。
+func (s *AppOAuthService) AttachProviderMeta(ctx context.Context, appID int64, items []oauthdomain.Binding) {
+	s.attachProviderMeta(ctx, appID, items)
+}
+
 // attachProviderMeta 给绑定记录补上渠道展示名与图标，前端无需再查一次配置。
 func (s *AppOAuthService) attachProviderMeta(ctx context.Context, appID int64, items []oauthdomain.Binding) {
 	if len(items) == 0 {

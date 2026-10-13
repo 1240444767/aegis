@@ -115,4 +115,30 @@ type LoginResult struct {
 	// PasswordChangeRequired 该账号被标记为必须修改密码（如批量导入后设置统一密码），
 	// 客户端应在登录成功后立即引导强制改密
 	PasswordChangeRequired bool `json:"passwordChangeRequired,omitempty"`
+	// OAuthLink 第三方身份已核实但还没有关联任何账号（原生换会话时带了 deferRegistration）。
+	// 此时不签发令牌：客户端让用户选「快速注册」或「绑定已有账号」，再凭 Ticket 继续
+	OAuthLink *OAuthLinkTicket `json:"oauthLink,omitempty"`
+}
+
+// OAuthLinkTicket 待关联的第三方身份。
+//
+// 身份本身（openid、unionid、令牌）只存在服务端，客户端拿到的只有一次性凭证与展示用的昵称头像。
+// AllowRegister / AllowBind 是这一刻两条路能不能走的结论，客户端据此决定显示哪个按钮。
+type OAuthLinkTicket struct {
+	Ticket        string    `json:"ticket"`
+	Provider      string    `json:"provider"`
+	DisplayName   string    `json:"displayName,omitempty"`
+	Nickname      string    `json:"nickname,omitempty"`
+	Avatar        string    `json:"avatar,omitempty"`
+	AllowRegister bool      `json:"allowRegister"`
+	AllowBind     bool      `json:"allowBind"`
+	ExpiresAt     time.Time `json:"expiresAt"`
+}
+
+// OAuthLinkPayload 关联凭证在服务端保存的内容。
+type OAuthLinkPayload struct {
+	AppID         int64           `json:"appid"`
+	Profile       ProviderProfile `json:"profile"`
+	DeviceID      string          `json:"deviceId,omitempty"`
+	AllowRegister bool            `json:"allowRegister"`
 }

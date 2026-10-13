@@ -63,8 +63,11 @@ val profile = client.me.profile()
 | `POST` | `/auth/2fa/verify` | 完成二次认证挑战 |
 | `POST` | `/auth/oauth/url` | 取第三方登录授权地址 |
 | `GET` | `/auth/oauth/callback` | 第三方授权回跳落点；**免包装** |
-| `POST` | `/auth/oauth/exchange` | 原生 SDK 用第三方 profile 换会话 |
+| `POST` | `/auth/oauth/exchange` | 原生 SDK 用第三方 `accessToken` 换会话（服务端核实身份） |
+| `POST` | `/auth/oauth/link/register` | 第三方账号未关联时凭 `oauthLink` 凭证快速注册 |
+| `POST` | `/auth/oauth/link/bind` | 登录已有账号后凭 `oauthLink` 凭证绑定（Bearer） |
 | `POST` | `/auth/oauth/bind/url` | 取第三方账号绑定授权地址（Bearer） |
+| `POST` | `/auth/oauth/bind/token` | 用原生 SDK 拿到的 `accessToken` 绑定（Bearer） |
 | `GET` `DELETE` | `/auth/oauth/bindings[/{provider}]` | 查询 / 解绑第三方账号（Bearer） |
 | `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码 |
 | `POST` | `/auth/password/recovery/start`、`/status`、`/send`、`/verify`、`/complete` | 找回密码（见 1.10） |
@@ -487,14 +490,53 @@ POST /api/v1/apps/{appKey}/auth/login
 
 **原生 SDK**
 
-端上用微信 / QQ / Apple 等官方 SDK 完成授权，拿到 profile 后
+端上用 QQ 互联 / 微信等官方 SDK 完成授权，把拿到的 `accessToken` 交给
 `POST /auth/oauth/exchange` 换取 Aegis 会话。该路径受完整安全等级包装保护。
+
+```json
+{ "provider": "qq", "accessToken": "…", "openId": "…", "deferRegistration": true, "deviceId": "…" }
+```
+
+- **身份由服务端核实**：服务端拿 `accessToken` 向服务商查回身份，端上自报的昵称、头像、
+  `providerUserId` 一概不作数。QQ 通过 `graph.qq.com/oauth2.0/me` 反查 openid（开通了权限时带 unionid），
+  并核对 `client_id` 等于渠道配置的 APP ID —— 别的应用签出的令牌一律 `40380`。
+  资料（昵称、头像）再用 `get_user_info` 拉取，拉不到不影响登录。
+- `openId`：QQ 可不填；微信、微博必填（它们的资料接口按 openid / uid 查）。填了就必须与核实结果一致，否则 `40380`。
+- 老字段 `providerUserId` 仍被接受，含义同 `openId`。
+
+**未关联账号时：快速注册或绑定已有账号**
+
+带 `deferRegistration: true` 且这个第三方账号还没关联任何账号时，不建号也不签发令牌，
+响应里只有 `authenticationState: "oauth_link_required"` 与 `oauthLink`：
+
+```json
+{ "oauthLink": { "ticket": "…", "provider": "qq", "displayName": "QQ", "nickname": "…", "avatar": "…",
+  "allowRegister": true, "allowBind": true, "expiresAt": "…" } }
+```
+
+- 用户选「快速注册」：`POST /auth/oauth/link/register { ticket }`，以第三方资料建号并登录（返回结构同登录）。
+- 用户选「绑定已有账号」：先用已有账号走任意一种正常登录（含二次认证），再带新令牌调
+  `POST /auth/oauth/link/bind { ticket }`。
+- 凭证一次性、10 分钟有效，过期或用过报 `40495`，重新走一遍第三方授权即可。
+- `allowRegister` 已经算上了渠道开关、应用注册开关与平台治理，为 `false` 时不要显示「快速注册」。
+- 渠道不开放绑定（`allowBind=false`）时没有可选的，服务端直接按自动注册处理。
+
+不带 `deferRegistration` 的老客户端沿用原行为：首次登录能否自动建号 = 渠道的
+`allowLogin` ∧ `allowRegister` ∧ 应用注册开关；不允许时返回 `40393`。
+
+自动建号的账号名是 `渠道_第三方ID`（例如 `qq_<openid>`，被占用时加随机后缀），没有密码；
+昵称头像取第三方资料。已有账号用第三方登录时只补空着的昵称与头像，不覆盖用户自己的资料。
+
+**已登录用户绑定 / 解绑**
+
+- 原生 SDK：端上授权后 `POST /auth/oauth/bind/token { provider, accessToken, openId? }`。
+- 浏览器跳转：`POST /auth/oauth/bind/url` 取授权地址。
+- 同一渠道一个账号只能绑一个第三方账号（`40953`），一个第三方账号只能绑一个账号（`40950`）。
+- `GET /auth/oauth/bindings` 列出已绑定的账号，`DELETE /auth/oauth/bindings/{provider}` 解绑；
+  没有密码的账号解绑最后一个第三方账号会被拒（`40094`）。
 
 可用渠道读 `/config` 的 `auth.oauthProviders`；应用没启用 `oauth` 登录方式时
 该数组为空。**不要在客户端硬编码渠道列表**，否则管理员改配置就得发版。
-
-首次登录能否自动建号 = 渠道的 `allowLogin` ∧ `allowRegister`；
-关闭时返回 `40393`，此时应引导用户先用已有账号登录再绑定。
 
 ## 1.8 网页扫码登录
 

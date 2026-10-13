@@ -46,14 +46,22 @@ var oauthTemplates = []oauthdomain.Template{
 	{
 		Key: "qq", Kind: oauthdomain.KindQQ, Name: "QQ 互联", Icon: "qq",
 		Color: "#1EBAFC", Category: "国内",
-		Description: "QQ 互联网站应用登录，返回 openid；同主体应用可通过 unionid 打通。",
+		Description: "QQ 互联网站应用或移动应用登录，返回 openid；同主体应用可通过 unionid 打通。",
 		DocsURL:     "https://wiki.connect.qq.com/使用authorization_code获取access_token",
 		ConsoleURL:  "https://connect.qq.com/",
 		AuthURL:     "https://graph.qq.com/oauth2.0/authorize",
 		TokenURL:    "https://graph.qq.com/oauth2.0/token",
 		UserInfoURL: "https://graph.qq.com/user/get_user_info",
 		Scopes:      []string{"get_user_info"},
-		Notes:       []string{"回调地址必须与 QQ 互联后台登记的完全一致（含协议、端口与查询串）。"},
+		Fields: []oauthdomain.TemplateField{
+			{Key: "clientId", Label: "APP ID", Placeholder: "102000000"},
+			{Key: "clientSecret", Label: "APP Key", Hint: "QQ 互联「应用管理」中的 APP Key"},
+		},
+		Notes: []string{
+			"网站应用：回调地址必须与 QQ 互联后台登记的完全一致（含协议、端口与查询串）。",
+			"移动应用：端上 SDK 授权后调 /auth/oauth/exchange，服务端用 access_token 反查 openid 并核对 client_id 等于这里的 APP ID，不经过回调地址。",
+			"unionid 需要向 QQ 互联申请接口权限；未开通时只按 openid 绑定。",
+		},
 	},
 	{
 		Key: "weibo", Kind: oauthdomain.KindWeibo, Name: "新浪微博", Icon: "sinaweibo",

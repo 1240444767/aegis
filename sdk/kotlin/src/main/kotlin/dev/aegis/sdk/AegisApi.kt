@@ -174,7 +174,15 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     }
 
     /**
-     * 原生 SDK 拿到第三方 profile 后换取 Aegis 会话。
+     * 原生 SDK（QQ 互联、微信等）在端上授权后，用拿到的 [accessToken] 换取 Aegis 会话。
+     *
+     * 身份由服务端拿令牌向服务商核实（QQ 还会核对令牌签给本应用），端上自报的昵称头像不作数。
+     * [openId] 微信、微博必填，QQ 可不填；填了就必须与令牌查出来的一致，否则 40380。
+     *
+     * [deferRegistration] 为 true 且这个第三方账号还没关联任何账号时，不建号也不签发令牌，
+     * 返回的 [AegisSession.oauthLink] 带一张 10 分钟有效的一次性凭证：
+     * 用户选「快速注册」就调 [oauthLinkRegister]；选「绑定已有账号」就先用已有账号正常登录
+     * （含二次认证），再调 [oauthLinkBind]。为 false 时沿用渠道的自动注册开关直接建号。
      *
      * 这条路径受完整安全等级包装保护；浏览器回跳那条（`/auth/oauth/callback`）
      * 无法被客户端包装，sealed 档下也是明文的。要求全链路加密就走这里。
@@ -183,21 +191,51 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
     @JvmOverloads
     fun oauthExchange(
         provider: String,
-        providerUserId: String,
-        unionId: String? = null,
-        nickname: String? = null,
-        avatar: String? = null,
-        email: String? = null,
-        accessToken: String? = null,
+        accessToken: String,
+        openId: String? = null,
+        deferRegistration: Boolean = false,
         deviceId: String? = null,
+        device: String? = null,
     ): AegisSession = login(
         buildBody(
-            "provider" to provider, "providerUserId" to providerUserId, "unionId" to unionId,
-            "nickname" to nickname, "avatar" to avatar, "email" to email,
-            "accessToken" to accessToken, "deviceId" to deviceId,
+            "provider" to provider, "accessToken" to accessToken, "openId" to openId,
+            "deferRegistration" to deferRegistration, "deviceId" to deviceId, "device" to device,
         ),
         path = "/auth/oauth/exchange",
     )
+
+    /**
+     * 第三方账号未关联时选「快速注册」：凭 [AegisSession.oauthLink] 的 `ticket` 建号并登录。
+     * 凭证只能用一次；过期或用过报 40495，要重新走一遍第三方授权。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun oauthLinkRegister(ticket: String, deviceId: String? = null, device: String? = null): AegisSession =
+        login(
+            buildBody("ticket" to ticket, "deviceId" to deviceId, "device" to device),
+            path = "/auth/oauth/link/register",
+        )
+
+    /**
+     * 第三方账号未关联时选「绑定已有账号」：用户用已有账号登录成功后，凭 `ticket` 把第三方账号挂上来。
+     * 返回绑定记录。该第三方账号已绑别人报 40950，当前账号已绑同渠道的另一个报 40953。
+     */
+    @Throws(IOException::class)
+    fun oauthLinkBind(ticket: String): JsonElement =
+        client.call("POST", "/auth/oauth/link/bind", mapOf("ticket" to ticket), requireAuth = true)
+
+    /**
+     * 已登录用户在设置里绑定：端上 SDK 授权拿到 [accessToken] 后直接绑定，返回绑定记录。
+     * [openId] 规则同 [oauthExchange]。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun oauthBindToken(provider: String, accessToken: String, openId: String? = null): JsonElement =
+        client.call(
+            "POST", "/auth/oauth/bind/token",
+            buildBody("provider" to provider, "accessToken" to accessToken, "openId" to openId),
+            requireAuth = true,
+        )
 
     @Throws(IOException::class)
     fun oauthBindUrl(provider: String): String {

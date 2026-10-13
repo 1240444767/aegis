@@ -227,6 +227,15 @@ WHERE appid=$1 AND user_id=$2 AND provider=$3`, appID, userID, strings.TrimSpace
 	return tag.RowsAffected(), nil
 }
 
+// FindUserOAuthBinding 该用户在某个渠道下已绑定的第三方 ID；没有绑定时返回空串。
+func (r *Repository) FindUserOAuthBinding(ctx context.Context, appID, userID int64, provider string) (string, error) {
+	var providerUserID string
+	err := r.pool.QueryRow(ctx, `SELECT provider_user_id FROM oauth_bindings
+WHERE appid=$1 AND user_id=$2 AND provider=$3 ORDER BY created_at ASC LIMIT 1`,
+		appID, userID, strings.TrimSpace(provider)).Scan(&providerUserID)
+	return providerUserID, normalizeNotFound(err)
+}
+
 // CountUserOAuthBindings 统计用户已绑定的渠道数（解绑前的安全校验用）。
 func (r *Repository) CountUserOAuthBindings(ctx context.Context, appID, userID int64) (int64, error) {
 	var count int64

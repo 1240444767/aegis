@@ -415,7 +415,10 @@ func (h *Handler) AppOAuthCallback(c *gin.Context) {
 	h.OAuthCallback(c)
 }
 
-// AppOAuthExchange 原生 SDK 拿到第三方 profile 后换取 Aegis 会话。
+// AppOAuthExchange 原生 SDK 拿到第三方令牌后换取 Aegis 会话。
+//
+// 身份由服务端拿 accessToken 向服务商核实（QQ 还会核对令牌签给本应用），客户端自报的资料不采信。
+// 带 deferRegistration 时，未绑定的身份不直接建号，而是返回 oauthLink 关联凭证。
 func (h *Handler) AppOAuthExchange(c *gin.Context) {
 	app, policy, ok := h.resolveGatewayApp(c)
 	if !ok {
@@ -435,28 +438,46 @@ func (h *Handler) AppOAuthExchange(c *gin.Context) {
 	deviceID, device := h.resolveGatewayDevice(c, req.DeviceID, req.Device)
 	// 是否允许自动建号 = 渠道级 allowRegister ∧ 应用已启用第三方登录。
 	// 注意注册方式里没有 oauth：那会变成两处配同一件事，见 authprotocol.RegisterMethods。
-	result, err := h.auth.MobileOAuthLoginScoped(
-		c.Request.Context(), app.ID, req.Provider,
-		authdomain.ProviderProfile{
-			Provider:       req.Provider,
-			ProviderUserID: req.ProviderUserID,
-			UnionID:        req.UnionID,
-			Nickname:       req.Nickname,
-			Avatar:         req.Avatar,
-			Email:          req.Email,
-			RawProfile:     req.RawProfile,
-			Tokens: map[string]string{
-				"access_token":  req.AccessToken,
-				"refresh_token": req.RefreshToken,
-			},
-		},
-		deviceID, device, c.ClientIP(), c.Request.UserAgent(), true,
-	)
+	result, err := h.auth.NativeOAuthLogin(c.Request.Context(), service.NativeOAuthLoginInput{
+		AppID: app.ID, Provider: req.Provider,
+		AccessToken: req.AccessToken, OpenID: req.claimedOpenID(),
+		DeviceID: deviceID, Device: device, IP: c.ClientIP(), UserAgent: c.Request.UserAgent(),
+		AllowRegister: true, DeferRegistration: req.DeferRegistration,
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
 	response.Success(c, http.StatusOK, authResultMessage(result, "第三方登录成功"), result)
+}
+
+// AppOAuthLinkRegister 第三方身份未绑定、用户选了「快速注册」：凭关联凭证建号并登录。
+func (h *Handler) AppOAuthLinkRegister(c *gin.Context) {
+	app, policy, ok := h.resolveGatewayApp(c)
+	if !ok {
+		return
+	}
+	if !h.requireAuthMethod(c, policy.LoginMethods, authprotocol.MethodOAuth) {
+		return
+	}
+	var req OAuthLinkRegisterRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	if !h.enforceDevicePolicy(c, app.ID, req.DeviceID, req.Device, req.MarkCode, captchadomain.PurposeRegister) {
+		return
+	}
+	deviceID, device := h.resolveGatewayDevice(c, req.DeviceID, req.Device)
+	result, err := h.auth.RegisterWithOAuthLink(c.Request.Context(), service.OAuthLinkRegisterInput{
+		AppID: app.ID, Ticket: req.Ticket,
+		DeviceID: deviceID, Device: device, IP: c.ClientIP(), UserAgent: c.Request.UserAgent(),
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, authResultMessage(result, "注册成功"), result)
 }
 
 // AppLogout 注销当前会话。

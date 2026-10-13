@@ -55,6 +55,59 @@ func (h *Handler) OAuthBindURL(c *gin.Context) {
 	response.Success(c, http.StatusOK, "获取授权地址成功", gin.H{"url": authURL})
 }
 
+// OAuthLinkBind 第三方身份未绑定、用户选了「绑定已有账号」并已登录：把关联凭证里的身份挂到当前账号。
+func (h *Handler) OAuthLinkBind(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	var req OAuthLinkBindRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	binding, err := h.auth.BindOAuthLink(c.Request.Context(), session.AppID, session.UserID, req.Ticket)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	h.decorateOAuthBinding(c, binding)
+	response.Success(c, http.StatusOK, "绑定成功", binding)
+}
+
+// OAuthBindToken 已登录用户用原生 SDK 拿到的第三方令牌直接绑定。
+func (h *Handler) OAuthBindToken(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	var req OAuthBindTokenRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	binding, err := h.auth.BindOAuthWithToken(c.Request.Context(), session.AppID, session.UserID,
+		req.Provider, req.AccessToken, req.OpenID)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	h.decorateOAuthBinding(c, binding)
+	response.Success(c, http.StatusOK, "绑定成功", binding)
+}
+
+// decorateOAuthBinding 补上渠道展示名与图标，与 /auth/oauth/bindings 列表里的形状一致。
+func (h *Handler) decorateOAuthBinding(c *gin.Context, binding *oauthdomain.Binding) {
+	if h.appOAuth == nil || binding == nil {
+		return
+	}
+	items := []oauthdomain.Binding{*binding}
+	h.appOAuth.AttachProviderMeta(c.Request.Context(), binding.AppID, items)
+	*binding = items[0]
+}
+
 // ListMyOAuthBindings 当前登录用户已绑定的第三方账号。
 func (h *Handler) ListMyOAuthBindings(c *gin.Context) {
 	if h.appOAuth == nil {

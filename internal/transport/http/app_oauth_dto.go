@@ -71,3 +71,24 @@ type OAuthBindURLRequest struct {
 	Device   string `json:"device"`
 	MarkCode string `json:"markCode"`
 }
+
+// OAuthLinkRegisterRequest 凭关联凭证快速注册。
+type OAuthLinkRegisterRequest struct {
+	Ticket   string `json:"ticket" binding:"required"`
+	DeviceID string `json:"deviceId"`
+	Device   string `json:"device"`
+	MarkCode string `json:"markCode"`
+}
+
+// OAuthLinkBindRequest 已登录后凭关联凭证绑定。
+type OAuthLinkBindRequest struct {
+	Ticket string `json:"ticket" binding:"required"`
+}
+
+// OAuthBindTokenRequest 已登录用户用原生 SDK 拿到的第三方令牌绑定。
+// openId 只有微信、微博需要；QQ 由服务端反查。
+type OAuthBindTokenRequest struct {
+	Provider    string `json:"provider" binding:"required"`
+	AccessToken string `json:"accessToken" binding:"required"`
+	OpenID      string `json:"openId"`
+}

@@ -214,40 +214,6 @@ func (s *AuthService) ensureProfilePhone(ctx context.Context, userID int64, phon
 	return err
 }
 
-// MobileOAuthLoginScoped 在渠道自身的 allowRegister 之上再叠加一层开关。
-//
-// v1 网关用它把"应用是否开放第三方登录"与"该渠道是否允许自动注册"分开表达：
-// 前者由 loginMethods 决定，后者仍由渠道配置决定，两者取与。
-func (s *AuthService) MobileOAuthLoginScoped(
-	ctx context.Context, appID int64, provider string, profile authdomain.ProviderProfile,
-	deviceID, device, ip, userAgent string, allowRegister bool,
-) (*authdomain.LoginResult, error) {
-	if profile.ProviderUserID == "" {
-		return nil, apperrors.New(40004, http.StatusBadRequest, "providerUserId 不能为空")
-	}
-	_, resolved, err := s.resolveOAuthProvider(ctx, appID, provider)
-	if err != nil {
-		return nil, err
-	}
-	if !resolved.AllowLogin {
-		return nil, apperrors.New(40391, http.StatusForbidden, "该渠道仅开放账号绑定，未开放直接登录")
-	}
-	var app *appdomain.App
-	if s.app != nil {
-		loaded, err := s.app.EnsureLoginAllowed(ctx, appID)
-		if err != nil {
-			return nil, err
-		}
-		if err := s.validateLoginPolicy(loaded, deviceID, device); err != nil {
-			return nil, err
-		}
-		app = loaded
-	}
-	profile.Provider = resolved.Provider
-	return s.loginWithOAuthProfile(ctx, app, appID, profile, deviceID, device, ip, userAgent,
-		"oauth_mobile", resolved.AllowRegister && allowRegister)
-}
-
 // normalizePhone 去掉空白与常见分隔符；不做号段校验，各国格式差异交给短信服务商。
 func normalizePhone(phone string) string {
 	replacer := strings.NewReplacer(" ", "", "-", "", "(", "", ")", "")

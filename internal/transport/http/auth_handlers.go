@@ -7,7 +7,6 @@ package httptransport
 import (
 	"net/http"
 
-	authdomain "aegis/internal/domain/auth"
 	captchadomain "aegis/internal/domain/captcha"
 	"aegis/internal/service"
 	"aegis/pkg/response"
@@ -138,19 +137,6 @@ func (h *Handler) OAuthMobileLogin(c *gin.Context) {
 // oauthMobileLoginWith 承载移动端 OAuth 换取会话的实际流程。
 // 旧 /api/auth/* 从 body 取 appid，v1 网关从路径取 appKey，两条入口共用这一段。
 func (h *Handler) oauthMobileLoginWith(c *gin.Context, req OAuthMobileLoginRequest) {
-	profile := authdomain.ProviderProfile{
-		Provider:       req.Provider,
-		ProviderUserID: req.ProviderUserID,
-		UnionID:        req.UnionID,
-		Nickname:       req.Nickname,
-		Avatar:         req.Avatar,
-		Email:          req.Email,
-		RawProfile:     req.RawProfile,
-		Tokens: map[string]string{
-			"access_token":  req.AccessToken,
-			"refresh_token": req.RefreshToken,
-		},
-	}
 	if !h.enforceDevicePolicy(c, req.AppID, req.DeviceID, req.Device, req.MarkCode, captchadomain.PurposeLogin) {
 		return
 	}
@@ -159,7 +145,13 @@ func (h *Handler) oauthMobileLoginWith(c *gin.Context, req OAuthMobileLoginReque
 	if device == "" {
 		device = guessDeviceFromUA(c.Request.UserAgent())
 	}
-	result, err := h.auth.MobileOAuthLogin(c.Request.Context(), req.AppID, req.Provider, profile, deviceID, device, c.ClientIP(), c.Request.UserAgent())
+	result, err := h.auth.NativeOAuthLogin(c.Request.Context(), service.NativeOAuthLoginInput{
+		AppID: req.AppID, Provider: req.Provider,
+		AccessToken: req.AccessToken, OpenID: req.claimedOpenID(),
+		DeviceID: deviceID, Device: device, IP: c.ClientIP(), UserAgent: c.Request.UserAgent(),
+		// 旧命名空间没有凭关联凭证注册 / 绑定的接口，不发凭证，照旧按渠道 allowRegister 建号
+		AllowRegister: true,
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return

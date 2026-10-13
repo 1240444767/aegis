@@ -115,6 +115,30 @@ func (r *SessionRepository) ConsumeOAuthState(ctx context.Context, state string)
 	return payload, nil
 }
 
+// SetOAuthLinkTicket 保存待关联的第三方身份（原生登录核实身份后、用户选择注册或绑定之前）。
+func (r *SessionRepository) SetOAuthLinkTicket(ctx context.Context, ticket string, payload any, ttl time.Duration) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return r.client.Set(ctx, r.oauthLinkKey(ticket), data, ttl).Err()
+}
+
+// ConsumeOAuthLinkTicket 原子地取出并删除关联凭证，同一张凭证只能用一次；不存在或已过期时 found=false。
+func (r *SessionRepository) ConsumeOAuthLinkTicket(ctx context.Context, ticket string, out any) (bool, error) {
+	value, err := r.client.GetDel(ctx, r.oauthLinkKey(ticket)).Result()
+	if err != nil {
+		if err == redislib.Nil {
+			return false, nil
+		}
+		return false, err
+	}
+	if err := json.Unmarshal([]byte(value), out); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *SessionRepository) GetMyView(ctx context.Context, appID int64, userID int64) (*user.MyView, error) {
 	var view user.MyView
 	found, err := r.getJSON(ctx, r.myKey(appID, userID), &view)
@@ -406,6 +430,10 @@ func (r *SessionRepository) blacklistKey(tokenID string) string {
 
 func (r *SessionRepository) oauthStateKey(state string) string {
 	return fmt.Sprintf("%s:oauth:state:%s", r.keyPrefix, state)
+}
+
+func (r *SessionRepository) oauthLinkKey(ticket string) string {
+	return fmt.Sprintf("%s:oauth:link:%s", r.keyPrefix, ticket)
 }
 
 func (r *SessionRepository) appKey(appID int64) string {
