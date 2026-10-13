@@ -109,7 +109,7 @@ func TestNativeOAuthIntegration(t *testing.T) {
 	link := pending.OAuthLink
 	if link == nil || pending.AccessToken != "" || pending.AuthenticationState != AuthStateOAuthLinkRequired ||
 		link.Ticket == "" || !link.AllowRegister || !link.AllowBind || link.Nickname != "小明" ||
-		!strings.HasPrefix(link.Avatar, "http://thirdqq.qlogo.cn/") || link.Provider != "qq" {
+		!strings.HasPrefix(link.Avatar, "https://thirdqq.qlogo.cn/") || link.Provider != "qq" {
 		t.Fatalf("未绑定时应返回关联凭证：%+v / %+v", pending, link)
 	}
 

@@ -427,9 +427,24 @@ func (p *OAuthProvider) fetchQQProfile(ctx context.Context, client *http.Client,
 		return profile, nil
 	}
 	profile.Nickname = firstString(raw, "nickname")
-	profile.Avatar = firstString(raw, "figureurl_qq_2", "figureurl_qq_1", "figureurl_2", "figureurl_1")
+	profile.Avatar = secureQQAvatar(firstString(raw, "figureurl_qq_2", "figureurl_qq_1", "figureurl_2", "figureurl_1"))
 	profile.RawProfile = raw
 	return profile, nil
+}
+
+// secureQQAvatar QQ 资料里的头像是 http 地址，HTTPS 页面上会被浏览器当混合内容拦掉；
+// qlogo.cn 同样支持 https，换过去即可。别的域名原样返回。
+func secureQQAvatar(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Scheme != "http" {
+		return raw
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host != "qlogo.cn" && !strings.HasSuffix(host, ".qlogo.cn") {
+		return raw
+	}
+	parsed.Scheme = "https"
+	return parsed.String()
 }
 
 // fetchQQIdentity 用 access_token 反查 openid / unionid，并核对令牌是签给本应用的。

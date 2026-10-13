@@ -126,7 +126,8 @@ func TestQQProfileFromAccessToken(t *testing.T) {
 		t.Fatalf("合法令牌应当换出身份：%v", err)
 	}
 	if profile.ProviderUserID != "OPENID_A" || profile.UnionID != "UID_OPENID_A" || profile.Nickname != "小明" ||
-		!strings.Contains(profile.Avatar, "s=100") || profile.Tokens["access_token"] != "tok-ok" {
+		!strings.HasPrefix(profile.Avatar, "https://thirdqq.qlogo.cn/") || !strings.Contains(profile.Avatar, "s=100") ||
+		profile.Tokens["access_token"] != "tok-ok" {
 		t.Fatalf("身份不对：%+v", profile)
 	}
 
@@ -193,4 +194,20 @@ func (t rewriteHostTransport) RoundTrip(request *http.Request) (*http.Response, 
 	clone.URL = parsed.URL
 	clone.Host = parsed.URL.Host
 	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func TestSecureQQAvatar(t *testing.T) {
+	cases := map[string]string{
+		"http://thirdqq.qlogo.cn/g?b=oidb&k=x&s=100": "https://thirdqq.qlogo.cn/g?b=oidb&k=x&s=100",
+		"http://qlogo.cn/a.png":                      "https://qlogo.cn/a.png",
+		"https://thirdqq.qlogo.cn/a":                 "https://thirdqq.qlogo.cn/a",
+		"http://evilqlogo.cn/a":                      "http://evilqlogo.cn/a",
+		"http://example.com/a.png":                   "http://example.com/a.png",
+		"":                                           "",
+	}
+	for input, want := range cases {
+		if got := secureQQAvatar(input); got != want {
+			t.Errorf("secureQQAvatar(%q) = %q，期望 %q", input, got, want)
+		}
+	}
 }
