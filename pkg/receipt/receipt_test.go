@@ -408,7 +408,7 @@ func TestEveryPaymentMethodHasLabel(t *testing.T) {
 	methods := []string{
 		"epay", "rainbow_epay", "xunhupay", "payjs", "qrpay", "vmqpay",
 		"alipay_native", "wechat_native", "stripe", "paypal", "balance",
-		"paddle", "lemonsqueezy", "razorpay", "coinbase", "square",
+		"paddle", "lemonsqueezy", "razorpay", "coinbase", "square", "afdian",
 	}
 	bundle, err := Bundle()
 	if err != nil {

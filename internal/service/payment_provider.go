@@ -50,6 +50,19 @@ type paymentReturnVerifier interface {
 	VerifyReturn(configData map[string]any, params map[string]string) (orderNo string, err error)
 }
 
+// remoteOrderSettler 可选能力：推送不保证送达、需要主动向上游核实到账的渠道实现此接口
+// （爱发电的 Webhook 官方明说可能丢）。返回的结果与 HandleCallback 同等可信，
+// 由网关走同一段交叉校验与履约；没找到的订单不出现在结果里。
+type remoteOrderSettler interface {
+	SettleRemoteOrders(ctx context.Context, data map[string]any, orderNos []string) (map[string]*paymentdomain.CallbackResult, error)
+}
+
+// callbackAcknowledger 可选能力：上游对回调应答的格式有硬性要求的渠道实现此接口
+// （爱发电只认 {"ec":200}）。err 是网关处理回调的结果，渠道据此决定要不要上游重推。
+type callbackAcknowledger interface {
+	AckCallback(result *paymentdomain.CallbackResult, err error) []byte
+}
+
 // callbackHeader 读取传输层注入的请求头（大小写不敏感）
 func callbackHeader(callbackData map[string]string, name string) string {
 	return callbackData[CallbackHeaderPrefix+strings.ToLower(name)]

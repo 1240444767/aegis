@@ -26,6 +26,8 @@ const (
 	MethodRazorpay     = "razorpay"     // Razorpay（印度）
 	MethodCoinbase     = "coinbase"     // Coinbase Commerce（加密货币）
 	MethodSquare       = "square"       // Square（北美线上收单）
+
+	MethodAfdian = "afdian" // 爱发电（创作者赞助平台）
 )
 
 // ── 渠道分组（前端渠道市场按此归类）──

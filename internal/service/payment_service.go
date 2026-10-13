@@ -54,6 +54,8 @@ type PaymentService struct {
 	// 留空时同步跳转不下发，渠道展示它自己的结果页 —— 与其把用户送到一个
 	// 猜出来的域名，不如让渠道兜底。
 	consoleBaseURL string
+	// settleAttempts 用户查单触发主动核实的节流表：订单号 → 上次核实时间
+	settleAttempts sync.Map
 }
 
 // SetConsoleBaseURL 注入控制台对外地址（bootstrap 中调用）。
@@ -107,6 +109,7 @@ func (s *PaymentService) registerBuiltinProviders(client *resty.Client) {
 	s.registerProvider(newPayjsProvider(client))
 	s.registerProvider(newQRPayProvider(client))
 	s.registerProvider(newVMQPayProvider(client))
+	s.registerProvider(newAfdianProvider(client))
 	s.registerProvider(newAlipayNativeProvider(client))
 	s.registerProvider(newWechatNativeProvider(client))
 	s.registerProvider(newStripeProvider(client))
@@ -150,6 +153,7 @@ var methodOrder = []string{
 	paymentdomain.MethodPayjs,
 	paymentdomain.MethodQRPay,
 	paymentdomain.MethodVMQPay,
+	paymentdomain.MethodAfdian,
 	paymentdomain.MethodStripe,
 	paymentdomain.MethodPaypal,
 	paymentdomain.MethodPaddle,
@@ -602,6 +606,10 @@ func (s *PaymentService) GetUserOrder(ctx context.Context, session *authdomain.S
 	if order == nil {
 		return nil, apperrors.New(40472, http.StatusNotFound, "订单不存在")
 	}
+	// 推送会丢的渠道：待支付订单当场去上游核实一次（节流），付过的钱不该等推送才认
+	if s.settleOrderOnDemand(ctx, order, true) {
+		order = s.reloadOrderAfterPayment(ctx, order)
+	}
 	// 查单兜底：已支付订单若因回调期故障尚未履约，在用户查单时补偿执行（幂等）
 	if order.Status == "paid" {
 		if err := s.ensureOrderFulfilled(ctx, order); err != nil {
@@ -661,7 +669,15 @@ func (s *PaymentService) QueryRemoteOrder(ctx context.Context, orderNo string) (
 	if err != nil {
 		return nil, err
 	}
-	return provider.QueryRemoteOrder(ctx, config.ConfigData, orderNo)
+	result, err := provider.QueryRemoteOrder(ctx, config.ConfigData, orderNo)
+	if err != nil {
+		return nil, err
+	}
+	// 主动查单的渠道：上游已付而本地未结时就地结单，不只是把上游状态念给调用方听
+	if paid, _ := result["paid"].(bool); paid && s.orderSettleable(order) {
+		result["settled"] = s.settleOrdersWithConfig(ctx, config, []*paymentdomain.Order{order}) > 0
+	}
+	return result, nil
 }
 
 // HandleEpayCallback 处理易支付回调（兼容旧路由）
@@ -821,6 +837,12 @@ func (s *PaymentService) HandleCallback(ctx context.Context, method string, call
 		}
 	}
 
+	return s.applyVerifiedResult(ctx, order, method, callbackMethod, clientIP, result)
+}
+
+// applyVerifiedResult 把一份**已验证**的上游结果落到订单上：交叉校验、翻转状态、履约。
+// 异步通知与主动查单（remoteOrderSettler）共用这一段，两条路的结论必须一样处理。
+func (s *PaymentService) applyVerifiedResult(ctx context.Context, order *paymentdomain.Order, method string, callbackMethod string, clientIP string, result *paymentdomain.CallbackResult) (*paymentdomain.CallbackResult, error) {
 	// 验签通过后的交叉校验：回调中的订单号 / 金额必须与本地订单一致，
 	// 防止「用 A 订单的合法回调骗 B 订单发货」与小额支付大额订单
 	if result.OrderNo != "" && result.OrderNo != order.OrderNo {
@@ -1190,6 +1212,9 @@ func (s *PaymentService) startReceiptCleaner() {
 		// 未结算退款单补偿：上游返回「受理中」或结算写入中断时，靠轮询收敛到终态
 		refundTicker := time.NewTicker(2 * time.Minute)
 		defer refundTicker.Stop()
+		// 推送会丢的渠道（爱发电）：主动向上游核实最近未结的订单
+		settleTicker := time.NewTicker(remoteSettleInterval)
+		defer settleTicker.Stop()
 		for {
 			select {
 			case <-s.closeCh:
@@ -1200,6 +1225,8 @@ func (s *PaymentService) startReceiptCleaner() {
 				s.expireOverdueOrders()
 			case <-refundTicker.C:
 				s.syncPendingRefunds()
+			case <-settleTicker.C:
+				s.syncUnsettledOrders()
 			}
 		}
 	}()

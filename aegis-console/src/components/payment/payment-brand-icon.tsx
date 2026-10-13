@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  siAfdian,
   siAlipay,
   siBitcoin,
   siCoinbase,
@@ -50,6 +51,7 @@ const registry: Record<string, IconEntry> = {
   razorpay: siRazorpay,
   coinbase: siCoinbase,
   square: siSquare,
+  afdian: siAfdian,
   bitcoin: siBitcoin,
   wallet: walletMark
 };

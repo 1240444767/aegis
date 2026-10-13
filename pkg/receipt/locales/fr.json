@@ -153,5 +153,6 @@
   "method.lemonsqueezy": "Lemon Squeezy",
   "method.razorpay": "Razorpay",
   "method.coinbase": "Coinbase Commerce",
-  "method.square": "Square"
+  "method.square": "Square",
+  "method.afdian": "Afdian"
 }

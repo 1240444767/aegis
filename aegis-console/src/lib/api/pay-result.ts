@@ -55,7 +55,8 @@ export function payMethodLabel(method: string): string {
     lemonsqueezy: "Lemon Squeezy",
     razorpay: "Razorpay",
     coinbase: "Coinbase Commerce",
-    square: "Square"
+    square: "Square",
+    afdian: "爱发电"
   };
   return table[method?.toLowerCase()] ?? method;
 }
@@ -78,7 +79,8 @@ export function payBrandSlug(method: string, providerType?: string): string | un
     lemonsqueezy: "lemonsqueezy",
     razorpay: "razorpay",
     coinbase: "coinbase",
-    square: "square"
+    square: "square",
+    afdian: "afdian"
   };
   const bySubType: Record<string, string> = {
     alipay: "alipay",

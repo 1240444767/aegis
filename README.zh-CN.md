@@ -345,7 +345,7 @@ transport 适配器，业务代码不动。
 | --- | --- |
 | 钱包 | 余额、消费、流水、管理员调账，金额全程 `shopspring/decimal` |
 | 会员 | 套餐、余额直购、试用期会员（一人一次由唯一约束保证）、功能标识粒度的服务端校验 |
-| 支付 | 16 个内置渠道，全部由 `Provider.Describe()` 自描述：内部钱包 / 支付宝 / 微信支付 / 易支付系聚合六家 / Stripe / PayPal / Paddle / Lemon Squeezy / Square / Razorpay / Coinbase Commerce |
+| 支付 | 17 个内置渠道，全部由 `Provider.Describe()` 自描述：内部钱包 / 支付宝 / 微信支付 / 易支付系聚合六家 / 爱发电 / Stripe / PayPal / Paddle / Lemon Squeezy / Square / Razorpay / Coinbase Commerce |
 | 凭证 | 订单与钱包流水两类主体都能出 PDF 凭证，同一笔钱只出一份；10 语言 A4 排版（`pkg/receipt`） |
 | 卡密 | 授权卡（卡即登录凭证，绑设备、有授权期）与兑换卡（发会员 / 积分 / 经验 / 余额 / 抽奖次数 / 设备位）两种形态 |
 | 抽奖 | 奖池与概率配置、发放留痕 |

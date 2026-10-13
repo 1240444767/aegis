@@ -136,6 +136,31 @@ func (r *Repository) GetPaymentOrderByOrderNo(ctx context.Context, orderNo strin
 	return scanPaymentOrder(r.pool.QueryRow(ctx, query, orderNo))
 }
 
+// ListUnsettledPaymentOrders 补单候选：指定渠道下、since 之后创建、仍未支付（含已过期）的订单，新单在前。
+func (r *Repository) ListUnsettledPaymentOrders(ctx context.Context, methods []string, since time.Time, limit int) ([]paymentdomain.Order, error) {
+	if len(methods) == 0 {
+		return nil, nil
+	}
+	if limit < 1 {
+		limit = 100
+	}
+	query := `SELECT id, appid, user_id, config_id, order_no, COALESCE(provider_order_no, ''), subject, COALESCE(body, ''), amount, payment_method, provider_type, status, notify_status, COALESCE(client_ip, ''), COALESCE(notify_url, ''), COALESCE(return_url, ''), COALESCE(metadata, '{}'::jsonb), COALESCE(raw_callback, '{}'::jsonb), refunded_amount, refund_status, COALESCE(currency, ''), paid_at, expire_at, created_at, updated_at FROM payment_orders WHERE payment_method = ANY($1) AND status IN ('pending', 'expired') AND created_at >= $2 ORDER BY created_at DESC LIMIT $3`
+	rows, err := r.pool.Query(ctx, query, methods, since, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]paymentdomain.Order, 0)
+	for rows.Next() {
+		item, err := scanPaymentOrder(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, *item)
+	}
+	return items, rows.Err()
+}
+
 func (r *Repository) GetPaymentOrderByOrderNoForUser(ctx context.Context, appID int64, userID int64, orderNo string) (*paymentdomain.Order, error) {
 	query := `SELECT id, appid, user_id, config_id, order_no, COALESCE(provider_order_no, ''), subject, COALESCE(body, ''), amount, payment_method, provider_type, status, notify_status, COALESCE(client_ip, ''), COALESCE(notify_url, ''), COALESCE(return_url, ''), COALESCE(metadata, '{}'::jsonb), COALESCE(raw_callback, '{}'::jsonb), refunded_amount, refund_status, COALESCE(currency, ''), paid_at, expire_at, created_at, updated_at FROM payment_orders WHERE appid = $1 AND user_id = $2 AND order_no = $3 LIMIT 1`
 	return scanPaymentOrder(r.pool.QueryRow(ctx, query, appID, userID, orderNo))

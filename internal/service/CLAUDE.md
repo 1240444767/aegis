@@ -605,7 +605,7 @@ Banner（投放位）与公告，方法挂在 `AppService` 上。三条结构性
 
 ### 支付网关
 
-16 个渠道共用一套适配器接口（`payment_provider.go` 的 `paymentProvider`）：
+17 个渠道共用一套适配器接口（`payment_provider.go` 的 `paymentProvider`）：
 `Name` / `Describe` / `ValidateConfig` / `TestConnection` / `CreateOrder` / `QueryRemoteOrder` / `HandleCallback`。
 
 **渠道自描述是这套设计的核心。** `Describe()` 返回的 `ProviderMeta` 同时承载展示信息、
@@ -627,15 +627,24 @@ Banner（投放位）与公告，方法挂在 `AppService` 上。三条结构性
   控制台渠道列表每次刷新都跳动。测试会断言新增渠道已登记进该列表。
 - **回调订单定位有三条链路**：表单字段 `out_trade_no`（易支付系/支付宝）→
   `callbackOrderExtractor.ExtractOrderNo` 从原始报文预提取（Stripe/PayPal/Paddle/
-  Lemon Squeezy/Razorpay/Coinbase/Square，其回调地址为平台级配置无法带参数）→
+  Lemon Squeezy/Razorpay/Coinbase/Square/爱发电，其回调地址为平台级配置无法带参数）→
   路径段 `/callback/:method/:appid` 提供应用标识后 config-first 解密（微信 v3）。
   预提取**只用于路由定位**，验签一律在 `HandleCallback` 内基于配置完成。
 - **签名头必须登记进 `CallbackSignatureHeaders`**，否则传输层不会透传，验签必然失败。
 - 验签通过后服务层仍会交叉校验回调订单号与金额，防「用 A 单的合法回调骗 B 单发货」。
+  这段与「翻转状态 + 履约」收在 `applyVerifiedResult`，异步通知与主动查单共用。
+- **爱发电**（`payment_provider_afdian.go`）没有下单接口，也没有推送签名：下单是拼
+  `/order/create?custom_order_id=<本地单号>` 链接（自选金额或按「金额=方案 ID」映射到赞助方案），
+  推送只当提醒，收到后用 API Token 按爱发电单号回查 `query-order`，以接口数据为准。
+  兑换码订单实付 0.00，判为未支付（网关的金额校验只查正数，放过去就是零元购）。
+- **推送会丢的渠道实现 `remoteOrderSettler`**（目前只有爱发电）：用户查单时当场核实（15 秒节流），
+  后台每 2 分钟按支付配置分组核实 24 小时内未结的订单（含已过期，见 `payment_remote_settle.go`）。
+- **应答格式有硬性要求的渠道实现 `callbackAcknowledger`**：爱发电只认 `{"ec":200}`。
+  4xx（测试推送、非本平台订单、金额不符）也回 200，免得爱发电无意义地重推；5xx 才回非 200。
 
 #### 退款（payment_refund_service.go）
 
-12/16 个渠道支持接口退款（不支持的：Coinbase Commerce / 码支付 / V免签 / 虎皮椒）。
+12/17 个渠道支持接口退款（不支持的：Coinbase Commerce / 码支付 / V免签 / 虎皮椒 / 爱发电）。
 链路与支付相反，但同样要求「钱与账一致」：
 
 ```

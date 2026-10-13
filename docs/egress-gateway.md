@@ -206,7 +206,7 @@ curl -X POST .../api/admin/system/egress/explain \
 | SAML IdP metadata | `auth.saml_metadata` | |
 | 第三方认证源健康探测 | `auth.provider_health` | |
 | 应用级 OAuth 渠道自检 | `oauth.probe` | |
-| 支付 REST 渠道（共用 resty 客户端） | `payment.gateway` | Paddle / Lemon Squeezy / Square / Razorpay / Coinbase / 易支付系 |
+| 支付 REST 渠道（共用 resty 客户端） | `payment.gateway` | Paddle / Lemon Squeezy / Square / Razorpay / Coinbase / 易支付系 / 爱发电 |
 | Stripe SDK | `payment.stripe` | 经 `stripe.Backends` 注入 |
 | PayPal SDK | `payment.paypal` | 经 `SetHTTPClient` 注入 |
 | 对象存储驱动 | `storage.outbound` | S3 / Azure / COS / WebDAV，**直连路径保留 SSRF 校验** |

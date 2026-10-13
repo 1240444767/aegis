@@ -566,6 +566,14 @@ func (h *Handler) PaymentCallback(c *gin.Context) {
 		data["__app_id"] = appID
 	}
 	result, err := h.payment.HandleCallback(c.Request.Context(), method, data, c.Request.Method, c.ClientIP())
+	// 对应答格式有硬性要求的渠道（爱发电只认 {"ec":200}）由渠道自己组织应答
+	if body, ok := h.payment.CallbackAck(method, result, err); ok {
+		if err != nil {
+			_ = c.Error(err)
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", body)
+		return
+	}
 	if err != nil {
 		h.writeError(c, err)
 		return
