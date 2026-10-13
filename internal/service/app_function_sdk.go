@@ -724,7 +724,8 @@ func (s *ScriptSDK) bindUserNamespace(vm *goja.Runtime, object *goja.Object) err
 			panic(vm.ToValue("封禁必须给出理由"))
 		}
 		seconds := call.Argument(1).ToInteger()
-		banType, banScope := "manual", "login"
+		// 类型留空由服务按是否给了时长推导（临时 / 永久），范围留空即全部访问
+		banType, banScope := "", ""
 		if len(call.Arguments) > 2 && !goja.IsUndefined(call.Argument(2)) {
 			if options, ok := call.Argument(2).Export().(map[string]any); ok {
 				if value, ok := options["type"].(string); ok && value != "" {

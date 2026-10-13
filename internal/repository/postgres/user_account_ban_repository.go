@@ -44,15 +44,11 @@ func (r *Repository) CreateUserAccountBan(ctx context.Context, appID int64, user
 		}
 	}()
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, created_at, updated_at FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID))
-	if err != nil {
+	if found, err := lockBanTargetUserTx(ctx, tx, appID, userID); err != nil || !found {
 		return nil, err
 	}
-	if user == nil {
-		return nil, nil
-	}
 
-	if err := revokeExistingActiveUserBanTx(ctx, tx, appID, userID, input.Operator, "superseded by newer ban"); err != nil {
+	if err := revokeExistingActiveUserBanTx(ctx, tx, appID, userID, input.Operator, AccountBanSupersededReason); err != nil {
 		return nil, err
 	}
 
@@ -104,11 +100,7 @@ func (r *Repository) RefreshUserAccountBanState(ctx context.Context, appID int64
 		}
 	}()
 
-	var lockedUserID int64
-	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID).Scan(&lockedUserID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	if found, err := lockBanTargetUserTx(ctx, tx, appID, userID); err != nil || !found {
 		return nil, err
 	}
 
@@ -147,11 +139,7 @@ func (r *Repository) UpdateActiveUserAccountBanReason(ctx context.Context, appID
 		}
 	}()
 
-	var lockedUserID int64
-	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID).Scan(&lockedUserID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	if found, err := lockBanTargetUserTx(ctx, tx, appID, userID); err != nil || !found {
 		return nil, err
 	}
 
@@ -194,11 +182,7 @@ func (r *Repository) RevokeUserAccountBan(ctx context.Context, appID int64, user
 		}
 	}()
 
-	var lockedUserID int64
-	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID).Scan(&lockedUserID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
+	if found, err := lockBanTargetUserTx(ctx, tx, appID, userID); err != nil || !found {
 		return nil, err
 	}
 
@@ -209,9 +193,11 @@ func (r *Repository) RevokeUserAccountBan(ctx context.Context, appID int64, user
 	if current == nil {
 		return nil, nil
 	}
+	if current.Status != userdomain.AccountBanStatusActive || (current.EndAt != nil && !current.EndAt.After(time.Now())) {
+		return nil, ErrAccountBanNotActive
+	}
 
-	if current.Status == userdomain.AccountBanStatusActive {
-		if _, err := tx.Exec(ctx, `UPDATE user_account_bans
+	if _, err := tx.Exec(ctx, `UPDATE user_account_bans
 SET status = 'revoked',
     revoked_at = NOW(),
     revoked_by_admin_id = $4,
@@ -219,8 +205,7 @@ SET status = 'revoked',
     revoke_reason = $6,
     updated_at = NOW()
 WHERE id = $1 AND appid = $2 AND user_id = $3`, banID, appID, userID, nullableInt64(input.Operator.AdminID), strings.TrimSpace(input.Operator.AdminName), strings.TrimSpace(input.Reason)); err != nil {
-			return nil, err
-		}
+		return nil, err
 	}
 
 	active, err := getActiveUserAccountBanTx(ctx, tx, appID, userID)
@@ -361,6 +346,38 @@ SELECT id, appid, user_id FROM updated`, limit)
 	return expired, nil
 }
 
+// AccountBanSupersededReason 是新封禁顶替旧封禁时写在旧记录上的撤销原因。
+const AccountBanSupersededReason = "已被新的封禁替代"
+
+// ErrAccountBanNotActive 撤销的封禁已经到期或已被撤销。
+var ErrAccountBanNotActive = errors.New("account ban is not active")
+
+// lockBanTargetUserTx 锁住被处置的用户行，同一用户的封禁写操作因此串行。
+// 只取 id：这里不需要用户的其它字段，也就不必跟着 users 表加列改列清单。
+func lockBanTargetUserTx(ctx context.Context, tx pgx.Tx, appID int64, userID int64) (bool, error) {
+	var lockedUserID int64
+	if err := tx.QueryRow(ctx, `SELECT id FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID).Scan(&lockedUserID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// CountUserAccountBans 按状态统计某个用户的封禁条数。
+func (r *Repository) CountUserAccountBans(ctx context.Context, appID int64, userID int64) (userdomain.AccountBanCounts, error) {
+	var counts userdomain.AccountBanCounts
+	err := r.pool.QueryRow(ctx, `SELECT
+    COUNT(*),
+    COUNT(*) FILTER (WHERE status = 'active'),
+    COUNT(*) FILTER (WHERE status = 'expired'),
+    COUNT(*) FILTER (WHERE status = 'revoked')
+FROM user_account_bans
+WHERE appid = $1 AND user_id = $2`, appID, userID).Scan(&counts.Total, &counts.Active, &counts.Expired, &counts.Revoked)
+	return counts, err
+}
+
 func getActiveUserAccountBanTx(ctx context.Context, tx pgx.Tx, appID int64, userID int64) (*userdomain.AccountBan, error) {
 	return scanAccountBan(tx.QueryRow(ctx, `SELECT `+userAccountBanColumns+`
 FROM user_account_bans
@@ -404,11 +421,12 @@ func applyUserAccountBanProjectionTx(ctx context.Context, tx pgx.Tx, userID int6
 		extra["disabled_reason"] = reason
 	}
 	extraJSON, _ := json.Marshal(extra)
-	if _, err := tx.Exec(ctx, `INSERT INTO user_profiles (user_id, extra, updated_at)
-VALUES ($1, $2, NOW())
+	if _, err := tx.Exec(ctx, `INSERT INTO user_profiles (user_id, disabled_reason, extra, updated_at)
+VALUES ($1, NULLIF($2, ''), $3, NOW())
 ON CONFLICT (user_id) DO UPDATE SET
+    disabled_reason = EXCLUDED.disabled_reason,
     extra = COALESCE(user_profiles.extra, '{}'::jsonb) || EXCLUDED.extra,
-    updated_at = NOW()`, userID, extraJSON); err != nil {
+    updated_at = NOW()`, userID, reason, extraJSON); err != nil {
 		return err
 	}
 	return nil

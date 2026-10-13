@@ -106,7 +106,11 @@ func (s *AuthService) ResolveOAuth2Subject(ctx context.Context, appID int64, sub
 	if user == nil || user.AppID != appID {
 		return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
 	}
-	if err := s.ensureUserLoginState(ctx, user); err != nil {
+	ensureState := s.ensureUserLoginState
+	if refresh {
+		ensureState = s.ensureUserSessionState
+	}
+	if err := ensureState(ctx, user); err != nil {
 		return nil, err
 	}
 	if refresh {

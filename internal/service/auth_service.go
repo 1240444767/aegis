@@ -773,7 +773,8 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 	if user == nil {
 		return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
 	}
-	if err := s.ensureUserLoginState(ctx, user); err != nil {
+	// 刷新是延续已有会话，按会话档判定：仅登录的封禁不打断已登录的设备
+	if err := s.ensureUserSessionState(ctx, user); err != nil {
 		return nil, err
 	}
 	// App 配置仅拉取一次，供签发与会话上限策略共用（原实现签发+策略各拉一次）
@@ -1142,25 +1143,20 @@ func (s *AuthService) VerifyPasskeyLogin(ctx context.Context, appID int64, chall
 	return s.finalizeLogin(ctx, app, user, "passkey", "passkey", deviceID, "", ip, userAgent)
 }
 
+// ensureUserLoginState 换取新会话前的账号状态关卡：任何生效中的封禁都拦。
 func (s *AuthService) ensureUserLoginState(ctx context.Context, user *userdomain.User) error {
 	if user == nil {
 		return apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
 	}
-	if ban, err := s.pg.RefreshUserAccountBanState(ctx, user.AppID, user.ID); err != nil {
-		s.log.Warn("refresh user account ban state failed", zap.Int64("appid", user.AppID), zap.Int64("userId", user.ID), zap.Error(err))
-	} else if ban != nil {
-		if ban.BanType == userdomain.AccountBanTypePermanent {
-			return apperrors.New(40301, http.StatusForbidden, BanMessageFromRecord(ban))
-		}
-		return apperrors.New(40302, http.StatusForbidden, BanMessageFromRecord(ban))
+	return enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSignIn)
+}
+
+// ensureUserSessionState 延续已有会话（刷新令牌）时的账号状态关卡：只有全部访问的封禁拦。
+func (s *AuthService) ensureUserSessionState(ctx context.Context, user *userdomain.User) error {
+	if user == nil {
+		return apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
 	}
-	if !user.Enabled {
-		return apperrors.New(40301, http.StatusForbidden, "用户账户已被禁用")
-	}
-	if user.DisabledEndTime != nil && user.DisabledEndTime.After(time.Now()) {
-		return apperrors.New(40302, http.StatusForbidden, "用户账户暂时被冻结")
-	}
-	return nil
+	return enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSession)
 }
 
 func (s *AuthService) issueSession(ctx context.Context, app *appdomain.App, user *userdomain.User, provider, loginType, deviceID, device, ip, userAgent string) (*authdomain.LoginResult, error) {

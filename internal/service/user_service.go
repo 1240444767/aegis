@@ -1804,19 +1804,8 @@ func (s *UserService) loadActiveUser(ctx context.Context, session *authdomain.Se
 	if user == nil || user.AppID != session.AppID {
 		return nil, nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
-	if ban, err := s.pg.RefreshUserAccountBanState(ctx, user.AppID, user.ID); err != nil {
-		s.log.Warn("refresh user account ban state failed", zap.Int64("appid", user.AppID), zap.Int64("userId", user.ID), zap.Error(err))
-	} else if ban != nil {
-		if ban.BanType == userdomain.AccountBanTypePermanent {
-			return nil, nil, apperrors.New(40301, http.StatusForbidden, BanMessageFromRecord(ban))
-		}
-		return nil, nil, apperrors.New(40302, http.StatusForbidden, BanMessageFromRecord(ban))
-	}
-	if !user.Enabled {
-		return nil, nil, apperrors.New(40301, http.StatusForbidden, "用户账户已被禁用")
-	}
-	if user.DisabledEndTime != nil && user.DisabledEndTime.After(time.Now()) {
-		return nil, nil, apperrors.New(40302, http.StatusForbidden, "用户账户暂时被冻结")
+	if err := enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSession); err != nil {
+		return nil, nil, err
 	}
 	profile, err := s.pg.GetUserProfileByUserID(ctx, user.ID)
 	if err != nil {
@@ -1871,18 +1860,28 @@ func (s *UserService) applyBatchStatusMutationToBan(ctx context.Context, appID i
 		return true, result.Created, nil
 	case "revoke":
 		var updated int64
+		// 没有封禁记录却仍受限的（迁移来的老数据）直接复原投影，与单个用户的路径一致
+		var legacy []int64
 		for _, userID := range userIDs {
 			active, err := s.ban.GetActiveBan(ctx, appID, userID)
 			if err != nil {
 				return false, updated, err
 			}
 			if active == nil {
+				legacy = append(legacy, userID)
 				continue
 			}
 			if _, err := s.ban.RevokeBan(ctx, appID, userID, active.ID, revokeInput); err != nil {
 				return false, updated, err
 			}
 			updated++
+		}
+		if len(legacy) > 0 {
+			restored, err := s.pg.BatchUpdateAdminUserStatus(ctx, appID, legacy, mutation)
+			if err != nil {
+				return false, updated, err
+			}
+			updated += restored
 		}
 		return true, updated, nil
 	case "reason":
@@ -1904,11 +1903,16 @@ func (s *UserService) applyBatchStatusMutationToBan(ctx context.Context, appID i
 
 func deriveBanActionFromStatusMutation(mutation userdomain.AdminUserStatusMutation, operator userdomain.BanOperator) (string, userdomain.AccountBanCreateInput, userdomain.AccountBanRevokeInput, *string) {
 	now := time.Now()
+	// 「限制账号」历来是踢下线并拦住一切访问，映射成全部访问的封禁
+	reason := statusStringValue(mutation.DisabledReason)
+	if reason == "" {
+		reason = "管理员限制"
+	}
 	if mutation.DisabledEndTime != nil && mutation.DisabledEndTime.After(now) {
 		return "create", userdomain.AccountBanCreateInput{
 			BanType:  userdomain.AccountBanTypeTemporary,
-			BanScope: userdomain.AccountBanScopeLogin,
-			Reason:   statusStringValue(mutation.DisabledReason),
+			BanScope: userdomain.AccountBanScopeAll,
+			Reason:   reason,
 			EndAt:    mutation.DisabledEndTime,
 			Operator: operator,
 		}, userdomain.AccountBanRevokeInput{}, nil
@@ -1916,8 +1920,8 @@ func deriveBanActionFromStatusMutation(mutation userdomain.AdminUserStatusMutati
 	if mutation.Enabled != nil && !*mutation.Enabled {
 		return "create", userdomain.AccountBanCreateInput{
 			BanType:  userdomain.AccountBanTypePermanent,
-			BanScope: userdomain.AccountBanScopeLogin,
-			Reason:   statusStringValue(mutation.DisabledReason),
+			BanScope: userdomain.AccountBanScopeAll,
+			Reason:   reason,
 			Operator: operator,
 		}, userdomain.AccountBanRevokeInput{}, nil
 	}

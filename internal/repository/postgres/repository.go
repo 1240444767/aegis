@@ -89,7 +89,7 @@ type levelState struct {
 }
 
 func (r *Repository) GetUserByAppAndAccount(ctx context.Context, appID int64, account string) (*userdomain.User, error) {
-	query := `SELECT id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at FROM users WHERE appid = $1 AND account = $2 LIMIT 1`
+	query := `SELECT ` + userColumns + ` FROM users WHERE appid = $1 AND account = $2 LIMIT 1`
 	return scanUser(r.pool.QueryRow(ctx, query, appID, account))
 }
 
@@ -926,7 +926,7 @@ LIMIT $%d`, len(args)+1)
 }
 
 func (r *Repository) GetUserByID(ctx context.Context, userID int64) (*userdomain.User, error) {
-	query := `SELECT id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at FROM users WHERE id = $1 LIMIT 1`
+	query := `SELECT ` + userColumns + ` FROM users WHERE id = $1 LIMIT 1`
 	return scanUser(r.pool.QueryRow(ctx, query, userID))
 }
 
@@ -1609,7 +1609,7 @@ func (r *Repository) UpdateAdminUserStatus(ctx context.Context, appID int64, use
 		}
 	}()
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID))
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID))
 	if err != nil {
 		return nil, err
 	}
@@ -2044,7 +2044,7 @@ func (r *Repository) CreateUser(ctx context.Context, appID int64, account string
 
 // createUserExec 在指定执行器（连接池或事务）上插入用户。
 func createUserExec(ctx context.Context, q queryExecutor, appID int64, account string, passwordHash string) (*userdomain.User, error) {
-	query := `INSERT INTO users (appid, account, password_hash, enabled) VALUES ($1, $2, $3, TRUE) RETURNING id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
+	query := `INSERT INTO users (appid, account, password_hash, enabled) VALUES ($1, $2, $3, TRUE) RETURNING ` + userColumns
 	user, err := scanUser(q.QueryRow(ctx, query, appID, account, nullableString(passwordHash)))
 	if isUniqueViolation(err) {
 		return nil, ErrAccountAlreadyExists
@@ -3105,7 +3105,7 @@ func (r *Repository) CreateDailySign(ctx context.Context, userID int64, appID in
 		}
 	}()
 
-	user, err := scanUser(tx.QueryRow(ctx, `SELECT id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID))
+	user, err := scanUser(tx.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID))
 	if err != nil {
 		return nil, err
 	}
@@ -4701,6 +4701,11 @@ WHERE n.id = nr.notification_id
 	}
 	return result.RowsAffected(), nil
 }
+
+// userColumns 是 scanUser 读取的列，顺序与 Scan 的参数一一对应。
+// 凡是交给 scanUser 的查询都必须用它拼 SELECT / RETURNING：手写列清单在加列时会漏改，
+// 漏一处就是运行时的「number of field descriptions must equal number of destinations」。
+const userColumns = `id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
 
 func scanUser(row interface{ Scan(dest ...any) error }) (*userdomain.User, error) {
 	var user userdomain.User

@@ -279,6 +279,24 @@ Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 开启后唯一的解绑出口是 `ResetLoginBaseline`（控制台「登录绑定 → 重置」）——
 没有这个出口，用户换宽带就等于账号报废。基线读写失败一律 fail-open，与 `LoginGuardService` 同取向。
 
+### 账号封禁 —— 封禁记录是唯一依据，两档范围各有执行点
+
+账号状态只看 `user_account_bans`；`users.enabled` / `disabled_end_time` / `user_profiles.disabled_reason`
+是它的投影，给列表筛选与统计用。改状态的接口（`UpdateAdminUserStatus`、批量版）也落成封禁记录：
+限制 = 永久 + 全部访问，启用 = 解除生效中的封禁。同一用户同时最多一条生效封禁，新的顶替旧的。
+
+判定只有一个入口 `enforceAccountBan`（`account_ban_service.go`），按执行点区分两档范围：
+
+| 执行点 | 调用处 | 仅登录 `login` | 全部访问 `all` |
+|---|---|---|---|
+| `AccountBanCheckpointSignIn` | `ensureUserLoginState`：各类登录、二次验证、扫码、找回密码、OAuth2 新登录 | 拦 | 拦 |
+| `AccountBanCheckpointSession` | `ensureUserSessionState`（刷新令牌、OAuth2 刷新）、`loadActiveUser`、签到 | 放行 | 拦 |
+
+全部访问的封禁在落库时还会撤销全部会话与 OAuth2 授权；仅登录的不动已签发的会话。
+有封禁记录时**不再看投影**（仅登录的封禁同样把投影置为受限，再看投影就会把已登录的设备一并挡掉）；
+没有记录时才回落到投影，兜住迁移来的老数据。范围留空即全部访问，类型留空按有无 `endAt` 推导。
+错误码：40301 永久封禁、40302 临时冻结（提示里带解除时间与原因）、40934 解除已到期或已解除的封禁。
+
 ### RiskService —— 风控中心
 
 打分制引擎：**规则各自加分 → 总分映射等级 → 处置策略按分数区间决定动作**。

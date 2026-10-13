@@ -124,8 +124,11 @@ var capabilities = []Capability{
 		Namespace: "user",
 		Members:   []string{"ban", "unban"},
 		Declaration: `
-    /** 封禁当前调用者。seconds 省略或为 0 表示永久封禁 */
-    ban(reason: string, seconds?: number, options?: { scope?: string; type?: string }): { banId: number; endAt?: string };
+    /**
+     * 封禁当前调用者。seconds 省略或为 0 表示永久封禁。
+     * scope：all（默认）踢下线并拦住一切访问；login 只拦新的登录，已登录的设备照常使用。
+     */
+    ban(reason: string, seconds?: number, options?: { scope?: "all" | "login" }): { banId: number; endAt?: string };
     /** 撤销当前调用者生效中的封禁，返回是否确实撤销了一条 */
     unban(reason?: string): boolean;`,
 	},

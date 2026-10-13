@@ -344,11 +344,8 @@ func (s *SignInService) requireActiveUser(ctx context.Context, session *authdoma
 	if user == nil || user.AppID != session.AppID {
 		return nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
-	if !user.Enabled {
-		return nil, apperrors.New(40301, http.StatusForbidden, "用户账户已被禁用")
-	}
-	if user.DisabledEndTime != nil && user.DisabledEndTime.After(time.Now()) {
-		return nil, apperrors.New(40302, http.StatusForbidden, "用户账户暂时被冻结")
+	if err := enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSession); err != nil {
+		return nil, err
 	}
 	return user, nil
 }
