@@ -731,6 +731,7 @@ POST	/api/admin/apps/:appkey/releases/:rid/revoke	AdminRevokeRelease
 POST	/api/admin/apps/:appkey/releases/assets	AdminUploadReleaseAsset
 POST	/api/admin/apps/:appkey/releases/assets/complete	AdminCompleteReleaseAsset
 POST	/api/admin/apps/:appkey/releases/assets/presign	AdminPresignReleaseAsset
+POST	/api/admin/apps/:appkey/releases/notes/preview	AdminPreviewReleaseNotes
 POST	/api/admin/apps/:appkey/releases/simulate	AdminSimulateRelease
 POST	/api/admin/apps/:appkey/rewarded-ads/views/:viewId/grant	AdminGrantRewardedAdView
 POST	/api/admin/apps/:appkey/signin-reward/reset	ResetAdminAppSignInReward

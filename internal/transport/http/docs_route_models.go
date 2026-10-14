@@ -173,6 +173,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/policy"):                                                AdminAppPolicyRequest{},                  // UpdateAdminAppPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/releases"):                                             AdminReleaseSaveRequest{},                // AdminCreateRelease
 		routeKey("POST", "/api/admin/apps/{appkey}/releases/simulate"):                                    AdminReleaseSimulateRequest{},            // AdminSimulateRelease
+		routeKey("POST", "/api/admin/apps/{appkey}/releases/notes/preview"):                               AdminReleaseNotesPreviewRequest{},        // AdminPreviewReleaseNotes
 		routeKey("PUT", "/api/admin/apps/{appkey}/releases/{rid}"):                                        AdminReleaseSaveRequest{},                // AdminUpdateRelease
 		routeKey("POST", "/api/admin/apps/{appkey}/releases/{rid}/publish"):                               AdminReleasePublishRequest{},             // AdminPublishRelease
 		routeKey("PUT", "/api/admin/apps/{appkey}/releases/{rid}/rollout"):                                AdminReleaseRolloutRequest{},             // AdminSetReleaseRollout

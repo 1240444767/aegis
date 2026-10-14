@@ -106,6 +106,7 @@ require (
 	github.com/wechatpay-apiv3/wechatpay-go v0.2.21
 	github.com/wneessen/go-mail v0.8.1
 	github.com/xuri/excelize/v2 v2.11.0
+	github.com/yuin/goldmark v1.8.6
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.45.0

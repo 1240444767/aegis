@@ -15,6 +15,7 @@ func init() {
 		Write("POST /api/admin/apps/:appkey/releases/assets/presign", "申请安装包直传地址", "安装包", SeverityLow),
 		Write("POST /api/admin/apps/:appkey/releases/assets/complete", "完成安装包直传", "安装包", SeverityLow),
 		View("POST /api/admin/apps/:appkey/releases/simulate", "模拟检测更新", ""),
+		View("POST /api/admin/apps/:appkey/releases/notes/preview", "预览更新说明", ""),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/publish", "发布版本", "版本", SeverityHigh),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/pause", "暂停下发", "版本", SeverityMedium),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/resume", "恢复下发", "版本", SeverityMedium),

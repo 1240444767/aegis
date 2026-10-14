@@ -153,13 +153,9 @@ func (s *ReleaseService) Save(ctx context.Context, mutation appdomain.ReleaseMut
 	if len([]rune(item.Title)) > 120 {
 		return nil, apperrors.New(40045, http.StatusBadRequest, "版本标题不超过 120 个字符")
 	}
-	if mutation.Notes != nil {
-		item.Notes = sanitizeRichText(*mutation.Notes)
-		if richTextIsEmpty(item.Notes) {
-			item.Notes = ""
-		}
+	if err := applyReleaseNotes(&item, mutation); err != nil {
+		return nil, err
 	}
-	item.Summary = releaseSummary(item.Notes)
 	if mutation.Platform != nil {
 		item.Platform = strings.ToLower(strings.TrimSpace(*mutation.Platform))
 	}

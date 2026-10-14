@@ -1,6 +1,6 @@
 # 发布中心
 
-应用的版本发布：多安装包、富文本更新说明、定时发布、渠道、可见范围、定向、灰度与更新漏斗统计。
+应用的版本发布：多安装包、富文本与 Markdown 更新说明、定时发布、渠道、可见范围、定向、灰度与更新漏斗统计。
 与旧的 `/versions` 接口共用 `app_versions` 表；旧接口原样保留，旧的检测接口改走同一套检测引擎。
 
 ## 概念
@@ -9,7 +9,7 @@
 |---|---|
 | 版本 | 版本名 + 单调递增的版本码；同平台同渠道下未撤回的版本码不能重复 |
 | 安装包 | 一个版本挂多个，按 `abi` 区分（`arm64-v8a`、`armeabi-v7a`、`x86`、`x86_64`、`universal` 或任意小写标识）；地址可以是外链，也可以是上传到对象存储得到的 `storage://` 引用 |
-| 更新说明 | 富文本 HTML，写入时净化（与公告同一套白名单），服务端另提取纯文本摘要 `summary` |
+| 更新说明 | 两种撰写格式，见下节「更新说明」。无论哪种，`notes` 都是净化后的 HTML，服务端另提取纯文本摘要 `summary` |
 | 更新类型 | `optional` 可选 / `recommended` 推荐 / `force` 强制 |
 | 最低支持版本码 | `minSupportedCode`：低于它的客户端必须更新 |
 | 渠道 | 版本挂在某个渠道上时，只有该渠道成员能收到；默认渠道 = 所有人；不挂渠道 = 所有渠道。渠道可开放「自助加入」（如 Beta 体验计划） |
@@ -17,6 +17,25 @@
 | 定向 | 地区、语言（前缀匹配）、机型（包含匹配）、ABI、系统版本范围、来源版本范围、排除名单，同时设置时取交集 |
 | 内测名单 | 用户 ID 或设备 ID；命中即收到，跳过定向与灰度（排除名单仍然优先） |
 | 灰度 | `rolloutPct` 0–100，按「版本 ID + 用户（未登录时为设备）」稳定哈希分桶：放量变大时已进入的人不会被踢出。未登录又没有设备 ID 的请求不参与非全量灰度 |
+
+### 更新说明
+
+| 字段 | 说明 |
+|---|---|
+| `notesFormat` | `html`（富文本编辑器）或 `markdown`；存量版本与旧接口改过正文的版本都是 `html` |
+| `notesMarkdown` | `notesFormat=markdown` 时的 Markdown 原文，否则不出现 |
+| `notes` | 净化后的 HTML。`markdown` 格式下由服务端从原文渲染再净化，只认 HTML 的客户端（官网、电脑版、iOS、旧版 App）照旧读它 |
+| `summary` | 纯文本摘要，≤160 字 |
+
+Markdown 的渲染规则（客户端自己排版时照这几条来，两边才长得一样）：
+
+- CommonMark + GFM：表格、删除线、任务列表、裸链接自动识别；
+- 段落里的单个换行就是换行，不折成空格；
+- 允许行内 HTML，但只有白名单里的能留下：文字颜色写作 `<span style="color:#D32F2F">…</span>`
+  或 `<font color="#D32F2F">…</font>`，`style` 只认 `color`、`background-color`，取值只认十六进制与 `rgb()`/`rgba()`；
+- 原文 ≤20000 字符，换行统一为 `\n`。
+
+白名单与公告共用：公告正文里的文字颜色同样会保留。旧接口（`/versions`）改了 `release_notes` 时格式退回 `html`、原文清空。
 
 ### 状态
 
@@ -64,13 +83,14 @@ Kotlin SDK：`client.releases.*`（已登录时自动带令牌）。
   "forceReason": "skipped",
   "release": {
     "id": 12, "version": "1.1.0", "versionCode": 1010099, "title": "秋季更新",
-    "notes": "<p>…</p>", "summary": "…", "platform": "android", "minOsVersion": "",
+    "notes": "<h2>修复</h2><ul><li>…</li></ul>", "notesFormat": "markdown", "notesMarkdown": "## 修复\n- …",
+    "summary": "…", "platform": "android", "minOsVersion": "",
     "updateType": "optional", "channel": {"id": 3, "code": "beta", "name": "Beta", "level": "beta"},
     "assets": [{"id": 40, "abi": "arm64-v8a", "label": "", "downloadUrl": "https://…", "fileSize": 52428800, "sha256": "…", "position": 0, "downloadCount": 0}],
     "publishedAt": "2026-10-08T02:00:00Z"
   },
   "asset": {"id": 40, "abi": "arm64-v8a", "downloadUrl": "https://…", "fileSize": 52428800, "sha256": "…"},
-  "changelog": [{"version": "1.1.0", "versionCode": 1010099, "title": "…", "summary": "…", "notes": "<p>…</p>", "updateType": "optional", "publishedAt": "…"}],
+  "changelog": [{"version": "1.1.0", "versionCode": 1010099, "title": "…", "summary": "…", "notes": "<p>…</p>", "notesFormat": "html", "updateType": "optional", "publishedAt": "…"}],
   "checkedAt": "2026-10-08T03:00:00Z",
   "nextCheckAfter": 3600
 }
@@ -121,6 +141,7 @@ Kotlin SDK：`client.releases.*`（已登录时自动带令牌）。
 | `POST` | `/releases/assets` | 上传安装包（multipart，`file` 字段，≤2 GB），返回 `{reference, downloadUrl, fileName, fileSize, sha256, abi}`；`reference` 填进安装包的 `url`，`abi` 由文件名猜出 |
 | `POST` | `/releases/assets/presign` | 申请浏览器直传：`{fileName, fileSize, contentType?, configName?}` → `{mode, method, uploadUrl, headers, token, expiresAt, provider, reason}`。`mode=direct` 时浏览器带 `headers` 直接 `PUT` 到 `uploadUrl`（1 小时内有效）；`mode=server` 表示当前存储不支持直传，改用上面的 multipart 接口 |
 | `POST` | `/releases/assets/complete` | 直传完成：`{token, sha256?}` → 与 multipart 上传相同的结果。服务端 HEAD 一次确认对象存在且大小与申请时一致，令牌只能用一次 |
+| `POST` | `/releases/notes/preview` | 更新说明预览：`{format, markdown, notes}` → `{format, html, summary}`，与保存走同一条渲染与净化，不落库 |
 | `POST` | `/releases/simulate` | 模拟检测：`{versionCode, platform, userId, deviceId, abis, osVersion, deviceModel, locale, region}` → `{result, decisions}`，`decisions` 给出每个候选版本能否收到与原因 |
 | `GET` | `/releases/{rid}` | 详情 |
 | `PUT` | `/releases/{rid}` | 更新（字段缺省不修改；`assets` 提交即整组替换，带 `id` 的保留下载计数；`channelId` 为 `null` 或 `0` 表示不限渠道） |
@@ -136,7 +157,8 @@ Kotlin SDK：`client.releases.*`（已登录时自动带令牌）。
 
 ```json
 {
-  "version": "1.1.0", "versionCode": 1010099, "title": "秋季更新", "notes": "<p>富文本</p>",
+  "version": "1.1.0", "versionCode": 1010099, "title": "秋季更新",
+  "notesFormat": "markdown", "notesMarkdown": "## 新增\n- **钢琴**\n- <span style=\"color:#D32F2F\">重要</span>",
   "platform": "android", "minOsVersion": "7.0", "updateType": "recommended", "minSupportedCode": 1000099,
   "visibility": "public", "rolloutPct": 20, "channelId": null,
   "targeting": {

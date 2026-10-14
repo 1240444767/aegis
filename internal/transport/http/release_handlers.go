@@ -28,6 +28,8 @@ type AdminReleaseSaveRequest struct {
 	VersionCode      *int64                        `json:"versionCode"`
 	Title            *string                       `json:"title"`
 	Notes            *string                       `json:"notes"`
+	NotesFormat      *string                       `json:"notesFormat"`
+	NotesMarkdown    *string                       `json:"notesMarkdown"`
 	Platform         *string                       `json:"platform"`
 	MinOSVersion     *string                       `json:"minOsVersion"`
 	UpdateType       *string                       `json:"updateType"`
@@ -46,6 +48,13 @@ type AdminReleasePublishRequest struct {
 
 type AdminReleaseRolloutRequest struct {
 	RolloutPct int `json:"rolloutPct"`
+}
+
+// AdminReleaseNotesPreviewRequest 更新说明预览。format 为 markdown 时读 markdown，否则读 notes（HTML）。
+type AdminReleaseNotesPreviewRequest struct {
+	Format   string `json:"format"`
+	Markdown string `json:"markdown"`
+	Notes    string `json:"notes"`
 }
 
 // AdminReleaseSimulateRequest 以某个客户端的身份模拟一次检测。
@@ -182,6 +191,8 @@ func (h *Handler) saveRelease(c *gin.Context, releaseID int64) {
 		VersionCode:      req.VersionCode,
 		Title:            req.Title,
 		Notes:            req.Notes,
+		NotesFormat:      req.NotesFormat,
+		NotesMarkdown:    req.NotesMarkdown,
 		Platform:         req.Platform,
 		MinOSVersion:     req.MinOSVersion,
 		UpdateType:       req.UpdateType,
@@ -366,6 +377,26 @@ func (h *Handler) AdminSimulateRelease(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, "模拟完成", result)
+}
+
+// AdminPreviewReleaseNotes POST /api/admin/apps/:appkey/releases/notes/preview
+//
+// 与保存走同一条渲染与净化，控制台的预览就是保存后客户端拿到的 HTML。
+func (h *Handler) AdminPreviewReleaseNotes(c *gin.Context) {
+	if _, ok := resolveAppID(c, h.app); !ok || !h.releaseReady(c) {
+		return
+	}
+	var req AdminReleaseNotesPreviewRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	preview, err := h.release.PreviewReleaseNotes(req.Format, req.Markdown, req.Notes)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "获取成功", preview)
 }
 
 // AdminUploadReleaseAsset POST /api/admin/apps/:appkey/releases/assets（multipart，file 字段）

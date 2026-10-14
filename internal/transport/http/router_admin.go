@@ -422,6 +422,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/releases/assets/presign", h.AdminPresignReleaseAsset)
 		admin.POST("/apps/:appkey/releases/assets/complete", h.AdminCompleteReleaseAsset)
 		admin.POST("/apps/:appkey/releases/simulate", h.AdminSimulateRelease)
+		admin.POST("/apps/:appkey/releases/notes/preview", h.AdminPreviewReleaseNotes)
 		admin.GET("/apps/:appkey/releases/:rid", h.AdminGetRelease)
 		admin.PUT("/apps/:appkey/releases/:rid", h.AdminUpdateRelease)
 		admin.DELETE("/apps/:appkey/releases/:rid", h.AdminDeleteRelease)

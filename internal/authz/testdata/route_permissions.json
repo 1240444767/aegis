@@ -7328,6 +7328,13 @@
     "unmapped": false
   },
   {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/notes/preview",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/releases/:rid",
     "permission": "version:read",
