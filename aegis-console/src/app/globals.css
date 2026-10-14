@@ -1796,6 +1796,191 @@
 }
 
 /* ==================================================================== */
+/*  富文本正文（.rich-prose）                                           */
+/*  公告、更新说明的编辑区与展示区共用。正文来自富文本编辑器或服务端从    */
+/*  Markdown 渲染的 HTML，标签只有净化白名单里那些。原先这里写的是       */
+/*  prose 类名，但没装 typography 插件，列表没有圆点、标题和正文一样大。 */
+/* ==================================================================== */
+.rich-prose {
+  color: var(--foreground);
+  font-size: 0.875rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.rich-prose > * + * {
+  margin-top: 0.75em;
+}
+
+.rich-prose h1,
+.rich-prose h2,
+.rich-prose h3,
+.rich-prose h4,
+.rich-prose h5,
+.rich-prose h6 {
+  font-weight: 600;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+}
+
+.rich-prose h1 {
+  font-size: 1.25rem;
+}
+
+.rich-prose h2 {
+  font-size: 1.0625rem;
+}
+
+.rich-prose h3 {
+  font-size: 0.9375rem;
+}
+
+.rich-prose h4,
+.rich-prose h5,
+.rich-prose h6 {
+  font-size: 0.875rem;
+}
+
+.rich-prose * + :is(h1, h2, h3, h4, h5, h6) {
+  margin-top: 1.4em;
+}
+
+.rich-prose strong,
+.rich-prose b {
+  font-weight: 600;
+}
+
+.rich-prose em,
+.rich-prose i {
+  font-style: italic;
+}
+
+.rich-prose u,
+.rich-prose ins {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.rich-prose s,
+.rich-prose del,
+.rich-prose strike {
+  text-decoration: line-through;
+}
+
+.rich-prose mark {
+  border-radius: 0.2em;
+  padding: 0 0.15em;
+  background: color-mix(in srgb, #f9a825 30%, transparent);
+  color: inherit;
+}
+
+.rich-prose a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.rich-prose ul,
+.rich-prose ol {
+  padding-left: 1.4em;
+}
+
+.rich-prose ul {
+  list-style: disc;
+}
+
+.rich-prose ul ul {
+  list-style: circle;
+}
+
+.rich-prose ol {
+  list-style: decimal;
+}
+
+.rich-prose li + li,
+.rich-prose li > ul,
+.rich-prose li > ol {
+  margin-top: 0.3em;
+}
+
+.rich-prose li::marker {
+  color: var(--muted-foreground);
+}
+
+.rich-prose li > p {
+  margin: 0;
+}
+
+.rich-prose blockquote {
+  padding-left: 0.9em;
+  border-left: 3px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.rich-prose code {
+  border-radius: 0.3em;
+  padding: 0.1em 0.35em;
+  background: var(--muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.85em;
+}
+
+.rich-prose pre {
+  overflow-x: auto;
+  border-radius: 0.5rem;
+  padding: 0.75em 1em;
+  background: var(--muted);
+  font-size: 0.8125rem;
+  line-height: 1.6;
+}
+
+.rich-prose pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.rich-prose hr {
+  margin: 1.4em 0;
+  border-color: var(--border);
+}
+
+.rich-prose img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+}
+
+.rich-prose table {
+  display: block;
+  width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.rich-prose th,
+.rich-prose td {
+  padding: 0.45em 0.75em;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.rich-prose th {
+  background: var(--muted);
+  font-weight: 600;
+}
+
+/* tiptap 的空段落占位 */
+.rich-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  color: var(--muted-foreground);
+  pointer-events: none;
+}
+
+/* ==================================================================== */
 /*  自动骨架屏（components/ui/auto-skeleton.tsx）                       */
 /* ==================================================================== */
 

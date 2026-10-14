@@ -3,6 +3,8 @@ import type {
   Release,
   ReleaseAssetUploadResult,
   ReleaseListResult,
+  ReleaseNotesFormat,
+  ReleaseNotesPreview,
   ReleaseOverview,
   ReleaseSavePayload,
   ReleaseSimulateInput,
@@ -83,6 +85,21 @@ export function simulateAdminRelease(token: string, appKey: string, input: Relea
     method: "POST",
     token,
     body: JSON.stringify(input)
+  });
+}
+
+/** 更新说明预览：与保存同一条渲染与净化，返回保存后客户端拿到的 HTML。 */
+export function previewAdminReleaseNotes(
+  token: string,
+  appKey: string,
+  payload: { format: ReleaseNotesFormat; markdown?: string; notes?: string },
+  signal?: AbortSignal
+) {
+  return apiRequest<ReleaseNotesPreview>(`${base(appKey)}/notes/preview`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload),
+    signal
   });
 }
 

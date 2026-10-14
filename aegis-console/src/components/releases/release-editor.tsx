@@ -18,7 +18,7 @@ import {
   Users
 } from "lucide-react";
 import { ApiError } from "@/lib/api-client";
-import type { Release, ReleaseSavePayload, ReleaseTargeting, ReleaseUpdateType, ReleaseVisibility, VersionChannel } from "@/lib/api/types";
+import type { Release, ReleaseNotesFormat, ReleaseSavePayload, ReleaseTargeting, ReleaseUpdateType, ReleaseVisibility, VersionChannel } from "@/lib/api/types";
 import { useAuthStore } from "@/lib/auth-store";
 import { inspectPackage, releasePackageInfo, type PackageInfo } from "@/lib/package-inspector/inspect";
 import { hashBlob } from "@/lib/package-inspector/sha256";
@@ -37,12 +37,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { RichEditor } from "@/components/ui/rich-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Slider } from "@/components/ui/slider";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { RELEASE_NOTES_MAX, ReleaseNotesEditor } from "./release-notes-editor";
 import { AppIcon, AssetCard, PackageDropzone, computeAssetIssues, type AssetItem } from "./release-assets";
 import { ApiLevelRange, DevicePicker, LocalePicker, ModelPicker, RegionPicker, SourceVersionRange, UserPicker } from "./release-audience";
 import {
@@ -71,7 +71,9 @@ type Form = {
   version: string;
   versionCode: string;
   title: string;
+  notesFormat: ReleaseNotesFormat;
   notes: string;
+  notesMarkdown: string;
   platform: string;
   minOsVersion: string;
   updateType: ReleaseUpdateType;
@@ -107,7 +109,10 @@ function toForm(item?: Release | null): Form {
     version: item?.version ?? "",
     versionCode: item?.versionCode ? String(item.versionCode) : "",
     title: item?.title ?? "",
+    // 新版本默认用 Markdown 写；已有版本沿用它保存时的格式
+    notesFormat: item ? (item.notesFormat ?? "html") : "markdown",
     notes: item?.notes ?? "",
+    notesMarkdown: item?.notesMarkdown ?? "",
     platform: item?.platform ?? "android",
     minOsVersion: item?.minOsVersion ?? "",
     updateType: item?.updateType ?? "optional",
@@ -387,17 +392,20 @@ export function ReleaseEditor({
     const minSrc = toInt(form.minSourceCode);
     const maxSrc = toInt(form.maxSourceCode);
     if (minSrc && maxSrc && minSrc > maxSrc) next.minSourceCode = "下限不能高于上限";
+    if (form.notesFormat === "markdown" && [...form.notesMarkdown].length > RELEASE_NOTES_MAX) {
+      next.notes = `更新说明不超过 ${RELEASE_NOTES_MAX} 个字符`;
+    }
     setErrors(next);
     const firstError = Object.keys(next)[0] as keyof Errors | undefined;
     if (firstError) {
-      const section: SectionId =
-        firstError === "assets"
-          ? "assets"
-          : firstError === "minSupportedCode"
-            ? "policy"
-            : ["minOsApi", "minSourceCode"].includes(firstError)
-              ? "targeting"
-              : "basics";
+      const sectionOf: Partial<Record<keyof Errors, SectionId>> = {
+        assets: "assets",
+        notes: "notes",
+        minSupportedCode: "policy",
+        minOsApi: "targeting",
+        minSourceCode: "targeting"
+      };
+      const section: SectionId = sectionOf[firstError] ?? "basics";
       scrollTo(section);
       return null;
     }
@@ -420,7 +428,8 @@ export function ReleaseEditor({
       version: form.version.trim(),
       versionCode,
       title: form.title.trim(),
-      notes: form.notes,
+      notesFormat: form.notesFormat,
+      ...(form.notesFormat === "markdown" ? { notesMarkdown: form.notesMarkdown } : { notes: form.notes }),
       platform: form.platform,
       minOsVersion: form.minOsVersion.trim(),
       updateType: form.updateType,
@@ -520,7 +529,10 @@ export function ReleaseEditor({
   const sectionDone: Record<SectionId, boolean> = {
     assets: assets.length > 0 && !busyRows.length && !failedRows.length && assets.every((a) => a.url),
     basics: Boolean(form.version.trim() && versionCode),
-    notes: form.notes.replace(/<[^>]*>/g, "").trim().length > 0,
+    notes:
+      form.notesFormat === "markdown"
+        ? form.notesMarkdown.trim().length > 0 && [...form.notesMarkdown].length <= RELEASE_NOTES_MAX
+        : form.notes.replace(/<[^>]*>/g, "").trim().length > 0,
     policy: true,
     audience: true,
     targeting: targetingCount > 0
@@ -662,7 +674,16 @@ export function ReleaseEditor({
               </Section>
 
               <Section id="notes" title="更新说明" description="会显示在客户端的更新弹窗与官网下载页">
-                <RichEditor value={form.notes} onChange={(html) => patch("notes", html)} placeholder="这次更新了什么？" fullscreenable />
+                <ReleaseNotesEditor
+                  appKey={appKey}
+                  format={form.notesFormat}
+                  markdown={form.notesMarkdown}
+                  html={form.notes}
+                  onFormatChange={(value) => patch("notesFormat", value)}
+                  onMarkdownChange={(value) => patch("notesMarkdown", value)}
+                  onHtmlChange={(value) => patch("notes", value)}
+                />
+                {errors.notes ? <p className="text-xs text-destructive">{errors.notes}</p> : null}
               </Section>
 
               <Section id="policy" title="更新策略">

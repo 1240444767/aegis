@@ -1351,13 +1351,25 @@ export type ReleaseChannelRef = {
   color?: string;
 };
 
+/** 更新说明的撰写格式：html 为富文本编辑器，markdown 为 Markdown 原文。 */
+export type ReleaseNotesFormat = "html" | "markdown";
+
+export type ReleaseNotesPreview = {
+  format: ReleaseNotesFormat;
+  html: string;
+  summary: string;
+};
+
 export type Release = {
   id: number;
   appid: number;
   version: string;
   versionCode: number;
   title?: string;
+  /** 净化后的 HTML；markdown 格式下由服务端从 notesMarkdown 渲染。 */
   notes: string;
+  notesFormat?: ReleaseNotesFormat;
+  notesMarkdown?: string;
   summary?: string;
   platform: string;
   minOsVersion?: string;
@@ -1400,6 +1412,8 @@ export type ReleaseSavePayload = {
   versionCode?: number;
   title?: string;
   notes?: string;
+  notesFormat?: ReleaseNotesFormat;
+  notesMarkdown?: string;
   platform?: string;
   minOsVersion?: string;
   updateType?: ReleaseUpdateType;
@@ -1464,6 +1478,8 @@ export type ReleaseChangelogEntry = {
   title?: string;
   summary?: string;
   notes: string;
+  notesFormat?: ReleaseNotesFormat;
+  notesMarkdown?: string;
   updateType: ReleaseUpdateType;
   publishedAt?: string | null;
 };

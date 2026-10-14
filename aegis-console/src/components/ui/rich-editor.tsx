@@ -81,7 +81,7 @@ export function RichEditor({ value, onChange, placeholder, className, fullscreen
     editorProps: {
       attributes: {
         class: cn(
-          "prose prose-sm dark:prose-invert max-w-none px-4 py-3 focus:outline-none",
+          "rich-prose px-4 py-3 focus:outline-none",
           fullscreen ? "min-h-[calc(100vh-56px)]" : "min-h-40"
         ),
       },
@@ -156,7 +156,7 @@ export function RichContent({ html, className }: { html?: string; className?: st
   if (!html) return null;
   return (
     <div
-      className={cn("prose prose-sm dark:prose-invert max-w-none", className)}
+      className={cn("rich-prose", className)}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );
