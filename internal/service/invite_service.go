@@ -557,10 +557,28 @@ func (s *InviteService) UpdateMyCode(ctx context.Context, appID, userID int64, c
 }
 
 // ensurePersonalCode 取我的个人码，没有就按应用格式生成一个。
+// 注册时平台已经写过老系统的个人码（user_profiles.invite_code），有就沿用它，
+// 一个账号只保留一个邀请码。
 func (s *InviteService) ensurePersonalCode(ctx context.Context, settings invite.Settings, userID int64) (*invite.Code, error) {
 	existing, err := s.pg.GetPersonalInviteCode(ctx, settings.AppID, userID)
 	if err != nil || existing != nil {
 		return existing, err
+	}
+	if legacy, err := s.pg.LegacyProfileInviteCode(ctx, settings.AppID, userID); err != nil {
+		return nil, err
+	} else if legacy != "" {
+		created, err := s.pg.CreatePersonalInviteCode(ctx, settings.AppID, userID, legacy, false)
+		switch {
+		case err == nil:
+			return created, nil
+		case errors.Is(err, pgrepo.ErrInvitePersonalCodeExists):
+			// 并发的另一次请求先生成了
+			return s.pg.GetPersonalInviteCode(ctx, settings.AppID, userID)
+		case pgrepo.IsUniqueViolation(err):
+			// 这个老码已经被 invite_codes 里别的行占用（历史脏数据）：退回随机生成
+		default:
+			return nil, err
+		}
 	}
 	for attempt := 0; attempt < inviteCodeAttempts; attempt++ {
 		code, err := invite.GenerateCode(settings.Config)

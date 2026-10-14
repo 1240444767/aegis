@@ -128,6 +128,21 @@ FROM invite_codes c WHERE c.appid = $1 AND c.owner_user_id = $2 AND c.kind = 'pe
 	return code, err
 }
 
+// LegacyProfileInviteCode 取注册时写在 user_profiles.invite_code 里的老系统个人码；没有返回空串。
+// 邀请中心首次取个人码时沿用它，避免同一个账号出现两个邀请码。
+func (r *Repository) LegacyProfileInviteCode(ctx context.Context, appID, userID int64) (string, error) {
+	var code string
+	err := r.pool.QueryRow(ctx, `SELECT COALESCE(p.invite_code, '') FROM user_profiles p
+JOIN users u ON u.id = p.user_id WHERE u.appid = $1 AND p.user_id = $2`, appID, userID).Scan(&code)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(code), nil
+}
+
 // CreatePersonalInviteCode 生成个人码。撞码返回唯一约束错误（调用方换码重试）；
 // 此人已经有个人码（并发首次生成）返回 ErrInvitePersonalCodeExists。
 func (r *Repository) CreatePersonalInviteCode(ctx context.Context, appID, userID int64, code string, custom bool) (*invite.Code, error) {
