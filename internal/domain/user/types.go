@@ -432,6 +432,9 @@ type AdminUserQuery struct {
 	CustomID    string     `json:"customId"`
 	UserID      *int64     `json:"userId,omitempty"`
 	Enabled     *bool      `json:"enabled,omitempty"`
+	// IDs 按用户 ID 批量取（最多 500 个），给出时忽略其余筛选与分页，按给定顺序返回。
+	// 发布中心的内测、排除名单要把存着的 ID 还原成人。
+	IDs         []int64    `json:"ids,omitempty"`
 	CreatedFrom *time.Time `json:"createdFrom,omitempty"`
 	CreatedTo   *time.Time `json:"createdTo,omitempty"`
 	// Sort 排序字段（外部名，如 createdAt / integral）。空 = createdAt。
@@ -648,4 +651,38 @@ type SignHistoryResult struct {
 
 type SignHistoryExportQuery struct {
 	Limit int `json:"limit"`
+}
+
+// AdminDeviceQuery 应用设备目录的查询条件（设备来自登录记录）。
+type AdminDeviceQuery struct {
+	// Keyword 匹配设备 ID、型号、设备名，或用过这台设备的用户账号、昵称
+	Keyword string
+	// UserID 只看某个用户用过的设备
+	UserID int64
+	// IDs 按设备 ID 批量取（最多 200 个）
+	IDs   []string
+	Limit int
+}
+
+// AdminDeviceUser 设备的最近使用者。
+type AdminDeviceUser struct {
+	ID       int64  `json:"id"`
+	Account  string `json:"account,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+}
+
+// AdminDeviceItem 应用设备目录里的一台设备。
+type AdminDeviceItem struct {
+	DeviceID    string             `json:"deviceId"`
+	DeviceInfo  *devicedomain.Info `json:"deviceInfo,omitempty"`
+	FirstSeenAt time.Time          `json:"firstSeenAt"`
+	LastSeenAt  time.Time          `json:"lastSeenAt"`
+	Logins      int64              `json:"logins"`
+	// Users 用过这台设备的不同用户数
+	Users    int64            `json:"users"`
+	LastUser *AdminDeviceUser `json:"lastUser,omitempty"`
+	LastIP   string           `json:"lastIp,omitempty"`
+	// 以下供解析设备名用，不下发
+	Metadata  map[string]any `json:"-"`
+	UserAgent string         `json:"-"`
 }

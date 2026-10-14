@@ -458,6 +458,42 @@ func (h *Handler) ExportAdminAppNotifications(c *gin.Context) {
 	}
 }
 
+// parseInt64List 解析逗号分隔的正整数列表，非法项忽略。
+func parseInt64List(raw string) []int64 {
+	var out []int64
+	for _, part := range strings.Split(raw, ",") {
+		if v, err := strconv.ParseInt(strings.TrimSpace(part), 10, 64); err == nil && v > 0 {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// AdminAppDevices GET /api/admin/apps/:appkey/users/devices
+// 设备目录：keyword 搜设备 ID、型号或使用者；userId 只看某人的设备；ids 按设备 ID 批量取。
+func (h *Handler) AdminAppDevices(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	query := userdomain.AdminDeviceQuery{
+		Keyword: strings.TrimSpace(c.Query("keyword")),
+		Limit:   parsePositiveInt(c.Query("limit"), 30),
+	}
+	query.UserID, _ = strconv.ParseInt(strings.TrimSpace(c.Query("userId")), 10, 64)
+	for _, id := range strings.Split(c.Query("ids"), ",") {
+		if id = strings.TrimSpace(id); id != "" && len(id) <= 191 {
+			query.IDs = append(query.IDs, id)
+		}
+	}
+	items, err := h.user.ListAdminDevices(c.Request.Context(), appID, query)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "获取成功", gin.H{"items": items})
+}
+
 func (h *Handler) AdminAppUsers(c *gin.Context) {
 	appID, ok := resolveAppID(c, h.app)
 	if !ok {
@@ -501,6 +537,7 @@ func (h *Handler) AdminAppUsers(c *gin.Context) {
 		Order:       query.Order,
 		Page:        query.Page,
 		Limit:       query.Limit,
+		IDs:         parseInt64List(query.IDs),
 	})
 	if err != nil {
 		h.writeError(c, err)

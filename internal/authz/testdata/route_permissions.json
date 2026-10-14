@@ -1023,6 +1023,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/devices",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/users/:userId",
     "permission": "app:user:read",
     "appScoped": true,

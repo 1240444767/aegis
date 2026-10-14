@@ -745,6 +745,19 @@ func (s *UserService) ListAdminUsers(ctx context.Context, appID int64, query use
 	query.Page = page
 	query.Limit = limit
 
+	if len(query.IDs) > 0 {
+		ids := query.IDs
+		if len(ids) > adminUserListMaxLimit {
+			ids = ids[:adminUserListMaxLimit]
+		}
+		items, err := s.pg.ListAdminUsersByIDs(ctx, appID, ids)
+		if err != nil {
+			return nil, err
+		}
+		total := int64(len(items))
+		return &userdomain.AdminUserListResult{Items: items, Page: 1, Limit: len(ids), Total: total, TotalPages: 1}, nil
+	}
+
 	if shouldUseAdminUserSearch(query) && s.search != nil {
 		ids, total, err := s.search.SearchUsers(ctx, appID, query)
 		if err == nil {
@@ -2399,4 +2412,16 @@ func shouldUseAdminUserSearch(query userdomain.AdminUserQuery) bool {
 		query.Enabled != nil ||
 		query.CreatedFrom != nil ||
 		query.CreatedTo != nil
+}
+
+// ListAdminDevices 应用的设备目录（来自登录记录），设备名按设备字典现查。
+func (s *UserService) ListAdminDevices(ctx context.Context, appID int64, query userdomain.AdminDeviceQuery) ([]userdomain.AdminDeviceItem, error) {
+	items, err := s.pg.ListAppDevices(ctx, appID, query)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		items[i].DeviceInfo = s.devices.describeFromMetadata(ctx, items[i].Metadata, items[i].DeviceID, items[i].UserAgent)
+	}
+	return items, nil
 }

@@ -228,6 +228,7 @@ GET	/api/admin/apps/:appkey/users/:userId/oauth2-grants	AdminListUserOAuth2Grant
 GET	/api/admin/apps/:appkey/users/:userId/sessions	AdminListUserSessions
 GET	/api/admin/apps/:appkey/users/:userId/wallet	AdminAppUserWallet
 GET	/api/admin/apps/:appkey/users/:userId/wallet/transactions	AdminAppUserWalletTransactions
+GET	/api/admin/apps/:appkey/users/devices	AdminAppDevices
 GET	/api/admin/apps/:appkey/users/export	ExportAdminAppUsers
 GET	/api/admin/apps/:appkey/versions	AdminListVersions
 GET	/api/admin/apps/:appkey/versions/:vid	AdminGetVersion

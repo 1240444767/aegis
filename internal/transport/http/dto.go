@@ -329,18 +329,20 @@ type AdminBatchIDsRequest struct {
 }
 
 type AdminUserListQuery struct {
-	AppID       int64  `json:"appid" form:"appid"`
-	Keyword     string `form:"keyword"`
-	Account     string `form:"account"`
-	Nickname    string `form:"nickname"`
-	Email       string `form:"email"`
-	Phone       string `form:"phone"`
-	InviteCode  string `form:"inviteCode"`
-	RegisterIP  string `form:"registerIp"`
-	MarkCode    string `form:"markcode"`
-	CustomID    string `form:"customId"`
-	UserID      *int64 `form:"userId"`
-	Enabled     *bool  `form:"enabled"`
+	AppID      int64  `json:"appid" form:"appid"`
+	Keyword    string `form:"keyword"`
+	Account    string `form:"account"`
+	Nickname   string `form:"nickname"`
+	Email      string `form:"email"`
+	Phone      string `form:"phone"`
+	InviteCode string `form:"inviteCode"`
+	RegisterIP string `form:"registerIp"`
+	MarkCode   string `form:"markcode"`
+	CustomID   string `form:"customId"`
+	UserID     *int64 `form:"userId"`
+	Enabled    *bool  `form:"enabled"`
+	// IDs 逗号分隔的用户 ID，按 ID 批量取
+	IDs         string `form:"ids"`
 	CreatedFrom string `form:"createdFrom"`
 	CreatedTo   string `form:"createdTo"`
 	// Sort 排序字段：createdAt(默认) / updatedAt / id / account / integral /

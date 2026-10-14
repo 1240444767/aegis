@@ -322,6 +322,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/notifications/bulk", h.AdminBulkNotifyUsers)
 		admin.GET("/apps/:appkey/users", h.AdminAppUsers)
 		admin.GET("/apps/:appkey/users/export", h.ExportAdminAppUsers)
+		admin.GET("/apps/:appkey/users/devices", h.AdminAppDevices)
 		admin.POST("/apps/:appkey/users/bans/batch", h.BatchCreateAdminAppUserBan)
 		admin.PUT("/apps/:appkey/users/status/batch", h.BatchUpdateAdminAppUserStatus)
 		admin.GET("/apps/:appkey/users/:userId", h.AdminAppUser)
