@@ -149,7 +149,7 @@ func (s *AuthService) createPhoneUser(ctx context.Context, input SMSLoginInput, 
 	// 与密码注册同款：邀请码撞码则换码整体重试，靠唯一约束兜底而非预查询。
 	var user *userdomain.User
 	for attempt := 0; attempt < inviteCodeMaxAttempts; attempt++ {
-		inviteCode, codeErr := randomInviteCode(inviteCodeLength)
+		inviteCode, codeErr := s.personalInviteCode(ctx, input.AppID)
 		if codeErr != nil {
 			return nil, codeErr
 		}

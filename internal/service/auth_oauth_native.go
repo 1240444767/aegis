@@ -284,7 +284,7 @@ func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile 
 	account := base
 	var user *userdomain.User
 	for attempt := 0; attempt < inviteCodeMaxAttempts && user == nil; attempt++ {
-		inviteCode, err := randomInviteCode(inviteCodeLength)
+		inviteCode, err := s.personalInviteCode(ctx, appID)
 		if err != nil {
 			return nil, err
 		}

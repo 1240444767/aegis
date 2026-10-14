@@ -166,7 +166,7 @@ func (s *AuthService) createCardKeyUser(ctx context.Context, input CardKeyLoginI
 
 	// 与密码 / 短信注册同款：邀请码撞码则换码整体重试，靠唯一约束兜底而非预查询。
 	for attempt := 0; attempt < inviteCodeMaxAttempts; attempt++ {
-		inviteCode, codeErr := randomInviteCode(inviteCodeLength)
+		inviteCode, codeErr := s.personalInviteCode(ctx, input.AppID)
 		if codeErr != nil {
 			return nil, codeErr
 		}

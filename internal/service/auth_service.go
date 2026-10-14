@@ -15,6 +15,7 @@ import (
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
 	devicedomain "aegis/internal/domain/device"
+	"aegis/internal/domain/invite"
 	oauthdomain "aegis/internal/domain/oauth"
 	platformdomain "aegis/internal/domain/platform"
 	plugindomain "aegis/internal/domain/plugin"
@@ -450,11 +451,11 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 
 	// 用户 + 档案（含邀请码）+ 密码安全状态在单个事务中原子落库，
 	// 消除原实现「三段独立写入、中途失败产生无档案孤儿用户」的问题。
-	// 邀请码为 24 位随机（32 字符集），撞码概率趋近于零：直接依赖唯一约束、
-	// 撞码时换码整体重试，省去原实现每次注册的 HasInviteCode 预查询
+	// 邀请码按应用的「邀请码格式」配置生成（前缀 + 长度 + 字符集），撞码概率趋近于零：
+	// 直接依赖唯一约束、撞码时换码整体重试，省去原实现每次注册的 HasInviteCode 预查询
 	var user *userdomain.User
 	for attempt := 0; attempt < inviteCodeMaxAttempts; attempt++ {
-		inviteCode, codeErr := randomInviteCode(inviteCodeLength)
+		inviteCode, codeErr := s.personalInviteCode(ctx, input.AppID)
 		if codeErr != nil {
 			return nil, codeErr
 		}
@@ -1696,9 +1697,17 @@ func parseInt64(value string) (int64, error) {
 
 func (s *AuthService) upsertUserProfileWithInviteCode(ctx context.Context, profile userdomain.Profile) (string, error) {
 	profile.InviteCode = strings.TrimSpace(profile.InviteCode)
+	// 档案没有邀请码才补一个，格式按应用配置；UserID 反查不到 appid 就走默认格式，
+	// 不能让「补邀请码」把登录 / 绑定流程带崩。
+	appID := int64(0)
+	if profile.UserID > 0 {
+		if user, err := s.pg.GetUserByID(ctx, profile.UserID); err == nil && user != nil {
+			appID = user.AppID
+		}
+	}
 	for attempt := 0; attempt < inviteCodeMaxAttempts; attempt++ {
 		if profile.InviteCode == "" {
-			inviteCode, err := s.generateGlobalInviteCode(ctx)
+			inviteCode, err := s.personalInviteCode(ctx, appID)
 			if err != nil {
 				return "", err
 			}
@@ -1716,21 +1725,24 @@ func (s *AuthService) upsertUserProfileWithInviteCode(ctx context.Context, profi
 	return "", fmt.Errorf("generate invite code exceeded max retries")
 }
 
-func (s *AuthService) generateGlobalInviteCode(ctx context.Context) (string, error) {
-	for attempt := 0; attempt < inviteCodeMaxAttempts; attempt++ {
-		inviteCode, err := randomInviteCode(inviteCodeLength)
-		if err != nil {
-			return "", err
-		}
-		exists, err := s.pg.HasInviteCode(ctx, inviteCode)
-		if err != nil {
-			return "", err
-		}
-		if !exists {
-			return inviteCode, nil
+// personalInviteCode 按应用的「邀请码格式」配置（前缀 + 长度 + 字符集）生成个人邀请码。
+//
+// 注册路径早前写死 24 位、字符集也独立于配置，于是控制台配的格式和实际发出的码对不上；
+// 这里统一读配置，读不到就用默认格式 —— 配置查询失败不该让注册失败。
+// 唯一性交给 invite_codes 的唯一约束 + 调用方的换码重试，不做预查询。
+func (s *AuthService) personalInviteCode(ctx context.Context, appID int64) (string, error) {
+	cfg := invite.DefaultConfig()
+	if appID > 0 {
+		settings, err := s.pg.GetInviteSettings(ctx, appID)
+		switch {
+		case err != nil:
+			s.log.Warn("load invite settings for personal invite code failed, fallback to default format",
+				zap.Int64("appid", appID), zap.Error(err))
+		case settings != nil:
+			cfg = invite.NormalizeConfig(settings.Config)
 		}
 	}
-	return "", fmt.Errorf("generate invite code exceeded max retries")
+	return invite.GenerateCode(cfg)
 }
 
 func randomInviteCode(length int) (string, error) {
