@@ -626,7 +626,7 @@ export const closing = {
 /* ─────────────────────────── 页脚 ─────────────────────────── */
 
 /** 版权声明。公开页脚与登录、注册页共用这一份，权利人变更只改这里。 */
-export const copyrightNotice = "湖北省川意科技有限公司 版权所有";
+export const copyrightNotice = "StarBox";
 
 export type FooterColumn = {
   title: string;
