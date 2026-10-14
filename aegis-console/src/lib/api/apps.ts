@@ -243,25 +243,60 @@ export function deleteAdminAppUser(token: string, appKey: string, userId: number
   });
 }
 
-export function adjustUserIntegral(
-  token: string,
-  payload: { userId: number; appid: number; amount: number; reason?: string }
-) {
-  return apiRequest<Record<string, unknown>>("/api/app/points/adjust-integral", {
-    method: "POST",
-    token,
-    body: JSON.stringify(payload)
+/** 积分 / 经验调整的结果，与后端 points.IntegralAdjustResult / ExperienceAdjustResult 对齐。 */
+export type PointsAdjustResult = {
+  userId: number;
+  appid: number;
+  account: string;
+  amount: number;
+  beforeAmount: number;
+  afterAmount: number;
+  reason: string;
+  operationType: "add" | "consume";
+  transactionNo: string;
+  createdAt: string;
+  /** 同一请求编号已生效过：返回的是首次结果，余额没有再次变化 */
+  replayed?: boolean;
+  levelChanged?: boolean;
+  oldLevel?: number;
+  newLevel?: number;
+};
+
+export type PointsAdjustPayload = {
+  userId: number;
+  appid: number;
+  /** 正数增加、负数扣减（经验只能为正）；单次绝对值不超过 100,000,000 */
+  amount: number;
+  reason?: string;
+  /** 防重复提交：同一编号只生效一次 */
+  requestId?: string;
+};
+
+// 后端字段是下划线写法（user_id / request_id）。这里显式转换，不把驼峰对象原样发出去 ——
+// 原样发送 userId 曾让每次调整都报「缺少必要的请求参数」。
+function pointsAdjustBody(payload: PointsAdjustPayload) {
+  return JSON.stringify({
+    user_id: payload.userId,
+    appid: payload.appid,
+    amount: payload.amount,
+    reason: payload.reason,
+    request_id: payload.requestId
   });
 }
 
-export function adjustUserExperience(
-  token: string,
-  payload: { userId: number; appid: number; amount: number; reason?: string }
-) {
-  return apiRequest<Record<string, unknown>>("/api/app/points/adjust-experience", {
+export function adjustUserIntegral(token: string, payload: PointsAdjustPayload) {
+  return apiRequest<PointsAdjustResult>("/api/app/points/adjust-integral", {
     method: "POST",
     token,
-    body: JSON.stringify(payload)
+    body: pointsAdjustBody(payload)
+  });
+}
+
+export function adjustUserExperience(token: string, payload: PointsAdjustPayload) {
+  return apiRequest<PointsAdjustResult>("/api/app/points/adjust-experience", {
+    method: "POST",
+    token,
+    body: pointsAdjustBody(payload)
   });
 }
 

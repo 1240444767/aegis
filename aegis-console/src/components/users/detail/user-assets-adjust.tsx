@@ -10,6 +10,13 @@
  * 方向（增加 / 扣减）单独选，而不是让人在数量前面打负号：
  * 负号在输入框里很容易漏看，扣成了加、加成了扣都要再做一笔冲正。
  * 提交按钮把方向与数量写出来（「扣减 50 积分」），点下去之前最后确认一眼。
+ *
+ * 数值一律按字符串放大成 BigInt 比较，不经过 Number：超过 2^53 的整数转成浮点数会被舍入，
+ * 「调整后」预览与上限判断都会算错。卡片在本地先拦下单次超限与调整后越界，
+ * 后端仍会按同样的规则再校验一遍。
+ *
+ * 每次提交附带一个请求编号：同一笔（方向、数量、原因都没变）重试时复用，
+ * 后端据此只生效一次 —— 网络超时后再点一次不会扣两遍。成功或改动内容后换新编号。
  */
 
 import * as React from "react";
@@ -41,6 +48,29 @@ function fromScaled(value: bigint) {
   const negative = value < ZERO;
   const digits = (negative ? -value : value).toString().padStart(SCALE + 1, "0");
   return `${negative ? "-" : ""}${digits.slice(0, -SCALE)}.${digits.slice(-SCALE)}`;
+}
+
+/** 比较两个十进制字符串；任一无法解析时返回 null。 */
+export function compareDecimal(a?: string | null, b?: string | null) {
+  const left = toScaled(a);
+  const right = toScaled(b);
+  if (left === null || right === null) return null;
+  return left === right ? 0 : left > right ? 1 : -1;
+}
+
+/** 千分位显示整数字符串（BigInt，不丢精度）。 */
+export function formatIntegerString(value: string) {
+  try {
+    return BigInt(value).toLocaleString("zh-CN");
+  } catch {
+    return value;
+  }
+}
+
+/** 生成请求编号；没有 randomUUID 的环境（非安全上下文）退回随机数拼接。 */
+export function newRequestId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
 /** 两个十进制字符串相加；任一无法解析时返回 null。 */
@@ -230,6 +260,9 @@ export function AdjustCard({
   quick,
   reasons,
   shortageText,
+  addOnly = false,
+  maxAmount,
+  maxBalance,
   pending,
   onSubmit
 }: {
@@ -250,27 +283,45 @@ export function AdjustCard({
   reasons: string[];
   /** 扣减超过当前值时的提示（后端同样拒绝），如「积分不足」 */
   shortageText: string;
+  /** 只允许增加（经验只增不减），不显示方向选择 */
+  addOnly?: boolean;
+  /** 单次调整数量上限（十进制字符串） */
+  maxAmount?: string;
+  /** 调整后余额上限（十进制字符串） */
+  maxBalance?: string;
   pending: boolean;
-  /** 返回 true 表示成功，卡片随即清空数量与原因 */
-  onSubmit: (signedAmount: string, reason: string) => Promise<boolean>;
+  /** 返回 true 表示成功，卡片随即清空数量与原因；requestId 同一笔重试时不变 */
+  onSubmit: (signedAmount: string, reason: string, requestId: string) => Promise<boolean>;
 }) {
-  const [direction, setDirection] = React.useState<Direction>("add");
+  const [pickedDirection, setDirection] = React.useState<Direction>("add");
   const [amount, setAmount] = React.useState("");
   const [reason, setReason] = React.useState("");
+  const direction: Direction = addOnly ? "add" : pickedDirection;
 
   const trimmed = amount.trim();
   const amountValid = (decimal ? DECIMAL_RE : INTEGER_RE).test(trimmed) && isPositiveDecimal(trimmed);
   const signed = direction === "deduct" ? `-${trimmed}` : trimmed;
   const after = amountValid && current !== undefined ? addDecimal(current, signed) : null;
   const shortage = after !== null && isNegativeDecimal(after);
-  const disabled = Boolean(unavailable) || loading || pending || !amountValid || shortage;
+  const overAmount = amountValid && maxAmount !== undefined && (compareDecimal(trimmed, maxAmount) ?? 0) > 0;
+  const overBalance = !shortage && after !== null && maxBalance !== undefined && (compareDecimal(after, maxBalance) ?? 0) > 0;
+  const disabled = Boolean(unavailable) || loading || pending || !amountValid || shortage || overAmount || overBalance;
 
-  const amountLabel = decimal ? `¥${trimmed}` : `${Number(trimmed).toLocaleString("zh-CN")} ${unit}`;
+  const amountLabel = decimal ? `¥${trimmed}` : `${formatIntegerString(trimmed)} ${unit}`;
+
+  // 请求编号跟着「这一笔」走：内容不变就复用，改了任何一项就换新的
+  const requestRef = React.useRef<{ key: string; id: string } | null>(null);
+  function requestIdFor(key: string) {
+    if (requestRef.current?.key !== key) requestRef.current = { key, id: newRequestId() };
+    return requestRef.current.id;
+  }
 
   async function submit() {
     if (disabled) return;
-    const ok = await onSubmit(signed, reason.trim());
+    const finalReason = reason.trim();
+    const ok = await onSubmit(signed, finalReason, requestIdFor(`${signed}|${finalReason}`));
     if (ok) {
+      requestRef.current = null;
       setAmount("");
       setReason("");
     }
@@ -300,13 +351,15 @@ export function AdjustCard({
 
       <div className="mt-auto space-y-2.5 border-t bg-muted/20 px-4 py-4 sm:px-5">
         <div className="flex gap-2">
-          <Segmented
-            value={direction}
-            onChange={setDirection}
-            options={DIRECTIONS}
-            ariaLabel={`${title}调整方向`}
-            className="shrink-0"
-          />
+          {addOnly ? null : (
+            <Segmented
+              value={direction}
+              onChange={setDirection}
+              options={DIRECTIONS}
+              ariaLabel={`${title}调整方向`}
+              className="shrink-0"
+            />
+          )}
           <div className="relative min-w-0 flex-1">
             <Input
               value={amount}
@@ -314,6 +367,7 @@ export function AdjustCard({
               placeholder={decimal ? "0.00" : "0"}
               aria-label={`${title}调整数量`}
               disabled={Boolean(unavailable)}
+              maxLength={decimal ? 16 : 12}
               className="h-8 pr-10 text-sm tabular-nums"
               onChange={(event) => setAmount(event.target.value.replace(/[^\d.]/g, ""))}
               onKeyDown={(event) => {
@@ -333,14 +387,18 @@ export function AdjustCard({
           items={quick}
           value={trimmed}
           onPick={setAmount}
-          render={(item) => (decimal ? `¥${item}` : Number(item).toLocaleString("zh-CN"))}
+          render={(item) => (decimal ? `¥${item}` : formatIntegerString(item))}
         />
 
         <div className="flex h-5 items-center gap-1.5 text-xs text-muted-foreground">
-          {shortage ? (
+          {overAmount ? (
+            <span className="text-destructive">单次最多调整 {formatIntegerString(maxAmount ?? "")} {unit}</span>
+          ) : shortage ? (
             <span className="text-destructive">
               {shortageText}，最多扣减 {current !== undefined ? format(current) : ""}
             </span>
+          ) : overBalance ? (
+            <span className="text-destructive">调整后将超过上限 {formatIntegerString(maxBalance ?? "")}</span>
           ) : after !== null && current !== undefined ? (
             <>
               <span className="tabular-nums">{format(current)}</span>

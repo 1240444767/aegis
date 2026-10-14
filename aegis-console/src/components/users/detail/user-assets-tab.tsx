@@ -36,7 +36,7 @@ import {
 } from "@/lib/app-user-hooks";
 import type { AdminAppUserDetail, UserWallet } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
-import { AdjustCard, Segmented } from "./user-assets-adjust";
+import { AdjustCard, Segmented, formatIntegerString } from "./user-assets-adjust";
 import {
   EMPTY,
   EmptyRow,
@@ -56,6 +56,10 @@ import { UserVipPanel } from "./user-vip-panel";
 const POINT_QUICK = ["10", "50", "100", "500", "1000"];
 const MONEY_QUICK = ["1", "5", "10", "50", "100"];
 const POINT_REASONS = ["活动奖励", "客诉补偿", "签到补发", "错误更正", "违规扣除"];
+const EXPERIENCE_REASONS = ["活动奖励", "客诉补偿", "签到补发", "错误更正"];
+/** 与后端 pointdomain.MaxAdminAdjustAmount / MaxBalance 一致 */
+const POINT_MAX_ADJUST = "100000000";
+const POINT_MAX_BALANCE = "9007199254740991";
 const MONEY_REASONS = ["客诉补偿", "线下充值", "退款补录", "错误更正"];
 
 const LEDGER_PAGE_SIZE = 10;
@@ -92,18 +96,27 @@ export function UserAssetsTab({
   const experienceMutation = useAdjustUserExperienceMutation();
   const walletMutation = useAdjustAdminUserWalletMutation(appKey, userId);
 
-  async function adjustPoints(kind: "integral" | "experience", signed: string, reason: string) {
+  async function adjustPoints(kind: "integral" | "experience", signed: string, reason: string, requestId: string) {
     if (!appId) {
       toast.error("缺少应用标识");
       return false;
     }
+    // 卡片已把数量限制在单次上限内，远小于 2^53，转 Number 不丢精度
     const amount = Number.parseInt(signed, 10);
+    if (!Number.isSafeInteger(amount) || amount === 0) {
+      toast.error("调整数量无效");
+      return false;
+    }
+    const label = kind === "integral" ? "积分" : "经验";
     const mutation = kind === "integral" ? integralMutation : experienceMutation;
     try {
-      await mutation.mutateAsync({ userId, appid: appId, amount, reason: reason || undefined });
-      toast.success(
-        `${kind === "integral" ? "积分" : "经验"}已${amount > 0 ? "增加" : "扣减"} ${Math.abs(amount).toLocaleString("zh-CN")}`
-      );
+      const result = await mutation.mutateAsync({ userId, appid: appId, amount, reason: reason || undefined, requestId });
+      const after = typeof result?.afterAmount === "number" ? `，当前 ${formatIntegerString(String(result.afterAmount))}` : "";
+      if (result?.replayed) {
+        toast.info(`该笔调整已处理过，未重复${amount > 0 ? "增加" : "扣减"}${after}`);
+      } else {
+        toast.success(`${label}已${amount > 0 ? "增加" : "扣减"} ${formatIntegerString(String(Math.abs(amount)))}${after}`);
+      }
       return true;
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : "调整失败");
@@ -126,7 +139,7 @@ export function UserAssetsTab({
 
   const numberString = (value: unknown) =>
     typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
-  const formatCount = (value: string) => Number(value).toLocaleString("zh-CN");
+  const formatCount = (value: string) => formatIntegerString(value);
 
   return (
     <div className="space-y-5">
@@ -140,8 +153,10 @@ export function UserAssetsTab({
           quick={POINT_QUICK}
           reasons={POINT_REASONS}
           shortageText="积分不足"
+          maxAmount={POINT_MAX_ADJUST}
+          maxBalance={POINT_MAX_BALANCE}
           pending={integralMutation.isPending}
-          onSubmit={(signed, reason) => adjustPoints("integral", signed, reason)}
+          onSubmit={(signed, reason, requestId) => adjustPoints("integral", signed, reason, requestId)}
         />
         <AdjustCard
           title="经验"
@@ -149,11 +164,15 @@ export function UserAssetsTab({
           unit="经验"
           current={numberString(user.experience)}
           format={formatCount}
+          hint="经验只增不减，等级随之重算"
           quick={POINT_QUICK}
-          reasons={POINT_REASONS}
+          reasons={EXPERIENCE_REASONS}
           shortageText="经验不足"
+          addOnly
+          maxAmount={POINT_MAX_ADJUST}
+          maxBalance={POINT_MAX_BALANCE}
           pending={experienceMutation.isPending}
-          onSubmit={(signed, reason) => adjustPoints("experience", signed, reason)}
+          onSubmit={(signed, reason, requestId) => adjustPoints("experience", signed, reason, requestId)}
         />
         <AdjustCard
           title="钱包余额"
