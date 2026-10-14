@@ -7301,6 +7301,20 @@
   },
   {
     "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/assets/presign",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/assets/complete",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
     "path": "/api/admin/apps/:appkey/releases/simulate",
     "permission": "version:read",
     "appScoped": true,

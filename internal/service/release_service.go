@@ -469,6 +469,87 @@ func (s *ReleaseService) UploadAsset(ctx context.Context, appID int64, baseURL s
 	}, nil
 }
 
+// ReleaseAssetDirectInput 准备直传安装包的参数。
+type ReleaseAssetDirectInput struct {
+	ConfigName  string
+	FileName    string
+	FileSize    int64
+	ContentType string
+	UploadedBy  *int64
+}
+
+// releaseAssetObjectKey 安装包的对象键：按月分目录，随机前缀防覆盖。
+func releaseAssetObjectKey(appID int64, name string) (string, error) {
+	buf := make([]byte, 6)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("apps/%d/releases/%s/%s-%s", appID, time.Now().UTC().Format("200601"), hex.EncodeToString(buf), safeObjectName(name)), nil
+}
+
+// PrepareAssetUpload 为安装包签发浏览器直传地址。存储不支持直传时返回 mode=server，
+// 控制台改走 UploadAsset（经服务器上传）。
+func (s *ReleaseService) PrepareAssetUpload(ctx context.Context, appID int64, input ReleaseAssetDirectInput) (*DirectUploadTicket, error) {
+	if s.storage == nil {
+		return nil, apperrors.New(50380, http.StatusServiceUnavailable, "存储服务未启用")
+	}
+	if input.FileSize <= 0 || input.FileSize > releaseAssetMaxSize {
+		return nil, apperrors.New(40045, http.StatusBadRequest, "安装包大小应在 2 GB 以内")
+	}
+	name := path.Base(strings.ReplaceAll(strings.TrimSpace(input.FileName), "\\", "/"))
+	if name == "" || name == "." || name == "/" {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "缺少文件名")
+	}
+	ext := strings.ToLower(path.Ext(name))
+	contentType := strings.TrimSpace(input.ContentType)
+	if ext == ".apk" || contentType == "" || contentType == "application/octet-stream" {
+		contentType = releaseContentType(ext)
+	}
+	key, err := releaseAssetObjectKey(appID, name)
+	if err != nil {
+		return nil, err
+	}
+	return s.storage.PrepareDirectUpload(ctx, appID, DirectUploadInput{
+		ConfigName:  strings.TrimSpace(input.ConfigName),
+		ObjectKey:   key,
+		FileName:    name,
+		ContentType: contentType,
+		Size:        input.FileSize,
+		UploadedBy:  input.UploadedBy,
+		Metadata:    map[string]string{"module": "app-release"},
+		// 大文件在慢网络上要传很久，给足一小时
+		Expires: time.Hour,
+	})
+}
+
+// CompleteAssetUpload 确认直传完成，返回与 UploadAsset 相同形状的结果。
+//
+// SHA-256 由浏览器在本地算好随请求带上：服务器没有经手文件内容，算不了；
+// 对象存储只保证收到的字节数对得上。这与手填外链时的 SHA-256 一样属于发布者自述，
+// 客户端下载后按它校验，填错只会让客户端拒绝安装，不会装上错误的包。
+func (s *ReleaseService) CompleteAssetUpload(ctx context.Context, appID int64, baseURL string, token string, sha256Hex string) (*ReleaseAssetUploadResult, error) {
+	if s.storage == nil {
+		return nil, apperrors.New(50380, http.StatusServiceUnavailable, "存储服务未启用")
+	}
+	sha256Hex = strings.ToLower(strings.TrimSpace(sha256Hex))
+	if sha256Hex != "" && !releaseSHA256Pattern.MatchString(sha256Hex) {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "SHA-256 应为 64 位十六进制")
+	}
+	stored, err := s.storage.CompleteDirectUpload(ctx, appID, token)
+	if err != nil {
+		return nil, err
+	}
+	reference := buildStorageReference(stored.ConfigID, stored.Key)
+	return &ReleaseAssetUploadResult{
+		Reference:   reference,
+		DownloadURL: s.resolveAssetURL(ctx, appID, reference, baseURL),
+		FileName:    stored.FileName,
+		FileSize:    stored.Size,
+		SHA256:      sha256Hex,
+		Abi:         guessAbi(stored.FileName),
+	}, nil
+}
+
 // ReleaseAssetUploadResult Reference 填进安装包的 url 字段。
 type ReleaseAssetUploadResult struct {
 	Reference   string `json:"reference"`
