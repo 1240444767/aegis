@@ -1,59 +1,71 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { FileUp, Link2, Loader2, Plus, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Crosshair,
+  FileText,
+  Layers,
+  Link2,
+  Loader2,
+  Megaphone,
+  Package,
+  Rocket,
+  Sparkles,
+  Tag,
+  Users
+} from "lucide-react";
 import { ApiError } from "@/lib/api-client";
-import type {
-  Release,
-  ReleaseSavePayload,
-  ReleaseTargeting,
-  ReleaseUpdateType,
-  ReleaseVisibility,
-  VersionChannel
-} from "@/lib/api/types";
-import { usePublishReleaseMutation, useSaveReleaseMutation, useUploadReleaseAssetMutation } from "@/lib/release-hooks";
+import type { Release, ReleaseSavePayload, ReleaseTargeting, ReleaseUpdateType, ReleaseVisibility, VersionChannel } from "@/lib/api/types";
+import { useAuthStore } from "@/lib/auth-store";
+import { inspectPackage, releasePackageInfo, type PackageInfo } from "@/lib/package-inspector/inspect";
+import { hashBlob } from "@/lib/package-inspector/sha256";
+import { usePublishReleaseMutation, useSaveReleaseMutation } from "@/lib/release-hooks";
+import { DIRECT_UPLOAD_MAX_BYTES, isUploadAborted, uploadReleaseAsset } from "@/lib/release-upload";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { RichEditor } from "@/components/ui/rich-editor";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Slider } from "@/components/ui/slider";
-import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
+import { AppIcon, AssetCard, PackageDropzone, computeAssetIssues, type AssetItem } from "./release-assets";
+import { ApiLevelRange, DevicePicker, LocalePicker, ModelPicker, RegionPicker, SourceVersionRange, UserPicker } from "./release-audience";
 import {
   COMMON_ABIS,
   ChannelDot,
   DATA_FONT,
   RELEASE_PLATFORMS,
   ROLLOUT_PRESETS,
+  ReleaseStatusBadge,
   UPDATE_TYPES,
-  VISIBILITIES,
-  formatBytes,
-  parseIdList,
-  parseList
+  VISIBILITIES
 } from "./release-shared";
 
 /**
  * 版本编辑抽屉。
  *
- * 新建一律落在草稿；底部「保存并发布」是最常见的一步到位动作。
- * 安装包整组提交：界面上看到的就是保存后的最终集合，带 id 的保留下载计数。
+ * 发版最常见的路径是「拖入安装包 → 写两句更新说明 → 发布」，所以安装包放在最上面：
+ * 文件在浏览器里解析，版本名、版本码、平台、最低系统要求随之填好；SHA-256 本地算，
+ * 文件直接 PUT 到对象存储（存储不支持时自动经服务器上传）。自动填写的字段带标记，
+ * 手动改过之后不再被后续安装包覆盖。
+ *
+ * 新建一律落在草稿；底部「保存并发布」一步到位。安装包整组提交，带 id 的保留下载计数。
  */
-
-type AssetRow = {
-  key: string;
-  id?: number;
-  abi: string;
-  label: string;
-  url: string;
-  fileSize: number;
-  sha256: string;
-  downloadUrl?: string;
-  fileName?: string;
-};
 
 type Form = {
   version: string;
@@ -67,19 +79,24 @@ type Form = {
   channelId: string;
   visibility: ReleaseVisibility;
   rolloutPct: number;
-  testerUserIds: string;
-  testerDeviceIds: string;
-  excludeUserIds: string;
-  excludeDeviceIds: string;
-  regions: string;
-  locales: string;
-  deviceModels: string;
+  testerUserIds: number[];
+  testerDeviceIds: string[];
+  excludeUserIds: number[];
+  excludeDeviceIds: string[];
+  regions: string[];
+  locales: string[];
+  deviceModels: string[];
   abis: string[];
   minOsApi: string;
   maxOsApi: string;
   minSourceCode: string;
   maxSourceCode: string;
 };
+
+/** 自动填写过的字段 → 来源文件名；用户手动改过的字段会从这里移除 */
+type AutoMap = Partial<Record<keyof Form, string>>;
+
+type Errors = Partial<Record<keyof Form | "assets", string>>;
 
 let rowSeq = 0;
 const nextKey = () => `asset-${++rowSeq}`;
@@ -98,13 +115,13 @@ function toForm(item?: Release | null): Form {
     channelId: item?.channel?.id ? String(item.channel.id) : "none",
     visibility: item?.visibility ?? "public",
     rolloutPct: item?.rolloutPct ?? 100,
-    testerUserIds: (t.testerUserIds ?? []).join("\n"),
-    testerDeviceIds: (t.testerDeviceIds ?? []).join("\n"),
-    excludeUserIds: (t.excludeUserIds ?? []).join("\n"),
-    excludeDeviceIds: (t.excludeDeviceIds ?? []).join("\n"),
-    regions: (t.regions ?? []).join(", "),
-    locales: (t.locales ?? []).join(", "),
-    deviceModels: (t.deviceModels ?? []).join(", "),
+    testerUserIds: t.testerUserIds ?? [],
+    testerDeviceIds: t.testerDeviceIds ?? [],
+    excludeUserIds: t.excludeUserIds ?? [],
+    excludeDeviceIds: t.excludeDeviceIds ?? [],
+    regions: t.regions ?? [],
+    locales: t.locales ?? [],
+    deviceModels: t.deviceModels ?? [],
     abis: t.abis ?? [],
     minOsApi: t.minOsVersion ? String(t.minOsVersion) : "",
     maxOsApi: t.maxOsVersion ? String(t.maxOsVersion) : "",
@@ -113,7 +130,7 @@ function toForm(item?: Release | null): Form {
   };
 }
 
-function toAssetRows(item?: Release | null): AssetRow[] {
+function toAssetRows(item?: Release | null): AssetItem[] {
   return (item?.assets ?? []).map((asset) => ({
     key: nextKey(),
     id: asset.id || undefined,
@@ -122,7 +139,10 @@ function toAssetRows(item?: Release | null): AssetRow[] {
     url: asset.url ?? asset.downloadUrl,
     fileSize: asset.fileSize,
     sha256: asset.sha256 ?? "",
-    downloadUrl: asset.downloadUrl
+    downloadUrl: asset.downloadUrl,
+    phase: "done",
+    progress: 1,
+    external: !(asset.url ?? "").startsWith("storage://")
   }));
 }
 
@@ -131,8 +151,21 @@ const toInt = (value: string) => {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : 0;
 };
 
-// 与 next.config.ts 的 proxyClientMaxBodySize 一致：超出部分会被同源反代截掉，后端只会报缺少上传文件
-const MAX_ASSET_BYTES = 1024 * 1024 * 1024;
+/** 与保存相关的部分，用于判断有没有未保存的改动 */
+function snapshot(form: Form, assets: AssetItem[]) {
+  return JSON.stringify({ form, assets: assets.map((a) => [a.id, a.abi, a.label, a.url, a.fileSize, a.sha256]) });
+}
+
+const SECTIONS = [
+  { id: "assets", label: "安装包", icon: Package },
+  { id: "basics", label: "版本信息", icon: Tag },
+  { id: "notes", label: "更新说明", icon: FileText },
+  { id: "policy", label: "更新策略", icon: Megaphone },
+  { id: "audience", label: "受众与灰度", icon: Users },
+  { id: "targeting", label: "定向与名单", icon: Crosshair }
+] as const;
+
+type SectionId = (typeof SECTIONS)[number]["id"];
 
 export function ReleaseEditor({
   appKey,
@@ -149,73 +182,204 @@ export function ReleaseEditor({
   onOpenChange: (open: boolean) => void;
   onSaved?: (release: Release) => void;
 }) {
-  const [form, setForm] = useState<Form>(() => toForm(item));
-  const [assets, setAssets] = useState<AssetRow[]>(() => toAssetRows(item));
-  const [errors, setErrors] = useState<Partial<Record<keyof Form | "assets", string>>>({});
-  const [uploading, setUploading] = useState(0);
-  const fileInput = useRef<HTMLInputElement>(null);
+  const token = useAuthStore((s) => s.accessToken);
+  const [state, setState] = useState<{ form: Form; auto: AutoMap }>(() => ({ form: toForm(item), auto: {} }));
+  const { form, auto } = state;
+  const [assets, setAssets] = useState<AssetItem[]>(() => toAssetRows(item));
+  const [errors, setErrors] = useState<Errors>({});
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [active, setActive] = useState<SectionId>("assets");
+  const [dragging, setDragging] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const assetsRef = useRef(assets);
+  const [initial] = useState(() => snapshot(toForm(item), toAssetRows(item)));
+
+  useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+
+  // 卸载时中止所有上传、释放图标占用的 object URL
+  useEffect(
+    () => () => {
+      for (const row of assetsRef.current) {
+        row.abort?.abort();
+        releasePackageInfo(row.info);
+      }
+    },
+    []
+  );
 
   const save = useSaveReleaseMutation(appKey);
   const publish = usePublishReleaseMutation(appKey);
-  const upload = useUploadReleaseAssetMutation(appKey);
-  const busy = save.isPending || publish.isPending || uploading > 0;
+  const busyRows = assets.filter((a) => a.phase === "parsing" || a.phase === "hashing" || a.phase === "uploading");
+  const failedRows = assets.filter((a) => a.phase === "error");
+  const saving = save.isPending || publish.isPending;
   const live = item?.effectiveStatus === "published";
   const canPublish = !item || item.status === "draft";
+  const dirty = snapshot(form, assets) !== initial;
+  const versionCode = toInt(form.versionCode);
+  const issues = useMemo(() => computeAssetIssues(assets, versionCode), [assets, versionCode]);
+  const primary = assets.find((a) => a.info)?.info;
 
-  function patch<K extends keyof Form>(key: K, value: Form[K]) {
-    setForm((state) => ({ ...state, [key]: value }));
-    setErrors((state) => ({ ...state, [key]: undefined }));
-  }
+  const patch = <K extends keyof Form>(key: K, value: Form[K]) => {
+    setState((s) => {
+      const nextAuto = { ...s.auto };
+      delete nextAuto[key];
+      return { form: { ...s.form, [key]: value }, auto: nextAuto };
+    });
+    setErrors((e) => ({ ...e, [key]: undefined }));
+  };
 
-  function patchAsset(key: string, changes: Partial<AssetRow>) {
+  const updateAsset = useCallback((key: string, changes: Partial<AssetItem>) => {
     setAssets((rows) => rows.map((row) => (row.key === key ? { ...row, ...changes } : row)));
-    setErrors((state) => ({ ...state, assets: undefined }));
+  }, []);
+
+  /** 用安装包信息填写空着的、或此前同样是自动填写的字段 */
+  const autofill = useCallback((info: PackageInfo) => {
+    setState((s) => {
+      const form = { ...s.form };
+      const auto = { ...s.auto };
+      const fill = (key: keyof Form, value?: string) => {
+        if (!value) return;
+        const current = String(form[key] ?? "");
+        if (current && !auto[key]) return;
+        (form as Record<string, unknown>)[key] = value;
+        auto[key] = info.fileName;
+      };
+      fill("version", info.versionName);
+      fill("versionCode", info.versionCode ? String(info.versionCode) : undefined);
+      if (info.kind !== "unknown") fill("platform", info.platform);
+      fill("minOsVersion", info.minOsLabel);
+      return { form, auto };
+    });
+    setErrors((e) => ({ ...e, version: undefined, versionCode: undefined, assets: undefined }));
+  }, []);
+
+  const processFile = useCallback(
+    async (key: string, file: File) => {
+      const abort = new AbortController();
+      updateAsset(key, { phase: "parsing", progress: 0, error: undefined, note: undefined, abort });
+      let info: PackageInfo | undefined;
+      try {
+        info = await inspectPackage(file);
+      } catch (error) {
+        updateAsset(key, { note: error instanceof Error ? error.message : "无法解析" });
+      }
+      if (info) {
+        const parsed = info;
+        updateAsset(key, { info: parsed, abi: parsed.abi });
+        autofill(parsed);
+        // 同类型的旧包（已上传完成、不在处理中）由新文件替换
+        const replaced = assetsRef.current.find((row) => row.key !== key && row.abi === parsed.abi && row.phase === "done");
+        if (replaced) {
+          setAssets((rows) => rows.filter((row) => row.key !== replaced.key));
+          releasePackageInfo(replaced.info);
+          toast.info(`已用 ${file.name} 替换原有的 ${parsed.abi} 安装包`);
+        }
+      }
+      try {
+        updateAsset(key, { phase: "hashing", progress: 0 });
+        const sha256 = await hashBlob(file, (done, total) => updateAsset(key, { progress: done / total }), abort.signal);
+        updateAsset(key, { sha256, phase: "uploading", progress: 0 });
+        if (!token) throw new Error("登录状态已失效，请重新登录");
+        const outcome = await uploadReleaseAsset(file, {
+          token,
+          appKey,
+          sha256,
+          contentType: file.name.toLowerCase().endsWith(".apk") ? "application/vnd.android.package-archive" : file.type,
+          onProgress: (fraction) => updateAsset(key, { progress: fraction }),
+          signal: abort.signal
+        });
+        updateAsset(key, {
+          phase: "done",
+          progress: 1,
+          url: outcome.result.reference,
+          downloadUrl: outcome.result.downloadUrl,
+          fileSize: outcome.result.fileSize,
+          mode: outcome.mode,
+          note: outcome.fallbackReason,
+          abort: undefined
+        });
+      } catch (error) {
+        updateAsset(key, {
+          phase: "error",
+          abort: undefined,
+          error: isUploadAborted(error) ? "已取消上传" : error instanceof ApiError || error instanceof Error ? error.message : "上传失败"
+        });
+      }
+    },
+    [appKey, autofill, token, updateAsset]
+  );
+
+  const addFiles = useCallback(
+    (files: File[]) => {
+      const accepted: Array<{ key: string; file: File }> = [];
+      for (const file of files) {
+        if (file.size > DIRECT_UPLOAD_MAX_BYTES) {
+          toast.error(`${file.name} 超过 2 GB，无法上传`);
+          continue;
+        }
+        if (assetsRef.current.some((row) => row.file && row.file.name === file.name && row.file.size === file.size)) {
+          toast.info(`${file.name} 已经在列表里`);
+          continue;
+        }
+        accepted.push({ key: nextKey(), file });
+      }
+      if (!accepted.length) return;
+      setAssets((rows) => [
+        ...rows,
+        ...accepted.map(({ key, file }) => ({
+          key,
+          abi: "universal",
+          label: "",
+          url: "",
+          fileSize: file.size,
+          sha256: "",
+          fileName: file.name,
+          file,
+          phase: "parsing" as const,
+          progress: 0
+        }))
+      ]);
+      setErrors((e) => ({ ...e, assets: undefined }));
+      for (const { key, file } of accepted) void processFile(key, file);
+    },
+    [processFile]
+  );
+
+  function removeAsset(row: AssetItem) {
+    row.abort?.abort();
+    releasePackageInfo(row.info);
+    setAssets((rows) => rows.filter((r) => r.key !== row.key));
   }
 
-  async function handleFiles(files: FileList | null) {
-    if (!files?.length) return;
-    for (const file of Array.from(files)) {
-      if (file.size > MAX_ASSET_BYTES) {
-        toast.error(`${file.name} 超过 1 GB，无法上传`);
-        continue;
+  function addExternal() {
+    setAssets((rows) => [
+      ...rows,
+      {
+        key: nextKey(),
+        abi: COMMON_ABIS.find((abi) => !rows.some((r) => r.abi === abi)) ?? "universal",
+        label: "",
+        url: "",
+        fileSize: 0,
+        sha256: "",
+        phase: "done",
+        progress: 1,
+        external: true
       }
-      setUploading((n) => n + 1);
-      try {
-        const result = await upload.mutateAsync(file);
-        setAssets((rows) => {
-          const existing = rows.find((row) => row.abi === result.abi);
-          const row: AssetRow = {
-            key: existing?.key ?? nextKey(),
-            id: existing?.id,
-            abi: result.abi,
-            label: existing?.label ?? "",
-            url: result.reference,
-            fileSize: result.fileSize,
-            sha256: result.sha256,
-            downloadUrl: result.downloadUrl,
-            fileName: result.fileName
-          };
-          return existing ? rows.map((r) => (r.key === existing.key ? row : r)) : [...rows, row];
-        });
-        toast.success(`已上传 ${result.fileName}`);
-      } catch (error) {
-        toast.error(error instanceof ApiError ? error.message : `${file.name} 上传失败`);
-      } finally {
-        setUploading((n) => n - 1);
-      }
-    }
-    if (fileInput.current) fileInput.current.value = "";
+    ]);
   }
 
   function validate(): ReleaseSavePayload | null {
-    const next: typeof errors = {};
-    const versionCode = toInt(form.versionCode);
+    const next: Errors = {};
     if (!form.version.trim()) next.version = "填写版本名";
     if (!versionCode) next.versionCode = "填写正整数版本码";
     const minSupported = toInt(form.minSupportedCode);
     if (minSupported && versionCode && minSupported > versionCode) next.minSupportedCode = "不能高于本版本码";
     const abis = assets.map((row) => row.abi.trim().toLowerCase());
-    if (assets.some((row) => !row.abi.trim() || !row.url.trim())) next.assets = "每个安装包都需要类型与地址";
+    if (busyRows.length) next.assets = "还有安装包在处理，请等上传完成";
+    else if (failedRows.length) next.assets = "有安装包上传失败，请重试或移除";
+    else if (assets.some((row) => !row.abi.trim() || !row.url.trim())) next.assets = "每个安装包都需要类型与下载地址";
     else if (new Set(abis).size !== abis.length) next.assets = "安装包类型不能重复";
     const minOs = toInt(form.minOsApi);
     const maxOs = toInt(form.maxOsApi);
@@ -224,16 +388,28 @@ export function ReleaseEditor({
     const maxSrc = toInt(form.maxSourceCode);
     if (minSrc && maxSrc && minSrc > maxSrc) next.minSourceCode = "下限不能高于上限";
     setErrors(next);
-    if (Object.keys(next).length) return null;
+    const firstError = Object.keys(next)[0] as keyof Errors | undefined;
+    if (firstError) {
+      const section: SectionId =
+        firstError === "assets"
+          ? "assets"
+          : firstError === "minSupportedCode"
+            ? "policy"
+            : ["minOsApi", "minSourceCode"].includes(firstError)
+              ? "targeting"
+              : "basics";
+      scrollTo(section);
+      return null;
+    }
 
     const targeting: ReleaseTargeting = {
-      testerUserIds: parseIdList(form.testerUserIds),
-      testerDeviceIds: parseList(form.testerDeviceIds),
-      excludeUserIds: parseIdList(form.excludeUserIds),
-      excludeDeviceIds: parseList(form.excludeDeviceIds),
-      regions: parseList(form.regions).map((item) => item.toUpperCase()),
-      locales: parseList(form.locales),
-      deviceModels: parseList(form.deviceModels),
+      testerUserIds: form.testerUserIds,
+      testerDeviceIds: form.testerDeviceIds,
+      excludeUserIds: form.excludeUserIds,
+      excludeDeviceIds: form.excludeDeviceIds,
+      regions: form.regions.map((v) => v.toUpperCase()),
+      locales: form.locales,
+      deviceModels: form.deviceModels,
       abis: form.abis,
       minOsVersion: minOs,
       maxOsVersion: maxOs,
@@ -265,6 +441,7 @@ export function ReleaseEditor({
   }
 
   async function submit(andPublish: boolean) {
+    if (saving) return;
     const payload = validate();
     if (!payload) return;
     try {
@@ -282,369 +459,434 @@ export function ReleaseEditor({
     }
   }
 
+  const submitRef = useRef(submit);
+  useEffect(() => {
+    submitRef.current = submit;
+  });
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        void submitRef.current(false);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
+
+  function requestClose(next: boolean) {
+    if (next) return onOpenChange(true);
+    if (busyRows.length || dirty) {
+      setConfirmClose(true);
+      return;
+    }
+    onOpenChange(false);
+  }
+
+  function scrollTo(id: SectionId) {
+    setActive(id);
+    document.getElementById(`release-section-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+
+  // 滚动时高亮当前所在的分区
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (visible) setActive(visible.target.id.replace("release-section-", "") as SectionId);
+      },
+      { root, rootMargin: "0px 0px -65% 0px", threshold: 0 }
+    );
+    for (const s of SECTIONS) {
+      const el = document.getElementById(`release-section-${s.id}`);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, []);
+
+  const conditionCount =
+    [form.regions, form.locales, form.deviceModels, form.abis].filter((v) => v.length).length +
+    [form.minOsApi || form.maxOsApi, form.minSourceCode || form.maxSourceCode].filter(Boolean).length;
+  const listCount = [form.testerUserIds, form.testerDeviceIds, form.excludeUserIds, form.excludeDeviceIds].filter((v) => v.length).length;
+  const targetingCount = conditionCount + listCount;
+  // 同时出现在内测与排除名单里的人或设备：排除优先，提醒一下免得以为内测生效了
+  const overlap =
+    form.testerUserIds.filter((id) => form.excludeUserIds.includes(id)).length +
+    form.testerDeviceIds.filter((id) => form.excludeDeviceIds.includes(id)).length;
+
+  const sectionDone: Record<SectionId, boolean> = {
+    assets: assets.length > 0 && !busyRows.length && !failedRows.length && assets.every((a) => a.url),
+    basics: Boolean(form.version.trim() && versionCode),
+    notes: form.notes.replace(/<[^>]*>/g, "").trim().length > 0,
+    policy: true,
+    audience: true,
+    targeting: targetingCount > 0
+  };
+
+  const uploadProgress = busyRows.length ? busyRows.reduce((sum, r) => sum + r.progress, 0) / busyRows.length : 0;
+
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-[94vw] max-w-3xl flex-col p-0">
+    <TooltipProvider delayDuration={200}>
+    <Sheet open={open} onOpenChange={requestClose}>
+      <SheetContent
+        side="right"
+        className="flex w-[96vw] flex-col gap-0 p-0 sm:max-w-5xl"
+        // 不让 Radix 把焦点放到第一个导航按钮上（会画出焦点框）；键盘用户按 Tab 照常进入
+        onOpenAutoFocus={(e) => e.preventDefault()}
+        onDragEnter={(e) => {
+          if (Array.from(e.dataTransfer.types).includes("Files")) setDragging(true);
+        }}
+      >
         <SheetHeader className="shrink-0 border-b px-6 py-4">
-          <SheetTitle>{item ? `编辑 ${item.version}` : "新建版本"}</SheetTitle>
-          <SheetDescription>
-            {live ? "该版本正在下发，保存后立即生效" : item ? "保存后不改变发布状态" : "新建的版本保存为草稿"}
-          </SheetDescription>
+          <div className="flex items-start gap-3">
+            {primary ? <AppIcon icon={primary.icon} size={40} /> : null}
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SheetTitle className="truncate">
+                  {item ? `编辑 ${item.version}` : primary?.appName ? `发布 ${primary.appName}` : "新建版本"}
+                </SheetTitle>
+                {item ? <ReleaseStatusBadge release={item} /> : null}
+              </div>
+              <SheetDescription className="mt-0.5">
+                {live ? "该版本正在下发，保存后立即生效" : item ? "保存后不改变发布状态" : "拖入安装包即可自动填写，新建的版本先保存为草稿"}
+              </SheetDescription>
+            </div>
+          </div>
         </SheetHeader>
 
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-8 px-6 py-5">
-            <Section title="基本信息">
-              <div className="grid gap-4 sm:grid-cols-3">
-                <Field label="版本名" error={errors.version}>
-                  <Input value={form.version} placeholder="1.2.0" onChange={(e) => patch("version", e.target.value)} />
-                </Field>
-                <Field label="版本码" error={errors.versionCode}>
-                  <Input
-                    className={DATA_FONT}
-                    inputMode="numeric"
-                    value={form.versionCode}
-                    placeholder="1020099"
-                    onChange={(e) => patch("versionCode", e.target.value.replace(/\D/g, ""))}
-                  />
-                </Field>
-                <Field label="平台">
-                  <Select value={form.platform} onValueChange={(value) => patch("platform", value)}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {RELEASE_PLATFORMS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-              </div>
-              <Field label="标题">
-                <Input value={form.title} placeholder="版本标题，可留空" onChange={(e) => patch("title", e.target.value)} />
-              </Field>
-              <Field label="更新说明">
-                <RichEditor
-                  value={form.notes}
-                  onChange={(html) => patch("notes", html)}
-                  placeholder="本次更新的内容"
-                  fullscreenable
-                />
-              </Field>
-            </Section>
+        <div className="flex min-h-0 flex-1">
+          <nav className="hidden w-48 shrink-0 border-r bg-muted/20 p-3 md:block" aria-label="编辑分区">
+            <ul className="space-y-0.5">
+              {SECTIONS.map((s) => {
+                const Icon = s.icon;
+                const isActive = active === s.id;
+                return (
+                  <li key={s.id}>
+                    <button
+                      type="button"
+                      onClick={() => scrollTo(s.id)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors",
+                        isActive ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:bg-muted/60 hover:text-foreground"
+                      )}
+                    >
+                      <Icon className="size-4 shrink-0" />
+                      <span className="flex-1 truncate">{s.label}</span>
+                      {s.id === "assets" && assets.length ? (
+                        <span className="text-[11px] tabular-nums text-muted-foreground">{assets.length}</span>
+                      ) : s.id === "targeting" && targetingCount ? (
+                        <span className="text-[11px] tabular-nums text-muted-foreground">{targetingCount}</span>
+                      ) : sectionDone[s.id] && s.id !== "policy" && s.id !== "audience" ? (
+                        <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                      ) : null}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </nav>
 
-            <Section title="安装包" description="上传后自动识别 ABI 并计算 SHA-256，也可填写外部下载地址">
-              <input
-                ref={fileInput}
-                type="file"
-                multiple
-                className="hidden"
-                accept=".apk,.aab,.ipa,.exe,.msi,.dmg,.zip,.hap,.appimage,.deb,.rpm"
-                onChange={(e) => void handleFiles(e.target.files)}
-              />
-              {assets.length === 0 ? (
-                <div className="rounded-lg border border-dashed px-4 py-6 text-center text-sm text-muted-foreground">
-                  暂无安装包
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {assets.map((row) => (
-                    <div key={row.key} className="space-y-2 rounded-lg border p-3">
-                      <div className="grid gap-2 sm:grid-cols-[10rem_1fr_auto]">
-                        <Select value={row.abi} onValueChange={(value) => patchAsset(row.key, { abi: value })}>
-                          <SelectTrigger className="h-9">
-                            <SelectValue placeholder="类型" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {Array.from(new Set([...COMMON_ABIS, row.abi].filter(Boolean))).map((abi) => (
-                              <SelectItem key={abi} value={abi}>
-                                {abi}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Input
-                          value={row.label}
-                          placeholder="显示名称，可留空"
-                          onChange={(e) => patchAsset(row.key, { label: e.target.value })}
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="size-9 text-muted-foreground"
-                          onClick={() => setAssets((rows) => rows.filter((r) => r.key !== row.key))}
-                          aria-label="移除安装包"
-                        >
-                          <Trash2 className="size-4" />
-                        </Button>
-                      </div>
-                      <Input
-                        className={cn("text-xs", DATA_FONT)}
-                        value={row.url}
-                        placeholder="https:// 或上传得到的 storage:// 引用"
-                        onChange={(e) => patchAsset(row.key, { url: e.target.value, downloadUrl: undefined })}
+          <div ref={scrollRef} className="relative min-w-0 flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-3xl space-y-10 px-6 py-6">
+              <Section id="assets" title="安装包" description="安装包在本地解析与校验，文件直接上传到对象存储">
+                {assets.length === 0 ? (
+                  <PackageDropzone onFiles={addFiles} />
+                ) : (
+                  <div className="space-y-3">
+                    {assets.map((row) => (
+                      <AssetCard
+                        key={row.key}
+                        item={row}
+                        issues={issues[row.key]}
+                        onChange={(changes) => {
+                          updateAsset(row.key, changes);
+                          setErrors((e) => ({ ...e, assets: undefined }));
+                        }}
+                        onRemove={() => removeAsset(row)}
+                        onRetry={() => row.file && void processFile(row.key, row.file)}
+                        onCancel={() => row.abort?.abort()}
                       />
-                      <div className="grid gap-2 sm:grid-cols-[10rem_1fr]">
-                        <Input
-                          className={cn("text-xs", DATA_FONT)}
-                          inputMode="numeric"
-                          value={row.fileSize ? String(row.fileSize) : ""}
-                          placeholder="大小（字节）"
-                          onChange={(e) => patchAsset(row.key, { fileSize: Number(e.target.value.replace(/\D/g, "")) || 0 })}
-                        />
-                        <Input
-                          className={cn("text-xs", DATA_FONT)}
-                          value={row.sha256}
-                          placeholder="SHA-256，可留空"
-                          onChange={(e) => patchAsset(row.key, { sha256: e.target.value })}
-                        />
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                        {row.fileName ? <span>{row.fileName}</span> : null}
-                        <span>{formatBytes(row.fileSize)}</span>
-                        {row.downloadUrl ? (
-                          <a className="underline-offset-2 hover:underline" href={row.downloadUrl} target="_blank" rel="noreferrer">
-                            下载测试
-                          </a>
-                        ) : null}
+                    ))}
+                    <PackageDropzone onFiles={addFiles} compact />
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-3">
+                  {errors.assets ? <p className="text-xs text-destructive">{errors.assets}</p> : <span />}
+                  <Button variant="ghost" size="sm" className="h-8 gap-1.5 text-xs text-muted-foreground" onClick={addExternal}>
+                    <Link2 className="size-3.5" />
+                    改用外部下载地址
+                  </Button>
+                </div>
+              </Section>
+
+              <Section id="basics" title="版本信息">
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field label="版本名" error={errors.version} auto={auto.version}>
+                    <Input value={form.version} placeholder="1.2.0" onChange={(e) => patch("version", e.target.value)} />
+                  </Field>
+                  <Field label="版本码" error={errors.versionCode} auto={auto.versionCode}>
+                    <Input
+                      className={DATA_FONT}
+                      inputMode="numeric"
+                      value={form.versionCode}
+                      placeholder="1020099"
+                      onChange={(e) => patch("versionCode", e.target.value.replace(/\D/g, ""))}
+                    />
+                  </Field>
+                  <Field label="平台" auto={auto.platform}>
+                    <Select value={form.platform} onValueChange={(value) => patch("platform", value)}>
+                      <SelectTrigger className="h-9 w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {RELEASE_PLATFORMS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>
+                            {option.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-[2fr_1fr]">
+                  <Field label="标题" hint="版本列表与更新弹窗上的标题，可留空">
+                    <Input value={form.title} placeholder={primary?.appName && form.version ? `${primary.appName} ${form.version}` : "例如：春季大更新"} onChange={(e) => patch("title", e.target.value)} />
+                  </Field>
+                  <Field label="最低系统要求" auto={auto.minOsVersion} hint="展示给用户">
+                    <Input value={form.minOsVersion} placeholder="如 Android 7.0" onChange={(e) => patch("minOsVersion", e.target.value)} />
+                  </Field>
+                </div>
+              </Section>
+
+              <Section id="notes" title="更新说明" description="会显示在客户端的更新弹窗与官网下载页">
+                <RichEditor value={form.notes} onChange={(html) => patch("notes", html)} placeholder="这次更新了什么？" fullscreenable />
+              </Section>
+
+              <Section id="policy" title="更新策略">
+                <ChoiceCards
+                  value={form.updateType}
+                  onChange={(value) => patch("updateType", value)}
+                  options={UPDATE_TYPES.map((o) => ({ value: o.value, label: o.label, hint: o.hint, tone: o.value === "force" ? "danger" : o.value === "recommended" ? "warning" : "default" }))}
+                />
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="最低支持版本码" error={errors.minSupportedCode} hint="低于此版本码的客户端必须更新，留空不限">
+                    <Input
+                      className={DATA_FONT}
+                      inputMode="numeric"
+                      value={form.minSupportedCode}
+                      placeholder="不限"
+                      onChange={(e) => patch("minSupportedCode", e.target.value.replace(/\D/g, ""))}
+                    />
+                  </Field>
+                </div>
+              </Section>
+
+              <Section id="audience" title="受众与灰度">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="渠道">
+                    <Select value={form.channelId} onValueChange={(value) => patch("channelId", value)}>
+                      <SelectTrigger className="h-9 w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">不限渠道</SelectItem>
+                        {channels.map((channel) => (
+                          <SelectItem key={channel.id} value={String(channel.id)}>
+                            <span className="flex items-center gap-2">
+                              <ChannelDot color={channel.color} />
+                              {channel.name}
+                              {channel.is_default ? <span className="text-muted-foreground">（默认）</span> : null}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </div>
+                <Field label="可见范围">
+                  <ChoiceCards value={form.visibility} onChange={(value) => patch("visibility", value)} options={VISIBILITIES.map((o) => ({ value: o.value, label: o.label, hint: o.hint }))} />
+                </Field>
+                <div className="space-y-3 rounded-2xl border p-4">
+                  <div className="flex items-baseline justify-between">
+                    <div>
+                      <div className="text-sm font-medium">灰度比例</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">
+                        {form.rolloutPct === 100 ? "全部符合条件的用户都会收到" : form.rolloutPct === 0 ? "暂不推送给任何人（内测名单除外）" : `约 ${form.rolloutPct}% 符合条件的用户会收到`}
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-              {errors.assets ? <p className="text-xs text-destructive">{errors.assets}</p> : null}
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" size="sm" disabled={uploading > 0} onClick={() => fileInput.current?.click()}>
-                  {uploading > 0 ? <Loader2 className="size-3.5 animate-spin" /> : <FileUp className="size-3.5" />}
-                  {uploading > 0 ? `上传中（${uploading}）` : "上传安装包"}
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setAssets((rows) => [
-                      ...rows,
-                      {
-                        key: nextKey(),
-                        abi: COMMON_ABIS.find((abi) => !rows.some((r) => r.abi === abi)) ?? "",
-                        label: "",
-                        url: "",
-                        fileSize: 0,
-                        sha256: ""
-                      }
-                    ])
-                  }
-                >
-                  <Link2 className="size-3.5" />
-                  添加外链
-                </Button>
-              </div>
-            </Section>
-
-            <Section title="更新策略">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="更新类型">
-                  <Select value={form.updateType} onValueChange={(value) => patch("updateType", value as ReleaseUpdateType)}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {UPDATE_TYPES.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[11px] text-muted-foreground">
-                    {UPDATE_TYPES.find((option) => option.value === form.updateType)?.hint}
-                  </p>
-                </Field>
-                <Field label="最低支持版本码" error={errors.minSupportedCode}>
-                  <Input
-                    className={DATA_FONT}
-                    inputMode="numeric"
-                    value={form.minSupportedCode}
-                    placeholder="不限"
-                    onChange={(e) => patch("minSupportedCode", e.target.value.replace(/\D/g, ""))}
-                  />
-                  <p className="text-[11px] text-muted-foreground">低于此版本码的客户端必须更新</p>
-                </Field>
-                <Field label="最低系统版本（展示用）">
-                  <Input value={form.minOsVersion} placeholder="如 Android 7.0" onChange={(e) => patch("minOsVersion", e.target.value)} />
-                </Field>
-              </div>
-            </Section>
-
-            <Section title="受众">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="渠道">
-                  <Select value={form.channelId} onValueChange={(value) => patch("channelId", value)}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="none">不限渠道</SelectItem>
-                      {channels.map((channel) => (
-                        <SelectItem key={channel.id} value={String(channel.id)}>
-                          <span className="flex items-center gap-2">
-                            <ChannelDot color={channel.color} />
-                            {channel.name}
-                            {channel.is_default ? <span className="text-muted-foreground">（默认）</span> : null}
-                          </span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="可见范围">
-                  <Select value={form.visibility} onValueChange={(value) => patch("visibility", value as ReleaseVisibility)}>
-                    <SelectTrigger className="h-9">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {VISIBILITIES.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-[11px] text-muted-foreground">
-                    {VISIBILITIES.find((option) => option.value === form.visibility)?.hint}
-                  </p>
-                </Field>
-              </div>
-
-              <div className="space-y-2 rounded-lg border px-4 py-3">
-                <div className="flex items-center justify-between">
-                  <Label className="text-xs">灰度比例</Label>
-                  <span className={cn("text-sm font-semibold", DATA_FONT)}>{form.rolloutPct}%</span>
-                </div>
-                <Slider
-                  value={[form.rolloutPct]}
-                  min={0}
-                  max={100}
-                  step={1}
-                  onValueChange={(value) => patch("rolloutPct", value[0] ?? 0)}
-                />
-                <div className="flex flex-wrap gap-1.5">
-                  {ROLLOUT_PRESETS.map((pct) => (
-                    <Button
-                      key={pct}
-                      variant={form.rolloutPct === pct ? "default" : "outline"}
-                      size="sm"
-                      className="h-7 px-2.5 text-xs"
-                      onClick={() => patch("rolloutPct", pct)}
-                    >
-                      {pct}%
-                    </Button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  按用户（未登录时按设备）稳定分桶，扩大比例时已覆盖的用户保持不变。内测名单不受灰度限制。
-                </p>
-              </div>
-            </Section>
-
-            <Section title="定向条件" description="均为可选，同时设置时需全部满足">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="地区码">
-                  <Input value={form.regions} placeholder="CN, HK" onChange={(e) => patch("regions", e.target.value)} />
-                </Field>
-                <Field label="语言">
-                  <Input value={form.locales} placeholder="zh, en-US" onChange={(e) => patch("locales", e.target.value)} />
-                </Field>
-                <Field label="机型关键字">
-                  <Input value={form.deviceModels} placeholder="Pixel, Xiaomi" onChange={(e) => patch("deviceModels", e.target.value)} />
-                </Field>
-                <Field label="ABI">
-                  <div className="flex flex-wrap gap-1.5">
-                    {COMMON_ABIS.filter((abi) => abi !== "universal").map((abi) => {
-                      const active = form.abis.includes(abi);
-                      return (
-                        <Button
-                          key={abi}
-                          variant={active ? "default" : "outline"}
-                          size="sm"
-                          className={cn("h-7 px-2 text-xs", DATA_FONT)}
-                          onClick={() =>
-                            patch("abis", active ? form.abis.filter((item) => item !== abi) : [...form.abis, abi])
-                          }
-                        >
-                          {abi}
-                        </Button>
-                      );
-                    })}
+                    <span className={cn("text-2xl font-semibold", DATA_FONT)}>{form.rolloutPct}%</span>
                   </div>
-                </Field>
-                <Field label="系统版本（API Level）" error={errors.minOsApi}>
-                  <RangeInputs
-                    min={form.minOsApi}
-                    max={form.maxOsApi}
-                    onMin={(value) => patch("minOsApi", value)}
-                    onMax={(value) => patch("maxOsApi", value)}
-                  />
-                </Field>
-                <Field label="来源版本码" error={errors.minSourceCode}>
-                  <RangeInputs
-                    min={form.minSourceCode}
-                    max={form.maxSourceCode}
-                    onMin={(value) => patch("minSourceCode", value)}
-                    onMax={(value) => patch("maxSourceCode", value)}
-                  />
-                </Field>
-              </div>
-            </Section>
+                  <Slider value={[form.rolloutPct]} min={0} max={100} step={1} onValueChange={(v) => patch("rolloutPct", v[0] ?? 0)} />
+                  <div className="flex flex-wrap gap-1.5">
+                    {ROLLOUT_PRESETS.map((pct) => (
+                      <Button key={pct} variant={form.rolloutPct === pct ? "default" : "outline"} size="sm" className="h-7 px-2.5 text-xs" onClick={() => patch("rolloutPct", pct)}>
+                        {pct}%
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] leading-5 text-muted-foreground">按用户（未登录时按设备）稳定分桶，扩大比例时已覆盖的用户保持不变。内测名单不受灰度限制。</p>
+                </div>
+              </Section>
 
-            <Section title="名单" description="每行一个，或以逗号分隔">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="内测用户 ID">
-                  <Textarea rows={3} className={DATA_FONT} value={form.testerUserIds} onChange={(e) => patch("testerUserIds", e.target.value)} />
-                </Field>
-                <Field label="内测设备 ID">
-                  <Textarea rows={3} className={DATA_FONT} value={form.testerDeviceIds} onChange={(e) => patch("testerDeviceIds", e.target.value)} />
-                </Field>
-                <Field label="排除用户 ID">
-                  <Textarea rows={3} className={DATA_FONT} value={form.excludeUserIds} onChange={(e) => patch("excludeUserIds", e.target.value)} />
-                </Field>
-                <Field label="排除设备 ID">
-                  <Textarea rows={3} className={DATA_FONT} value={form.excludeDeviceIds} onChange={(e) => patch("excludeDeviceIds", e.target.value)} />
-                </Field>
+              <Section id="targeting" title="定向与名单" description="均为可选；同时设置时需全部满足。内测名单跳过定向与灰度，排除名单优先于一切">
+                <Collapsible title="定向条件" count={conditionCount} defaultOpen={Boolean(errors.minOsApi || errors.minSourceCode)}>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="地区" hint="按客户端上报或 IP 判定的国家与地区">
+                      <RegionPicker value={form.regions} onChange={(v) => patch("regions", v)} />
+                    </Field>
+                    <Field label="语言" hint="按客户端系统语言匹配">
+                      <LocalePicker value={form.locales} onChange={(v) => patch("locales", v)} />
+                    </Field>
+                    <Field label="机型" hint="型号包含任一关键字即匹配">
+                      <ModelPicker value={form.deviceModels} onChange={(v) => patch("deviceModels", v)} />
+                    </Field>
+                    <Field label="设备架构">
+                      <div className="flex min-h-9 flex-wrap items-center gap-1.5">
+                        {COMMON_ABIS.filter((abi) => abi !== "universal").map((abi) => {
+                          const on = form.abis.includes(abi);
+                          return (
+                            <Button key={abi} variant={on ? "default" : "outline"} size="sm" className={cn("h-7 px-2 text-xs", DATA_FONT)} onClick={() => patch("abis", on ? form.abis.filter((x) => x !== abi) : [...form.abis, abi])}>
+                              {abi}
+                            </Button>
+                          );
+                        })}
+                      </div>
+                    </Field>
+                    <Field label="系统版本" error={errors.minOsApi}>
+                      <ApiLevelRange min={form.minOsApi} max={form.maxOsApi} onMin={(v) => patch("minOsApi", v)} onMax={(v) => patch("maxOsApi", v)} />
+                    </Field>
+                    <Field label="来源版本" error={errors.minSourceCode} hint="只推给从这些版本升级的用户">
+                      <SourceVersionRange appKey={appKey} min={form.minSourceCode} max={form.maxSourceCode} onMin={(v) => patch("minSourceCode", v)} onMax={(v) => patch("maxSourceCode", v)} />
+                    </Field>
+                  </div>
+                </Collapsible>
+                <Collapsible title="内测与排除名单" count={listCount}>
+                  <div className="space-y-5">
+                    <AudienceGroup tone="include" title="内测名单" hint="始终能收到这个版本，不受定向条件、灰度比例与可见范围限制">
+                      <Field label="用户">
+                        <UserPicker appKey={appKey} value={form.testerUserIds} onChange={(v) => patch("testerUserIds", v)} tone="include" />
+                      </Field>
+                      <Field label="设备">
+                        <DevicePicker appKey={appKey} value={form.testerDeviceIds} onChange={(v) => patch("testerDeviceIds", v)} tone="include" />
+                      </Field>
+                    </AudienceGroup>
+                    <AudienceGroup tone="exclude" title="排除名单" hint="永远收不到这个版本，优先于一切规则">
+                      <Field label="用户">
+                        <UserPicker appKey={appKey} value={form.excludeUserIds} onChange={(v) => patch("excludeUserIds", v)} tone="exclude" />
+                      </Field>
+                      <Field label="设备">
+                        <DevicePicker appKey={appKey} value={form.excludeDeviceIds} onChange={(v) => patch("excludeDeviceIds", v)} tone="exclude" />
+                      </Field>
+                    </AudienceGroup>
+                    {overlap ? (
+                      <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                        有 {overlap} 项同时在内测与排除名单中，按排除处理
+                      </p>
+                    ) : null}
+                  </div>
+                </Collapsible>
+              </Section>
+            </div>
+
+            {dragging ? (
+              <div
+                className="absolute inset-0 z-10 m-3 grid place-items-center rounded-2xl border-2 border-dashed border-primary bg-background/85 backdrop-blur-sm"
+                onDragOver={(e) => e.preventDefault()}
+                onDragLeave={(e) => {
+                  if (e.currentTarget === e.target) setDragging(false);
+                }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  setDragging(false);
+                  const files = Array.from(e.dataTransfer.files ?? []);
+                  if (files.length) {
+                    addFiles(files);
+                    scrollTo("assets");
+                  }
+                }}
+              >
+                <div className="pointer-events-none flex flex-col items-center gap-2 text-center">
+                  <span className="grid size-14 place-items-center rounded-2xl bg-primary/10 text-primary">
+                    <Layers className="size-6" />
+                  </span>
+                  <div className="text-sm font-medium">松开以添加安装包</div>
+                  <div className="text-xs text-muted-foreground">将在本地读取版本信息并自动填写</div>
+                </div>
               </div>
-              <p className="text-[11px] text-muted-foreground">内测名单跳过定向条件与灰度；排除名单优先于一切。</p>
-            </Section>
+            ) : null}
           </div>
-        </ScrollArea>
-
-        <div className="flex shrink-0 items-center justify-end gap-2 border-t px-6 py-3">
-          <Button variant="outline" size="sm" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button variant={canPublish ? "outline" : "default"} size="sm" disabled={busy} onClick={() => void submit(false)}>
-            {save.isPending && !publish.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-            {canPublish ? "保存草稿" : "保存"}
-          </Button>
-          {canPublish ? (
-            <Button size="sm" disabled={busy || assets.length === 0} onClick={() => void submit(true)}>
-              <Plus className="size-3.5" />
-              保存并发布
-            </Button>
-          ) : null}
         </div>
+
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t bg-background px-6 py-3">
+          <div className="min-w-0 text-xs text-muted-foreground">
+            {busyRows.length ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="size-3.5 animate-spin" />
+                正在处理 {busyRows.length} 个安装包，{Math.round(uploadProgress * 100)}%
+              </span>
+            ) : failedRows.length ? (
+              <span className="text-destructive">{failedRows.length} 个安装包上传失败</span>
+            ) : assets.length ? (
+              <span className="flex items-center gap-1.5">
+                <Check className="size-3.5 text-emerald-600 dark:text-emerald-400" />
+                {assets.length} 个安装包已就绪{dirty ? "，有未保存的修改" : ""}
+              </span>
+            ) : (
+              <span>还没有安装包</span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => requestClose(false)}>
+              取消
+            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant={canPublish ? "outline" : "default"} size="sm" disabled={saving} onClick={() => void submit(false)}>
+                  {save.isPending && !publish.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                  {canPublish ? "保存草稿" : "保存"}
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent className="text-xs">Ctrl / ⌘ + S</TooltipContent>
+            </Tooltip>
+            {canPublish ? (
+              <Button size="sm" disabled={saving || assets.length === 0} onClick={() => void submit(true)}>
+                {publish.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Rocket className="size-3.5" />}
+                保存并发布
+              </Button>
+            ) : null}
+          </div>
+        </div>
+
+        <AlertDialog open={confirmClose} onOpenChange={setConfirmClose}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{busyRows.length ? "安装包还在上传" : "放弃未保存的修改？"}</AlertDialogTitle>
+              <AlertDialogDescription>
+                {busyRows.length ? "关闭后上传会中止，已填写的内容也不会保存。" : "关闭后本次填写的内容不会保存。"}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>继续编辑</AlertDialogCancel>
+              <AlertDialogAction variant="destructive" onClick={() => onOpenChange(false)}>
+                放弃并关闭
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </SheetContent>
     </Sheet>
+    </TooltipProvider>
   );
 }
 
-function Section({ title, description, children }: { title: string; description?: string; children: React.ReactNode }) {
+function Section({ id, title, description, children }: { id: SectionId; title: string; description?: string; children: ReactNode }) {
   return (
-    <section className="space-y-4">
+    <section id={`release-section-${id}`} className="scroll-mt-6 space-y-4">
       <div>
-        <h3 className="text-sm font-semibold">{title}</h3>
+        <h3 className="text-base font-semibold">{title}</h3>
         {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
       </div>
       {children}
@@ -652,32 +894,105 @@ function Section({ title, description, children }: { title: string; description?
   );
 }
 
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function Field({ label, error, hint, auto, children }: { label: string; error?: string; hint?: string; auto?: string; children: ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <Label className="text-xs">{label}</Label>
+      <div className="flex h-5 items-center gap-1.5">
+        <span className="text-xs font-medium">{label}</span>
+        {auto ? (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <span className="inline-flex items-center gap-0.5 rounded-full bg-violet-500/10 px-1.5 text-[10px] leading-4 text-violet-700 dark:text-violet-300">
+                <Sparkles className="size-2.5" />
+                自动
+              </span>
+            </TooltipTrigger>
+            <TooltipContent className="text-xs">读取自 {auto}，手动修改后不再自动更新</TooltipContent>
+          </Tooltip>
+        ) : null}
+      </div>
       {children}
-      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {error ? <p className="text-xs text-destructive">{error}</p> : hint ? <p className="text-[11px] text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
 
-function RangeInputs({
-  min,
-  max,
-  onMin,
-  onMax
+function ChoiceCards<T extends string>({
+  value,
+  onChange,
+  options
 }: {
-  min: string;
-  max: string;
-  onMin: (value: string) => void;
-  onMax: (value: string) => void;
+  value: T;
+  onChange: (value: T) => void;
+  options: Array<{ value: T; label: string; hint: string; tone?: "default" | "warning" | "danger" }>;
 }) {
   return (
-    <div className="flex items-center gap-2">
-      <Input className={DATA_FONT} inputMode="numeric" value={min} placeholder="不限" onChange={(e) => onMin(e.target.value.replace(/\D/g, ""))} />
-      <span className="text-xs text-muted-foreground">至</span>
-      <Input className={DATA_FONT} inputMode="numeric" value={max} placeholder="不限" onChange={(e) => onMax(e.target.value.replace(/\D/g, ""))} />
+    <div role="radiogroup" className="grid gap-2 sm:grid-cols-3">
+      {options.map((option) => {
+        const selected = option.value === value;
+        return (
+          <button
+            key={option.value}
+            type="button"
+            role="radio"
+            aria-checked={selected}
+            onClick={() => onChange(option.value)}
+            className={cn(
+              "relative rounded-xl border px-3.5 py-3 text-left transition-colors",
+              selected
+                ? option.tone === "danger"
+                  ? "border-red-500/60 bg-red-500/[0.05]"
+                  : option.tone === "warning"
+                    ? "border-amber-500/60 bg-amber-500/[0.05]"
+                    : "border-primary/60 bg-primary/[0.04]"
+                : "hover:bg-muted/40"
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-sm font-medium">{option.label}</span>
+              <span className={cn("grid size-4 place-items-center rounded-full border", selected && "border-transparent bg-primary text-primary-foreground")}>
+                {selected ? <Check className="size-3" /> : null}
+              </span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-muted-foreground">{option.hint}</p>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Collapsible({ title, count, defaultOpen, children }: { title: string; count: number; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(Boolean(defaultOpen || count > 0));
+  return (
+    <div className="rounded-2xl border">
+      <button type="button" aria-expanded={open} onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2 px-4 py-3 text-left">
+        <span className="text-sm font-medium">{title}</span>
+        {count ? (
+          <Badge variant="secondary" size="sm">
+            已设置 {count} 项
+          </Badge>
+        ) : (
+          <span className="text-xs text-muted-foreground">未设置</span>
+        )}
+        <ChevronDown className={cn("ml-auto size-4 text-muted-foreground transition-transform", open && "rotate-180")} />
+      </button>
+      {open ? <div className="border-t px-4 py-4">{children}</div> : null}
+    </div>
+  );
+}
+
+function AudienceGroup({ tone, title, hint, children }: { tone: "include" | "exclude"; title: string; hint: string; children: ReactNode }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-2">
+        <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", tone === "include" ? "bg-emerald-500" : "bg-red-500")} />
+        <div>
+          <div className="text-sm font-medium">{title}</div>
+          <p className="text-[11px] text-muted-foreground">{hint}</p>
+        </div>
+      </div>
+      <div className="grid gap-4 pl-4 lg:grid-cols-2">{children}</div>
     </div>
   );
 }

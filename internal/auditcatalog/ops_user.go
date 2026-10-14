@@ -8,6 +8,7 @@ func init() {
 		View("GET /api/admin/apps/:appkey/users", "查看用户列表", ""),
 		View("GET /api/admin/apps/:appkey/users/:userId", "查看用户详情", "用户"),
 		Export("GET /api/admin/apps/:appkey/users/export", "导出用户", ""),
+		View("GET /api/admin/apps/:appkey/users/devices", "查看设备目录", ""),
 		Write("PUT /api/admin/apps/:appkey/users/:userId/profile", "修改用户资料", "用户", SeverityMedium),
 		Write("PUT /api/admin/apps/:appkey/users/:userId/status", "修改用户状态", "用户", SeverityHigh),
 		View("GET /api/admin/apps/:appkey/users/:userId/oauth2-grants", "查看用户的第三方授权", "用户"),

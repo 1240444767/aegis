@@ -81,6 +81,8 @@ func (s *SessionMgmtService) ForceLogoutAll(ctx context.Context, adminID, operat
 	}
 	// 4. 清除在线状态
 	_ = s.sessions.ClearAdminOnline(ctx, adminID)
+	// 5. 断开其控制台的实时连接（在线统计里随即显示下线）
+	s.realtime.DisconnectUser(ctx, 0, adminID)
 	s.log.Info("管理员所有会话被强制撤销", zap.Int64("adminId", adminID), zap.Int64("count", count), zap.Int64("operatorId", operatorID))
 	return count, nil
 }

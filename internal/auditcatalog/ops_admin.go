@@ -38,6 +38,7 @@ func init() {
 		View("GET /api/admin/system/sessions", "查看全部会话", ""),
 		Write("POST /api/admin/system/sessions/:sessionId/revoke", "撤销会话", "会话", SeverityHigh),
 		View("GET /api/admin/system/online/stats", "查看在线统计", ""),
+		View("GET /api/admin/system/online/live", "打开实时在线统计", ""),
 		View("GET /api/admin/system/online/apps/:appkey", "查看应用在线统计", ""),
 		View("GET /api/admin/system/online/apps/:appkey/users", "查看应用在线用户", ""),
 	)

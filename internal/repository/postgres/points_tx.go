@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -25,6 +26,16 @@ import (
 func (r *Repository) applyExperienceChangeTx(ctx context.Context, tx pgx.Tx, userID int64, appID int64,
 	amount int64, category string, title string, description string, sourceType string, sourceID *int64,
 	extra map[string]any) (*pointdomain.ExperienceAdjustResult, error) {
+	return r.applyExperienceChangeTxNo(ctx, tx, userID, appID, amount, category, title, description, sourceType, sourceID, extra, "")
+}
+
+// applyExperienceChangeTxNo 同 applyExperienceChangeTx，可指定流水号（管理端幂等调整用）。
+func (r *Repository) applyExperienceChangeTxNo(ctx context.Context, tx pgx.Tx, userID int64, appID int64,
+	amount int64, category string, title string, description string, sourceType string, sourceID *int64,
+	extra map[string]any, transactionNo string) (*pointdomain.ExperienceAdjustResult, error) {
+	if amount <= 0 {
+		return nil, ErrExperienceDeduction
+	}
 	var userIDDB int64
 	var account string
 	var experienceBefore int64
@@ -37,13 +48,17 @@ func (r *Repository) applyExperienceChangeTx(ctx context.Context, tx pgx.Tx, use
 		return nil, err
 	}
 
+	experienceAfter, err := pointdomain.ApplyDelta(experienceBefore, amount)
+	if err != nil {
+		return nil, &BalanceError{Err: pointdomain.ErrBalanceOverflow, Kind: pointdomain.KindExperience, Balance: experienceBefore}
+	}
+
 	levels, err := r.getActiveLevels(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	beforeState := r.resolveLevelState(levels, experienceBefore)
-	experienceAfter := experienceBefore + amount
 	afterState := r.resolveLevelState(levels, experienceAfter)
 	now := time.Now().UTC()
 
@@ -56,7 +71,9 @@ func (r *Repository) applyExperienceChangeTx(ctx context.Context, tx pgx.Tx, use
 		return nil, err
 	}
 
-	transactionNo := generateTransactionNo("EXP")
+	if transactionNo == "" {
+		transactionNo = generateTransactionNo("EXP")
+	}
 	isLevelUp := afterState.CurrentLevel > beforeState.CurrentLevel
 
 	payload := map[string]any{
@@ -108,6 +125,24 @@ VALUES ($1, $2, $3, 'earn', $4, $5, $6, $7, $8, $9, 'completed', $10, $11, $12, 
 		CreatedAt:     now,
 	}, nil
 }
+
+// BalanceError 余额校验失败，带当前余额，便于给出「当前 120，不足以扣减 200」这样的提示。
+// Unwrap 返回 ErrInsufficientIntegral 或 pointdomain.ErrBalanceOverflow，原有的 errors.Is 判断照常生效。
+type BalanceError struct {
+	Err     error
+	Kind    pointdomain.Kind
+	Balance int64
+}
+
+func (e *BalanceError) Error() string { return e.Err.Error() }
+func (e *BalanceError) Unwrap() error { return e.Err }
+
+var (
+	// ErrExperienceDeduction 经验值只增不减（见 applyExperienceChangeTx 的说明）。
+	ErrExperienceDeduction = errors.New("postgres: experience cannot be deducted")
+	// ErrRequestIDConflict 请求编号已被另一笔不同内容的调整使用。
+	ErrRequestIDConflict = errors.New("postgres: request id already used by a different adjustment")
+)
 
 // stringFrom 从 extra 里取一个字符串字段；缺失或类型不符时返回空串。
 func stringFrom(extra map[string]any, key string) string {

@@ -2,13 +2,11 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	paymentdomain "aegis/internal/domain/payment"
-	pointdomain "aegis/internal/domain/points"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
 	"github.com/jackc/pgx/v5"
@@ -228,106 +226,3 @@ WHERE status = 'pending' AND expire_at IS NOT NULL AND expire_at < NOW()`)
 	return result.RowsAffected(), nil
 }
 
-// BatchAdjustUserIntegralByAdmin 管理员批量调整积分（集合化单事务）。
-// 原实现按用户逐个开事务（1000 用户 = 1000 事务 + 2000 余次往返）；
-// 此实现一个事务、一条复合语句完成锁定/更新/记账，并逐用户返回成败明细：
-//   - 不存在或不属于该应用的用户 → "用户不存在"
-//   - 扣减后为负的用户 → "用户积分不足"（其余用户正常生效）
-func (r *Repository) BatchAdjustUserIntegralByAdmin(ctx context.Context, userIDs []int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) ([]pointdomain.IntegralAdjustResult, []pointdomain.BatchAdjustFailure, error) {
-	if len(userIDs) == 0 {
-		return nil, nil, nil
-	}
-	title := "管理员批量调整"
-	txnType := "earn"
-	if amount < 0 {
-		txnType = "consume"
-		title = "管理员批量扣除"
-	}
-	if reason == "" {
-		reason = title
-	}
-	extraJSON, _ := json.Marshal(map[string]any{
-		"adminId":      options.AdminID,
-		"adminAccount": options.AdminAccount,
-		"reason":       reason,
-		"batch":        true,
-	})
-	// 批次号前缀 + '-' + 用户ID 构成行级唯一流水号（总长受 VARCHAR(40) 约束）
-	batchNo := "INTB" + time.Now().UTC().Format("060102150405") + randomDigits(4)
-
-	rows, err := r.pool.Query(ctx, `WITH target AS (
-    SELECT id, account, integral FROM users
-    WHERE appid = $1 AND id = ANY($2)
-    ORDER BY id
-    FOR UPDATE
-), updated AS (
-    UPDATE users u
-    SET integral = u.integral + $3, updated_at = NOW()
-    FROM target t
-    WHERE u.id = t.id AND t.integral + $3 >= 0
-    RETURNING u.id, t.integral AS balance_before, u.integral AS balance_after
-), logged AS (
-    INSERT INTO integral_transactions (transaction_no, user_id, appid, type, category, amount,
-        balance_before, balance_after, status, title, description, source_id, source_type, multiplier,
-        client_ip, user_agent, extra_data, created_at, updated_at)
-    SELECT $4 || '-' || u.id::text, u.id, $1, $5, 'admin_adjust', $3, u.balance_before, u.balance_after,
-        'completed', $6, $7, $8, 'admin_manual', 1, $9, $10, $11::jsonb, NOW(), NOW()
-    FROM updated u
-    RETURNING user_id
-)
-SELECT t.id, t.account, t.integral AS balance_before,
-       COALESCE(u.balance_after, t.integral) AS balance_after,
-       (u.id IS NOT NULL) AS applied
-FROM target t
-LEFT JOIN updated u ON u.id = t.id
-ORDER BY t.id`,
-		appID, userIDs, amount, batchNo, txnType, title, nullableString(reason),
-		nullableInt64(options.AdminID), nullableString(options.ClientIP), nullableString(options.UserAgent), extraJSON)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-
-	now := time.Now().UTC()
-	operationType := "add"
-	if amount < 0 {
-		operationType = "consume"
-	}
-	found := make(map[int64]bool, len(userIDs))
-	results := make([]pointdomain.IntegralAdjustResult, 0, len(userIDs))
-	failures := make([]pointdomain.BatchAdjustFailure, 0)
-	for rows.Next() {
-		var id, before, after int64
-		var account string
-		var applied bool
-		if err := rows.Scan(&id, &account, &before, &after, &applied); err != nil {
-			return nil, nil, err
-		}
-		found[id] = true
-		if !applied {
-			failures = append(failures, pointdomain.BatchAdjustFailure{UserID: id, Error: "用户积分不足"})
-			continue
-		}
-		results = append(results, pointdomain.IntegralAdjustResult{
-			UserID:        id,
-			AppID:         appID,
-			Account:       account,
-			Amount:        amount,
-			BeforeAmount:  before,
-			AfterAmount:   after,
-			Reason:        reason,
-			OperationType: operationType,
-			TransactionNo: fmt.Sprintf("%s-%d", batchNo, id),
-			CreatedAt:     now,
-		})
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
-	for _, id := range userIDs {
-		if !found[id] {
-			failures = append(failures, pointdomain.BatchAdjustFailure{UserID: id, Error: "用户不存在"})
-		}
-	}
-	return results, failures, nil
-}

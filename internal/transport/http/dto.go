@@ -329,18 +329,20 @@ type AdminBatchIDsRequest struct {
 }
 
 type AdminUserListQuery struct {
-	AppID       int64  `json:"appid" form:"appid"`
-	Keyword     string `form:"keyword"`
-	Account     string `form:"account"`
-	Nickname    string `form:"nickname"`
-	Email       string `form:"email"`
-	Phone       string `form:"phone"`
-	InviteCode  string `form:"inviteCode"`
-	RegisterIP  string `form:"registerIp"`
-	MarkCode    string `form:"markcode"`
-	CustomID    string `form:"customId"`
-	UserID      *int64 `form:"userId"`
-	Enabled     *bool  `form:"enabled"`
+	AppID      int64  `json:"appid" form:"appid"`
+	Keyword    string `form:"keyword"`
+	Account    string `form:"account"`
+	Nickname   string `form:"nickname"`
+	Email      string `form:"email"`
+	Phone      string `form:"phone"`
+	InviteCode string `form:"inviteCode"`
+	RegisterIP string `form:"registerIp"`
+	MarkCode   string `form:"markcode"`
+	CustomID   string `form:"customId"`
+	UserID     *int64 `form:"userId"`
+	Enabled    *bool  `form:"enabled"`
+	// IDs 逗号分隔的用户 ID，按 ID 批量取
+	IDs         string `form:"ids"`
 	CreatedFrom string `form:"createdFrom"`
 	CreatedTo   string `form:"createdTo"`
 	// Sort 排序字段：createdAt(默认) / updatedAt / id / account / integral /
@@ -516,26 +518,32 @@ type AppPointsStatsRequest struct {
 	TimeRange int   `json:"time_range" form:"time_range"`
 }
 
+// AppAdjustIntegralRequest 文档用的请求模型；实际解析见 decodePointsAdjust（兼容 userId / appId 写法）。
 type AppAdjustIntegralRequest struct {
-	UserID int64  `json:"user_id" form:"user_id" binding:"required"`
-	AppID  int64  `json:"appid" form:"appid" binding:"required"`
-	Amount int64  `json:"amount" form:"amount" binding:"required"`
-	Reason string `json:"reason" form:"reason"`
+	UserID    int64  `json:"user_id" form:"user_id" binding:"required"`
+	AppID     int64  `json:"appid" form:"appid" binding:"required"`
+	Amount    int64  `json:"amount" form:"amount" binding:"required"`
+	Reason    string `json:"reason" form:"reason"`
+	RequestID string `json:"request_id" form:"request_id"`
 }
 
+// AppAdjustExperienceRequest 文档用的请求模型；amount 必须为正（经验只增不减）。
 type AppAdjustExperienceRequest struct {
-	UserID int64  `json:"user_id" form:"user_id" binding:"required"`
-	AppID  int64  `json:"appid" form:"appid" binding:"required"`
-	Amount int64  `json:"amount" form:"amount" binding:"required"`
-	Reason string `json:"reason" form:"reason"`
+	UserID    int64  `json:"user_id" form:"user_id" binding:"required"`
+	AppID     int64  `json:"appid" form:"appid" binding:"required"`
+	Amount    int64  `json:"amount" form:"amount" binding:"required"`
+	Reason    string `json:"reason" form:"reason"`
+	RequestID string `json:"request_id" form:"request_id"`
 }
 
+// AppBatchAdjustIntegralRequest 文档用的请求模型。
 type AppBatchAdjustIntegralRequest struct {
 	UserIDs       []int64 `json:"user_ids" form:"user_ids" binding:"required"`
 	AppID         int64   `json:"appid" form:"appid" binding:"required"`
 	Amount        int64   `json:"amount" form:"amount" binding:"required"`
 	OperationType string  `json:"operation_type" form:"operation_type"`
 	Reason        string  `json:"reason" form:"reason"`
+	RequestID     string  `json:"request_id" form:"request_id"`
 }
 
 type SiteCreateRequest struct {

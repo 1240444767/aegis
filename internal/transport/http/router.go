@@ -36,6 +36,7 @@ type Handler struct {
 	avatar          *service.AvatarService
 	monitor         *service.MonitorService
 	realtime        *service.RealtimeService
+	onlineLive      *service.OnlineLiveHub
 	system          *service.PlatformSettingsService
 	security        *service.SecurityService
 	captcha         *service.CaptchaService

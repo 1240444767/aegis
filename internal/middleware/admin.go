@@ -66,12 +66,20 @@ func AdminAccess(adminService *service.AdminService, appService *service.AppServ
 		var appID *int64
 		if appScoped {
 			appID, err = extractAdminAppID(c, appService)
+			if errors.Is(err, errAppIDConflict) {
+				response.Error(c, http.StatusBadRequest, 40058,
+					"请求中的 appid 不一致：查询串、表单与请求体里的应用标识必须相同")
+				c.Abort()
+				return
+			}
 			if err != nil {
 				response.Error(c, http.StatusBadRequest, 40058,
 					"缺少有效的应用标识：该接口按应用作用域鉴权，请在路径、查询串或请求体中携带 appid")
 				c.Abort()
 				return
 			}
+			// 处理函数用这个值，保证改的就是鉴权通过的那个应用
+			c.Set(AdminScopeAppIDKey, *appID)
 		}
 		if err := adminService.Authorize(c.Request.Context(), access, permission, appID); err != nil {
 			writeAdminError(c, err)
@@ -243,6 +251,9 @@ func resolveAdminPermission(c *gin.Context) (string, bool, error) {
 	return decision.Permission, decision.AppScoped(), nil
 }
 
+// AdminScopeAppIDKey 应用作用域鉴权通过的应用 ID（int64）在 gin.Context 里的键。
+const AdminScopeAppIDKey = "admin.scopeAppID"
+
 // errRouteNotRegistered 路由没登记在权限规则表里 —— 默认拒绝。
 var errRouteNotRegistered = errors.New("该管理端路由未登记权限规则")
 
@@ -265,47 +276,91 @@ func extractAdminAppID(c *gin.Context, appService *service.AppService) (*int64, 
 		}
 	}
 
-	// 2) 兼容 query/form/body 中的数字 appid（遗留 API）
-	for _, value := range []string{c.Query("appid"), c.PostForm("appid"), c.PostForm("appId")} {
-		if appID, ok := parseOptionalInt64(value); ok {
-			return &appID, nil
+	// 2) 兼容 query/form/body 中的数字 appid（遗留 API）。
+	//
+	// 必须把所有来源都看一遍：鉴权按这里取到的应用判定，而处理函数通常只从请求体绑定。
+	// 旧实现取到第一个就返回，于是「查询串写有权限的应用 A、请求体写应用 B」能用 A 的
+	// 权限改 B 的数据。现在各来源出现不同的值一律拒绝。
+	var candidates []int64
+	for _, value := range []string{c.Query("appid"), c.Query("appId"), c.PostForm("appid"), c.PostForm("appId")} {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		appID, ok := parseOptionalInt64(value)
+		if !ok {
+			return nil, errAppIDInvalid
+		}
+		candidates = append(candidates, appID)
+	}
+	bodyIDs, err := jsonBodyAppIDs(c)
+	if err != nil {
+		return nil, err
+	}
+	candidates = append(candidates, bodyIDs...)
+	if len(candidates) == 0 {
+		return nil, io.EOF
+	}
+	for _, id := range candidates[1:] {
+		if id != candidates[0] {
+			return nil, errAppIDConflict
 		}
 	}
+	return &candidates[0], nil
+}
+
+var (
+	// errAppIDConflict 同一请求的不同位置给出了不同的 appid。
+	errAppIDConflict = errors.New("appid conflict")
+	// errAppIDInvalid appid 不是正整数。
+	errAppIDInvalid = errors.New("appid invalid")
+)
+
+// jsonBodyAppIDs 读 JSON 请求体顶层的 appid / appId（不消耗请求体）。
+// 用 UseNumber 解码：float64 在 2^53 以上会丢精度，可能让两个不同的 ID 看起来相等。
+func jsonBodyAppIDs(c *gin.Context) ([]int64, error) {
 	if c.Request == nil || c.Request.Body == nil || c.Request.Body == http.NoBody {
-		return nil, io.EOF
+		return nil, nil
 	}
-	contentType := strings.ToLower(c.ContentType())
-	if !strings.Contains(contentType, "json") {
-		return nil, io.EOF
+	if !strings.Contains(strings.ToLower(c.ContentType()), "json") {
+		return nil, nil
 	}
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		return nil, err
 	}
 	c.Request.Body = io.NopCloser(bytes.NewReader(body))
-	if len(body) == 0 {
-		return nil, io.EOF
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
 	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
 	var payload map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, err
+	if err := decoder.Decode(&payload); err != nil {
+		// 不是 JSON 对象（数组、格式错误）：这里不判，交给处理函数报格式错误
+		return nil, nil
 	}
+	var out []int64
 	for _, key := range []string{"appid", "appId"} {
-		if value, ok := payload[key]; ok {
-			switch typed := value.(type) {
-			case float64:
-				id := int64(typed)
-				if id > 0 {
-					return &id, nil
-				}
-			case string:
-				if id, ok := parseOptionalInt64(typed); ok {
-					return &id, nil
-				}
-			}
+		value, ok := payload[key]
+		if !ok || value == nil {
+			continue
 		}
+		var raw string
+		switch typed := value.(type) {
+		case json.Number:
+			raw = typed.String()
+		case string:
+			raw = typed
+		default:
+			return nil, errAppIDInvalid
+		}
+		id, ok := parseOptionalInt64(raw)
+		if !ok {
+			return nil, errAppIDInvalid
+		}
+		out = append(out, id)
 	}
-	return nil, io.EOF
+	return out, nil
 }
 
 func parseOptionalInt64(value string) (int64, bool) {

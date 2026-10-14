@@ -71,6 +71,8 @@ export type AdminAppUserListParams = {
   markcode?: string;
   customId?: string;
   userId?: number;
+  /** 逗号分隔的用户 ID，按 ID 批量取（最多 500 个），给出时忽略其他筛选 */
+  ids?: string;
   enabled?: boolean;
   /** RFC3339 绝对时刻；控制台按浏览器时区把日期换成当天起止后再传 */
   createdFrom?: string;
@@ -85,6 +87,33 @@ export type AdminAppUserListParams = {
 export function getAdminAppUsers(token: string, appKey: string, params?: AdminAppUserListParams) {
   return apiRequest<PagedResult<AdminAppUserItem>>(
     `/api/admin/apps/${encodeURIComponent(appKey)}/users${buildQuery({ ...params })}`,
+    { token }
+  );
+}
+
+/** 设备目录里的一台设备（来自登录记录），与后端 user.AdminDeviceItem 对齐。 */
+export type AdminDeviceItem = {
+  deviceId: string;
+  deviceInfo?: DeviceInfo;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  logins: number;
+  users: number;
+  lastUser?: { id: number; account?: string; nickname?: string };
+  lastIp?: string;
+};
+
+export type AdminDeviceListParams = {
+  keyword?: string;
+  userId?: number;
+  /** 逗号分隔的设备 ID */
+  ids?: string;
+  limit?: number;
+};
+
+export function getAdminAppDevices(token: string, appKey: string, params?: AdminDeviceListParams) {
+  return apiRequest<{ items: AdminDeviceItem[] }>(
+    `/api/admin/apps/${encodeURIComponent(appKey)}/users/devices${buildQuery({ ...params })}`,
     { token }
   );
 }
@@ -243,25 +272,60 @@ export function deleteAdminAppUser(token: string, appKey: string, userId: number
   });
 }
 
-export function adjustUserIntegral(
-  token: string,
-  payload: { userId: number; appid: number; amount: number; reason?: string }
-) {
-  return apiRequest<Record<string, unknown>>("/api/app/points/adjust-integral", {
-    method: "POST",
-    token,
-    body: JSON.stringify(payload)
+/** 积分 / 经验调整的结果，与后端 points.IntegralAdjustResult / ExperienceAdjustResult 对齐。 */
+export type PointsAdjustResult = {
+  userId: number;
+  appid: number;
+  account: string;
+  amount: number;
+  beforeAmount: number;
+  afterAmount: number;
+  reason: string;
+  operationType: "add" | "consume";
+  transactionNo: string;
+  createdAt: string;
+  /** 同一请求编号已生效过：返回的是首次结果，余额没有再次变化 */
+  replayed?: boolean;
+  levelChanged?: boolean;
+  oldLevel?: number;
+  newLevel?: number;
+};
+
+export type PointsAdjustPayload = {
+  userId: number;
+  appid: number;
+  /** 正数增加、负数扣减（经验只能为正）；单次绝对值不超过 100,000,000 */
+  amount: number;
+  reason?: string;
+  /** 防重复提交：同一编号只生效一次 */
+  requestId?: string;
+};
+
+// 后端字段是下划线写法（user_id / request_id）。这里显式转换，不把驼峰对象原样发出去 ——
+// 原样发送 userId 曾让每次调整都报「缺少必要的请求参数」。
+function pointsAdjustBody(payload: PointsAdjustPayload) {
+  return JSON.stringify({
+    user_id: payload.userId,
+    appid: payload.appid,
+    amount: payload.amount,
+    reason: payload.reason,
+    request_id: payload.requestId
   });
 }
 
-export function adjustUserExperience(
-  token: string,
-  payload: { userId: number; appid: number; amount: number; reason?: string }
-) {
-  return apiRequest<Record<string, unknown>>("/api/app/points/adjust-experience", {
+export function adjustUserIntegral(token: string, payload: PointsAdjustPayload) {
+  return apiRequest<PointsAdjustResult>("/api/app/points/adjust-integral", {
     method: "POST",
     token,
-    body: JSON.stringify(payload)
+    body: pointsAdjustBody(payload)
+  });
+}
+
+export function adjustUserExperience(token: string, payload: PointsAdjustPayload) {
+  return apiRequest<PointsAdjustResult>("/api/app/points/adjust-experience", {
+    method: "POST",
+    token,
+    body: pointsAdjustBody(payload)
   });
 }
 

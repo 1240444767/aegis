@@ -400,6 +400,60 @@ func (h *Handler) AdminUploadReleaseAsset(c *gin.Context) {
 	response.Success(c, http.StatusOK, "上传成功", result)
 }
 
+type releaseAssetPresignRequest struct {
+	FileName    string `json:"fileName" binding:"required"`
+	FileSize    int64  `json:"fileSize" binding:"required"`
+	ContentType string `json:"contentType"`
+	ConfigName  string `json:"configName"`
+}
+
+// AdminPresignReleaseAsset POST /api/admin/apps/:appkey/releases/assets/presign
+// 签发浏览器直传地址；存储不支持直传时 data.mode=server，控制台改走 multipart 上传。
+func (h *Handler) AdminPresignReleaseAsset(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok || !h.releaseReady(c) {
+		return
+	}
+	var req releaseAssetPresignRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	ticket, err := h.release.PrepareAssetUpload(c.Request.Context(), appID, service.ReleaseAssetDirectInput{
+		ConfigName: req.ConfigName, FileName: req.FileName, FileSize: req.FileSize,
+		ContentType: req.ContentType, UploadedBy: currentAdminID(c),
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "ok", ticket)
+}
+
+type releaseAssetCompleteRequest struct {
+	Token  string `json:"token" binding:"required"`
+	SHA256 string `json:"sha256"`
+}
+
+// AdminCompleteReleaseAsset POST /api/admin/apps/:appkey/releases/assets/complete
+func (h *Handler) AdminCompleteReleaseAsset(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok || !h.releaseReady(c) {
+		return
+	}
+	var req releaseAssetCompleteRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.release.CompleteAssetUpload(c.Request.Context(), appID, requestBaseURL(c.Request), req.Token, req.SHA256)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "上传成功", result)
+}
+
 /* ───────────────────── 网关 ───────────────────── */
 
 // releaseClientFromQuery 从查询参数与（可选的）登录态拼出客户端身份。

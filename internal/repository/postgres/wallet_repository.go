@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	pointdomain "aegis/internal/domain/points"
 	walletdomain "aegis/internal/domain/wallet"
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
@@ -424,31 +425,78 @@ func scanAdminWalletTxn(row interface{ Scan(dest ...any) error }) (*walletdomain
 func applyIntegralChangeTx(ctx context.Context, tx pgx.Tx, userID int64, appID int64, amount int64,
 	txnType string, category string, title string, description string, sourceType string, sourceID *int64,
 	extra map[string]any) (balanceBefore int64, balanceAfter int64, transactionNo string, err error) {
-	var account string
-	if err = tx.QueryRow(ctx, `SELECT account, integral FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`,
-		userID, appID).Scan(&account, &balanceBefore); err != nil {
+	change, err := applyIntegralChangeTxNo(ctx, tx, integralChange{
+		UserID: userID, AppID: appID, Amount: amount, TxnType: txnType, Category: category,
+		Title: title, Description: description, SourceType: sourceType, SourceID: sourceID, Extra: extra,
+	})
+	if err != nil {
+		return 0, 0, "", err
+	}
+	return change.Before, change.After, change.TransactionNo, nil
+}
+
+// integralChange 一次积分变更的全部参数；TransactionNo 为空时自动生成。
+type integralChange struct {
+	UserID        int64
+	AppID         int64
+	Amount        int64
+	TxnType       string
+	Category      string
+	Title         string
+	Description   string
+	SourceType    string
+	SourceID      *int64
+	Extra         map[string]any
+	TransactionNo string
+	ClientIP      string
+	UserAgent     string
+}
+
+type integralChangeResult struct {
+	Account       string
+	Before        int64
+	After         int64
+	TransactionNo string
+}
+
+// applyIntegralChangeTxNo 锁行、按 pointdomain.ApplyDelta 计算新余额（不足或超过上限都拒绝）、更新、记账。
+func applyIntegralChangeTxNo(ctx context.Context, tx pgx.Tx, in integralChange) (*integralChangeResult, error) {
+	var out integralChangeResult
+	if err := tx.QueryRow(ctx, `SELECT account, integral FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`,
+		in.UserID, in.AppID).Scan(&out.Account, &out.Before); err != nil {
 		if err == pgx.ErrNoRows {
-			err = ErrUserNotFound
+			return nil, ErrUserNotFound
 		}
-		return 0, 0, "", err
+		return nil, err
 	}
-	balanceAfter = balanceBefore + amount
-	if balanceAfter < 0 {
-		return 0, 0, "", ErrInsufficientIntegral
+	after, err := pointdomain.ApplyDelta(out.Before, in.Amount)
+	if err != nil {
+		if errors.Is(err, pointdomain.ErrBalanceInsufficient) {
+			return nil, &BalanceError{Err: ErrInsufficientIntegral, Kind: pointdomain.KindIntegral, Balance: out.Before}
+		}
+		return nil, &BalanceError{Err: pointdomain.ErrBalanceOverflow, Kind: pointdomain.KindIntegral, Balance: out.Before}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE users SET integral = $1, updated_at = NOW() WHERE id = $2 AND appid = $3`,
-		balanceAfter, userID, appID); err != nil {
-		return 0, 0, "", err
+	out.After = after
+	if _, err := tx.Exec(ctx, `UPDATE users SET integral = $1, updated_at = NOW() WHERE id = $2 AND appid = $3`,
+		out.After, in.UserID, in.AppID); err != nil {
+		return nil, err
 	}
-	transactionNo = generateTransactionNo("INT")
-	extraJSON, _ := json.Marshal(extra)
-	if _, err = tx.Exec(ctx,
+	out.TransactionNo = in.TransactionNo
+	if out.TransactionNo == "" {
+		out.TransactionNo = generateTransactionNo("INT")
+	}
+	extraJSON, _ := json.Marshal(in.Extra)
+	if in.Extra == nil {
+		extraJSON = []byte("{}")
+	}
+	if _, err := tx.Exec(ctx,
 		`INSERT INTO integral_transactions (transaction_no, user_id, appid, type, category, amount, balance_before, balance_after,
-status, title, description, source_id, source_type, multiplier, extra_data, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'completed', $9, $10, $11, $12, 1, $13, NOW(), NOW())`,
-		transactionNo, userID, appID, txnType, category, amount, balanceBefore, balanceAfter,
-		title, nullableString(description), sourceID, nullableString(sourceType), extraJSON); err != nil {
-		return 0, 0, "", err
+status, title, description, source_id, source_type, multiplier, client_ip, user_agent, extra_data, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'completed', $9, $10, $11, $12, 1, $13, $14, $15, NOW(), NOW())`,
+		out.TransactionNo, in.UserID, in.AppID, in.TxnType, in.Category, in.Amount, out.Before, out.After,
+		in.Title, nullableString(in.Description), in.SourceID, nullableString(in.SourceType),
+		nullableString(in.ClientIP), nullableString(in.UserAgent), extraJSON); err != nil {
+		return nil, err
 	}
-	return balanceBefore, balanceAfter, transactionNo, nil
+	return &out, nil
 }

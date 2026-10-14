@@ -119,6 +119,8 @@ Kotlin SDK：`client.releases.*`（已登录时自动带令牌）。
 | `POST` | `/releases` | 新建（落在草稿） |
 | `GET` | `/releases/overview` | 总览：各状态计数、灰度中数量、各渠道最新下发版本、近 14 天漏斗 |
 | `POST` | `/releases/assets` | 上传安装包（multipart，`file` 字段，≤2 GB），返回 `{reference, downloadUrl, fileName, fileSize, sha256, abi}`；`reference` 填进安装包的 `url`，`abi` 由文件名猜出 |
+| `POST` | `/releases/assets/presign` | 申请浏览器直传：`{fileName, fileSize, contentType?, configName?}` → `{mode, method, uploadUrl, headers, token, expiresAt, provider, reason}`。`mode=direct` 时浏览器带 `headers` 直接 `PUT` 到 `uploadUrl`（1 小时内有效）；`mode=server` 表示当前存储不支持直传，改用上面的 multipart 接口 |
+| `POST` | `/releases/assets/complete` | 直传完成：`{token, sha256?}` → 与 multipart 上传相同的结果。服务端 HEAD 一次确认对象存在且大小与申请时一致，令牌只能用一次 |
 | `POST` | `/releases/simulate` | 模拟检测：`{versionCode, platform, userId, deviceId, abis, osVersion, deviceModel, locale, region}` → `{result, decisions}`，`decisions` 给出每个候选版本能否收到与原因 |
 | `GET` | `/releases/{rid}` | 详情 |
 | `PUT` | `/releases/{rid}` | 更新（字段缺省不修改；`assets` 提交即整组替换，带 `id` 的保留下载计数；`channelId` 为 `null` 或 `0` 表示不限渠道） |
@@ -151,6 +153,16 @@ Kotlin SDK：`client.releases.*`（已登录时自动带令牌）。
 
 渠道沿用 `/channels` 接口，新增字段 `self_join`（允许用户自助加入）。渠道上旧的 `rollout_pct`、`rules`、
 `platforms`、`min/max_version_code` 不参与新的检测，灰度与定向一律设在版本上。
+
+## 浏览器直传与本地解析
+
+控制台发布编辑器在浏览器里解析安装包（APK 的清单、资源表、v2/v3 签名证书，AAB 的 protobuf 清单，
+IPA 的 Info.plist，HAP 的 module.json），自动填写版本名、版本码、平台与最低系统要求，
+并在本地计算 SHA-256。文件随后直接 `PUT` 到对象存储，不经过 Next.js 代理与 Aegis 进程。
+
+- 支持直传的存储：S3 兼容（含 R2）、MinIO、阿里云 OSS、腾讯云 COS。其余存储（本地磁盘、WebDAV、网盘类）自动退回经服务器上传（受同源代理 1 GB 上限约束）。
+- 存储桶需要允许控制台域名跨域 `PUT`（CORS：`AllowedOrigins` 为控制台地址，`AllowedMethods` 含 `PUT`，`AllowedHeaders` 含 `Content-Type`）。未配置时浏览器会拦下请求，控制台自动改为经服务器上传并提示原因。
+- 直传时 SHA-256 由浏览器计算后随 `complete` 提交，服务端只能核对大小；经服务器上传时服务端边传边算，与本地值不一致时控制台判为上传失败。
 
 ## 旧接口
 

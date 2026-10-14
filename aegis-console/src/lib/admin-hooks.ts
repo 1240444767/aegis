@@ -205,7 +205,7 @@ import {
   getOIDCPublicConfig
 } from "@/lib/api/system";
 import type { FirewallLogListParams, IPBanListParams } from "@/lib/api/system";
-import type { AdminAppUserListParams } from "@/lib/api/apps";
+import type { AdminAppUserListParams, PointsAdjustPayload } from "@/lib/api/apps";
 import type { StorageBatchAction, StorageObjectQuery } from "@/lib/api/types";
 import {
   getAdminLotteryActivities,
@@ -2244,8 +2244,7 @@ export function useAdjustUserIntegralMutation() {
   const token = useAdminToken();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { userId: number; appid: number; amount: number; reason?: string }) =>
-      adjustUserIntegral(token as string, payload),
+    mutationFn: (payload: PointsAdjustPayload) => adjustUserIntegral(token as string, payload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-app-users"] }),
@@ -2259,8 +2258,7 @@ export function useAdjustUserExperienceMutation() {
   const token = useAdminToken();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { userId: number; appid: number; amount: number; reason?: string }) =>
-      adjustUserExperience(token as string, payload),
+    mutationFn: (payload: PointsAdjustPayload) => adjustUserExperience(token as string, payload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["admin-app-users"] }),

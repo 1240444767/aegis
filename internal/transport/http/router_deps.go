@@ -91,6 +91,7 @@ type RouterDeps struct {
 	AdminInbox   *service.AdminInboxService
 	Email        *service.EmailService
 	Realtime     *service.RealtimeService
+	OnlineLive   *service.OnlineLiveHub
 
 	// ── 存储与媒体 ────────────────────────────────────────────────────
 	Storage         *service.StorageService
@@ -160,6 +161,7 @@ func (d RouterDeps) newHandler() *Handler {
 		avatar:             d.Avatar,
 		monitor:            d.Monitor,
 		realtime:           d.Realtime,
+		onlineLive:         d.OnlineLive,
 		system:             d.PlatformSettings,
 		security:           d.Security,
 		captcha:            d.Captcha,

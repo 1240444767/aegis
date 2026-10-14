@@ -192,6 +192,8 @@ type IntegralAdjustResult struct {
 	OperationType string    `json:"operationType"`
 	TransactionNo string    `json:"transactionNo"`
 	CreatedAt     time.Time `json:"createdAt"`
+	// Replayed 为真表示同一请求编号已经生效过，这里返回的是首次的结果，没有再次变更余额
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 type ExperienceAdjustResult struct {
@@ -208,6 +210,8 @@ type ExperienceAdjustResult struct {
 	OldLevel      int       `json:"oldLevel"`
 	NewLevel      int       `json:"newLevel"`
 	CreatedAt     time.Time `json:"createdAt"`
+	// Replayed 为真表示同一请求编号已经生效过，这里返回的是首次的结果，没有再次变更余额
+	Replayed bool `json:"replayed,omitempty"`
 }
 
 type BatchAdjustFailure struct {
@@ -224,4 +228,5 @@ type BatchIntegralAdjustResult struct {
 	FailedCount    int                    `json:"failedCount"`
 	Results        []IntegralAdjustResult `json:"results"`
 	Failures       []BatchAdjustFailure   `json:"failures"`
+	Replayed       bool                   `json:"replayed,omitempty"`
 }

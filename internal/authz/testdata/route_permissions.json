@@ -218,6 +218,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/system/online/live",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/system/online/stats",
     "permission": "system:admin:manage",
     "appScoped": false,
@@ -1010,6 +1017,13 @@
   {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/users/export",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/devices",
     "permission": "app:user:read",
     "appScoped": true,
     "unmapped": false
@@ -7288,6 +7302,20 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/releases/assets",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/assets/presign",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/assets/complete",
     "permission": "version:write",
     "appScoped": true,
     "unmapped": false

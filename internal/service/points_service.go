@@ -216,62 +216,112 @@ func (s *PointsService) GetAppStatistics(ctx context.Context, appID int64, timeR
 	return s.pg.GetAppPointsStatistics(ctx, appID, timeRange, startDate, s.location.String())
 }
 
+// ── 积分 / 经验调整 ──
+//
+// 管理端入口（AdminAdjust*）在内部入口的基础上多校验单次数量上限与请求编号；
+// 内部入口（AdjustUser*，抽奖、云函数等调用）只校验非零与原因长度。
+// 两者都落到同一组仓储函数，余额不足、超过上限、int64 溢出在锁行之后统一判定。
+
+// AdminAdjustIntegral 管理员调整积分（可加可减）。
+func (s *PointsService) AdminAdjustIntegral(ctx context.Context, in pointdomain.AdjustInput, options pointdomain.AdminAdjustOptions) (*pointdomain.IntegralAdjustResult, error) {
+	in.Kind = pointdomain.KindIntegral
+	if err := in.Validate(); err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	result, err := s.pg.AdminAdjustIntegral(ctx, in, options)
+	if err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	return result, nil
+}
+
+// AdminAdjustExperience 管理员增加经验。经验只增不减，负数直接拒绝。
+func (s *PointsService) AdminAdjustExperience(ctx context.Context, in pointdomain.AdjustInput, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
+	in.Kind = pointdomain.KindExperience
+	if in.Amount < 0 {
+		return nil, mapPointsAdjustError(in.Kind, pgrepo.ErrExperienceDeduction)
+	}
+	if err := in.Validate(); err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	result, err := s.pg.AdminAdjustExperience(ctx, in, options)
+	if err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	return result, nil
+}
+
+// AdjustUserIntegral 内部调整积分（抽奖消耗与奖励、云函数等），不受管理端单次上限约束。
 func (s *PointsService) AdjustUserIntegral(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.IntegralAdjustResult, error) {
+	in, err := internalAdjustInput(pointdomain.KindIntegral, userID, appID, amount, reason)
+	if err != nil {
+		return nil, mapPointsAdjustError(pointdomain.KindIntegral, err)
+	}
+	result, err := s.pg.AdminAdjustIntegral(ctx, in, options)
+	if err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	return result, nil
+}
+
+// AdjustUserExperience 内部增加经验，数量必须为正。
+func (s *PointsService) AdjustUserExperience(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
+	if amount < 0 {
+		return nil, mapPointsAdjustError(pointdomain.KindExperience, pgrepo.ErrExperienceDeduction)
+	}
+	in, err := internalAdjustInput(pointdomain.KindExperience, userID, appID, amount, reason)
+	if err != nil {
+		return nil, mapPointsAdjustError(pointdomain.KindExperience, err)
+	}
+	result, err := s.pg.AdminAdjustExperience(ctx, in, options)
+	if err != nil {
+		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	return result, nil
+}
+
+func internalAdjustInput(kind pointdomain.Kind, userID, appID, amount int64, reason string) (pointdomain.AdjustInput, error) {
+	in := pointdomain.AdjustInput{Kind: kind, AppID: appID, UserID: userID, Amount: amount}
 	if appID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "应用ID不能为空")
+		return in, &pointdomain.ValidationError{Message: "应用ID不能为空"}
 	}
 	if userID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "用户ID不能为空")
+		return in, &pointdomain.ValidationError{Message: "用户ID不能为空"}
 	}
 	if amount == 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "调整数量不能为0")
+		return in, &pointdomain.ValidationError{Message: "调整数量不能为0"}
 	}
-	result, err := s.pg.AdjustUserIntegralByAdmin(ctx, userID, appID, amount, reason, options)
-	if err != nil {
-		switch {
-		case errors.Is(err, pgrepo.ErrUserNotFound):
-			return nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
-		case errors.Is(err, pgrepo.ErrInsufficientIntegral):
-			return nil, apperrors.New(40009, http.StatusBadRequest, "用户积分不足")
-		default:
-			return nil, err
-		}
-	}
-	return result, nil
+	// 内部调用的原因由代码拼出来（如「抽奖奖励: 奖品名」），超长就截断，不因此让业务失败
+	in.Reason = truncateRunes(strings.TrimSpace(reason), pointdomain.MaxAdjustReasonRunes)
+	return in, nil
 }
 
-func (s *PointsService) AdjustUserExperience(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
+// BatchAdjustUserIntegral 管理员批量调整积分。amount 为正数，方向由 operationType（add / consume）决定。
+func (s *PointsService) BatchAdjustUserIntegral(ctx context.Context, userIDs []int64, appID int64, amount int64, operationType string, reason string, requestID string, options pointdomain.AdminAdjustOptions) (*pointdomain.BatchIntegralAdjustResult, error) {
+	kind := pointdomain.KindIntegral
 	if appID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "应用ID不能为空")
+		return nil, apperrors.New(40000, http.StatusBadRequest, "缺少应用 ID（appid）")
 	}
-	if userID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "用户ID不能为空")
+	ids := uniquePositiveIDs(userIDs)
+	if len(ids) == 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "用户 ID 列表不能为空")
+	}
+	if len(ids) > pointdomain.MaxAdminBatchUsers {
+		return nil, apperrors.New(40000, http.StatusBadRequest, fmt.Sprintf("批量操作最多支持 %d 个用户", pointdomain.MaxAdminBatchUsers))
 	}
 	if amount <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "调整数量必须大于0")
+		return nil, apperrors.New(40000, http.StatusBadRequest, "调整数量必须大于 0，扣减请使用 operation_type=consume")
 	}
-	result, err := s.pg.AdjustUserExperienceByAdmin(ctx, userID, appID, amount, reason, options)
+	if err := pointdomain.ValidateAmount(kind, amount); err != nil {
+		return nil, mapPointsAdjustError(kind, err)
+	}
+	reason, err := pointdomain.NormalizeReason(reason)
 	if err != nil {
-		if errors.Is(err, pgrepo.ErrUserNotFound) {
-			return nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
-		}
-		return nil, err
+		return nil, mapPointsAdjustError(kind, err)
 	}
-	return result, nil
-}
-
-func (s *PointsService) BatchAdjustUserIntegral(ctx context.Context, userIDs []int64, appID int64, amount int64, operationType string, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.BatchIntegralAdjustResult, error) {
-	if appID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "应用ID不能为空")
-	}
-	if len(userIDs) == 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "用户ID列表不能为空")
-	}
-	if len(userIDs) > 1000 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "批量操作最多支持1000个用户")
-	}
-	if amount <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "调整数量必须大于0")
+	requestID, err = pointdomain.NormalizeRequestID(requestID)
+	if err != nil {
+		return nil, mapPointsAdjustError(kind, err)
 	}
 
 	op := strings.ToLower(strings.TrimSpace(operationType))
@@ -279,31 +329,77 @@ func (s *PointsService) BatchAdjustUserIntegral(ctx context.Context, userIDs []i
 		op = "add"
 	}
 	if op != "add" && op != "consume" {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "操作类型必须为add或consume")
+		return nil, apperrors.New(40000, http.StatusBadRequest, "操作类型必须为 add 或 consume")
 	}
-
 	signedAmount := amount
 	if op == "consume" {
 		signedAmount = -amount
 	}
 
-	// 集合化批量调整：单事务单语句完成全部用户的锁定/更新/记账。
-	// 原实现按用户逐个开事务（1000 用户 = 1000 事务、数千次网络往返），
-	// 现为 1 次往返；逐用户成败明细由 SQL 直接返回
-	results, failures, err := s.pg.BatchAdjustUserIntegralByAdmin(ctx, userIDs, appID, signedAmount, reason, options)
+	results, failures, replayed, err := s.pg.AdminBatchAdjustIntegral(ctx, appID, ids, signedAmount, reason, requestID, options)
 	if err != nil {
-		return nil, err
+		return nil, mapPointsAdjustError(kind, err)
+	}
+	if results == nil {
+		results = []pointdomain.IntegralAdjustResult{}
+	}
+	if failures == nil {
+		failures = []pointdomain.BatchAdjustFailure{}
 	}
 	return &pointdomain.BatchIntegralAdjustResult{
 		AppID:          appID,
 		OperationType:  op,
 		Amount:         amount,
-		RequestedCount: len(userIDs),
+		RequestedCount: len(ids),
 		SuccessCount:   len(results),
 		FailedCount:    len(failures),
 		Results:        results,
 		Failures:       failures,
+		Replayed:       replayed,
 	}, nil
+}
+
+// mapPointsAdjustError 把仓储与校验错误翻译成带业务码的错误，提示里带上当前余额。
+func mapPointsAdjustError(kind pointdomain.Kind, err error) error {
+	var validation *pointdomain.ValidationError
+	var balance *pgrepo.BalanceError
+	switch {
+	case errors.As(err, &validation):
+		return apperrors.New(40000, http.StatusBadRequest, validation.Message)
+	case errors.Is(err, pgrepo.ErrUserNotFound):
+		return apperrors.New(40401, http.StatusNotFound, "用户不存在或不属于该应用")
+	case errors.Is(err, pgrepo.ErrExperienceDeduction):
+		return apperrors.New(40000, http.StatusBadRequest, "经验只能增加，不支持扣减")
+	case errors.Is(err, pgrepo.ErrRequestIDConflict):
+		return apperrors.New(40921, http.StatusConflict, "请求编号已用于另一笔调整，请刷新后重试")
+	case errors.As(err, &balance) && errors.Is(err, pointdomain.ErrBalanceOverflow):
+		return apperrors.New(40961, http.StatusBadRequest,
+			fmt.Sprintf("调整后%s将超过上限 %s（当前 %s）", balance.Kind.Label(),
+				pointdomain.GroupDigits(pointdomain.MaxBalance), pointdomain.GroupDigits(balance.Balance)))
+	case errors.As(err, &balance):
+		return apperrors.New(40009, http.StatusBadRequest,
+			fmt.Sprintf("用户%s不足（当前 %s）", balance.Kind.Label(), pointdomain.GroupDigits(balance.Balance)))
+	case errors.Is(err, pgrepo.ErrInsufficientIntegral):
+		return apperrors.New(40009, http.StatusBadRequest, fmt.Sprintf("用户%s不足", kind.Label()))
+	default:
+		return err
+	}
+}
+
+func uniquePositiveIDs(ids []int64) []int64 {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func (s *PointsService) getCachedSignRanking(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {
