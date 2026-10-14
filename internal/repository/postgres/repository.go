@@ -2437,7 +2437,8 @@ ON CONFLICT (id) DO UPDATE SET
     vip_expire_at = EXCLUDED.vip_expire_at,
     created_at = EXCLUDED.created_at,
     updated_at = EXCLUDED.updated_at`
-	_, err := r.pool.Exec(ctx, query, user.ID, user.AppID, user.Account, nullableString(user.PasswordHash), user.Integral, user.Experience, user.Enabled, user.DisabledEndTime, user.VIPExpireAt, user.CreatedAt, user.UpdatedAt)
+	// 导入的旧数据可能带负数或超大值，按余额边界收拢，否则会撞上 chk_users_*_range
+	_, err := r.pool.Exec(ctx, query, user.ID, user.AppID, user.Account, nullableString(user.PasswordHash), clampBalance(user.Integral), clampBalance(user.Experience), user.Enabled, user.DisabledEndTime, user.VIPExpireAt, user.CreatedAt, user.UpdatedAt)
 	if isUniqueViolation(err) {
 		return ErrAccountAlreadyExists
 	}
@@ -3144,8 +3145,15 @@ func (r *Repository) CreateDailySign(ctx context.Context, userID int64, appID in
 
 	integralBefore := user.Integral
 	experienceBefore := user.Experience
-	integralAfter := integralBefore + reward.IntegralReward
-	experienceAfter := experienceBefore + reward.ExperienceReward
+	// 签到奖励同样走 ApplyDelta：余额接近上限时拒绝，而不是让 int64 回绕
+	integralAfter, err := pointdomain.ApplyDelta(integralBefore, reward.IntegralReward)
+	if err != nil {
+		return nil, &BalanceError{Err: err, Kind: pointdomain.KindIntegral, Balance: integralBefore}
+	}
+	experienceAfter, err := pointdomain.ApplyDelta(experienceBefore, reward.ExperienceReward)
+	if err != nil {
+		return nil, &BalanceError{Err: pointdomain.ErrBalanceOverflow, Kind: pointdomain.KindExperience, Balance: experienceBefore}
+	}
 
 	if _, err = tx.Exec(ctx, `UPDATE users SET integral = $2, experience = $3, updated_at = NOW() WHERE id = $1`, userID, integralAfter, experienceAfter); err != nil {
 		return nil, err
@@ -3637,138 +3645,7 @@ ORDER BY day ASC`, appID, startDate.UTC(), timezone)
 	return result, nil
 }
 
-func (r *Repository) AdjustUserIntegralByAdmin(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.IntegralAdjustResult, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
 
-	var userIDDB int64
-	var account string
-	var balanceBefore int64
-	if err := tx.QueryRow(ctx, `SELECT id, account, integral FROM users WHERE id = $1 AND appid = $2 FOR UPDATE`, userID, appID).Scan(&userIDDB, &account, &balanceBefore); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, ErrUserNotFound
-		}
-		return nil, err
-	}
-
-	balanceAfter := balanceBefore + amount
-	if balanceAfter < 0 {
-		return nil, ErrInsufficientIntegral
-	}
-
-	now := time.Now().UTC()
-	if _, err := tx.Exec(ctx, `UPDATE users SET integral = $1, updated_at = NOW() WHERE id = $2 AND appid = $3`, balanceAfter, userID, appID); err != nil {
-		return nil, err
-	}
-
-	transactionNo := generateTransactionNo("INT")
-	transactionType := "earn"
-	title := "管理员手动调整"
-	if amount < 0 {
-		transactionType = "consume"
-		title = "管理员手动扣除"
-	}
-	if strings.TrimSpace(reason) == "" {
-		reason = title
-	}
-
-	extraData, _ := json.Marshal(map[string]any{
-		"adminId":      options.AdminID,
-		"adminAccount": options.AdminAccount,
-		"reason":       reason,
-	})
-
-	if _, err := tx.Exec(ctx, `INSERT INTO integral_transactions (transaction_no, user_id, appid, type, category, amount, balance_before, balance_after, status, title, description, source_id, source_type, multiplier, client_ip, user_agent, extra_data, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'admin_adjust', $5, $6, $7, 'completed', $8, $9, $10, 'admin_manual', 1, $11, $12, $13, $14, $14)`,
-		transactionNo,
-		userID,
-		appID,
-		transactionType,
-		amount,
-		balanceBefore,
-		balanceAfter,
-		title,
-		reason,
-		nullableInt64(options.AdminID),
-		nullableString(options.ClientIP),
-		nullableString(options.UserAgent),
-		extraData,
-		now,
-	); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	tx = nil
-
-	operationType := "add"
-	if amount < 0 {
-		operationType = "consume"
-	}
-
-	return &pointdomain.IntegralAdjustResult{
-		UserID:        userIDDB,
-		AppID:         appID,
-		Account:       account,
-		Amount:        amount,
-		BeforeAmount:  balanceBefore,
-		AfterAmount:   balanceAfter,
-		Reason:        reason,
-		OperationType: operationType,
-		TransactionNo: transactionNo,
-		CreatedAt:     now,
-	}, nil
-}
-
-func (r *Repository) AdjustUserExperienceByAdmin(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
-	if strings.TrimSpace(reason) == "" {
-		reason = "管理员手动调整经验值"
-	}
-	var sourceID *int64
-	if options.AdminID != 0 {
-		adminID := options.AdminID
-		sourceID = &adminID
-	}
-
-	result, err := r.applyExperienceChangeTx(ctx, tx, userID, appID, amount,
-		"admin_adjust", "管理员手动调整", reason, "admin_manual", sourceID,
-		map[string]any{
-			"adminId":      options.AdminID,
-			"adminAccount": options.AdminAccount,
-			"reason":       reason,
-			"clientIp":     options.ClientIP,
-			"userAgent":    options.UserAgent,
-		})
-	if err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	tx = nil
-
-	return result, nil
-}
 
 func (r *Repository) GetIntegralRankings(ctx context.Context, appID int64, page int, limit int, currentUserID int64) (*pointdomain.RankingResponse, error) {
 	return r.getUserMetricRankings(ctx, appID, page, limit, currentUserID, "integral")
@@ -5624,4 +5501,9 @@ func (r *Repository) CountLoginsSince(ctx context.Context, since time.Time) (int
 	var count int64
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM admin_audit_logs WHERE action = 'admin.login' AND created_at >= $1`, since).Scan(&count)
 	return count, err
+}
+
+// clampBalance 把余额收拢到 [0, pointdomain.MaxBalance]。
+func clampBalance(v int64) int64 {
+	return max(0, min(v, pointdomain.MaxBalance))
 }

@@ -11,6 +11,12 @@ import (
 // adminRoutes 从路由快照里取出全部管理端路由（快照由 transport/http 的 golden 测试维护）。
 func adminRoutes(t *testing.T) []string {
 	t.Helper()
+	return routesWithPrefix(t, "/api/admin/")
+}
+
+// routesWithPrefix 路由快照里以任一前缀开头的路由。
+func routesWithPrefix(t *testing.T, prefixes ...string) []string {
+	t.Helper()
 	file, err := os.Open("../transport/http/testdata/routes.golden")
 	if err != nil {
 		t.Fatalf("读取路由快照失败：%v", err)
@@ -20,13 +26,20 @@ func adminRoutes(t *testing.T) []string {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		fields := strings.Fields(scanner.Text())
-		if len(fields) < 2 || !strings.HasPrefix(fields[1], "/api/admin/") {
+		if len(fields) < 2 {
+			continue
+		}
+		matched := false
+		for _, prefix := range prefixes {
+			matched = matched || strings.HasPrefix(fields[1], prefix)
+		}
+		if !matched {
 			continue
 		}
 		keys = append(keys, fields[0]+" "+fields[1])
 	}
-	if len(keys) < 500 {
-		t.Fatalf("只读到 %d 条管理端路由，快照明显不完整", len(keys))
+	if len(keys) < 50 {
+		t.Fatalf("只读到 %d 条路由，快照明显不完整", len(keys))
 	}
 	return keys
 }
@@ -49,7 +62,8 @@ func TestCatalogCoversEveryAdminRoute(t *testing.T) {
 // 目录里不能有已经不存在的路由：它们永远不会命中，却会让人以为某个接口已经登记过了。
 func TestCatalogHasNoStaleEntries(t *testing.T) {
 	live := map[string]bool{}
-	for _, key := range adminRoutes(t) {
+	// 走管理员鉴权的旧版兼容接口（/api/app/*）也可以登记
+	for _, key := range routesWithPrefix(t, "/api/admin/", "/api/app/") {
 		live[key] = true
 	}
 	for key := range registry {

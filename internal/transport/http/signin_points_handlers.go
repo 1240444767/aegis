@@ -323,62 +323,70 @@ func (h *Handler) AppPointsStats(c *gin.Context) {
 	response.Success(c, 200, "获取积分经验统计成功", stats)
 }
 
+// AppAdjustIntegral 管理员调整单个用户的积分（amount 为正增加、为负扣减）。
 func (h *Handler) AppAdjustIntegral(c *gin.Context) {
-	var req AppAdjustIntegralRequest
-	if err := bind(c, &req); err != nil {
+	req, err := decodePointsAdjust(c, false)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	adminID, adminAccount := adminAccount(c)
-	result, err := h.points.AdjustUserIntegral(c.Request.Context(), req.UserID, req.AppID, req.Amount, req.Reason, pointdomain.AdminAdjustOptions{
-		AdminID:      adminID,
-		AdminAccount: adminAccount,
-		ClientIP:     c.ClientIP(),
-		UserAgent:    c.Request.UserAgent(),
-	})
+	result, err := h.points.AdminAdjustIntegral(c.Request.Context(), pointdomain.AdjustInput{
+		AppID: req.AppID, UserID: req.UserID, Amount: req.Amount, Reason: req.Reason, RequestID: req.RequestID,
+	}, h.pointsAdjustOptions(c))
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "用户积分调整成功", result)
+	message := "用户积分调整成功"
+	if result.Replayed {
+		message = "该请求已处理，返回首次结果"
+	}
+	response.Success(c, 200, message, result)
 }
 
+// AppAdjustExperience 管理员给单个用户增加经验（经验只增不减）。
 func (h *Handler) AppAdjustExperience(c *gin.Context) {
-	var req AppAdjustExperienceRequest
-	if err := bind(c, &req); err != nil {
+	req, err := decodePointsAdjust(c, false)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	adminID, adminAccount := adminAccount(c)
-	result, err := h.points.AdjustUserExperience(c.Request.Context(), req.UserID, req.AppID, req.Amount, req.Reason, pointdomain.AdminAdjustOptions{
-		AdminID:      adminID,
-		AdminAccount: adminAccount,
-		ClientIP:     c.ClientIP(),
-		UserAgent:    c.Request.UserAgent(),
-	})
+	result, err := h.points.AdminAdjustExperience(c.Request.Context(), pointdomain.AdjustInput{
+		AppID: req.AppID, UserID: req.UserID, Amount: req.Amount, Reason: req.Reason, RequestID: req.RequestID,
+	}, h.pointsAdjustOptions(c))
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "用户经验值调整成功", result)
+	message := "用户经验值调整成功"
+	if result.Replayed {
+		message = "该请求已处理，返回首次结果"
+	}
+	response.Success(c, 200, message, result)
 }
 
+// AppBatchAdjustIntegral 管理员批量调整积分（amount 为正数，operation_type 决定增加或扣减）。
 func (h *Handler) AppBatchAdjustIntegral(c *gin.Context) {
-	var req AppBatchAdjustIntegralRequest
-	if err := bind(c, &req); err != nil {
+	req, err := decodePointsAdjust(c, true)
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	adminID, adminAccount := adminAccount(c)
-	result, err := h.points.BatchAdjustUserIntegral(c.Request.Context(), req.UserIDs, req.AppID, req.Amount, req.OperationType, req.Reason, pointdomain.AdminAdjustOptions{
-		AdminID:      adminID,
-		AdminAccount: adminAccount,
-		ClientIP:     c.ClientIP(),
-		UserAgent:    c.Request.UserAgent(),
-	})
+	result, err := h.points.BatchAdjustUserIntegral(c.Request.Context(), req.UserIDs, req.AppID, req.Amount,
+		req.OperationType, req.Reason, req.RequestID, h.pointsAdjustOptions(c))
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "批量调整用户积分成功", result)
+	response.Success(c, 200, "批量调整完成", result)
+}
+
+func (h *Handler) pointsAdjustOptions(c *gin.Context) pointdomain.AdminAdjustOptions {
+	adminID, account := adminAccount(c)
+	return pointdomain.AdminAdjustOptions{
+		AdminID:      adminID,
+		AdminAccount: account,
+		ClientIP:     c.ClientIP(),
+		UserAgent:    c.Request.UserAgent(),
+	}
 }

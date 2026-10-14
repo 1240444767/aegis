@@ -8,6 +8,12 @@ func init() {
 		View("GET /api/admin/apps/:appkey/commerce/overview", "查看商业化总览", ""),
 		Write("PUT /api/admin/apps/:appkey/commerce", "修改商业化设置", "", SeverityHigh),
 
+		// 积分与经验（旧版兼容接口，用户详情「资产」页在用）
+		View("POST /api/app/points/stats", "查看积分统计", ""),
+		Write("POST /api/app/points/adjust-integral", "调整用户积分", "用户", SeverityMedium),
+		Write("POST /api/app/points/adjust-experience", "增加用户经验", "用户", SeverityMedium),
+		Write("POST /api/app/points/batch-adjust", "批量调整用户积分", "用户", SeverityHigh),
+
 		// 会员
 		View("GET /api/admin/apps/:appkey/vip/plans", "查看会员套餐", ""),
 		Write("POST /api/admin/apps/:appkey/vip/plans", "保存会员套餐", "会员套餐", SeverityMedium),
