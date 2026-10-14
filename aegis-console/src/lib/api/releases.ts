@@ -92,6 +92,38 @@ export function uploadAdminReleaseAsset(token: string, appKey: string, file: Fil
   return apiRequest<ReleaseAssetUploadResult>(`${base(appKey)}/assets`, { method: "POST", token, body: form });
 }
 
+/** 直传准备结果：mode=direct 时浏览器直接 PUT 到 uploadUrl；mode=server 表示存储不支持直传，改走 multipart 上传。 */
+export type ReleaseDirectUploadTicket = {
+  mode: "direct" | "server";
+  method?: string;
+  uploadUrl?: string;
+  headers?: Record<string, string>;
+  token?: string;
+  expiresAt?: string;
+  provider?: string;
+  reason?: string;
+};
+
+export function presignAdminReleaseAsset(
+  token: string,
+  appKey: string,
+  payload: { fileName: string; fileSize: number; contentType?: string; configName?: string }
+) {
+  return apiRequest<ReleaseDirectUploadTicket>(`${base(appKey)}/assets/presign`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export function completeAdminReleaseAsset(token: string, appKey: string, payload: { token: string; sha256?: string }) {
+  return apiRequest<ReleaseAssetUploadResult>(`${base(appKey)}/assets/complete`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
 // ── 渠道 ──
 
 const channelBase = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}/channels`;
