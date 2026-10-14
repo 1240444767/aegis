@@ -41,10 +41,10 @@ import { RichEditor } from "@/components/ui/rich-editor";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Slider } from "@/components/ui/slider";
-import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { AppIcon, AssetCard, PackageDropzone, computeAssetIssues, type AssetItem } from "./release-assets";
+import { ApiLevelRange, DevicePicker, LocalePicker, ModelPicker, RegionPicker, SourceVersionRange, UserPicker } from "./release-audience";
 import {
   COMMON_ABIS,
   ChannelDot,
@@ -53,9 +53,7 @@ import {
   ROLLOUT_PRESETS,
   ReleaseStatusBadge,
   UPDATE_TYPES,
-  VISIBILITIES,
-  parseIdList,
-  parseList
+  VISIBILITIES
 } from "./release-shared";
 
 /**
@@ -81,13 +79,13 @@ type Form = {
   channelId: string;
   visibility: ReleaseVisibility;
   rolloutPct: number;
-  testerUserIds: string;
-  testerDeviceIds: string;
-  excludeUserIds: string;
-  excludeDeviceIds: string;
-  regions: string;
-  locales: string;
-  deviceModels: string;
+  testerUserIds: number[];
+  testerDeviceIds: string[];
+  excludeUserIds: number[];
+  excludeDeviceIds: string[];
+  regions: string[];
+  locales: string[];
+  deviceModels: string[];
   abis: string[];
   minOsApi: string;
   maxOsApi: string;
@@ -117,13 +115,13 @@ function toForm(item?: Release | null): Form {
     channelId: item?.channel?.id ? String(item.channel.id) : "none",
     visibility: item?.visibility ?? "public",
     rolloutPct: item?.rolloutPct ?? 100,
-    testerUserIds: (t.testerUserIds ?? []).join("\n"),
-    testerDeviceIds: (t.testerDeviceIds ?? []).join("\n"),
-    excludeUserIds: (t.excludeUserIds ?? []).join("\n"),
-    excludeDeviceIds: (t.excludeDeviceIds ?? []).join("\n"),
-    regions: (t.regions ?? []).join(", "),
-    locales: (t.locales ?? []).join(", "),
-    deviceModels: (t.deviceModels ?? []).join(", "),
+    testerUserIds: t.testerUserIds ?? [],
+    testerDeviceIds: t.testerDeviceIds ?? [],
+    excludeUserIds: t.excludeUserIds ?? [],
+    excludeDeviceIds: t.excludeDeviceIds ?? [],
+    regions: t.regions ?? [],
+    locales: t.locales ?? [],
+    deviceModels: t.deviceModels ?? [],
     abis: t.abis ?? [],
     minOsApi: t.minOsVersion ? String(t.minOsVersion) : "",
     maxOsApi: t.maxOsVersion ? String(t.maxOsVersion) : "",
@@ -405,13 +403,13 @@ export function ReleaseEditor({
     }
 
     const targeting: ReleaseTargeting = {
-      testerUserIds: parseIdList(form.testerUserIds),
-      testerDeviceIds: parseList(form.testerDeviceIds),
-      excludeUserIds: parseIdList(form.excludeUserIds),
-      excludeDeviceIds: parseList(form.excludeDeviceIds),
-      regions: parseList(form.regions).map((v) => v.toUpperCase()),
-      locales: parseList(form.locales),
-      deviceModels: parseList(form.deviceModels),
+      testerUserIds: form.testerUserIds,
+      testerDeviceIds: form.testerDeviceIds,
+      excludeUserIds: form.excludeUserIds,
+      excludeDeviceIds: form.excludeDeviceIds,
+      regions: form.regions.map((v) => v.toUpperCase()),
+      locales: form.locales,
+      deviceModels: form.deviceModels,
       abis: form.abis,
       minOsVersion: minOs,
       maxOsVersion: maxOs,
@@ -509,10 +507,15 @@ export function ReleaseEditor({
     return () => observer.disconnect();
   }, []);
 
-  const targetingCount = [
-    form.regions, form.locales, form.deviceModels, form.minOsApi, form.maxOsApi, form.minSourceCode, form.maxSourceCode,
-    form.testerUserIds, form.testerDeviceIds, form.excludeUserIds, form.excludeDeviceIds
-  ].filter((v) => v.trim()).length + (form.abis.length ? 1 : 0);
+  const conditionCount =
+    [form.regions, form.locales, form.deviceModels, form.abis].filter((v) => v.length).length +
+    [form.minOsApi || form.maxOsApi, form.minSourceCode || form.maxSourceCode].filter(Boolean).length;
+  const listCount = [form.testerUserIds, form.testerDeviceIds, form.excludeUserIds, form.excludeDeviceIds].filter((v) => v.length).length;
+  const targetingCount = conditionCount + listCount;
+  // 同时出现在内测与排除名单里的人或设备：排除优先，提醒一下免得以为内测生效了
+  const overlap =
+    form.testerUserIds.filter((id) => form.excludeUserIds.includes(id)).length +
+    form.testerDeviceIds.filter((id) => form.excludeDeviceIds.includes(id)).length;
 
   const sectionDone: Record<SectionId, boolean> = {
     assets: assets.length > 0 && !busyRows.length && !failedRows.length && assets.every((a) => a.url),
@@ -729,19 +732,19 @@ export function ReleaseEditor({
               </Section>
 
               <Section id="targeting" title="定向与名单" description="均为可选；同时设置时需全部满足。内测名单跳过定向与灰度，排除名单优先于一切">
-                <Collapsible title="定向条件" count={[form.regions, form.locales, form.deviceModels, form.minOsApi, form.maxOsApi, form.minSourceCode, form.maxSourceCode].filter((v) => v.trim()).length + (form.abis.length ? 1 : 0)} defaultOpen={Boolean(errors.minOsApi || errors.minSourceCode)}>
+                <Collapsible title="定向条件" count={conditionCount} defaultOpen={Boolean(errors.minOsApi || errors.minSourceCode)}>
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="地区码" hint="ISO 国家或地区码">
-                      <Input value={form.regions} placeholder="CN, HK" onChange={(e) => patch("regions", e.target.value)} />
+                    <Field label="地区" hint="按客户端上报或 IP 判定的国家与地区">
+                      <RegionPicker value={form.regions} onChange={(v) => patch("regions", v)} />
                     </Field>
-                    <Field label="语言">
-                      <Input value={form.locales} placeholder="zh, en-US" onChange={(e) => patch("locales", e.target.value)} />
+                    <Field label="语言" hint="按客户端系统语言匹配">
+                      <LocalePicker value={form.locales} onChange={(v) => patch("locales", v)} />
                     </Field>
-                    <Field label="机型关键字">
-                      <Input value={form.deviceModels} placeholder="Pixel, Xiaomi" onChange={(e) => patch("deviceModels", e.target.value)} />
+                    <Field label="机型" hint="型号包含任一关键字即匹配">
+                      <ModelPicker value={form.deviceModels} onChange={(v) => patch("deviceModels", v)} />
                     </Field>
                     <Field label="设备架构">
-                      <div className="flex flex-wrap gap-1.5">
+                      <div className="flex min-h-9 flex-wrap items-center gap-1.5">
                         {COMMON_ABIS.filter((abi) => abi !== "universal").map((abi) => {
                           const on = form.abis.includes(abi);
                           return (
@@ -752,28 +755,37 @@ export function ReleaseEditor({
                         })}
                       </div>
                     </Field>
-                    <Field label="系统版本（API Level）" error={errors.minOsApi}>
-                      <RangeInputs min={form.minOsApi} max={form.maxOsApi} onMin={(v) => patch("minOsApi", v)} onMax={(v) => patch("maxOsApi", v)} />
+                    <Field label="系统版本" error={errors.minOsApi}>
+                      <ApiLevelRange min={form.minOsApi} max={form.maxOsApi} onMin={(v) => patch("minOsApi", v)} onMax={(v) => patch("maxOsApi", v)} />
                     </Field>
-                    <Field label="来源版本码" error={errors.minSourceCode} hint="只推给从这些版本升级的用户">
-                      <RangeInputs min={form.minSourceCode} max={form.maxSourceCode} onMin={(v) => patch("minSourceCode", v)} onMax={(v) => patch("maxSourceCode", v)} />
+                    <Field label="来源版本" error={errors.minSourceCode} hint="只推给从这些版本升级的用户">
+                      <SourceVersionRange appKey={appKey} min={form.minSourceCode} max={form.maxSourceCode} onMin={(v) => patch("minSourceCode", v)} onMax={(v) => patch("maxSourceCode", v)} />
                     </Field>
                   </div>
                 </Collapsible>
-                <Collapsible title="内测与排除名单" count={[form.testerUserIds, form.testerDeviceIds, form.excludeUserIds, form.excludeDeviceIds].filter((v) => v.trim()).length}>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="内测用户 ID" hint="每行一个，或以逗号分隔">
-                      <Textarea rows={3} className={DATA_FONT} value={form.testerUserIds} onChange={(e) => patch("testerUserIds", e.target.value)} />
-                    </Field>
-                    <Field label="内测设备 ID">
-                      <Textarea rows={3} className={DATA_FONT} value={form.testerDeviceIds} onChange={(e) => patch("testerDeviceIds", e.target.value)} />
-                    </Field>
-                    <Field label="排除用户 ID">
-                      <Textarea rows={3} className={DATA_FONT} value={form.excludeUserIds} onChange={(e) => patch("excludeUserIds", e.target.value)} />
-                    </Field>
-                    <Field label="排除设备 ID">
-                      <Textarea rows={3} className={DATA_FONT} value={form.excludeDeviceIds} onChange={(e) => patch("excludeDeviceIds", e.target.value)} />
-                    </Field>
+                <Collapsible title="内测与排除名单" count={listCount}>
+                  <div className="space-y-5">
+                    <AudienceGroup tone="include" title="内测名单" hint="始终能收到这个版本，不受定向条件、灰度比例与可见范围限制">
+                      <Field label="用户">
+                        <UserPicker appKey={appKey} value={form.testerUserIds} onChange={(v) => patch("testerUserIds", v)} tone="include" />
+                      </Field>
+                      <Field label="设备">
+                        <DevicePicker appKey={appKey} value={form.testerDeviceIds} onChange={(v) => patch("testerDeviceIds", v)} tone="include" />
+                      </Field>
+                    </AudienceGroup>
+                    <AudienceGroup tone="exclude" title="排除名单" hint="永远收不到这个版本，优先于一切规则">
+                      <Field label="用户">
+                        <UserPicker appKey={appKey} value={form.excludeUserIds} onChange={(v) => patch("excludeUserIds", v)} tone="exclude" />
+                      </Field>
+                      <Field label="设备">
+                        <DevicePicker appKey={appKey} value={form.excludeDeviceIds} onChange={(v) => patch("excludeDeviceIds", v)} tone="exclude" />
+                      </Field>
+                    </AudienceGroup>
+                    {overlap ? (
+                      <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                        有 {overlap} 项同时在内测与排除名单中，按排除处理
+                      </p>
+                    ) : null}
                   </div>
                 </Collapsible>
               </Section>
@@ -970,12 +982,17 @@ function Collapsible({ title, count, defaultOpen, children }: { title: string; c
   );
 }
 
-function RangeInputs({ min, max, onMin, onMax }: { min: string; max: string; onMin: (v: string) => void; onMax: (v: string) => void }) {
+function AudienceGroup({ tone, title, hint, children }: { tone: "include" | "exclude"; title: string; hint: string; children: ReactNode }) {
   return (
-    <div className="flex items-center gap-2">
-      <Input className={DATA_FONT} inputMode="numeric" value={min} placeholder="不限" onChange={(e) => onMin(e.target.value.replace(/\D/g, ""))} />
-      <span className="text-xs text-muted-foreground">至</span>
-      <Input className={DATA_FONT} inputMode="numeric" value={max} placeholder="不限" onChange={(e) => onMax(e.target.value.replace(/\D/g, ""))} />
+    <div className="space-y-3">
+      <div className="flex items-start gap-2">
+        <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", tone === "include" ? "bg-emerald-500" : "bg-red-500")} />
+        <div>
+          <div className="text-sm font-medium">{title}</div>
+          <p className="text-[11px] text-muted-foreground">{hint}</p>
+        </div>
+      </div>
+      <div className="grid gap-4 pl-4 lg:grid-cols-2">{children}</div>
     </div>
   );
 }

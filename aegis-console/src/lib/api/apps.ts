@@ -71,6 +71,8 @@ export type AdminAppUserListParams = {
   markcode?: string;
   customId?: string;
   userId?: number;
+  /** 逗号分隔的用户 ID，按 ID 批量取（最多 500 个），给出时忽略其他筛选 */
+  ids?: string;
   enabled?: boolean;
   /** RFC3339 绝对时刻；控制台按浏览器时区把日期换成当天起止后再传 */
   createdFrom?: string;
@@ -85,6 +87,33 @@ export type AdminAppUserListParams = {
 export function getAdminAppUsers(token: string, appKey: string, params?: AdminAppUserListParams) {
   return apiRequest<PagedResult<AdminAppUserItem>>(
     `/api/admin/apps/${encodeURIComponent(appKey)}/users${buildQuery({ ...params })}`,
+    { token }
+  );
+}
+
+/** 设备目录里的一台设备（来自登录记录），与后端 user.AdminDeviceItem 对齐。 */
+export type AdminDeviceItem = {
+  deviceId: string;
+  deviceInfo?: DeviceInfo;
+  firstSeenAt: string;
+  lastSeenAt: string;
+  logins: number;
+  users: number;
+  lastUser?: { id: number; account?: string; nickname?: string };
+  lastIp?: string;
+};
+
+export type AdminDeviceListParams = {
+  keyword?: string;
+  userId?: number;
+  /** 逗号分隔的设备 ID */
+  ids?: string;
+  limit?: number;
+};
+
+export function getAdminAppDevices(token: string, appKey: string, params?: AdminDeviceListParams) {
+  return apiRequest<{ items: AdminDeviceItem[] }>(
+    `/api/admin/apps/${encodeURIComponent(appKey)}/users/devices${buildQuery({ ...params })}`,
     { token }
   );
 }
