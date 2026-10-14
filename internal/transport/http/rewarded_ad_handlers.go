@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -298,6 +299,10 @@ func (h *Handler) AppRewardedAdRecords(c *gin.Context) {
 // 由灰鲸服务器发起，没有用户令牌也没有应用密钥可带，凭 sha256(securityKey:transId) 验签。
 // 响应体是平台规定的 {"isValid": bool}，不套本项目的信封 —— 与支付回调回 "success" 同理，
 // 对方只认它自己的格式。参数名大小写两种写法都认（后台模板是 camelCase，宏名是 SNAKE）。
+//
+// 响应的 isValid 是「这次回调我收到了」：应用对不上才回 false，其余一律 true，
+// 因为平台只等 200ms 上下，而验签要读配置、落库要合并客户端上报，本机数据库一慢就必超时。
+// 真正的判定（验签、限额、合并发奖）在响应的同时交给后台 context 跑完，结论写进记录表。
 func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
 	app, err := h.app.GetAppByKey(c.Request.Context(), strings.TrimSpace(c.Param("appkey")))
 	if err != nil || app == nil {
@@ -305,7 +310,7 @@ func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
 		return
 	}
 	amount, _ := strconv.Atoi(firstQuery(c, "rewardAmount", "reward_amount", "REWARD_AMOUNT"))
-	valid, _ := h.rewardedAd.HuijingCallback(c.Request.Context(), service.HuijingCallbackInput{
+	input := service.HuijingCallbackInput{
 		AppID:        app.ID,
 		UserID:       firstQuery(c, "userId", "user_id", "USER_ID"),
 		TransID:      firstQuery(c, "transId", "trans_id", "TRANS_ID"),
@@ -315,8 +320,21 @@ func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
 		RewardAmount: amount,
 		NetworkID:    firstQuery(c, "networkId", "network_id", "NETWORK_ID"),
 		Extra:        firstQuery(c, "extrainfo", "extraInfo", "extra", "EXTRAINFO"),
-	})
-	c.JSON(http.StatusOK, gin.H{"isValid": valid})
+	}
+	// 平台等响应只有 200ms 上下（等不到就断开连接、每 200ms 重试，最多 3 次），
+	// 而验签要读配置、落库要合并客户端上报，本机数据库一慢就会超过它的超时——
+	// 客户端断开会把请求 context 取消，落到库里的那一步直接失败，奖励就永远停在待发放。
+	// 所以这里先回「收到」，验签与落库换一个独立的 context 在后台跑完：
+	// 验签不通过时后台照样不会合并、不会发奖，isValid 只影响平台要不要重试，不影响发奖正确性。
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if valid, reason := h.rewardedAd.HuijingCallback(ctx, input); !valid {
+			// 失败原因由 service 的日志记录（bad_sign / trans_invalid / 限额等），这里不重复打。
+			_ = reason
+		}
+	}()
+	c.JSON(http.StatusOK, gin.H{"isValid": true})
 }
 
 // parseRewardedAdRange 解析记录筛选的时间范围。
