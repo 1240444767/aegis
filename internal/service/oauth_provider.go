@@ -42,7 +42,7 @@ func (p *OAuthProvider) kind() string {
 	}
 	switch kind {
 	case oauthdomain.KindQQ, oauthdomain.KindWechat, oauthdomain.KindWeibo,
-		oauthdomain.KindGitHub, oauthdomain.KindMicrosoft:
+		oauthdomain.KindGitHub, oauthdomain.KindMicrosoft, oauthdomain.KindGoogle:
 		return kind
 	default:
 		return oauthdomain.KindGeneric
@@ -561,6 +561,7 @@ func secureQQAvatar(raw string) string {
 // ProfileFromAccessToken 用原生 SDK 在端上拿到的 access_token，由服务端向服务商换回第三方身份。
 //
 // 客户端自报的 openid、昵称一概不作数，身份只认服务端拿令牌查回来的结果。
+// Google 的 accessToken 位置也接受 ID Token（安卓 Credential Manager 只给这个），见 oauth_google.go。
 // openID 只有微信、微博需要：它们的资料接口按 openid / uid 查，令牌本身反查不出是谁。
 // 客户端传了 openID 而与查回来的不一致时拒绝，免得拿 A 的令牌冒充 B。
 func (p *OAuthProvider) ProfileFromAccessToken(ctx context.Context, client *http.Client, accessToken, openID string) (authdomain.ProviderProfile, error) {
@@ -593,6 +594,8 @@ func (p *OAuthProvider) ProfileFromAccessToken(ctx context.Context, client *http
 		}
 	case oauthdomain.KindGitHub:
 		profile, err = p.fetchGitHubProfile(ctx, client, base)
+	case oauthdomain.KindGoogle:
+		profile, err = p.fetchGoogleProfile(ctx, client, base, accessToken)
 	default:
 		profile, err = p.fetchGenericProfile(ctx, client, base)
 	}

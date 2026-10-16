@@ -732,11 +732,20 @@ func (s *AppOAuthService) attachProviderMeta(ctx context.Context, appID int64, i
 }
 
 func publicView(item *oauthdomain.Provider) oauthdomain.PublicProvider {
-	return oauthdomain.PublicProvider{
+	view := oauthdomain.PublicProvider{
 		Provider: item.Provider, DisplayName: item.DisplayName,
 		Icon: item.Icon, Color: item.Color,
 		AllowLogin: item.AllowLogin, AllowBind: item.AllowBind, SortOrder: item.SortOrder,
 	}
+	// 平台级渠道可能没写 kind，与 OAuthProvider.kind() 一样按渠道名推断
+	kind := normalizeOAuthKind(item.Kind)
+	if kind == "" {
+		kind = normalizeOAuthKind(item.Provider)
+	}
+	if kind == oauthdomain.KindGoogle {
+		view.ClientID = strings.TrimSpace(item.ClientID)
+	}
+	return view
 }
 
 // configIssues 列出阻碍该渠道正常工作的缺失项，供前端逐条提示。
@@ -811,6 +820,8 @@ func normalizeOAuthKind(value string) string {
 		return oauthdomain.KindGitHub
 	case oauthdomain.KindMicrosoft:
 		return oauthdomain.KindMicrosoft
+	case oauthdomain.KindGoogle:
+		return oauthdomain.KindGoogle
 	case oauthdomain.KindGeneric:
 		return oauthdomain.KindGeneric
 	default:

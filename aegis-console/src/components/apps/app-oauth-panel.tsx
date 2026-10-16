@@ -928,6 +928,7 @@ function ProviderEditor({
                       <SelectItem value="weibo">微博</SelectItem>
                       <SelectItem value="github">GitHub</SelectItem>
                       <SelectItem value="microsoft">Microsoft</SelectItem>
+                      <SelectItem value="google">Google</SelectItem>
                     </SelectContent>
                   </Select>
                 </Field>

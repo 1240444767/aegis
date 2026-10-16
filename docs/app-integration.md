@@ -501,7 +501,12 @@ POST /api/v1/apps/{appKey}/auth/login
   `providerUserId` 一概不作数。QQ 通过 `graph.qq.com/oauth2.0/me` 反查 openid（开通了权限时带 unionid），
   并核对 `client_id` 等于渠道配置的 APP ID —— 别的应用签出的令牌一律 `40380`。
   资料（昵称、头像）再用 `get_user_info` 拉取，拉不到不影响登录。
-- `openId`：QQ 可不填；微信、微博必填（它们的资料接口按 openid / uid 查）。填了就必须与核实结果一致，否则 `40380`。
+- **Google**：`accessToken` 位置放 Credential Manager（Sign in with Google）给的 **ID Token**。服务端用
+  Google 公钥验签，核对 `iss`、`exp` 与 `aud` 等于渠道的 ClientID（控制台「Web 应用」类型的客户端 ID），
+  身份取 `sub`，邮箱只在 `email_verified` 时收。传 access token 也行：服务端先问 tokeninfo 它签给了谁，
+  受众不是本渠道 ClientID 一律 `40380`。端上要的 `serverClientId` 读 `/config` 里该渠道的 `clientId`
+  （只有 Google 渠道下发，Client ID 不是秘密）。
+- `openId`：QQ、Google 可不填；微信、微博必填（它们的资料接口按 openid / uid 查）。填了就必须与核实结果一致，否则 `40380`。
 - 老字段 `providerUserId` 仍被接受，含义同 `openId`。
 
 **未关联账号时：快速注册或绑定已有账号**
