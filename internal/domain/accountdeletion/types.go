@@ -429,17 +429,34 @@ type TrendPoint struct {
 	Cancelled int64  `json:"cancelled"`
 }
 
+// OpenCounts 进行中的申请数（不限时间窗口）：控制台的待处理提示看它。
+type OpenCounts struct {
+	Reviewing  int64 `json:"reviewing"`
+	Scheduled  int64 `json:"scheduled"`
+	Processing int64 `json:"processing"`
+	Failed     int64 `json:"failed"`
+}
+
+// AdminReasonKey 原因分布里「管理员发起且没选原因」的那一桶。带 @ 是为了不与配置里的原因标识相撞
+// （标识只允许小写字母、数字、下划线与连字符）。
+const AdminReasonKey = "@admin"
+
 // Stats 管理端统计。
+//
+// 口径分两类：Total、Open、DueIn7Days、Tombstones、RetentionRate 不限时间；
+// WindowTotal 与 ByStatus / ByMode / BySource / Reasons / Trend 只算最近 Days 天内提交的申请。
 type Stats struct {
-	Total      int64        `json:"total"`
-	ByStatus   []CountItem  `json:"byStatus"`
-	ByMode     []CountItem  `json:"byMode"`
-	BySource   []CountItem  `json:"bySource"`
-	Reasons    []CountItem  `json:"reasons"`
-	Trend      []TrendPoint `json:"trend"`
-	DueIn7Days int64        `json:"dueIn7Days"`
-	Tombstones int64        `json:"tombstones"`
-	// RetentionRate 已结束的申请里被撤销（含驳回）的比例，0–1
+	Total       int64        `json:"total"`
+	Open        OpenCounts   `json:"open"`
+	WindowTotal int64        `json:"windowTotal"`
+	ByStatus    []CountItem  `json:"byStatus"`
+	ByMode      []CountItem  `json:"byMode"`
+	BySource    []CountItem  `json:"bySource"`
+	Reasons     []CountItem  `json:"reasons"`
+	Trend       []TrendPoint `json:"trend"`
+	DueIn7Days  int64        `json:"dueIn7Days"`
+	Tombstones  int64        `json:"tombstones"`
+	// RetentionRate 已结束的申请里被撤销（含驳回）的比例，0–1（不限时间）
 	RetentionRate float64 `json:"retentionRate"`
 	Days          int     `json:"days"`
 	TimeZone      string  `json:"timeZone"`

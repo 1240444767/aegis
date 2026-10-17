@@ -99,9 +99,9 @@ rejected 在驳回后 30 天内展示 `reviewNote`，不影响重新提交。`de
 
 | 接口 | 说明 |
 |---|---|
-| `GET account-deletion/catalog` | 枚举、默认配置、上限 |
+| `GET account-deletion/catalog` | 枚举、默认配置、全部取值与字数上限（`limits`） |
 | `GET/PUT account-deletion/settings` | `{enabled, config}` |
-| `GET account-deletion/stats?days=&tz=` | 总数、按状态 / 方式 / 来源 / 原因、趋势（按浏览器时区分日）、7 天内到期、墓碑数、挽留率 |
+| `GET account-deletion/stats?days=&tz=` | 不限时间：`total`、`open`（待审核 / 冷静期 / 执行中 / 失败）、7 天内到期、墓碑数、挽留率；最近 `days` 天：`windowTotal`、按状态 / 方式 / 来源 / 原因（管理员发起且没选原因的归 `@admin`）、趋势（按 `tz` 分日） |
 | `GET account-deletion/requests` | `status, mode, source, userId, keyword, from, to, page, limit` |
 | `GET account-deletion/requests/:id` | 详情（含提交时的账号快照） |
 | `POST …/:id/approve` | `{note}` |
@@ -111,7 +111,7 @@ rejected 在驳回后 30 天内展示 `reviewNote`，不影响重新提交。`de
 | `POST …/:id/reschedule` | `{scheduledAt, notify}`，晚于现在、不晚于一年 |
 | `GET account-deletion/tombstones` / `DELETE …/:tombstoneId` | 重新注册限制与解除 |
 | `GET users/:userId/account-deletion` | 进行中的申请与历史 |
-| `POST users/:userId/account-deletion` | `{mode, coolingDays, reason, notify, confirm}`；不过验证与前置条件，立即注销须 `confirm` 账号名 |
+| `POST users/:userId/account-deletion` | `{mode, coolingDays, reasonCode, reason, notify, confirm}`；`reasonCode`（配置里的原因）与 `reason` 至少给一个；不过验证与前置条件，立即注销须 `confirm` 账号名 |
 
 ## 验证
 

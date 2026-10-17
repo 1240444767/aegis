@@ -167,6 +167,9 @@ func (s *AccountDeletionService) Catalog() AccountDeletionCatalog {
 			"maxRecentLoginMinutes": accountdeletion.MaxRecentLoginMinutes, "maxRemindBeforeHours": accountdeletion.MaxRemindBeforeHours,
 			"maxReregisterDays": accountdeletion.MaxReregisterDays, "maxReasons": accountdeletion.MaxReasons,
 			"maxNoticeRunes": accountdeletion.MaxNoticeRunes, "maxReasonTextRunes": accountdeletion.MaxReasonTextRunes,
+			"maxReasonCodeRunes": accountdeletion.MaxReasonCodeRunes, "maxReasonLabelRunes": accountdeletion.MaxReasonLabelRunes,
+			"maxNoticeTitleRunes": accountdeletion.MaxNoticeTitleRunes, "maxAgreementRunes": accountdeletion.MaxAgreementRunes,
+			"maxSupportRunes": accountdeletion.MaxSupportRunes, "maxNoteRunes": accountDeletionNoteMaxRunes,
 		},
 	}
 }

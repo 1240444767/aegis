@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -243,8 +244,10 @@ type AccountDeletionAdminCreateInput struct {
 	UserID      int64
 	Mode        string
 	CoolingDays int
-	Reason      string
-	Notify      bool
+	// ReasonCode 应用配置里的一项原因（选填）；Reason 为补充说明。两者至少给一个
+	ReasonCode string
+	Reason     string
+	Notify     bool
 	// Confirm 立即注销时必须与账号名一致（防误点）
 	Confirm  string
 	Operator string
@@ -258,9 +261,6 @@ func (s *AccountDeletionService) AdminCreate(ctx context.Context, input AccountD
 	if err != nil {
 		return nil, err
 	}
-	if reason == "" {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "请填写注销原因")
-	}
 	mode := strings.TrimSpace(input.Mode)
 	if mode != accountdeletion.ModeImmediate && mode != accountdeletion.ModeCooling {
 		return nil, apperrors.New(40000, http.StatusBadRequest, "mode 只能是 immediate 或 cooling")
@@ -270,6 +270,13 @@ func (s *AccountDeletionService) AdminCreate(ctx context.Context, input AccountD
 		return nil, err
 	}
 	cfg := settings.Config
+	reasonCode := strings.ToLower(strings.TrimSpace(input.ReasonCode))
+	if reasonCode != "" && !slices.ContainsFunc(cfg.Reasons, func(r accountdeletion.Reason) bool { return r.Code == reasonCode }) {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择有效的注销原因")
+	}
+	if reasonCode == "" && reason == "" {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择或填写注销原因")
+	}
 	subject, err := s.loadSubject(ctx, input.AppID, input.UserID)
 	if err != nil {
 		return nil, err
@@ -284,7 +291,7 @@ func (s *AccountDeletionService) AdminCreate(ctx context.Context, input AccountD
 	checks := accountdeletion.EvaluateGuards(cfg, *facts, s.now())
 	record := accountdeletion.RequestInput{
 		AppID: input.AppID, UserID: input.UserID, Account: subject.user.Account, Nickname: subjectNickname(subject),
-		Mode: mode, Source: accountdeletion.SourceAdmin, ReasonText: reason, Operator: input.Operator, IP: input.IP,
+		Mode: mode, Source: accountdeletion.SourceAdmin, ReasonCode: reasonCode, ReasonText: reason, Operator: input.Operator, IP: input.IP,
 		VerifiedBy: []string{}, Snapshot: s.snapshot(subject, facts, checks),
 	}
 	now := s.now()
@@ -386,8 +393,12 @@ func (s *AccountDeletionService) Stats(ctx context.Context, appID int64, days in
 	stats.Trend = trend
 	if settings, err := s.pg.GetAccountDeletionSettings(ctx, appID); err == nil {
 		for i := range stats.Reasons {
-			if stats.Reasons[i].Key == "" {
+			switch stats.Reasons[i].Key {
+			case "":
 				stats.Reasons[i].Label = "未选择"
+				continue
+			case accountdeletion.AdminReasonKey:
+				stats.Reasons[i].Label = "管理员发起"
 				continue
 			}
 			stats.Reasons[i].Label = accountdeletion.ReasonLabel(settings.Config, stats.Reasons[i].Key)

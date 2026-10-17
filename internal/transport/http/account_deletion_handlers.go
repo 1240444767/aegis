@@ -42,11 +42,13 @@ type AccountDeletionRescheduleRequest struct {
 }
 
 // AccountDeletionAdminCreateRequest 管理员代用户发起注销。
-// mode 为 immediate 时 confirm 必须填账号名；coolingDays 不传按应用配置。
+// mode 为 immediate 时 confirm 必须填账号名；coolingDays 不传按应用配置；
+// reasonCode（应用配置里的原因）与 reason（说明）至少给一个。
 type AccountDeletionAdminCreateRequest struct {
 	Mode        string `json:"mode" binding:"required"`
 	CoolingDays int    `json:"coolingDays"`
-	Reason      string `json:"reason" binding:"required"`
+	ReasonCode  string `json:"reasonCode"`
+	Reason      string `json:"reason"`
 	Notify      *bool  `json:"notify"`
 	Confirm     string `json:"confirm"`
 }
@@ -350,7 +352,7 @@ func (h *Handler) AdminCreateUserAccountDeletion(c *gin.Context) {
 	}
 	_, operator := adminAccount(c)
 	result, err := h.accountDeletion.AdminCreate(c.Request.Context(), service.AccountDeletionAdminCreateInput{
-		AppID: appID, UserID: userID, Mode: req.Mode, CoolingDays: req.CoolingDays, Reason: req.Reason,
+		AppID: appID, UserID: userID, Mode: req.Mode, CoolingDays: req.CoolingDays, ReasonCode: req.ReasonCode, Reason: req.Reason,
 		Notify: boolOr(req.Notify, true), Confirm: req.Confirm, Operator: operator, IP: c.ClientIP(),
 	})
 	if err != nil {

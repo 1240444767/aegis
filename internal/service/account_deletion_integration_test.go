@@ -301,6 +301,25 @@ SELECT $1, $2, c.id, 'D-1', '会员', 10, 'alipay', 'alipay', 'pending' FROM c`,
 		t.Fatalf("管理员立即注销：%+v / %v", forced, err)
 	}
 
+	// 管理员发起时原因可以选配置里的一项；不在列表里的被拒，两者都不给也被拒
+	erin := env.recovery.user(t, "erin", password, "", "")
+	if _, err := env.deletion.AdminCreate(ctx, AccountDeletionAdminCreateInput{AppID: env.appID, UserID: erin, Mode: "cooling", Operator: "root"}); errCode(err) != 40000 {
+		t.Fatalf("没有原因应被拒，得到 %v", err)
+	}
+	if _, err := env.deletion.AdminCreate(ctx, AccountDeletionAdminCreateInput{AppID: env.appID, UserID: erin, Mode: "cooling", ReasonCode: "nope", Operator: "root"}); errCode(err) != 40000 {
+		t.Fatalf("不在列表里的原因应被拒，得到 %v", err)
+	}
+	erinReq, err := env.deletion.AdminCreate(ctx, AccountDeletionAdminCreateInput{AppID: env.appID, UserID: erin, Mode: "cooling", CoolingDays: 3, ReasonCode: "privacy", Operator: "root"})
+	if err != nil || erinReq.Status != accountdeletion.StatusScheduled || erinReq.ReasonCode != "privacy" || erinReq.CoolingDays != 3 {
+		t.Fatalf("管理员按原因发起冷静期：%+v / %v", erinReq, err)
+	}
+	if open, _ := env.deletion.Stats(ctx, env.appID, 7, ""); open.Open.Scheduled != 1 {
+		t.Fatalf("进行中的申请应计入 open：%+v", open.Open)
+	}
+	if _, err := env.deletion.AdminCancel(ctx, env.appID, erinReq.ID, "", "root", false); err != nil {
+		t.Fatal(err)
+	}
+
 	// ── 列表与统计 ──
 	page, err := env.deletion.ListRequests(ctx, accountdeletion.RequestQuery{AppID: env.appID, Status: accountdeletion.StatusCompleted})
 	if err != nil || page.Total != 3 {
@@ -310,8 +329,20 @@ SELECT $1, $2, c.id, 'D-1', '会员', 10, 'alipay', 'alipay', 'pending' FROM c`,
 		t.Fatalf("按账号搜索 dave 应有 3 条，得到 %d", page.Total)
 	}
 	stats, err := env.deletion.Stats(ctx, env.appID, 7, "Asia/Shanghai")
-	if err != nil || stats.Total != 6 || len(stats.Trend) != 7 || stats.Trend[6].Requested != 6 || stats.Trend[6].Completed != 3 {
+	if err != nil || stats.Total != 7 || stats.WindowTotal != 7 || len(stats.Trend) != 7 || stats.Trend[6].Requested != 7 || stats.Trend[6].Completed != 3 {
 		t.Fatalf("统计不对：%+v / %v", stats, err)
+	}
+	if stats.Open != (accountdeletion.OpenCounts{}) {
+		t.Fatalf("此时没有进行中的申请：%+v", stats.Open)
+	}
+	adminBucket := false
+	for _, item := range stats.Reasons {
+		if item.Key == accountdeletion.AdminReasonKey && item.Label == "管理员发起" && item.Count == 1 {
+			adminBucket = true
+		}
+	}
+	if !adminBucket {
+		t.Fatalf("管理员发起且没选原因的申请应单独成一桶：%+v", stats.Reasons)
 	}
 	userView, err := env.deletion.UserView(ctx, env.appID, dave)
 	if err != nil || userView.Open != nil || len(userView.History) != 3 {

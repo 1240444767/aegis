@@ -464,8 +464,14 @@ func (r *Repository) AccountDeletionStats(ctx context.Context, appID int64, sinc
   COUNT(*) FILTER (WHERE status = 'scheduled' AND scheduled_at <= NOW() + INTERVAL '7 days'),
   COUNT(*) FILTER (WHERE status IN ('completed','cancelled','rejected')),
   COUNT(*) FILTER (WHERE status IN ('cancelled','rejected')),
-  (SELECT COUNT(*) FROM account_deletion_tombstones t WHERE t.appid = $1 AND t.expires_at > NOW())
-FROM account_deletion_requests WHERE appid = $1`, appID).Scan(&stats.Total, &stats.DueIn7Days, &closed, &retained, &stats.Tombstones); err != nil {
+  (SELECT COUNT(*) FROM account_deletion_tombstones t WHERE t.appid = $1 AND t.expires_at > NOW()),
+  COUNT(*) FILTER (WHERE status = 'reviewing'),
+  COUNT(*) FILTER (WHERE status = 'scheduled'),
+  COUNT(*) FILTER (WHERE status = 'processing'),
+  COUNT(*) FILTER (WHERE status = 'failed'),
+  COUNT(*) FILTER (WHERE created_at >= $2)
+FROM account_deletion_requests WHERE appid = $1`, appID, since).Scan(&stats.Total, &stats.DueIn7Days, &closed, &retained, &stats.Tombstones,
+		&stats.Open.Reviewing, &stats.Open.Scheduled, &stats.Open.Processing, &stats.Open.Failed, &stats.WindowTotal); err != nil {
 		return nil, err
 	}
 	if closed > 0 {
@@ -498,7 +504,7 @@ WHERE appid = $1 AND created_at >= $2 GROUP BY 1 ORDER BY 2 DESC`, appID, since)
 	if stats.BySource, err = group("source"); err != nil {
 		return nil, err
 	}
-	if stats.Reasons, err = group("CASE WHEN reason_code = '' THEN '' ELSE reason_code END"); err != nil {
+	if stats.Reasons, err = group("CASE WHEN reason_code <> '' THEN reason_code WHEN source = 'admin' THEN '" + accountdeletion.AdminReasonKey + "' ELSE '' END"); err != nil {
 		return nil, err
 	}
 
