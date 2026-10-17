@@ -16,7 +16,7 @@ import { SAMLConfigPanel } from "@/components/security/saml-config-panel";
 import { AdminCaptchaConfigPanel } from "@/components/security/admin-captcha-config-panel";
 import { EgressConfigPanel } from "@/components/configuration/egress-config-panel";
 import { TrafficRampPanel } from "@/components/configuration/traffic-ramp-panel";
-import { EmailChannelPanel } from "@/components/email/email-channel-panel";
+import { EmailWorkspace } from "@/components/email/email-workspace";
 import { PLATFORM_EMAIL_SCOPE } from "@/lib/email-hooks";
 import { AIChannelPanel } from "@/components/ai/ai-channel-panel";
 import { PLATFORM_AI_SCOPE } from "@/lib/api/ai";
@@ -96,7 +96,7 @@ function ConfigurationPageInner() {
         <TabsContent value="firewall"><FirewallConfigPanel /></TabsContent>
         <TabsContent value="traffic-ramp"><TrafficRampPanel /></TabsContent>
         <TabsContent value="egress"><EgressConfigPanel /></TabsContent>
-        <TabsContent value="email"><EmailChannelPanel scope={PLATFORM_EMAIL_SCOPE} /></TabsContent>
+        <TabsContent value="email"><EmailWorkspace scope={PLATFORM_EMAIL_SCOPE} /></TabsContent>
         <TabsContent value="ai"><AIChannelPanel scope={PLATFORM_AI_SCOPE} /></TabsContent>
         <TabsContent value="security"><PlatformSecurityPanel /></TabsContent>
         <TabsContent value="ldap"><LDAPConfigPanel /></TabsContent>

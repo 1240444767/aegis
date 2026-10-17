@@ -1032,6 +1032,9 @@ export type EmailDelivery = {
   openCount?: number;
   clickCount?: number;
   lastEvent?: string;
+  lastEventPayload?: Record<string, unknown>;
+  /** 借用平台共享通道发出（留痕仍记在发信的应用名下） */
+  inherited?: boolean;
   sentAt?: string;
   deliveredAt?: string;
   createdAt: string;

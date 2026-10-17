@@ -32,7 +32,7 @@ import { AppPointsStorePanel } from "@/components/apps/points-store/app-points-s
 import { AppInvitePanel } from "@/components/apps/invite/app-invite-panel";
 import { AppAccountDeletionPanel } from "@/components/apps/account-deletion/app-account-deletion-panel";
 import { AppVipPanel } from "@/components/apps/vip/app-vip-panel";
-import { EmailChannelPanel } from "@/components/email/email-channel-panel";
+import { EmailWorkspace } from "@/components/email/email-workspace";
 import { AIChannelPanel } from "@/components/ai/ai-channel-panel";
 import { useAdminAppQuery, useAdminAppsQuery, useDeleteAdminAppMutation } from "@/lib/admin-hooks";
 import { useAppGovernanceQuery } from "@/lib/platform-governance-hooks";
@@ -167,7 +167,7 @@ function AppSectionPanel({ section, app }: { section: string; app: AppSummary })
     case "auth-protocol":
       return <AppAuthProtocolPanel appKey={app.appKey} />;
     case "email":
-      return <EmailChannelPanel scope={{ kind: "app", appId: app.id }} />;
+      return <EmailWorkspace scope={{ kind: "app", appId: app.id }} />;
     case "ai":
       return <AIChannelPanel scope={{ kind: "app", appKey: app.appKey }} />;
     case "payment":
