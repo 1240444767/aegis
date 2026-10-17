@@ -40,14 +40,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError } from "@/lib/api/client";
 import type { DeletionConfig, DeletionMode, DeletionRequest } from "@/lib/api/account-deletion";
-import { useCreateUserDeletionMutation, useUserDeletionQuery } from "@/lib/account-deletion-hooks";
+import {
+  useCreateUserDeletionMutation,
+  useDeletionCatalogQuery,
+  useUserDeletionQuery
+} from "@/lib/account-deletion-hooks";
 import { formatDateTimeMinute, formatRelative } from "@/lib/datetime";
 import { usePermissionChecker } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 import { Panel } from "./user-detail-shared";
 
 const REASON_MAX = 500;
-const ADMIN_REASON_PRESETS = ["用户通过客服申请注销", "账号长期未使用", "违规账号清理"];
+/** 说明的常用写法，点一下填入；与应用配置的原因（reasonCode）互不冲突 */
+const ADMIN_NOTE_PRESETS = ["用户通过客服申请注销", "账号长期未使用", "违规账号清理"];
 
 /**
  * 用户详情「处置」页签里的账号注销卡片。
@@ -70,6 +75,7 @@ export function UserAccountDeletionCard({
   const can = usePermissionChecker();
   const canWrite = can("app:user:write");
   const viewQuery = useUserDeletionQuery(appKey, userId);
+  const catalogQuery = useDeletionCatalogQuery(appKey);
   const view = viewQuery.data;
   const open = view?.open ?? null;
   const history = (view?.history ?? []).filter((item) => item.id !== open?.id);
@@ -126,7 +132,8 @@ export function UserAccountDeletionCard({
           userId={userId}
           account={account}
           defaultCoolingDays={view.config.coolingDays}
-          reasonPresets={Array.from(new Set([...ADMIN_REASON_PRESETS, ...view.config.reasons.map((item) => item.label)])).slice(0, 6)}
+          reasons={view.config.reasons}
+          maxCoolingDays={catalogQuery.data?.limits?.maxCoolingDays ?? 180}
           onDone={handleDone}
         />
       ) : (
@@ -267,28 +274,31 @@ function CreateForm({
   userId,
   account,
   defaultCoolingDays,
-  reasonPresets,
+  reasons,
+  maxCoolingDays,
   onDone
 }: {
   appKey: string;
   userId: number;
   account: string;
   defaultCoolingDays: number;
-  reasonPresets: string[];
+  reasons: DeletionConfig["reasons"];
+  maxCoolingDays: number;
   onDone: (result: DeletionRequest) => void;
 }) {
   const mutation = useCreateUserDeletionMutation(appKey, userId);
   const [mode, setMode] = useState<DeletionMode>("cooling");
   const [coolingDays, setCoolingDays] = useState(String(defaultCoolingDays || 15));
+  const [reasonCode, setReasonCode] = useState("");
   const [reason, setReason] = useState("");
   const [notify, setNotify] = useState(true);
   const [confirm, setConfirm] = useState("");
 
   const days = Number.parseInt(coolingDays, 10);
-  const problem = !reason.trim()
-    ? "请填写注销原因"
-    : mode === "cooling" && !(days >= 1 && days <= 180)
-      ? "冷静期为 1–180 天"
+  const problem = !reasonCode && !reason.trim()
+    ? "请选择或填写注销原因"
+    : mode === "cooling" && !(days >= 1 && days <= maxCoolingDays)
+      ? `冷静期为 1–${maxCoolingDays} 天`
       : mode === "immediate" && confirm.trim() !== account
         ? "输入账号名确认后才能立即注销"
         : null;
@@ -299,6 +309,7 @@ function CreateForm({
       const result = await mutation.mutateAsync({
         mode,
         coolingDays: mode === "cooling" ? days : undefined,
+        reasonCode: reasonCode || undefined,
         reason: reason.trim(),
         notify,
         confirm: mode === "immediate" ? confirm.trim() : undefined
@@ -311,6 +322,7 @@ function CreateForm({
         toast.success("已进入注销冷静期");
       }
       setReason("");
+      setReasonCode("");
       setConfirm("");
       onDone(result);
     } catch (error) {
@@ -345,30 +357,64 @@ function CreateForm({
           </div>
           {mode === "cooling" ? (
             <div className="max-w-48">
-              <NumberField label="冷静期" value={coolingDays} onChange={setCoolingDays} min={1} max={180} unit="天" />
+              <NumberField
+                label="冷静期"
+                value={coolingDays}
+                onChange={setCoolingDays}
+                min={1}
+                max={maxCoolingDays}
+                unit="天"
+              />
             </div>
           ) : null}
           <SwitchRow label="通知用户" checked={notify} onChange={setNotify} />
         </div>
 
         <div className="space-y-2">
-          <div className="flex items-baseline justify-between gap-2">
-            <Label className="text-xs text-muted-foreground">
-              注销原因<span className="ml-0.5 text-red-500">*</span>
-            </Label>
+          <Label className="text-xs text-muted-foreground">
+            注销原因<span className="ml-0.5 text-red-500">*</span>
+          </Label>
+          {reasons.length ? (
+            <div className="flex flex-wrap gap-1.5" role="radiogroup" aria-label="注销原因">
+              {reasons.map((item) => {
+                const active = item.code === reasonCode;
+                return (
+                  <button
+                    key={item.code}
+                    type="button"
+                    role="radio"
+                    aria-checked={active}
+                    onClick={() => setReasonCode(active ? "" : item.code)}
+                    className={cn(
+                      "rounded-lg border px-2.5 py-1 text-xs transition-colors",
+                      active
+                        ? "border-primary bg-primary/10 font-medium text-primary"
+                        : "border-border text-muted-foreground hover:text-foreground"
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+          <div className="flex items-baseline justify-between gap-2 pt-1">
+            <span className="text-[11px] text-muted-foreground">
+              {reasons.length ? "补充说明（选了原因时可不填）" : "说明"}
+            </span>
             <span className="text-[10px] tabular-nums text-muted-foreground">
               {reason.length}/{REASON_MAX}
             </span>
           </div>
           <Textarea
-            rows={4}
+            rows={3}
             value={reason}
             maxLength={REASON_MAX}
             onChange={(event) => setReason(event.target.value)}
             className="resize-none text-sm"
           />
           <div className="flex flex-wrap gap-1.5">
-            {reasonPresets.map((preset) => (
+            {ADMIN_NOTE_PRESETS.map((preset) => (
               <button
                 key={preset}
                 type="button"

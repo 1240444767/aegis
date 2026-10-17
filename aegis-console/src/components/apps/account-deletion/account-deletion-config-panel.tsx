@@ -71,12 +71,6 @@ import { formatDateTimeMinute } from "@/lib/datetime";
 import { usePermissionChecker } from "@/lib/permissions";
 import { cn } from "@/lib/utils";
 
-/** 目录里没有下发的上限，与后端 accountdeletion/types.go 一致；最终以后端校验为准 */
-const MAX_REASON_CODE = 64;
-const MAX_REASON_LABEL = 60;
-const MAX_NOTICE_TITLE = 60;
-const MAX_AGREEMENT = 120;
-const MAX_SUPPORT = 200;
 const REASON_CODE_PATTERN = /^[a-z0-9_-]{1,64}$/;
 
 const VERIFY_ICON: Record<DeletionVerifyMethod, React.ReactNode> = {
@@ -276,6 +270,12 @@ export function DeletionConfigPanel({ appKey }: { appKey: string }) {
   const maxReregister = limits.maxReregisterDays ?? 3650;
   const maxReasons = limits.maxReasons ?? 20;
   const maxNotice = limits.maxNoticeRunes ?? 8000;
+  // 字数上限由 catalog.limits 下发；目录还没到时用与后端一致的默认值
+  const maxReasonCode = limits.maxReasonCodeRunes ?? 64;
+  const maxReasonLabel = limits.maxReasonLabelRunes ?? 60;
+  const maxNoticeTitle = limits.maxNoticeTitleRunes ?? 60;
+  const maxAgreement = limits.maxAgreementRunes ?? 120;
+  const maxSupport = limits.maxSupportRunes ?? 200;
 
   const loading = settingsQuery.isLoading || catalogQuery.isLoading;
   const saved = loading ? PLACEHOLDER_FORM : seed(settings, catalog?.defaults);
@@ -467,7 +467,7 @@ export function DeletionConfigPanel({ appKey }: { appKey: string }) {
                     >
                       <Input
                         value={reason.code}
-                        maxLength={MAX_REASON_CODE}
+                        maxLength={maxReasonCode}
                         placeholder="标识"
                         aria-label="原因标识"
                         aria-invalid={codeInvalid}
@@ -476,7 +476,7 @@ export function DeletionConfigPanel({ appKey }: { appKey: string }) {
                       />
                       <Input
                         value={reason.label}
-                        maxLength={MAX_REASON_LABEL}
+                        maxLength={maxReasonLabel}
                         placeholder="名称"
                         aria-label="原因名称"
                         aria-invalid={labelInvalid}
@@ -535,7 +535,7 @@ export function DeletionConfigPanel({ appKey }: { appKey: string }) {
             <TextField
               label="标题"
               value={form.noticeTitle}
-              maxLength={MAX_NOTICE_TITLE}
+              maxLength={maxNoticeTitle}
               onChange={(value) => patch("noticeTitle", value)}
             />
             <FieldGroup label="正文" hint={`${form.noticeContent.length}/${maxNotice}`}>
@@ -561,13 +561,13 @@ export function DeletionConfigPanel({ appKey }: { appKey: string }) {
               <TextField
                 label="同意勾选文案"
                 value={form.agreementLabel}
-                maxLength={MAX_AGREEMENT}
+                maxLength={maxAgreement}
                 onChange={(value) => patch("agreementLabel", value)}
               />
               <TextField
                 label="客服联系方式"
                 value={form.supportContact}
-                maxLength={MAX_SUPPORT}
+                maxLength={maxSupport}
                 placeholder="不设置"
                 onChange={(value) => patch("supportContact", value)}
               />

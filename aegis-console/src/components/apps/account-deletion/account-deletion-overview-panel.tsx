@@ -42,7 +42,6 @@ import type {
   DeletionStatus
 } from "@/lib/api/account-deletion";
 import {
-  useDeletionRequestsQuery,
   useDeletionSettingsQuery,
   useDeletionStatsQuery
 } from "@/lib/account-deletion-hooks";
@@ -87,11 +86,10 @@ export function DeletionOverviewPanel({
   const trendConfig = useMemo(() => buildChartConfig(SERIES), []);
   const rows = useMemo(() => (stats?.trend ?? []).map((day) => ({ ...day, label: day.date.slice(5) })), [stats]);
   const trendEmpty = rows.every((row) => row.requested === 0 && row.completed === 0 && row.cancelled === 0);
-  const reviewingQuery = useDeletionRequestsQuery(appKey, { status: "reviewing", page: 1, limit: 1 });
-  const failedQuery = useDeletionRequestsQuery(appKey, { status: "failed", page: 1, limit: 1 });
-  const reviewing = reviewingQuery.data?.total ?? 0;
-  const failed = failedQuery.data?.total ?? 0;
-  const windowText = `近 ${days} 天提交`;
+  // 待处理提示看 open：它不受时间窗口影响，早于窗口的失败申请同样提示
+  const reviewing = stats?.open?.reviewing ?? 0;
+  const failed = stats?.open?.failed ?? 0;
+  const windowText = stats ? `近 ${days} 天提交 ${formatCount(stats.windowTotal)} 条` : `近 ${days} 天提交`;
   const value = (count?: number) => (stats ? formatCount(count) : "—");
 
   const rangePicker = (

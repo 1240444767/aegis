@@ -83,6 +83,13 @@ export type DeletionCatalogLimits = {
   maxReasons: number;
   maxNoticeRunes: number;
   maxReasonTextRunes: number;
+  maxReasonCodeRunes: number;
+  maxReasonLabelRunes: number;
+  maxNoticeTitleRunes: number;
+  maxAgreementRunes: number;
+  maxSupportRunes: number;
+  /** 审核、驳回、撤销说明与管理员发起原因 */
+  maxNoteRunes: number;
 };
 
 export type DeletionCatalog = {
@@ -193,8 +200,17 @@ export type DeletionCountItem = { key: string; label?: string; count: number };
 
 export type DeletionTrendPoint = { date: string; requested: number; completed: number; cancelled: number };
 
+/** 进行中的申请数，不限时间窗口 */
+export type DeletionOpenCounts = { reviewing: number; scheduled: number; processing: number; failed: number };
+
+/**
+ * total、open、dueIn7Days、tombstones、retentionRate 不限时间；
+ * windowTotal 与各分布、trend 只算最近 days 天内提交的申请。
+ */
 export type DeletionStats = {
   total: number;
+  open: DeletionOpenCounts;
+  windowTotal: number;
   byStatus: DeletionCountItem[];
   byMode: DeletionCountItem[];
   bySource: DeletionCountItem[];
@@ -220,6 +236,8 @@ export type DeletionAdminCreatePayload = {
   mode: DeletionMode;
   /** 不传按应用配置 */
   coolingDays?: number;
+  /** 应用配置里的一项原因；与 reason 至少给一个 */
+  reasonCode?: string;
   reason: string;
   notify: boolean;
   /** 立即注销时填账号名 */
