@@ -61,6 +61,7 @@ import {
   relativeTime,
   textValue
 } from "./user-detail-shared";
+import { UserAccountDeletionCard } from "./user-account-deletion-card";
 
 /** 被新封禁顶替时后端写在旧记录上的撤销原因，与 pgrepo.AccountBanSupersededReason 一致。 */
 const SUPERSEDED_REASON = "已被新的封禁替代";
@@ -91,7 +92,8 @@ export function UserGovernanceTab({
   user,
   activeBan,
   onDelete,
-  deletePending
+  deletePending,
+  onUserDeleted
 }: {
   appKey: string;
   userId: number;
@@ -99,6 +101,8 @@ export function UserGovernanceTab({
   activeBan?: AdminUserBan | null;
   onDelete: () => void;
   deletePending: boolean;
+  /** 账号在注销卡片里被注销之后（用户已不存在） */
+  onUserDeleted: () => void;
 }) {
   const now = useNow();
   const [filter, setFilter] = useState<HistoryFilter>("all");
@@ -194,6 +198,13 @@ export function UserGovernanceTab({
           </div>
         ) : null}
       </Panel>
+
+      <UserAccountDeletionCard
+        appKey={appKey}
+        userId={userId}
+        account={user.account ?? ""}
+        onUserDeleted={onUserDeleted}
+      />
 
       <Card className="flex flex-col gap-3 border-destructive/30 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
         <div className="flex items-center gap-3">

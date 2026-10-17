@@ -711,6 +711,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
 | `components/apps/invite/` | 邀请区块：概览 / 配置 / 邀请码 / 邀请记录（见下节） |
 | `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
+| `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
+| `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
 | `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品与邀请奖励共用 |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
@@ -1045,6 +1047,34 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 能否填写、奖励发放与结算全部在后端，规则见 [docs/invite.md](../docs/invite.md)。
 
+## 账号注销区块（/apps/{appKey}?tab=account-deletion）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/account-deletion/app-account-deletion-panel.tsx` | 骨架 + 概览 / 申请 / 配置 / 重新注册限制四个视图的切换，概览带状态筛选跳到申请 |
+| `components/apps/account-deletion/account-deletion-overview-panel.tsx` | 开关与方式摘要、待审核与执行失败提示、四个数字、趋势柱状图（按浏览器时区分日）、状态 / 方式 / 来源环形图与原因条形图 |
+| `components/apps/account-deletion/account-deletion-requests-panel.tsx` | 申请列表：状态 / 方式 / 来源 / 关键词 / 提交时间筛选，点行开详情抽屉 |
+| `components/apps/account-deletion/account-deletion-request-sheet.tsx` | 详情抽屉：进度时间线、申请信息、提交时的账号快照与前置条件结论、设备与网络，底部按状态给处置按钮 |
+| `components/apps/account-deletion/account-deletion-action-dialog.tsx` | 批准 / 驳回 / 撤销 / 立即执行 / 改期五种处置的弹窗；`ExecuteConfirm` 输入账号名确认 |
+| `components/apps/account-deletion/account-deletion-config-panel.tsx` | 开关与全部配置一次保存（目录驱动），七项前置条件逐项 off / warn / block |
+| `components/apps/account-deletion/account-deletion-tombstones-panel.tsx` | 重新注册限制：打码标识、对应账号、到期，逐条解除 |
+| `components/apps/account-deletion/account-deletion-shared.tsx` | 状态 / 方式 / 来源 / 验证方式 / 前置条件的文案与配色、各状态可做的处置、分页条 |
+| `components/users/detail/user-account-deletion-card.tsx` | 用户详情「处置」页签里的注销卡片：进行中的申请与快捷处置、代发起、历史 |
+
+四条硬约束：
+
+1. **可做的处置只看状态**（`availableActions`，与后端各接口允许的起始状态一致）：批准 / 驳回只对 reviewing，
+   撤销对 reviewing / scheduled / failed，立即执行对 scheduled / failed，改期只对 scheduled。
+   按钮另受 `app:user:write` 控制，只读管理员看得到申请但没有任何处置入口。
+2. **立即执行与代发起立即注销必须输入账号名**，逐字一致才放行（后端同样核对 `confirm`）。
+   返回 200 不等于成功：状态为 failed 时原因在 `failure` 里，按状态 toast。
+3. **立即注销成功后用户已不存在**：hooks 刻意不失效 `admin-app-user`，用户详情页拿到 completed 后自己跳回列表，
+   否则会先闪一下「未找到该用户」。
+4. **目录没有下发的上限**（原因标识 / 名称、须知标题、同意文案、客服联系方式）写在配置面板顶部，与
+   `accountdeletion/types.go` 一致，最终以后端校验为准，原因原样 toast。
+
+状态机、前置条件与验证判定全部在后端，规则见 [docs/account-deletion.md](../docs/account-deletion.md)。
+
 ## 用户云存储区块（/apps/{appKey}?tab=cloud-storage）
 
 | 文件 | 职责 |
@@ -1151,7 +1181,7 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/users/detail/user-activity-map.tsx` | 活动地图（deck.gl ⋈ MapLibre）：活动点 / 密度热力 / 位移轨迹 |
 | `lib/geo/private-network.ts` | 内网 / 回环 / CGNAT 识别（"服务器地址"的判据） |
 | `lib/geo/server-location.ts` | 服务端端点位置，与攻击飞线图共用一份 |
-| `components/users/detail/user-governance-tab.tsx` | 账号开关 / 新建封禁 / 封禁历史与撤销 / 删除 |
+| `components/users/detail/user-governance-tab.tsx` | 账号开关 / 新建封禁 / 封禁历史与撤销 / 账号注销 / 删除 |
 | `lib/api/app-users.ts` | 单用户维度 API（封禁 / 钱包 / 单用户审计） |
 | `lib/app-user-hooks.ts` | 上述 hooks + 成组失效 `USER_SCOPE_KEYS` |
 

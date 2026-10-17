@@ -286,6 +286,7 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
                     activeBan={activeBan}
                     onDelete={() => setShowDelete(true)}
                     deletePending={deleteMutation.isPending}
+                    onUserDeleted={() => router.push(backHref)}
                   />
                 </TabsContent>
               </div>
