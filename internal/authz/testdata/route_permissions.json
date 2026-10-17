@@ -7459,5 +7459,110 @@
     "permission": "system:admin:manage",
     "appScoped": false,
     "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/catalog",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/settings",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/account-deletion/settings",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/stats",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/approve",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/reject",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/execute",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/tombstones",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/account-deletion/tombstones/:tombstoneId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-deletion",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-deletion",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
   }
 ]

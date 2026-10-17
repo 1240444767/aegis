@@ -244,6 +244,11 @@ data class AegisSession(
      * 此时没有令牌，让用户选「快速注册」或「绑定已有账号」。
      */
     val oauthLink: OAuthLinkTicket? = null,
+    /**
+     * 账号处于注销冷静期或待审核时出现：`status`、`mode`、`scheduledAt`；
+     * `cancelled` 为 true 表示这次登录撤销了冷静期（应用配置为登录即撤销）。
+     */
+    val accountDeletion: AccountDeletionLoginNotice? = null,
 ) {
     /** 拿到可用令牌才算登录完成。 */
     val isAuthenticated: Boolean get() = accessToken.isNotEmpty()
@@ -263,6 +268,15 @@ data class OAuthLinkTicket(
     val allowRegister: Boolean = false,
     val allowBind: Boolean = false,
     val expiresAt: String = "",
+)
+
+/** 登录结果里的注销状态，见 [AegisSession.accountDeletion]。 */
+@Serializable
+data class AccountDeletionLoginNotice(
+    val status: String = "",
+    val mode: String = "",
+    val scheduledAt: String? = null,
+    val cancelled: Boolean = false,
 )
 
 @Serializable

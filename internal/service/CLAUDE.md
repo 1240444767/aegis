@@ -279,6 +279,18 @@ Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 开启后唯一的解绑出口是 `ResetLoginBaseline`（控制台「登录绑定 → 重置」）——
 没有这个出口，用户换宽带就等于账号报废。基线读写失败一律 fail-open，与 `LoginGuardService` 同取向。
 
+### 账号注销 —— 申请行是唯一记录，删除只走 PurgeUser
+
+规则与接口见 [docs/account-deletion.md](../../docs/account-deletion.md)。改这块时守住几条：
+
+- 判定都在 `domain/accountdeletion`（`EvaluateGuards`、`PlanVerification`、`ResolveReason`），注销页展示的结论
+  与提交时的报错出自同一个函数，不要在服务层另写一份。
+- 状态迁移只用 `TransitionAccountDeletionRequest`（条件更新）；执行前申请必须已是 processing（认领过）。
+- 删用户只走 `UserService.PurgeUser`，管理员「删除用户」也是它；新增需要随账号清理的外部资源（对象存储之类）
+  时加在 `execute` 里，表数据靠外键 CASCADE / SET NULL。
+- 登录回调在 `finalizeLogin`（所有登录方式的收口），注册回调 `checkReregister` 在密码、短信、第三方三处建号前。
+  新增建号路径时要接上。
+
 ### 账号封禁 —— 封禁记录是唯一依据，两档范围各有执行点
 
 账号状态只看 `user_account_bans`；`users.enabled` / `disabled_end_time` / `user_profiles.disabled_reason`

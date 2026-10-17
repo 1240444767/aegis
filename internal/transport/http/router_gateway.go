@@ -136,6 +136,11 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/me/auto-sign", h.AppAutoSignStatus)
 		appGatewayAuthed.PUT("/me/auto-sign", h.AppUpdateAutoSign)
 		appGatewayAuthed.GET("/me/security", h.Security)
+		// 账号注销：注销页（enabled=false 时入口隐藏）/ 发验证码 / 提交 / 撤销
+		appGatewayAuthed.GET("/me/deletion", h.AppAccountDeletion)
+		appGatewayAuthed.POST("/me/deletion/code", h.AppAccountDeletionCode)
+		appGatewayAuthed.POST("/me/deletion", h.AppSubmitAccountDeletion)
+		appGatewayAuthed.POST("/me/deletion/cancel", h.AppCancelAccountDeletion)
 
 		// 二次认证
 		appGatewayAuthed.POST("/me/2fa/totp/enroll", h.BeginTOTPEnrollment)

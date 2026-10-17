@@ -2207,6 +2207,16 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, appID int64, userID i
 	if user == nil {
 		return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
+	if err := s.PurgeUser(ctx, appID, userID); err != nil {
+		return err
+	}
+	s.log.Warn("管理员删除用户", zap.Int64("appid", appID), zap.Int64("userId", userID))
+	return nil
+}
+
+// PurgeUser 硬删除一个用户：吊销会话、清理安全凭证、删行（CASCADE 清理关联表）、清缓存与搜索索引、
+// 触发 user.onDeleted 钩子。管理员删除与账号注销共用这一条路径。
+func (s *UserService) PurgeUser(ctx context.Context, appID int64, userID int64) error {
 	// 先吊销会话
 	s.revokeAllUserSessions(ctx, appID, userID)
 	// 清理安全凭证
@@ -2220,7 +2230,6 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, appID int64, userID i
 	}
 	s.invalidateAdminUserCaches(ctx, appID, userID)
 	s.deleteAdminUserSearch(appID, userID)
-	s.log.Warn("管理员删除用户", zap.Int64("appid", appID), zap.Int64("userId", userID))
 	if s.plugin != nil {
 		go s.plugin.ExecuteHook(context.Background(), HookUserDeleted, map[string]any{
 			"userId": userID,

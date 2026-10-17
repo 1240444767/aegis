@@ -65,6 +65,8 @@ type APIApp struct {
 	Governance *service.PlatformGovernanceService
 	// CloudStorage 用户云存储：后台循环清理过期回收站，退出时必须 Stop
 	CloudStorage *service.CloudStorageService
+	// AccountDeletion 账号注销：后台循环执行到期的冷静期申请并发到期提醒，退出时必须 Stop
+	AccountDeletion *service.AccountDeletionService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
 	AuthProviderHealth *service.AuthProviderHealthService
 	// Egress 出海代理网关管理面；EgressGateway 是进程级单例，
@@ -435,6 +437,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
+	// 账号注销：验证走邮件与短信，执行时吊销登录、清空云存储、删用户；登录与注册经 AuthService 回调
+	accountDeletionService := service.NewAccountDeletionService(log, pg, sessions, cfg.Security.MasterKey)
+	accountDeletionService.SetAccountServices(authService, userService, securityService)
+	accountDeletionService.SetVerificationChannels(emailService, captchaService, appService)
+	accountDeletionService.SetCloudStorage(cloudStorageService)
+	accountDeletionService.SetNotifier(notificationService)
+	accountDeletionService.SetEventPublisher(realtimeService)
+	authService.SetAccountDeletion(accountDeletionService)
 	appFunctionService := service.NewAppFunctionService(log, pg, cfg.JWT.Secret)
 	// AI 供应商通道（系统级 + 应用级，密钥加密落库）与 Agent 编排。
 	aiProviderService := service.NewAIProviderService(log, pg, cfg.Security.MasterKey)
@@ -617,6 +627,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AdPolicy:         adPolicyService,
 		PointsStore:      pointsStoreService,
 		Invite:           inviteService,
+		AccountDeletion:  accountDeletionService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
 		Version:          versionService,
@@ -730,6 +741,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Risk:               riskService,
 		Governance:         governanceService,
 		CloudStorage:       cloudStorageService,
+		AccountDeletion:    accountDeletionService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
 		EgressGateway:      egressGateway,
@@ -761,6 +773,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.CloudStorage != nil {
 		a.CloudStorage.Start(ctx)
 	}
+	if a.AccountDeletion != nil {
+		a.AccountDeletion.Start(ctx)
+	}
 	if a.OwnsEgress && a.EgressGateway != nil {
 		a.EgressGateway.Start(ctx)
 	}
@@ -789,6 +804,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.CloudStorage != nil {
 		a.CloudStorage.Stop()
+	}
+	if a.AccountDeletion != nil {
+		a.AccountDeletion.Stop()
 	}
 	if a.Database != nil {
 		a.Database.Stop()

@@ -93,6 +93,23 @@ func init() {
 		Write("POST /api/admin/apps/:appkey/invite/relations/:relationId/cancel", "取消邀请人奖励", "邀请记录", SeverityMedium),
 		View("GET /api/admin/apps/:appkey/invite/stats", "查看邀请统计", ""),
 
+		// 账号注销
+		View("GET /api/admin/apps/:appkey/account-deletion/catalog", "查看注销配置目录", ""),
+		View("GET /api/admin/apps/:appkey/account-deletion/settings", "查看注销配置", ""),
+		Write("PUT /api/admin/apps/:appkey/account-deletion/settings", "修改注销配置", "", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/account-deletion/stats", "查看注销统计", ""),
+		View("GET /api/admin/apps/:appkey/account-deletion/requests", "查看注销申请", ""),
+		View("GET /api/admin/apps/:appkey/account-deletion/requests/:requestId", "查看注销申请详情", ""),
+		Write("POST /api/admin/apps/:appkey/account-deletion/requests/:requestId/approve", "批准注销申请", "注销申请", SeverityCritical),
+		Write("POST /api/admin/apps/:appkey/account-deletion/requests/:requestId/reject", "驳回注销申请", "注销申请", SeverityHigh),
+		Write("POST /api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel", "撤销注销申请", "注销申请", SeverityHigh),
+		Write("POST /api/admin/apps/:appkey/account-deletion/requests/:requestId/execute", "立即执行注销", "注销申请", SeverityCritical),
+		Write("POST /api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule", "调整注销时间", "注销申请", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/account-deletion/tombstones", "查看重新注册限制", ""),
+		Write("DELETE /api/admin/apps/:appkey/account-deletion/tombstones/:tombstoneId", "解除重新注册限制", "重新注册限制", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/users/:userId/account-deletion", "查看用户注销状况", ""),
+		Write("POST /api/admin/apps/:appkey/users/:userId/account-deletion", "代用户发起注销", "用户", SeverityCritical),
+
 		// 签到
 		View("GET /api/admin/apps/:appkey/signin/records", "查看签到记录", ""),
 		View("GET /api/admin/apps/:appkey/signin/stats", "查看签到统计", ""),

@@ -80,6 +80,8 @@ func gatewayRequestModels() map[string]any {
 		"settings":       SettingsCategoryQuery{},
 		"settingsUpdate": UpdateSettingsRequest{},
 		"autoSignUpdate": AutoSignUpdateRequest{},
+		"deletionCode":   AccountDeletionCodeRequest{},
+		"deletionSubmit": AccountDeletionSubmitRequest{},
 		"avatarRestore":  AvatarRestoreRequest{},
 
 		// 二次认证

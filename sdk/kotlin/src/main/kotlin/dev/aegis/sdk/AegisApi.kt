@@ -537,6 +537,57 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun security(): JsonElement = client.call("GET", "/me/security", requireAuth = true)
 
+    // ── 账号注销 ──
+
+    /**
+     * 注销页：可选方式（modes）、须知（notice）、原因（reasons）、要过的验证（verification）、
+     * 前置条件（checks / blocked）与进行中的申请（request）。enabled 为 false 且没有 request 时入口应当隐藏。
+     */
+    @Throws(IOException::class)
+    fun accountDeletion(): JsonElement = client.call("GET", "/me/deletion", requireAuth = true)
+
+    /**
+     * 向绑定的邮箱或手机号发注销验证码，[channel] 为 email 或 phone（须在 verification.methods 里）。
+     * 同一渠道 60 秒一次（42911），验证码 10 分钟内有效。
+     */
+    @Throws(IOException::class)
+    fun sendAccountDeletionCode(channel: String): JsonElement =
+        client.call("POST", "/me/deletion/code", mapOf("channel" to channel), requireAuth = true)
+
+    /**
+     * 提交注销。[mode] 为 cooling（冷静期）或 immediate（立即），不传按应用默认；[agree] 必须为 true。
+     * 身份验证：[password]，或 [channel] + [code]；verification.totp 为真时再带 [totpCode] 或 [recoveryCode]。
+     * 返回 `{ request, deleted, signedOut }`，deleted 为 true 时账号已删除，应当清掉本地登录。
+     * 失败码：40371 未开放 / 40915 已有申请 / 40917 不满足条件 / 40127 验证未通过 / 40128 验证码失效 /
+     * 40129 缺少验证 / 42912 失败过多。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitAccountDeletion(
+        agree: Boolean,
+        mode: String? = null,
+        reasonCode: String? = null,
+        reasonText: String? = null,
+        password: String? = null,
+        channel: String? = null,
+        code: String? = null,
+        totpCode: String? = null,
+        recoveryCode: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/me/deletion",
+        buildBody(
+            "agree" to agree, "mode" to mode, "reasonCode" to reasonCode, "reasonText" to reasonText,
+            "password" to password, "channel" to channel, "code" to code, "totpCode" to totpCode,
+            "recoveryCode" to recoveryCode, "deviceId" to deviceId,
+        ),
+        requireAuth = true,
+    )
+
+    /** 撤销进行中的注销申请（待审核、冷静期中、执行失败），返回撤销后的申请。 */
+    @Throws(IOException::class)
+    fun cancelAccountDeletion(): JsonElement = client.call("POST", "/me/deletion/cancel", requireAuth = true)
+
     // ── 二次认证 ──
 
     @Throws(IOException::class)

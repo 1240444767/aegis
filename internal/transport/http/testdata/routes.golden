@@ -1,4 +1,5 @@
 DELETE	/api/admin/apps/:appkey	AdminDeleteApp
+DELETE	/api/admin/apps/:appkey/account-deletion/tombstones/:tombstoneId	AdminReleaseAccountDeletionTombstone
 DELETE	/api/admin/apps/:appkey/ai/configs/:configId	AdminAppAIConfigDelete
 DELETE	/api/admin/apps/:appkey/ai/conversations/:conversationId	AdminAppAIConversationDelete
 DELETE	/api/admin/apps/:appkey/ai/mcp-servers/:serverId	AdminAppAIMCPDelete
@@ -107,6 +108,12 @@ GET	/	Homepage
 GET	/announcements	AnnouncementsPage
 GET	/api/admin/apps	AdminApps
 GET	/api/admin/apps/:appkey	AdminApp
+GET	/api/admin/apps/:appkey/account-deletion/catalog	AdminAccountDeletionCatalog
+GET	/api/admin/apps/:appkey/account-deletion/requests	AdminListAccountDeletions
+GET	/api/admin/apps/:appkey/account-deletion/requests/:requestId	AdminGetAccountDeletion
+GET	/api/admin/apps/:appkey/account-deletion/settings	AdminAccountDeletionSettings
+GET	/api/admin/apps/:appkey/account-deletion/stats	AdminAccountDeletionStats
+GET	/api/admin/apps/:appkey/account-deletion/tombstones	AdminListAccountDeletionTombstones
 GET	/api/admin/apps/:appkey/ad-policy/config	AdminAdPolicy
 GET	/api/admin/apps/:appkey/ad-policy/consent-logs	AdminListAdConsentLogs
 GET	/api/admin/apps/:appkey/ad-policy/consents	AdminListAdConsents
@@ -214,6 +221,7 @@ GET	/api/admin/apps/:appkey/stats/regions	AdminAppRegionStats
 GET	/api/admin/apps/:appkey/stats/user-trend	AdminAppUserTrend
 GET	/api/admin/apps/:appkey/users	AdminAppUsers
 GET	/api/admin/apps/:appkey/users/:userId	AdminAppUser
+GET	/api/admin/apps/:appkey/users/:userId/account-deletion	AdminUserAccountDeletion
 GET	/api/admin/apps/:appkey/users/:userId/ad-policy	AdminUserAdPolicy
 GET	/api/admin/apps/:appkey/users/:userId/audits/login	AdminAppUserLoginAudits
 GET	/api/admin/apps/:appkey/users/:userId/audits/sessions	AdminAppUserSessionAudits
@@ -546,6 +554,7 @@ GET	/api/v1/apps/:appkey/me/audits/login	UserLoginAudits
 GET	/api/v1/apps/:appkey/me/audits/sessions	UserSessionAudits
 GET	/api/v1/apps/:appkey/me/auto-sign	AppAutoSignStatus
 GET	/api/v1/apps/:appkey/me/avatar/history	ListUserAvatarHistory
+GET	/api/v1/apps/:appkey/me/deletion	AppAccountDeletion
 GET	/api/v1/apps/:appkey/me/oauth2/grants	AppMyOAuth2Grants
 GET	/api/v1/apps/:appkey/me/passkeys	ListPasskeys
 GET	/api/v1/apps/:appkey/me/profile	Profile
@@ -675,6 +684,11 @@ POST	/api/admin/app/version/list	AdminVersionListCompat
 POST	/api/admin/app/version/stats	AdminVersionStatsCompat
 POST	/api/admin/app/version/update	AdminVersionUpdateCompat
 POST	/api/admin/apps	CreateAdminApp
+POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/approve	AdminApproveAccountDeletion
+POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel	AdminCancelAccountDeletion
+POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/execute	AdminExecuteAccountDeletion
+POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reject	AdminRejectAccountDeletion
+POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule	AdminRescheduleAccountDeletion
 POST	/api/admin/apps/:appkey/ai/agent/stream	AdminAppAIAgentStream
 POST	/api/admin/apps/:appkey/ai/configs	AdminAppAIConfigCreate
 POST	/api/admin/apps/:appkey/ai/configs/:configId/test	AdminAppAIConfigTest
@@ -736,6 +750,7 @@ POST	/api/admin/apps/:appkey/releases/simulate	AdminSimulateRelease
 POST	/api/admin/apps/:appkey/rewarded-ads/views/:viewId/grant	AdminGrantRewardedAdView
 POST	/api/admin/apps/:appkey/signin-reward/reset	ResetAdminAppSignInReward
 POST	/api/admin/apps/:appkey/signin-reward/test	TestAdminAppSignInReward
+POST	/api/admin/apps/:appkey/users/:userId/account-deletion	AdminCreateUserAccountDeletion
 POST	/api/admin/apps/:appkey/users/:userId/avatar	AdminUploadAppUserAvatar
 POST	/api/admin/apps/:appkey/users/:userId/bans	CreateAdminAppUserBan
 POST	/api/admin/apps/:appkey/users/:userId/bans/:banId/revoke	RevokeAdminAppUserBan
@@ -1099,6 +1114,9 @@ POST	/api/v1/apps/:appkey/me/2fa/totp/enable	EnableTOTP
 POST	/api/v1/apps/:appkey/me/2fa/totp/enroll	BeginTOTPEnrollment
 POST	/api/v1/apps/:appkey/me/avatar	UploadUserAvatar
 POST	/api/v1/apps/:appkey/me/avatar/restore	RestoreUserAvatar
+POST	/api/v1/apps/:appkey/me/deletion	AppSubmitAccountDeletion
+POST	/api/v1/apps/:appkey/me/deletion/cancel	AppCancelAccountDeletion
+POST	/api/v1/apps/:appkey/me/deletion/code	AppAccountDeletionCode
 POST	/api/v1/apps/:appkey/me/passkeys	FinishPasskeyRegistration
 POST	/api/v1/apps/:appkey/me/passkeys/options	BeginPasskeyRegistration
 POST	/api/v1/apps/:appkey/me/password/recovery	AppMyPasswordRecoveryStart
@@ -1135,6 +1153,7 @@ POST	/oauth2/login	OAuth2LoginSubmit
 POST	/oauth2/login/mfa	OAuth2SecondFactorSubmit
 POST	/oauth2/logout	OAuth2LogoutSubmit
 PUT	/api/admin/apps/:appkey	UpdateAdminApp
+PUT	/api/admin/apps/:appkey/account-deletion/settings	AdminSaveAccountDeletionSettings
 PUT	/api/admin/apps/:appkey/ad-policy/config	AdminSaveAdPolicy
 PUT	/api/admin/apps/:appkey/ai/configs/:configId	AdminAppAIConfigUpdate
 PUT	/api/admin/apps/:appkey/ai/mcp-servers/:serverId	AdminAppAIMCPUpdate

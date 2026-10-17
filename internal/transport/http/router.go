@@ -63,6 +63,7 @@ type Handler struct {
 	adPolicy        *service.AdPolicyService
 	pointsStore     *service.PointsStoreService
 	invite          *service.InviteService
+	accountDeletion *service.AccountDeletionService
 	cloudStorage    *service.CloudStorageService
 	authProtocol    *service.AuthProtocolService
 	dashboard       *service.DashboardService

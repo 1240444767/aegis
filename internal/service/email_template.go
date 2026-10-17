@@ -419,6 +419,13 @@ func getEmailPurposePresentation(purpose string) emailPurposePresentation {
 			Lead:   "密码已经通过，再输入验证码就能完成这次登录。",
 			Footer: "如果您并没有在登录，说明密码可能已经泄露，请尽快更换。",
 		}
+	case "account_deletion", "account-deletion", "delete_account":
+		return emailPurposePresentation{
+			Noun:   "账号注销验证码",
+			Title:  "确认注销账号",
+			Lead:   "您正在申请注销账号，输入验证码确认是本人操作。",
+			Footer: "不是您本人在操作的话，请立即修改密码；不输入验证码，注销不会生效。",
+		}
 	default:
 		return emailPurposePresentation{
 			Noun:   "验证码",

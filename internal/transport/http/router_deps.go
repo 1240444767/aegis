@@ -54,6 +54,7 @@ type RouterDeps struct {
 	AdPolicy         *service.AdPolicyService
 	PointsStore      *service.PointsStoreService
 	Invite           *service.InviteService
+	AccountDeletion  *service.AccountDeletionService
 	CloudStorage     *service.CloudStorageService
 	Site             *service.SiteService
 	Version          *service.VersionService
@@ -188,6 +189,7 @@ func (d RouterDeps) newHandler() *Handler {
 		adPolicy:           d.AdPolicy,
 		pointsStore:        d.PointsStore,
 		invite:             d.Invite,
+		accountDeletion:    d.AccountDeletion,
 		cloudStorage:       d.CloudStorage,
 		authProtocol:       d.AuthProtocol,
 		dashboard:          d.Dashboard,

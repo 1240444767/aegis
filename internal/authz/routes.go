@@ -341,6 +341,9 @@ var adminRouteRules = []RouteRule{
 
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/users/*", Permission: PermAppUserRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/users/*", Permission: PermAppUserWrite, Scope: ScopeApp},
+	// 账号注销的申请、审核与重新注册限制都是用户数据，配置也决定「用户能不能删掉自己」，同归用户权限点
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/account-deletion/*", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/account-deletion/*", Permission: PermAppUserWrite, Scope: ScopeApp},
 	// 渠道下的用户名单同样是用户数据（旧实现里靠 Contains "/users" 覆盖到）
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/channels/:cid/users/*", Permission: PermAppUserRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/channels/:cid/users/*", Permission: PermAppUserWrite, Scope: ScopeApp},

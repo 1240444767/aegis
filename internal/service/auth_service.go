@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"aegis/pkg/egress"
 	"context"
 	"crypto/rand"
@@ -73,6 +74,7 @@ type AuthService struct {
 	// 也执行一次等价代价的 bcrypt 比较，使「账号不存在」与「密码错误」耗时不可区分，
 	// 防止通过响应时间差枚举有效账号
 	timingDummyHash []byte
+	deletion        *AccountDeletionService
 }
 
 type PasswordRegisterInput struct {
@@ -86,6 +88,19 @@ type PasswordRegisterInput struct {
 	Device          string // 设备可读名称
 	IP              string
 	UserAgent       string
+}
+
+// SetAccountDeletion 接上账号注销：登录结果带上冷静期状态（按配置登录即撤销），注册前核对重新注册限制。
+func (s *AuthService) SetAccountDeletion(deletion *AccountDeletionService) {
+	s.deletion = deletion
+}
+
+// checkReregister 注册前核对：刚注销、还在限制期内的标识不能再注册。
+func (s *AuthService) checkReregister(ctx context.Context, appID int64, identifiers ...RegisterIdentifier) error {
+	if s.deletion == nil {
+		return nil
+	}
+	return s.deletion.CheckReregister(ctx, appID, identifiers...)
 }
 
 // SetPluginService 注入插件服务
@@ -415,6 +430,13 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 		return nil, err
 	} else if existing != nil {
 		return nil, apperrors.New(40901, http.StatusConflict, "账号已存在")
+	}
+	registerEmail, _ := input.Profile["email"].(string)
+	if err := s.checkReregister(ctx, input.AppID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: input.Account},
+		RegisterIdentifier{Kind: accountdeletion.TombstoneEmail, Value: registerEmail},
+	); err != nil {
+		return nil, err
 	}
 
 	// 与上面策略校验用同一份上下文，否则落库的强度分会高于实际判定所用的分
@@ -1077,7 +1099,11 @@ func (s *AuthService) finalizeLogin(ctx context.Context, app *appdomain.App, use
 	s.runDetached("login.first_device", 3*time.Second, func(actx context.Context) {
 		s.recordFirstDevice(actx, record)
 	})
-	return s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
+	result, err := s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
+	if err == nil && result != nil && s.deletion != nil {
+		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
+	}
+	return result, err
 }
 
 func (s *AuthService) VerifySecondFactor(ctx context.Context, challengeID string, code string, recoveryCode string) (*authdomain.LoginResult, error) {

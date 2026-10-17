@@ -3,6 +3,7 @@ package auth
 import (
 	"time"
 
+	"aegis/internal/domain/accountdeletion"
 	devicedomain "aegis/internal/domain/device"
 )
 
@@ -118,6 +119,9 @@ type LoginResult struct {
 	// OAuthLink 第三方身份已核实但还没有关联任何账号（原生换会话时带了 deferRegistration）。
 	// 此时不签发令牌：客户端让用户选「快速注册」或「绑定已有账号」，再凭 Ticket 继续
 	OAuthLink *OAuthLinkTicket `json:"oauthLink,omitempty"`
+	// AccountDeletion 账号处于注销冷静期或待审核时出现；Cancelled 为真表示这次登录撤销了冷静期。
+	// 客户端据此提示「账号将于某日注销」或「注销已撤销」
+	AccountDeletion *accountdeletion.LoginNotice `json:"accountDeletion,omitempty"`
 }
 
 // OAuthLinkTicket 待关联的第三方身份。

@@ -134,6 +134,15 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "autoSignUpdate", Method: "PUT", Path: "/me/auto-sign", Auth: true,
 		Summary: "修改自动签到设置（只改传了的字段）；从关到开时校验开放策略，返回修改后的状态"},
 	{Key: "security", Method: "GET", Path: "/me/security", Auth: true, Summary: "账户安全概览"},
+	// 账号注销：enabled=false（且没有进行中的申请）时入口应当整个隐藏；verification 说明提交时要带哪些凭据
+	{Key: "deletion", Method: "GET", Path: "/me/deletion", Auth: true,
+		Summary: "注销页：可选方式、须知、原因、要过的验证、前置条件与进行中的申请"},
+	{Key: "deletionCode", Method: "POST", Path: "/me/deletion/code", Auth: true,
+		Summary: "向绑定的邮箱或手机号发注销验证码（channel: email | phone）"},
+	{Key: "deletionSubmit", Method: "POST", Path: "/me/deletion", Auth: true,
+		Summary: "提交注销（mode: cooling | immediate）；deleted 为真时账号已删除，清掉本地登录"},
+	{Key: "deletionCancel", Method: "POST", Path: "/me/deletion/cancel", Auth: true,
+		Summary: "撤销进行中的注销申请（待审核、冷静期中、执行失败）"},
 
 	// ── 二次认证 ──
 	{Key: "totpEnroll", Method: "POST", Path: "/me/2fa/totp/enroll", Auth: true, Summary: "发起 TOTP 绑定"},
@@ -403,6 +412,27 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRedeeming, Name: "POINTS_STORE_REDEEMING", Message: "兑换正在处理",
 		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	// ── 账号注销 ──
+	{Code: errCodeDeletionDisabled, Name: "ACCOUNT_DELETION_DISABLED", Message: "账号注销暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/me/deletion 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodeDeletionVerifyFailed, Name: "ACCOUNT_DELETION_VERIFY_FAILED", Message: "身份验证未通过",
+		Recovery: authprotocol.RecoveryNone, Hint: "密码、验证码或动态码不对；连续失败 8 次锁定 1 小时（42912）"},
+	{Code: errCodeDeletionCodeMissing, Name: "ACCOUNT_DELETION_CODE_MISSING", Message: "验证码已失效，请重新获取",
+		Recovery: authprotocol.RecoveryNone, Hint: "先调 /me/deletion/code，验证码 10 分钟内有效"},
+	{Code: errCodeDeletionVerifyRequired, Name: "ACCOUNT_DELETION_VERIFY_REQUIRED", Message: "请完成身份验证",
+		Recovery: authprotocol.RecoveryNone, Hint: "按 /me/deletion 的 verification 带上 password 或 channel+code；totp 为真时再带 totpCode 或 recoveryCode；available 为假时 message 说明要先绑定什么"},
+	{Code: errCodeDeletionNotFound, Name: "ACCOUNT_DELETION_NOT_FOUND", Message: "没有进行中的注销申请", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeDeletionOpenExists, Name: "ACCOUNT_DELETION_OPEN_EXISTS", Message: "已有进行中的注销申请",
+		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /me/deletion，按 request 展示冷静期或审核状态"},
+	{Code: errCodeDeletionStateChanged, Name: "ACCOUNT_DELETION_STATE_CHANGED", Message: "申请状态已变化",
+		Recovery: authprotocol.RecoveryNone, Hint: "例如正在执行时撤销；重新拉一次 /me/deletion"},
+	{Code: errCodeDeletionBlocked, Name: "ACCOUNT_DELETION_BLOCKED", Message: "暂不满足注销条件",
+		Recovery: authprotocol.RecoveryNone, Hint: "/me/deletion 的 checks 里 level=block 且 passed=false 的一项，message 说明具体原因"},
+	{Code: errCodeDeletionReregister, Name: "ACCOUNT_DELETION_REREGISTER_LIMITED", Message: "该账号注销未满限制期，暂不能重新注册",
+		Recovery: authprotocol.RecoveryNone, Hint: "注册接口返回；message 带可以重新注册的日期"},
+	{Code: errCodeDeletionResendTooSoon, Name: "ACCOUNT_DELETION_CODE_TOO_FREQUENT", Message: "验证码发送过于频繁",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一渠道 60 秒一次，每天 10 次"},
+	{Code: errCodeDeletionTooManyFailure, Name: "ACCOUNT_DELETION_LOCKED", Message: "验证失败次数过多", Recovery: authprotocol.RecoveryNone},
 	// ── 邀请 ──
 	// 与 /invite 的 bind.reason、/invite/preview 的 reason 同一套判据。
 	{Code: errCodeInviteDisabled, Name: "INVITE_DISABLED", Message: "邀请活动暂未开放",

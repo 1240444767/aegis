@@ -92,6 +92,13 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/app/version/update"):                                                 AdminAppVersionSaveRequest{},             // AdminVersionUpdateCompat
 		routeKey("POST", "/api/admin/apps"):                                                               AdminAppCreateRequest{},                  // CreateAdminApp
 		routeKey("PUT", "/api/admin/apps/{appkey}"):                                                       AdminAppUpsertRequest{},                  // UpdateAdminApp
+		routeKey("GET", "/api/admin/apps/{appkey}/account-deletion/requests"):                             AccountDeletionRequestQuery{},            // AdminListAccountDeletions
+		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/approve"):        AccountDeletionNoteRequest{},             // AdminApproveAccountDeletion
+		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/cancel"):         AccountDeletionNoteRequest{},             // AdminCancelAccountDeletion
+		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/execute"):        AccountDeletionExecuteRequest{},          // AdminExecuteAccountDeletion
+		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/reject"):         AccountDeletionNoteRequest{},             // AdminRejectAccountDeletion
+		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/reschedule"):     AccountDeletionRescheduleRequest{},       // AdminRescheduleAccountDeletion
+		routeKey("PUT", "/api/admin/apps/{appkey}/account-deletion/settings"):                             AccountDeletionSettingsRequest{},         // AdminSaveAccountDeletionSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/ad-policy/config"):                                      SaveAdPolicyRequest{},                    // AdminSaveAdPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/agent/stream"):                                      adminAIAgentStreamRequest{},              // AdminAppAIAgentStream
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/configs"):                                           adminAIConfigSaveRequest{},               // AdminAppAIConfigCreate
@@ -172,8 +179,10 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/settings"):                                 PointsStoreSettingsRequest{},             // AdminSavePointsStoreSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/policy"):                                                AdminAppPolicyRequest{},                  // UpdateAdminAppPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/releases"):                                             AdminReleaseSaveRequest{},                // AdminCreateRelease
-		routeKey("POST", "/api/admin/apps/{appkey}/releases/simulate"):                                    AdminReleaseSimulateRequest{},            // AdminSimulateRelease
+		routeKey("POST", "/api/admin/apps/{appkey}/releases/assets/complete"):                             releaseAssetCompleteRequest{},            // AdminCompleteReleaseAsset
+		routeKey("POST", "/api/admin/apps/{appkey}/releases/assets/presign"):                              releaseAssetPresignRequest{},             // AdminPresignReleaseAsset
 		routeKey("POST", "/api/admin/apps/{appkey}/releases/notes/preview"):                               AdminReleaseNotesPreviewRequest{},        // AdminPreviewReleaseNotes
+		routeKey("POST", "/api/admin/apps/{appkey}/releases/simulate"):                                    AdminReleaseSimulateRequest{},            // AdminSimulateRelease
 		routeKey("PUT", "/api/admin/apps/{appkey}/releases/{rid}"):                                        AdminReleaseSaveRequest{},                // AdminUpdateRelease
 		routeKey("POST", "/api/admin/apps/{appkey}/releases/{rid}/publish"):                               AdminReleasePublishRequest{},             // AdminPublishRelease
 		routeKey("PUT", "/api/admin/apps/{appkey}/releases/{rid}/rollout"):                                AdminReleaseRolloutRequest{},             // AdminSetReleaseRollout
@@ -202,6 +211,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/users/bans/batch"):                                     AdminUserBanBatchCreateRequest{},         // BatchCreateAdminAppUserBan
 		routeKey("GET", "/api/admin/apps/{appkey}/users/export"):                                          AdminUserListQuery{},                     // ExportAdminAppUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/users/status/batch"):                                    AdminUserBatchStatusRequest{},            // BatchUpdateAdminAppUserStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/account-deletion"):                      AccountDeletionAdminCreateRequest{},      // AdminCreateUserAccountDeletion
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/audits/login"):                           AdminUserLoginAuditQuery{},               // AdminAppUserLoginAudits
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/audits/sessions"):                        AdminUserSessionAuditQuery{},             // AdminAppUserSessionAudits
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/bans"):                                   AdminUserBanListQuery{},                  // AdminAppUserBans
@@ -437,9 +447,6 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/app/password-policy/reset"):                                                PasswordPolicyAppIDRequest{},             // ResetAppPasswordPolicy
 		routeKey("POST", "/api/app/password-policy/set"):                                                  PasswordPolicySetRequest{},               // SetAppPasswordPolicy
 		routeKey("POST", "/api/app/password-policy/test"):                                                 PasswordPolicyTestRequest{},              // TestAppPasswordPolicy
-		routeKey("POST", "/api/app/points/adjust-experience"):                                             AppAdjustExperienceRequest{},             // AppAdjustExperience
-		routeKey("POST", "/api/app/points/adjust-integral"):                                               AppAdjustIntegralRequest{},               // AppAdjustIntegral
-		routeKey("POST", "/api/app/points/batch-adjust"):                                                  AppBatchAdjustIntegralRequest{},          // AppBatchAdjustIntegral
 		routeKey("POST", "/api/app/points/stats"):                                                         AppPointsStatsRequest{},                  // AppPointsStats
 		routeKey("GET", "/api/app/public"):                                                                AppIDQuery{},                             // AppPublic
 		routeKey("POST", "/api/app/workflow/create"):                                                      WorkflowSaveRequest{},                    // WorkflowCreate
@@ -619,6 +626,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/sessions"):                                       UserSessionAuditQuery{},                  // UserSessionAudits
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/auto-sign"):                                             AutoSignUpdateRequest{},                  // AppUpdateAutoSign
 		routeKey("POST", "/api/v1/apps/{appkey}/me/avatar/restore"):                                       AvatarRestoreRequest{},                   // RestoreUserAvatar
+		routeKey("POST", "/api/v1/apps/{appkey}/me/deletion"):                                             AccountDeletionSubmitRequest{},           // AppSubmitAccountDeletion
+		routeKey("POST", "/api/v1/apps/{appkey}/me/deletion/code"):                                        AccountDeletionCodeRequest{},             // AppAccountDeletionCode
 		routeKey("POST", "/api/v1/apps/{appkey}/me/passkeys"):                                             PasskeyRegistrationFinishRequest{},       // FinishPasskeyRegistration
 		routeKey("POST", "/api/v1/apps/{appkey}/me/password/recovery"):                                    AppPasswordRecoveryDeviceRequest{},       // AppMyPasswordRecoveryStart
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/profile"):                                               UpdateProfileRequest{},                   // UpdateProfile

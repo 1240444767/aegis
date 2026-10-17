@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"context"
 	"net/http"
 	"strings"
@@ -128,6 +129,12 @@ func (s *AuthService) findUserByPhone(ctx context.Context, appID int64, phone st
 // createPhoneUser 以手机号为账号建号。没有密码：这类账号只能靠短信或后续绑定的方式登录，
 // 想用密码登录需要走「设置密码」流程。
 func (s *AuthService) createPhoneUser(ctx context.Context, input SMSLoginInput, phone string) (*userdomain.User, error) {
+	if err := s.checkReregister(ctx, input.AppID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: phone},
+		RegisterIdentifier{Kind: accountdeletion.TombstonePhone, Value: phone},
+	); err != nil {
+		return nil, err
+	}
 	now := timeutil.NowUTC()
 	profile := userdomain.Profile{
 		Nickname: strings.TrimSpace(input.Nickname),

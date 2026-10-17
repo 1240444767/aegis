@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"context"
 	"net/http"
 	"strings"
@@ -281,6 +282,12 @@ func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile 
 		},
 	}
 	base := pgrepo.LegacyOAuthAccount(profile.Provider, profile.ProviderUserID)
+	if err := s.checkReregister(ctx, appID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: base},
+		RegisterIdentifier{Kind: accountdeletion.TombstoneEmail, Value: profile.Email},
+	); err != nil {
+		return nil, err
+	}
 	account := base
 	var user *userdomain.User
 	for attempt := 0; attempt < inviteCodeMaxAttempts && user == nil; attempt++ {
