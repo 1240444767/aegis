@@ -39,6 +39,12 @@ Zeabur 要求 html / text 至少给一个，两个都给才是正经做法 —�
 {{ end }}
 --
 {{ .NoReply }}
+{{- with .Support }}
+{{ . }}
+{{- end }}
 {{- with .AppName }}
+{{ . }}
+{{- end }}
+{{- with .FooterText }}
 {{ . }}
 {{- end }}

@@ -342,34 +342,11 @@ func (s *EmailService) DeliveryStats(ctx context.Context, appID int64) (*emaildo
 // ── 业务发信入口 ──
 
 func (s *EmailService) SendVerificationCode(ctx context.Context, appID int64, email string, purpose string, expireMinutes int, configName string) (*emaildomain.VerificationResult, error) {
-	config, err := s.resolveConfig(ctx, appID, configName)
-	if err != nil {
-		return nil, err
-	}
-	code := generateEmailCode()
-	expireAt, messageID, err := s.sendCodeMail(ctx, appID, config, email, code, purpose, expireMinutes)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.redis.Set(ctx, s.emailCodeKey(appID, purpose, email), code, timeutil.Minutes(expireMinutes)).Err(); err != nil {
-		return nil, err
-	}
-	return &emaildomain.VerificationResult{Success: true, Email: email, Purpose: purpose, ExpireAt: expireAt, MessageID: messageID}, nil
+	return s.SendCode(ctx, CodeRequest{AppID: appID, Email: email, Purpose: purpose, ExpireMinutes: expireMinutes, ConfigName: configName})
 }
 
 func (s *EmailService) VerifyCode(ctx context.Context, appID int64, email string, code string, purpose string) (bool, error) {
-	stored, err := s.redis.Get(ctx, s.emailCodeKey(appID, purpose, email)).Result()
-	if err != nil {
-		if err == redislib.Nil {
-			return false, nil
-		}
-		return false, err
-	}
-	valid := strings.TrimSpace(stored) == strings.TrimSpace(code)
-	if valid {
-		_ = s.redis.Del(ctx, s.emailCodeKey(appID, purpose, email)).Err()
-	}
-	return valid, nil
+	return s.verifyStoredSecret(ctx, appID, s.emailCodeKey(appID, purpose, email), emailCodeDigestInput(appID, purpose, email, code))
 }
 
 // passwordResetTTLMinutes 重置链接的有效期。
@@ -378,40 +355,7 @@ func (s *EmailService) VerifyCode(ctx context.Context, appID int64, email string
 const passwordResetTTLMinutes = 30
 
 func (s *EmailService) SendPasswordResetEmail(ctx context.Context, appID int64, email string, resetBaseURL string, configName string) (*emaildomain.ResetResult, error) {
-	config, err := s.resolveConfig(ctx, appID, configName)
-	if err != nil {
-		return nil, err
-	}
-	scopeName, err := s.scopeName(ctx, appID)
-	if err != nil {
-		return nil, err
-	}
-	token, err := generateResetToken()
-	if err != nil {
-		return nil, err
-	}
-	expireAt := timeutil.Now().Add(timeutil.Minutes(passwordResetTTLMinutes))
-	resetURL := strings.TrimRight(strings.TrimSpace(resetBaseURL), "/")
-	if resetURL != "" {
-		resetURL += "?token=" + token + "&email=" + email
-	}
-	subject := fmt.Sprintf("重置 %s 的登录密码", scopeName)
-	html, text := renderEmail(emailLayout{
-		AppName:    scopeName,
-		Title:      "重置密码",
-		Lead:       "我们收到了一次重置这个账号密码的请求。",
-		Preheader:  fmt.Sprintf("重置密码的链接 %d 分钟内有效", passwordResetTTLMinutes),
-		Blocks:     passwordResetBlocks(resetURL, passwordResetTTLMinutes),
-		FooterNote: "不是您本人申请的话，忽略这封信即可，密码不会有任何变化。",
-	})
-	messageID, err := s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "password_reset")
-	if err != nil {
-		return nil, err
-	}
-	if err := s.redis.Set(ctx, s.resetTokenKey(appID, email), token, timeutil.Minutes(passwordResetTTLMinutes)).Err(); err != nil {
-		return nil, err
-	}
-	return &emaildomain.ResetResult{Success: true, Email: email, Token: token, ResetURL: resetURL, ExpireAt: expireAt, MessageID: messageID}, nil
+	return s.SendPasswordResetLink(ctx, ResetLinkRequest{AppID: appID, Email: email, ResetURL: resetBaseURL, ConfigName: configName})
 }
 
 // RecoveryMailReady 这个应用能不能发信（有可用的邮件配置）。找回密码据此决定邮箱算不算一项可用的验证方式。
@@ -452,7 +396,7 @@ func (s *EmailService) SendPasswordResetNotice(ctx context.Context, appID int64,
 	if err != nil {
 		return err
 	}
-	scopeName, err := s.scopeName(ctx, appID)
+	policy, brand, err := s.mailContext(ctx, appID)
 	if err != nil {
 		return err
 	}
@@ -467,82 +411,72 @@ func (s *EmailService) SendPasswordResetNotice(ctx context.Context, appID int64,
 		{Label: "IP 地址", Value: notice.IP},
 		{Label: "位置", Value: notice.Location},
 	}
-	lead := "账号的登录密码已通过找回流程重新设置。"
+	leadDefault := ""
 	if notice.SignedOut > 0 {
-		lead = fmt.Sprintf("账号的登录密码已通过找回流程重新设置，%d 个登录中的设备已退出。", notice.SignedOut)
+		leadDefault = fmt.Sprintf("账号的登录密码已通过找回流程重新设置，%d 个登录中的设备已退出。", notice.SignedOut)
 	}
-	subject := fmt.Sprintf("%s 的登录密码已重置", scopeName)
-	html, text := renderEmail(emailLayout{
-		AppName:    scopeName,
-		Title:      "密码已重置",
-		Lead:       lead,
-		Preheader:  fmt.Sprintf("%s 的登录密码刚刚被重置", scopeName),
-		Blocks:     []mailBlock{mailDetails(details...)},
-		FooterNote: "不是您本人操作的话，请立即再次找回密码，并检查绑定的邮箱、手机号与两步验证。",
+	subject, html, text := composeScene(policy, brand, sceneMail{
+		Scene:       emaildomain.ScenePasswordResetNotice,
+		Vars:        map[string]string{"account": notice.Account},
+		Preheader:   fmt.Sprintf("%s 的登录密码刚刚被重置", brand.Name),
+		Blocks:      []mailBlock{mailDetails(details...)},
+		LeadDefault: leadDefault,
 	})
-	_, err = s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "password_reset_notice")
+	_, err = s.sendRenderedMail(ctx, appID, config, email, subject, mailBody{HTML: html, Text: text}, "password_reset_notice")
 	return err
 }
 
 func (s *EmailService) VerifyResetToken(ctx context.Context, appID int64, email string, token string) (bool, error) {
-	stored, err := s.redis.Get(ctx, s.resetTokenKey(appID, email)).Result()
-	if err != nil {
-		if err == redislib.Nil {
-			return false, nil
-		}
-		return false, err
-	}
-	return strings.TrimSpace(stored) == strings.TrimSpace(token), nil
+	return s.verifyStoredSecret(ctx, appID, s.resetTokenKey(appID, email), resetTokenDigestInput(appID, email, token))
 }
 
 func (s *EmailService) SendWelcomeEmail(ctx context.Context, appID int64, email string, userName string, configName string) error {
+	policy, brand, err := s.mailContext(ctx, appID)
+	if err != nil {
+		return err
+	}
+	if !policy.SceneEnabled(emaildomain.SceneWelcome) {
+		return nil
+	}
 	config, err := s.resolveConfig(ctx, appID, configName)
 	if err != nil {
 		return err
 	}
-	scopeName, err := s.scopeName(ctx, appID)
-	if err != nil {
-		return err
-	}
-	subject := fmt.Sprintf("%s 账号已开通", scopeName)
-	html, text := renderEmail(emailLayout{
-		AppName: scopeName,
-		Title:   "账号已开通",
-		Lead:    welcomeLead(scopeName, userName),
-		Blocks: []mailBlock{
-			mailDetails(emailDetail{Label: "登录邮箱", Value: email}),
-		},
-		FooterNote: fmt.Sprintf("如果您没有注册过 %s，忽略这封信即可。", scopeName),
+	subject, html, text := composeScene(policy, brand, sceneMail{
+		Scene:       emaildomain.SceneWelcome,
+		Vars:        map[string]string{"name": strings.TrimSpace(userName), "email": strings.TrimSpace(email)},
+		Blocks:      []mailBlock{mailDetails(emailDetail{Label: "登录邮箱", Value: email})},
+		LeadDefault: welcomeLead(brand.Name, userName),
 	})
-	_, err = s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "welcome")
+	_, err = s.sendRenderedMail(ctx, appID, config, email, subject, mailBody{HTML: html, Text: text}, "welcome")
 	return err
 }
 
 func (s *EmailService) SendProfileChangeCompletedEmail(ctx context.Context, appID int64, email string, field string, oldValue string, newValue string, configName string) error {
+	policy, brand, err := s.mailContext(ctx, appID)
+	if err != nil {
+		return err
+	}
+	if !policy.SceneEnabled(emaildomain.SceneProfileChange) {
+		return nil
+	}
 	config, err := s.resolveConfig(ctx, appID, configName)
 	if err != nil {
 		return err
 	}
-	scopeName, err := s.scopeName(ctx, appID)
-	if err != nil {
-		return err
-	}
 	fieldName := describeProfileChangeField(field)
-	subject := fmt.Sprintf("%s 的%s已变更", scopeName, fieldName)
-	html, text := renderEmail(emailLayout{
-		AppName:   scopeName,
-		Title:     fieldName + "已变更",
-		Lead:      "变更已经生效，下面是这次的改动。",
-		Preheader: fmt.Sprintf("%s 的%s刚刚被修改", scopeName, fieldName),
+	subject, html, text := composeScene(policy, brand, sceneMail{
+		Scene:     emaildomain.SceneProfileChange,
+		Vars:      map[string]string{"field": fieldName},
+		Preheader: fmt.Sprintf("%s 的%s刚刚被修改", brand.Name, fieldName),
 		Blocks: []mailBlock{
 			mailDetails(
 				emailDetail{Label: "变更前", Value: maskProfileChangeNotificationValue(field, oldValue)},
 				emailDetail{Label: "变更后", Value: maskProfileChangeNotificationValue(field, newValue)},
 			),
 		},
-		FooterNote: "不是您本人改的话，请立刻修改密码，并检查账号的绑定信息和最近登录记录。",
 	})
-	_, err = s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "profile_change")
+	_, err = s.sendRenderedMail(ctx, appID, config, email, subject, mailBody{HTML: html, Text: text}, "profile_change")
 	return err
 }
 
@@ -561,7 +495,7 @@ func (s *EmailService) SendNotificationEmail(ctx context.Context, appID int64, t
 	if subject == "" {
 		subject = "Aegis 通知"
 	}
-	_, err = s.sendMail(ctx, config, to, subject, htmlBody, "notification")
+	_, err = s.sendMail(ctx, appID, config, to, subject, htmlBody, "notification")
 	return err
 }
 
@@ -740,21 +674,31 @@ func (s *EmailService) SendDocumentEmail(ctx context.Context, appID int64, mail 
 	if purpose == "" {
 		purpose = "document"
 	}
-	return s.sendMail(ctx, config, mail.To, mail.Subject, mail.HTML, purpose, files...)
+	return s.sendMail(ctx, appID, config, mail.To, mail.Subject, mail.HTML, purpose, files...)
 }
 
 func (s *EmailService) sendCodeMail(ctx context.Context, appID int64, config *emaildomain.Config, email string, code string, purpose string, expireMinutes int) (time.Time, string, error) {
-	scopeName, err := s.scopeName(ctx, appID)
+	policy, brand, err := s.mailContext(ctx, appID)
 	if err != nil {
 		return time.Time{}, "", err
 	}
 	if expireMinutes <= 0 {
-		expireMinutes = 5
+		expireMinutes = policy.Code.TTLMinutes
 	}
 	expireAt := timeutil.Now().Add(timeutil.Minutes(expireMinutes))
-	subject, html, text := renderCodeMailContent(scopeName, config.Name, purpose, code, expireMinutes)
-	messageID, err := s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, purpose)
+	subject, html, text := renderCodeMailWithPolicy(policy, brand, config.Name, purpose, code, expireMinutes, email)
+	messageID, err := s.sendRenderedMail(ctx, appID, config, email, subject, mailBody{HTML: html, Text: text}, purpose)
 	return expireAt, messageID, err
+}
+
+// mailContext 一次取齐渲染要用的策略与落款。
+func (s *EmailService) mailContext(ctx context.Context, appID int64) (emaildomain.Policy, mailBrand, error) {
+	scopeName, err := s.scopeName(ctx, appID)
+	if err != nil {
+		return emaildomain.Policy{}, mailBrand{}, err
+	}
+	policy := s.policyFor(ctx, appID)
+	return policy, brandFromPolicy(policy, scopeName), nil
 }
 
 // mailBody 一封渲染完成的信：HTML 与配套纯文本成对交出。
@@ -768,17 +712,27 @@ type mailBody struct {
 }
 
 // sendMail 正文由外部给 HTML 时的入口，纯文本靠抓取补齐。
-func (s *EmailService) sendMail(ctx context.Context, config *emaildomain.Config, to string, subject string, htmlBody string, purpose string, attachments ...emailAttachment) (string, error) {
-	return s.sendRenderedMail(ctx, config, to, subject,
+func (s *EmailService) sendMail(ctx context.Context, appID int64, config *emaildomain.Config, to string, subject string, htmlBody string, purpose string, attachments ...emailAttachment) (string, error) {
+	return s.sendRenderedMail(ctx, appID, config, to, subject,
 		mailBody{HTML: htmlBody, Text: htmlToPlainText(htmlBody)}, purpose, attachments...)
 }
 
-// sendRenderedMail 是全平台唯一的邮件出口：挑发送器 → 交付 → 留痕。
+// sendRenderedMail 是全平台唯一的邮件出口：抑制名单 → 挑发送器 → 交付 → 留痕。
 // 模板已在调用方渲染完毕，这里不关心内容，只关心「用哪条通道发、发没发出去、发到哪儿了」。
-func (s *EmailService) sendRenderedMail(ctx context.Context, config *emaildomain.Config, to string, subject string, body mailBody, purpose string, attachments ...emailAttachment) (string, error) {
+//
+// appID 是**发信的作用域**，不一定等于 config.AppID：应用借用平台共享通道时两者不同。
+// 抑制名单与投递留痕都按发信的作用域算 —— 否则应用的投递记录里看不到自己借道发出的信，
+// 应用的抑制名单也拦不住经共享通道发出的那一封。
+func (s *EmailService) sendRenderedMail(ctx context.Context, appID int64, config *emaildomain.Config, to string, subject string, body mailBody, purpose string, attachments ...emailAttachment) (string, error) {
 	to = strings.TrimSpace(to)
 	if _, err := mail.ParseAddress(to); err != nil {
 		return "", apperrors.New(40062, http.StatusBadRequest, "邮箱地址格式错误")
+	}
+	// 通道自检是管理员对着一个明确的地址手动发的，不受抑制名单约束
+	if normalizeEmailPurpose(purpose) != "test" {
+		if err := s.ensureNotSuppressed(ctx, appID, to); err != nil {
+			return "", err
+		}
 	}
 	// 平台治理挂在这里而不是各调用点：这里是全平台唯一的邮件出口，
 	// 验证码 / 密码重置 / 欢迎信 / NotifyHub 的 email 渠道全部经过这一处。
@@ -809,7 +763,7 @@ func (s *EmailService) sendRenderedMail(ctx context.Context, config *emaildomain
 		Attachments: attachments,
 	}
 	result, sendErr := sender.Send(ctx, config, out)
-	s.recordDelivery(ctx, config, out, result, sendErr)
+	s.recordDelivery(ctx, appID, config, out, result, sendErr)
 	if sendErr != nil {
 		return "", sendErr
 	}
@@ -828,10 +782,11 @@ func (s *EmailService) sendRenderedMail(ctx context.Context, config *emaildomain
 //
 // 留痕失败绝不能反过来让发信失败 —— 信已经交出去了，这里再报错只会让调用方重发一封。
 // 因此所有错误止于一条 warn 日志。
-func (s *EmailService) recordDelivery(ctx context.Context, config *emaildomain.Config, out emailOutbound, result emailSendResult, sendErr error) {
+func (s *EmailService) recordDelivery(ctx context.Context, appID int64, config *emaildomain.Config, out emailOutbound, result emailSendResult, sendErr error) {
 	fromAddress, _, _ := config.SenderIdentity()
 	record := emaildomain.Delivery{
-		AppID:             config.AppID,
+		AppID:             appID,
+		Inherited:         config.AppID != appID,
 		ConfigID:          config.ID,
 		ConfigName:        config.Name,
 		Provider:          normalizeEmailProvider(config.Provider),
@@ -874,7 +829,7 @@ func (s *EmailService) ListDeliveries(ctx context.Context, query emaildomain.Del
 }
 
 func (s *EmailService) emailCodeKey(appID int64, purpose string, email string) string {
-	return fmt.Sprintf("%s:email:code:%d:%s:%s", s.keyPrefix, appID, strings.TrimSpace(purpose), strings.ToLower(strings.TrimSpace(email)))
+	return fmt.Sprintf("%s:email:code:%d:%s:%s", s.keyPrefix, appID, normalizeEmailPurpose(purpose), strings.ToLower(strings.TrimSpace(email)))
 }
 
 func (s *EmailService) resetTokenKey(appID int64, email string) string {
@@ -897,8 +852,16 @@ func derefString(value *string) string {
 }
 
 func generateEmailCode() string {
+	return generateEmailCodeLength(6)
+}
+
+// generateEmailCodeLength 指定位数的数字验证码。
+func generateEmailCodeLength(length int) string {
+	if length <= 0 {
+		length = 6
+	}
 	const digits = "0123456789"
-	buf := make([]byte, 6)
+	buf := make([]byte, length)
 	for i := range buf {
 		n, _ := rand.Int(rand.Reader, big.NewInt(10))
 		buf[i] = digits[n.Int64()]

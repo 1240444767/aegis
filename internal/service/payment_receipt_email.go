@@ -264,6 +264,7 @@ func (s *PaymentService) sendReceiptDocumentEmail(
 		DownloadURL: downloadURL,
 		LinkExpiry:  export.ExpiresAt,
 		Timezone:    resolveReceiptTimezone(opts.Timezone, uiSettings),
+		Visual:      s.email.brandFor(ctx, subject.AppID),
 	})
 
 	message := newReceiptEmailMessage(to, mailSubject, body)
@@ -446,6 +447,8 @@ type receiptEmailView struct {
 	DownloadURL string
 	LinkExpiry  time.Time
 	Timezone    *time.Location
+	// Visual 应用邮件策略里的 Logo、强调色、客服邮箱与页脚；品牌名仍用 Brand
+	Visual mailBrand
 }
 
 // buildReceiptEmail 生成与 PDF 同语言的邮件标题与正文。
@@ -492,14 +495,18 @@ func (s *PaymentService) buildReceiptEmail(loc *i18n.Localizer, view receiptEmai
 	}
 
 	html := renderEmailLayoutWith(emailLayout{
-		Lang:        loc.Tag().String(),
-		AppName:     view.Brand,
-		Eyebrow:     title,
-		Title:       loc.T("email.title", args),
-		Lead:        loc.T("email.lead", args),
-		Blocks:      blocks,
-		FooterNote:  loc.T("footer.disclaimer"),
-		NoReplyNote: loc.T("email.footer"),
+		Lang:         loc.Tag().String(),
+		AppName:      view.Brand,
+		Eyebrow:      title,
+		Title:        loc.T("email.title", args),
+		Lead:         loc.T("email.lead", args),
+		Blocks:       blocks,
+		FooterNote:   loc.T("footer.disclaimer"),
+		NoReplyNote:  loc.T("email.footer"),
+		LogoURL:      view.Visual.LogoURL,
+		Accent:       view.Visual.Accent,
+		SupportEmail: view.Visual.SupportEmail,
+		FooterText:   view.Visual.FooterText,
 	})
 	return subject, html
 }

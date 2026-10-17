@@ -69,10 +69,10 @@ val profile = client.me.profile()
 | `POST` | `/auth/oauth/bind/url` | 取第三方账号绑定授权地址（Bearer） |
 | `POST` | `/auth/oauth/bind/token` | 用原生 SDK 拿到的 `accessToken` 绑定（Bearer） |
 | `GET` `DELETE` | `/auth/oauth/bindings[/{provider}]` | 查询 / 解绑第三方账号（Bearer） |
-| `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码 |
+| `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码。位数、有效期、重发冷却（42961）、按邮箱 / IP 的频次上限（42962 / 42963）、错误次数（42964）由应用的邮件策略决定；`expireMinutes` 只能比策略里的短 |
 | `POST` | `/auth/password/recovery/start`、`/status`、`/send`、`/verify`、`/complete` | 找回密码（见 1.10） |
 | `POST` | `/me/password/recovery` | 已登录时找回密码，后续步骤同上（Bearer，见 1.10） |
-| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 旧的邮件链接式重置：只寄信，响应不含令牌；新接入请用上一行 |
+| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 旧的邮件链接式重置：只寄信，响应不含令牌；`resetUrl` 必须落在邮件策略登记的前缀内（否则 42291），不存在的账号同样返回成功但不发信。新接入请用上一行 |
 | `POST` | `/auth/password/verify`、`/auth/password/change` | 校验 / 修改密码（Bearer） |
 | `POST` | `/auth/passkey/options`、`/auth/passkey/login` | Passkey 登录 |
 | `POST` | `/auth/qr/create`、`/auth/qr/poll` | 网页扫码登录：网页申请票据、轮询并领取会话（见 1.8） |

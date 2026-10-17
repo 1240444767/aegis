@@ -7564,5 +7564,113 @@
     "permission": "app:user:write",
     "appScoped": true,
     "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/scenes",
+    "permission": "",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/policy",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/policy/save",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/preview",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/overview",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/deliveries/detail",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions/create",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions/delete",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/scenes",
+    "permission": "",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/overview",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/policy",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/system/email/policy",
+    "permission": "email:write",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/email/preview",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/deliveries/:deliveryId",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/suppressions",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/email/suppressions",
+    "permission": "email:write",
+    "appScoped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/system/email/suppressions/:suppressionId",
+    "permission": "email:write",
+    "appScoped": false
   }
 ]

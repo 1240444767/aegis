@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"strconv"
 	"strings"
 	"time"
@@ -524,11 +525,38 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 		})
 	}
 	s.syncAdminUserSearch(input.AppID, user.ID)
+	s.sendWelcomeMail(input.AppID, input.Account, registerEmail, input.Nickname)
 	if input.SuppressSession {
 		return &authdomain.LoginResult{UserID: user.ID, Account: user.Account}, nil
 	}
 	// 新建用户必然未被封禁/禁用，无需 ensureUserLoginState；首次设备已以 register 场景同步写入
 	return s.completeLogin(ctx, app, user, "password", "password", input.DeviceID, input.Device, input.IP, input.UserAgent)
+}
+
+// sendWelcomeMail 注册成功后发欢迎信。是否发由应用邮件策略的「欢迎信」场景决定（默认关），
+// 收件地址取注册时填的邮箱，没填而账号名本身是邮箱时用账号名。移出关键路径：
+// 发信慢或失败都不该拖住注册。
+func (s *AuthService) sendWelcomeMail(appID int64, account string, email string, nickname string) {
+	// 找回密码的发信接口里没有欢迎信，按能力断言：测试里注入的替身不必实现它
+	mailer, ok := s.recoveryEmail.(interface {
+		SendWelcomeEmail(ctx context.Context, appID int64, email string, userName string, configName string) error
+	})
+	if !ok || mailer == nil {
+		return
+	}
+	address := strings.TrimSpace(email)
+	if address == "" && strings.Contains(account, "@") {
+		address = strings.TrimSpace(account)
+	}
+	if _, err := mail.ParseAddress(address); address == "" || err != nil {
+		return
+	}
+	nickname = strings.TrimSpace(nickname)
+	s.runDetached("register.welcome", 15*time.Second, func(actx context.Context) {
+		if err := mailer.SendWelcomeEmail(actx, appID, address, nickname, ""); err != nil {
+			s.log.Debug("send welcome email skipped", zap.Int64("appid", appID), zap.Error(err))
+		}
+	})
 }
 
 // recordFirstDevice 在 Redis 中写入首次设备（已存在则不覆盖）

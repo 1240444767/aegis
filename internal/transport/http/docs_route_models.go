@@ -33,9 +33,17 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/app/email-config/create"):                                            AdminEmailConfigSaveRequest{},            // AdminEmailConfigCreate
 		routeKey("POST", "/api/admin/app/email-config/delete"):                                            AdminEmailConfigDetailRequest{},          // AdminEmailConfigDelete
 		routeKey("POST", "/api/admin/app/email-config/deliveries"):                                        AdminEmailDeliveryListRequest{},          // AdminEmailDeliveryList
+		routeKey("POST", "/api/admin/app/email-config/deliveries/detail"):                                 AdminEmailDeliveryDetailRequest{},        // AdminEmailDeliveryDetail
 		routeKey("POST", "/api/admin/app/email-config/detail"):                                            AdminEmailConfigDetailRequest{},          // AdminEmailConfigDetail
 		routeKey("POST", "/api/admin/app/email-config/list"):                                              AdminEmailConfigListRequest{},            // AdminEmailConfigList
+		routeKey("POST", "/api/admin/app/email-config/overview"):                                          AdminEmailOverviewRequest{},              // AdminEmailOverview
+		routeKey("POST", "/api/admin/app/email-config/policy"):                                            AdminEmailScopeRequest{},                 // AdminEmailPolicy
+		routeKey("POST", "/api/admin/app/email-config/policy/save"):                                       AdminEmailPolicySaveRequest{},            // AdminEmailPolicySave
+		routeKey("POST", "/api/admin/app/email-config/preview"):                                           AdminEmailPreviewRequest{},               // AdminEmailPreview
 		routeKey("POST", "/api/admin/app/email-config/stats"):                                             AdminEmailConfigListRequest{},            // AdminEmailDeliveryStats
+		routeKey("POST", "/api/admin/app/email-config/suppressions"):                                      AdminEmailSuppressionListRequest{},       // AdminEmailSuppressionList
+		routeKey("POST", "/api/admin/app/email-config/suppressions/create"):                               AdminEmailSuppressionCreateRequest{},     // AdminEmailSuppressionCreate
+		routeKey("POST", "/api/admin/app/email-config/suppressions/delete"):                               AdminEmailSuppressionDeleteRequest{},     // AdminEmailSuppressionDelete
 		routeKey("POST", "/api/admin/app/email-config/test"):                                              AdminEmailConfigTestRequest{},            // AdminEmailConfigTest
 		routeKey("POST", "/api/admin/app/email-config/update"):                                            AdminEmailConfigSaveRequest{},            // AdminEmailConfigUpdate
 		routeKey("POST", "/api/admin/app/payment-config/create"):                                          AdminPaymentConfigSaveRequest{},          // AdminPaymentConfigCreate
@@ -310,6 +318,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/system/email/configs"):                                               AdminPlatformEmailConfigSaveRequest{},    // AdminPlatformEmailConfigCreate
 		routeKey("PUT", "/api/admin/system/email/configs/{configId}"):                                     AdminPlatformEmailConfigSaveRequest{},    // AdminPlatformEmailConfigUpdate
 		routeKey("POST", "/api/admin/system/email/configs/{configId}/test"):                               AdminPlatformEmailTestRequest{},          // AdminPlatformEmailConfigTest
+		routeKey("PUT", "/api/admin/system/email/policy"):                                                 EmailPolicySaveRequest{},                 // AdminPlatformEmailPolicySave
+		routeKey("POST", "/api/admin/system/email/preview"):                                               EmailPreviewRequest{},                    // AdminPlatformEmailPreview
+		routeKey("POST", "/api/admin/system/email/suppressions"):                                          EmailSuppressionCreateRequest{},          // AdminPlatformEmailSuppressionCreate
 		routeKey("GET", "/api/admin/system/firewall/bans"):                                                IPBanListRequest{},                       // AdminListIPBans
 		routeKey("POST", "/api/admin/system/firewall/bans"):                                               IPBanCreateRequest{},                     // AdminBanIP
 		routeKey("POST", "/api/admin/system/firewall/geo-bans"):                                           GeoBanUpsertRequest{},                    // AdminUpsertGeoBan

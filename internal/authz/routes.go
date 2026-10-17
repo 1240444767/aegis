@@ -212,6 +212,9 @@ var adminRouteRules = []RouteRule{
 	// 按应用作用域判定的话，任何一个应用管理员都能改到全站的发信出口 ——
 	// 与 /api/admin/platform/* 那条「恒全局」是同一个理由。
 	{Pattern: "/api/admin/system/email/providers", Note: "邮件服务商静态目录，不含租户数据与凭据"},
+	{Pattern: "/api/admin/system/email/scenes", Note: "邮件场景静态目录（默认文案与可用变量）"},
+	// 预览用 POST 只是因为要带一份草稿策略，不落库也不发信
+	{Methods: []string{"POST"}, Pattern: "/api/admin/system/email/preview", Permission: PermEmailRead},
 	{Methods: readMethods, Pattern: "/api/admin/system/email/*", Permission: PermEmailRead},
 	{Pattern: "/api/admin/system/email/*", Permission: PermEmailWrite},
 
@@ -300,6 +303,12 @@ var adminRouteRules = []RouteRule{
 	{Pattern: "/api/admin/app/email-config/deliveries", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/stats", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/channel", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/scenes", Note: "邮件场景静态目录（默认文案与可用变量）"},
+	{Pattern: "/api/admin/app/email-config/policy", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/preview", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/overview", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/deliveries/detail", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/suppressions", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/*", Permission: PermEmailWrite, Scope: ScopeApp},
 
 	{Pattern: "/api/admin/app/storage-config/list", Permission: PermStorageRead, Scope: ScopeApp},

@@ -51,7 +51,7 @@ func (s *EmailService) SendAccountDeletionNotice(ctx context.Context, appID int6
 	if err != nil {
 		return err
 	}
-	scopeName, err := s.scopeName(ctx, appID)
+	_, brand, err := s.mailContext(ctx, appID)
 	if err != nil {
 		return err
 	}
@@ -101,15 +101,16 @@ func (s *EmailService) SendAccountDeletionNotice(ctx context.Context, appID int6
 	default:
 		return fmt.Errorf("unknown account deletion notice %q", notice.Kind)
 	}
-	subject = fmt.Sprintf("%s：%s", scopeName, title)
-	html, text := renderEmail(emailLayout{
-		AppName:    scopeName,
+	subject = fmt.Sprintf("%s：%s", brand.Name, title)
+	layout := emailLayout{
 		Eyebrow:    "账号安全",
 		Title:      title,
 		Lead:       lead,
 		Blocks:     []mailBlock{mailDetails(details...)},
 		FooterNote: footer,
-	})
-	_, err = s.sendRenderedMail(ctx, config, email, subject, mailBody{HTML: html, Text: text}, "account_deletion_"+notice.Kind)
+	}
+	brand.apply(&layout)
+	html, text := renderEmail(layout)
+	_, err = s.sendRenderedMail(ctx, appID, config, email, subject, mailBody{HTML: html, Text: text}, "account_deletion_"+notice.Kind)
 	return err
 }

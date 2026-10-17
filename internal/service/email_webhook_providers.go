@@ -174,7 +174,7 @@ func (s *EmailService) HandleSESWebhook(ctx context.Context, request ProviderWeb
 		return &ProviderWebhookResult{Provider: emaildomain.ProviderSES, Received: true, Events: 1, Ignored: 1}, nil
 	}
 	update.AppID = request.AppID
-	matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+	matched, err := s.applyDeliveryEvent(ctx, update)
 	if err != nil {
 		return nil, err
 	}
@@ -452,7 +452,7 @@ func (s *EmailService) HandleResendWebhook(ctx context.Context, request Provider
 		return &ProviderWebhookResult{Provider: emaildomain.ProviderResend, Received: true, Events: 1, Ignored: 1}, nil
 	}
 	update.AppID = request.AppID
-	matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+	matched, err := s.applyDeliveryEvent(ctx, update)
 	if err != nil {
 		return nil, err
 	}
@@ -554,7 +554,7 @@ func (s *EmailService) HandleSendGridWebhook(ctx context.Context, request Provid
 			continue
 		}
 		update.AppID = request.AppID
-		matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+		matched, err := s.applyDeliveryEvent(ctx, update)
 		if err != nil {
 			return nil, err
 		}
@@ -713,7 +713,7 @@ func (s *EmailService) HandleMailgunWebhook(ctx context.Context, request Provide
 		return &ProviderWebhookResult{Provider: emaildomain.ProviderMailgun, Received: true, Events: 1, Ignored: 1}, nil
 	}
 	update.AppID = request.AppID
-	matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+	matched, err := s.applyDeliveryEvent(ctx, update)
 	if err != nil {
 		return nil, err
 	}
@@ -830,7 +830,7 @@ func (s *EmailService) HandlePostmarkWebhook(ctx context.Context, request Provid
 		return &ProviderWebhookResult{Provider: emaildomain.ProviderPostmark, Received: true, Events: 1, Ignored: 1}, nil
 	}
 	update.AppID = request.AppID
-	matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+	matched, err := s.applyDeliveryEvent(ctx, update)
 	if err != nil {
 		return nil, err
 	}
@@ -1109,7 +1109,7 @@ func (s *EmailService) applyTolerantWebhook(
 			continue
 		}
 		update.AppID = request.AppID
-		matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+		matched, err := s.applyDeliveryEvent(ctx, update)
 		if err != nil {
 			return nil, err
 		}

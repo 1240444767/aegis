@@ -296,7 +296,8 @@ type AppOAuthURLRequest struct {
 type AppEmailCodeRequest struct {
 	Email string `json:"email" form:"email" binding:"required"`
 	// Purpose 验证码用途，如 register / bind / reset
-	Purpose       string `json:"purpose" form:"purpose"`
+	Purpose string `json:"purpose" form:"purpose"`
+	// ExpireMinutes 有效期（分钟）。不传按应用邮件策略；传了也只能比策略里的短
 	ExpireMinutes int    `json:"expireMinutes" form:"expireMinutes"`
 	ConfigName    string `json:"configName" form:"configName"`
 }
@@ -309,7 +310,8 @@ type AppEmailVerifyRequest struct {
 
 type AppPasswordForgotRequest struct {
 	Email string `json:"email" form:"email" binding:"required"`
-	// ResetURL 重置页地址，验证令牌会作为查询参数附加在它后面
+	// ResetURL 重置页地址，验证令牌会作为查询参数附加在它后面。
+	// 必须落在应用邮件策略登记的前缀内，不传则用登记的第一条
 	ResetURL   string `json:"resetUrl" form:"resetUrl"`
 	ConfigName string `json:"configName" form:"configName"`
 }

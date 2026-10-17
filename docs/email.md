@@ -45,6 +45,68 @@ Zeabur 那一档的接入细节另见 [zeabur-email.md](zeabur-email.md)。
 **发出这封信的那条通道**上。回落会让 A 应用的回调拿平台通道的密钥去验签，
 验过了还会把状态写到错误的作用域里。
 
+## 邮件策略
+
+通道回答「从哪儿发」，策略回答「发成什么样、什么时候发、发给谁不发」。一个作用域一行
+（`email_policies`，`appid IS NULL` 即平台级），没保存过按 `DefaultPolicy()` 处理。
+结构与校验在 `internal/domain/email/policy.go`，场景目录在 `scenes.go`。
+
+| 分区 | 内容 | 默认 |
+|---|---|---|
+| 品牌 `brand` | 品牌名（留空用应用名）、Logo（https）、强调色（按钮与验证码数字）、客服邮箱、页脚附加行 | 全空 |
+| 验证码 `code` | 位数 4–8、有效期 1–60 分钟、重发冷却、错误次数、单邮箱每小时 / 每天、单 IP 每小时（0 = 不限） | 6 位 / 10 分钟 / 60 秒 / 5 次 / 10 / 30 / 60 |
+| 场景 `scenes` | 每类信的开关（仅欢迎信、资料变更可关）与主题 / 标题 / 引导语 / 页脚提示的覆盖 | 欢迎信关，其余开 |
+| 退信抑制 `suppression` | 硬退信、投诉是否自动加入抑制名单 | 都开 |
+| 重置链接 `resetLinks` | 旧版重置接口允许的地址前缀（协议 + 主机 + 路径前缀） | 空 |
+
+### 场景与文案
+
+`Scenes()` 列出平台发出的每类信（12 种验证码、重置链接、密码已重置、资料变更、欢迎信）的
+默认文案与可用变量。覆盖文案里的变量写成 `{{app}}` `{{code}}` `{{minutes}}` 这种形式，
+**纯文本替换后**再交给 html/template 转义 —— 管理员写的文案不会被当成模板执行。
+校验会拒绝场景没有声明的变量，以免发出带着 `{{code}}` 字面量的信。
+
+账号注销告知与支付凭证不在目录里（前者 6 种状态各有措辞、后者按收件人语言出具），
+但同样套用品牌设置。
+
+### 验证码的护栏
+
+此前公开的 `/auth/email/code` 只有按 IP 的全局限流（而且网关路径根本不在那条规则里），
+验证码明文存在 Redis，校验接口可以无限次试错。现在（`service/email_guard.go`）：
+
+- **重发冷却**：同一地址同一用途 N 秒内只发一次，发送失败的那次立刻退回；
+- **频次上限**：单个地址每小时 / 每天、单个 IP 每小时，被拒的那次不占额度；
+- **错误次数**：同一个码错满 N 次即作废（42964），必须重新获取；
+- **只存摘要**：Redis 里是 `h1:` + HMAC 摘要，摘要绑定作用域、用途与地址。升级前写入的明文照常兼容。
+
+Redis 出错时限频放行并记 warn：为一次缓存抖动让所有人收不到验证码，代价比偶尔多发一封大。
+
+### 旧版重置链接接口的收紧
+
+`/auth/password/forgot` 此前原样采用调用方给的 `resetUrl`，于是任何人都能用应用自己的发件人身份
+把带着真实令牌的链接指向自己的网站。现在链接必须落在 `resetLinks` 登记的前缀内（不传则用第一条），
+否则 42291；并且只给真实存在的账号发信 —— 不存在的地址同样返回成功、不发信也不生成令牌。
+
+## 抑制名单
+
+`email_suppressions`：硬退信与投诉由回执自动加入（`applyDeliveryEvent`，按策略开关），
+也可在控制台手动添加（可设到期时间）。`sendRenderedMail` 投递前检查，命中即 42290 并说清原因；
+通道自检不受约束。软退信、延迟不改主状态，自然也不触发抑制。
+
+抑制记在**信所属的作用域**上：借道平台共享通道的信，拦的是这个应用的下一封。
+
+## 共享通道发出的信记在应用名下
+
+此前借用平台共享通道的信以平台作用域留痕，应用的投递记录里看不到自己的信。
+现在留痕记在发信应用名下（`email_deliveries.inherited = true`），回执按**通道归属**匹配：
+「这封信的 appid 属于回执地址的作用域，或它走的通道属于该作用域」。
+
+## 投递详情与概览
+
+- 每条回执另记一行 `email_delivery_events`，详情页据此画时间线；
+- 概览（`overview`）给累计数字、按浏览器时区分日的趋势（`tz` 参数）、按用途与状态的分布、
+  有效抑制数与近 24 小时失败数。
+
 ## 九档服务商
 
 | provider | 传输 | SDK | 附件 | 投递回执 |
@@ -231,6 +293,8 @@ PascalCase 三种写法（阿里云还分「带事件名」与「只有状态码
 | 目录 | `GET /api/admin/system/email/providers`、`POST /api/admin/app/email-config/providers` |
 | 平台级 | `GET|POST /api/admin/system/email/configs`、`GET|PUT|DELETE .../configs/{id}`、`POST .../configs/{id}/test`、`GET .../channel|deliveries|stats` |
 | 应用级 | `POST /api/admin/app/email-config/{list,detail,create,update,delete,test,deliveries,stats,channel}` |
+| 策略等（平台级） | `GET|PUT .../email/policy`、`GET .../email/scenes`、`POST .../email/preview`、`GET .../email/overview`、`GET .../email/deliveries/{id}`、`GET|POST .../email/suppressions`、`DELETE .../email/suppressions/{id}` |
+| 策略等（应用级） | `POST /api/admin/app/email-config/{scenes,policy,policy/save,preview,overview,deliveries/detail,suppressions,suppressions/create,suppressions/delete}` |
 
 授权：平台级恒按**全局作用域**判定（`email:read` / `email:write`）。
 按应用作用域判定的话，任何一个应用管理员都能改到全站的发信出口 ——

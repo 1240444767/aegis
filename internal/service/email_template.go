@@ -1,10 +1,13 @@
 package service
 
 import (
+	emaildomain "aegis/internal/domain/email"
 	"bytes"
 	"embed"
 	"fmt"
 	htmltemplate "html/template"
+	"regexp"
+	"strconv"
 	"strings"
 	texttemplate "text/template"
 
@@ -180,6 +183,16 @@ type emailLayout struct {
 	FooterNote string
 	// NoReplyNote 页脚提示，留空用中文默认句
 	NoReplyNote string
+
+	// 以下来自邮件策略的品牌设置（见 mailBrand.apply），全部可选
+	// LogoURL 标题上方的 Logo（https）
+	LogoURL string
+	// Accent 按钮颜色 #rrggbb，留空用默认的深色
+	Accent string
+	// SupportEmail 填了之后页脚会给出客服邮箱
+	SupportEmail string
+	// FooterText 页脚附加的一行
+	FooterText string
 }
 
 // mailTemplateData 交给模板的视图对象。
@@ -199,6 +212,13 @@ type mailTemplateData struct {
 	FontMono     htmltemplate.CSS
 	ButtonBG     string
 	ButtonFG     string
+	// ButtonStyle 设了强调色时内联到按钮上；带 !important 才盖得过深色模式那条媒体查询
+	ButtonStyle htmltemplate.CSS
+	// CodeStyle 设了强调色时验证码数字用它着色
+	CodeStyle  htmltemplate.CSS
+	LogoURL    string
+	Support    string
+	FooterText string
 }
 
 // preheaderPad 撑开收件箱摘要的零宽字符，防止客户端把正文开头接在摘要后面。
@@ -209,6 +229,19 @@ const preheaderPad = htmltemplate.HTML(
 		"&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;",
 )
 
+// accentForeground 按强调色的亮度取按钮文字颜色（WCAG 相对亮度的简化版）。
+func accentForeground(hex string) string {
+	value, err := strconv.ParseUint(strings.TrimPrefix(hex, "#"), 16, 32)
+	if err != nil {
+		return mailButtonFG
+	}
+	r, g, b := float64(value>>16&0xff), float64(value>>8&0xff), float64(value&0xff)
+	if 0.299*r+0.587*g+0.114*b > 160 {
+		return "#18181b"
+	}
+	return "#ffffff"
+}
+
 func (layout emailLayout) data() mailTemplateData {
 	brand := strings.TrimSpace(layout.AppName)
 	if eyebrow := strings.TrimSpace(layout.Eyebrow); eyebrow != "" {
@@ -218,8 +251,30 @@ func (layout emailLayout) data() mailTemplateData {
 			brand = eyebrow
 		}
 	}
+	buttonBG, buttonFG := mailButtonBG, mailButtonFG
+	var buttonStyle, codeStyle htmltemplate.CSS
+	if accent := strings.ToLower(strings.TrimSpace(layout.Accent)); accentPattern.MatchString(accent) {
+		buttonBG, buttonFG = accent, accentForeground(accent)
+		buttonStyle = htmltemplate.CSS(fmt.Sprintf(
+			"background-color:%s !important;border-color:%s !important;color:%s !important;", buttonBG, buttonBG, buttonFG))
+		codeStyle = htmltemplate.CSS("color:" + accent + " !important;")
+	}
+	lang := firstNonEmpty(layout.Lang, "zh-CN")
+	support := ""
+	if address := strings.TrimSpace(layout.SupportEmail); address != "" {
+		// 凭证邮件按收件人的语言出具，客服那一行只有中文措辞，非中文时只给地址
+		if strings.HasPrefix(strings.ToLower(lang), "zh") {
+			support = "如需帮助，请联系 " + address
+		} else {
+			support = address
+		}
+	}
+	logo := ""
+	if strings.HasPrefix(strings.TrimSpace(layout.LogoURL), "https://") {
+		logo = strings.TrimSpace(layout.LogoURL)
+	}
 	return mailTemplateData{
-		Lang:         firstNonEmpty(layout.Lang, "zh-CN"),
+		Lang:         lang,
 		AppName:      strings.TrimSpace(layout.AppName),
 		Brand:        brand,
 		Title:        strings.TrimSpace(layout.Title),
@@ -232,10 +287,17 @@ func (layout emailLayout) data() mailTemplateData {
 		CSS:          htmltemplate.CSS(emailThemeCSS),
 		FontSans:     htmltemplate.CSS(mailFontSans),
 		FontMono:     htmltemplate.CSS(mailFontMono),
-		ButtonBG:     mailButtonBG,
-		ButtonFG:     mailButtonFG,
+		ButtonBG:     buttonBG,
+		ButtonFG:     buttonFG,
+		ButtonStyle:  buttonStyle,
+		CodeStyle:    codeStyle,
+		LogoURL:      logo,
+		Support:      support,
+		FooterText:   strings.TrimSpace(layout.FooterText),
 	}
 }
+
+var accentPattern = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 
 /* ── 渲染 ── */
 
@@ -299,24 +361,15 @@ type emailPurposePresentation struct {
 // 主题把验证码放在最前面（「482913 是您的登录验证码」）：手机通知栏和
 // 邮件列表都只显示开头十几个字，验证码放在那里往往不用点开邮件。
 func renderCodeMailContent(appName string, configName string, purpose string, code string, expireMinutes int) (string, string, string) {
-	if normalizeEmailPurpose(purpose) == "test" {
-		return renderChannelTestMail(appName, configName, code)
-	}
+	return renderCodeMailWithPolicy(emaildomain.DefaultPolicy(), mailBrand{Name: appName}, configName, purpose, code, expireMinutes, "")
+}
 
-	p := getEmailPurposePresentation(purpose)
-	trimmed := strings.TrimSpace(code)
-	html, text := renderEmail(emailLayout{
-		AppName:   appName,
-		Title:     p.Title,
-		Lead:      p.Lead,
-		Preheader: fmt.Sprintf("验证码 %s，%d 分钟内有效", trimmed, expireMinutes),
-		Blocks: []mailBlock{
-			mailCode(trimmed, expireMinutes),
-			mailParagraph("请不要把这串数字转发给任何人。"),
-		},
-		FooterNote: p.Footer,
-	})
-	return fmt.Sprintf("%s 是您的%s", trimmed, p.Noun), html, text
+// renderCodeMailWithPolicy 按策略（文案覆盖与品牌）渲染验证码邮件。
+func renderCodeMailWithPolicy(policy emaildomain.Policy, brand mailBrand, configName string, purpose string, code string, expireMinutes int, email string) (string, string, string) {
+	if normalizeEmailPurpose(purpose) == "test" {
+		return renderChannelTestMail(brand, configName, code)
+	}
+	return composeScene(policy, brand, codeSceneMail(purpose, code, expireMinutes, email))
 }
 
 // renderChannelTestMail 通道自检邮件。
@@ -324,9 +377,8 @@ func renderCodeMailContent(appName string, configName string, purpose string, co
 // 它不是验证码 —— 这串数字不写 Redis，验不了任何东西，只是让操作者把邮件里的
 // 内容和控制台返回的值对一眼，确认中途没有被改写。写成「验证码」会让收到的人
 // 以为账号上正在发生什么。
-func renderChannelTestMail(appName string, configName string, code string) (string, string, string) {
-	html, text := renderEmail(emailLayout{
-		AppName:   appName,
+func renderChannelTestMail(brand mailBrand, configName string, code string) (string, string, string) {
+	layout := emailLayout{
 		Eyebrow:   "运维",
 		Title:     "邮件通道自检",
 		Lead:      "这封信由控制台手动触发，能收到就说明这条通道是通的。",
@@ -339,100 +391,25 @@ func renderChannelTestMail(appName string, configName string, code string) (stri
 			mailParagraph("控制台上显示的校验串与这里一致，说明正文在投递途中没有被改写。"),
 		},
 		FooterNote: "这封信不涉及任何账号操作，看完可以直接删除。",
-	})
-	return fmt.Sprintf("%s 邮件通道自检", appName), html, text
+	}
+	// 自检信同样带上品牌设置：管理员试发时顺带就能看到 Logo 与按钮颜色的实际效果
+	brand.apply(&layout)
+	html, text := renderEmail(layout)
+	return fmt.Sprintf("%s 邮件通道自检", layout.AppName), html, text
 }
 
 func normalizeEmailPurpose(purpose string) string {
 	return strings.ToLower(strings.TrimSpace(purpose))
 }
 
+// getEmailPurposePresentation 用途对应的默认文案，取自场景目录（domain/email/scenes.go）。
 func getEmailPurposePresentation(purpose string) emailPurposePresentation {
-	switch normalizeEmailPurpose(purpose) {
-	case "register", "signup", "sign-up":
-		return emailPurposePresentation{
-			Noun:   "注册验证码",
-			Title:  "注册验证码",
-			Lead:   "输入验证码完成注册，之后就用这个邮箱登录。",
-			Footer: "不是您本人在注册的话，忽略这封信即可，账号不会被创建。",
-		}
-	case "login", "signin", "sign-in":
-		return emailPurposePresentation{
-			Noun:   "登录验证码",
-			Title:  "登录验证码",
-			Lead:   "输入验证码即可登录。",
-			Footer: "如果不是您本人在登录，建议立刻改密码，并看一下最近的登录记录。",
-		}
-	case "admin_login":
-		return emailPurposePresentation{
-			Noun:   "管理员登录验证码",
-			Title:  "管理后台登录验证码",
-			Lead:   "输入验证码登录管理后台。",
-			Footer: "后台账号权限高。不是您本人在登录的话，请立刻联系平台管理员。",
-		}
-	case "bind_email", "bind-email":
-		return emailPurposePresentation{
-			Noun:   "邮箱绑定验证码",
-			Title:  "绑定这个邮箱",
-			Lead:   "验证通过后，这个邮箱会绑定到您的账号。",
-			Footer: "不是您本人在操作的话，忽略即可，绑定不会生效。",
-		}
-	case "change_email", "change-email", "profile_email_change":
-		return emailPurposePresentation{
-			Noun:   "邮箱变更验证码",
-			Title:  "换成这个邮箱",
-			Lead:   "验证通过后，账号邮箱会改成您当前正在查看的这个地址。",
-			Footer: "变更完成后原邮箱会收到通知。不是您本人在操作的话，请立刻改密码。",
-		}
-	case "bind_phone", "bind-phone":
-		return emailPurposePresentation{
-			Noun:   "手机绑定验证码",
-			Title:  "绑定手机号",
-			Lead:   "验证通过后，这个手机号会绑定到您的账号。",
-			Footer: "不是您本人在操作的话，忽略即可，绑定不会生效。",
-		}
-	case "change_phone", "change-phone", "profile_phone_change":
-		return emailPurposePresentation{
-			Noun:   "手机变更验证码",
-			Title:  "更换手机号",
-			Lead:   "验证通过后，账号手机号会换成新的那个。",
-			Footer: "不是您本人在操作的话，请立刻改密码，并检查账号的绑定信息。",
-		}
-	case "password_reset", "reset_password", "reset-password":
-		return emailPurposePresentation{
-			Noun:   "密码重置验证码",
-			Title:  "重置密码",
-			Lead:   "输入验证码后就可以设置新密码。",
-			Footer: "新密码设置好之前，原密码一直有效。不是您本人申请的话，忽略即可。",
-		}
-	case "verify_identity", "identity_verify", "identity-verification":
-		return emailPurposePresentation{
-			Noun:   "身份验证码",
-			Title:  "身份验证",
-			Lead:   "输入验证码完成这次身份核验。",
-			Footer: "任何人向您要这串数字都是诈骗，包括自称客服的。",
-		}
-	case "two_factor", "two-factor", "2fa", "mfa":
-		return emailPurposePresentation{
-			Noun:   "两步验证码",
-			Title:  "两步验证",
-			Lead:   "密码已经通过，再输入验证码就能完成这次登录。",
-			Footer: "如果您并没有在登录，说明密码可能已经泄露，请尽快更换。",
-		}
-	case "account_deletion", "account-deletion", "delete_account":
-		return emailPurposePresentation{
-			Noun:   "账号注销验证码",
-			Title:  "确认注销账号",
-			Lead:   "您正在申请注销账号，输入验证码确认是本人操作。",
-			Footer: "不是您本人在操作的话，请立即修改密码；不输入验证码，注销不会生效。",
-		}
-	default:
-		return emailPurposePresentation{
-			Noun:   "验证码",
-			Title:  "验证码",
-			Lead:   "输入验证码完成这次操作。",
-			Footer: "任何人向您要这串数字都是诈骗，包括自称客服的。",
-		}
+	scene := emaildomain.CodeSceneForPurpose(purpose)
+	return emailPurposePresentation{
+		Noun:   strings.TrimPrefix(scene.Defaults.Subject, "{{code}} 是您的"),
+		Title:  scene.Defaults.Title,
+		Lead:   scene.Defaults.Lead,
+		Footer: scene.Defaults.Footer,
 	}
 }
 

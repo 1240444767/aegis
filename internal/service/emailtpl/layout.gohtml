@@ -36,6 +36,7 @@ html.EscapeString —— 手工转义一旦漏一处就是注入。
 
 <table class="m-card" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0">
   <tr><td class="m-head" style="font-family:{{ .FontSans }};">
+    {{- with .LogoURL }}<img class="m-logo" src="{{ . }}" alt="{{ $.AppName }}" height="32" />{{ end }}
     {{- with .Brand }}<div class="m-brand">{{ . }}</div>{{ end }}
     <h1 class="m-title">{{ .Title }}</h1>
     {{- with .Lead }}<p class="m-lead">{{ . }}</p>{{ end }}
@@ -49,7 +50,7 @@ html.EscapeString —— 手工转义一旦漏一处就是注入。
     {{- else if eq .Kind "code" }}
     <table class="m-code-wrap" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
       <tr><td class="m-code-cell" align="center">
-        <div class="m-code" style="font-family:{{ $.FontMono }};">{{ .Code }}</div>
+        <div class="m-code" style="font-family:{{ $.FontMono }};{{ $.CodeStyle }}">{{ .Code }}</div>
         {{- with .Note }}<div class="m-code-hint">{{ . }}</div>{{ end }}
       </td></tr>
     </table>
@@ -98,7 +99,7 @@ html.EscapeString —— 手工转义一旦漏一处就是注入。
       </v:roundrect>
       {{ .MSOEnd }}
       {{ .NonMSOStart }}
-      <a class="m-btn" href="{{ .URL }}">{{ .Label }}</a>
+      <a class="m-btn" href="{{ .URL }}"{{ with $.ButtonStyle }} style="{{ . }}"{{ end }}>{{ .Label }}</a>
       {{ .NonMSOEnd }}
     </td></tr></table>
     {{- end }}
@@ -117,7 +118,9 @@ html.EscapeString —— 手工转义一旦漏一处就是注入。
 <table class="m-foot" role="presentation" width="600" cellpadding="0" cellspacing="0" border="0">
   <tr><td class="m-foot-cell" align="center" style="font-family:{{ .FontSans }};">
     <div class="m-foot-text">{{ .NoReply }}</div>
+    {{- with .Support }}<div class="m-foot-text">{{ . }}</div>{{ end }}
     {{- with .AppName }}<div class="m-foot-text">{{ . }}</div>{{ end }}
+    {{- with .FooterText }}<div class="m-foot-text">{{ . }}</div>{{ end }}
   </td></tr>
 </table>
 

@@ -112,6 +112,16 @@ func registerAdminAppConfigRoutes(router *gin.Engine, h *Handler, deps RouterDep
 		emailAdmin.POST("/providers", h.EmailProviderCatalog)
 		// 当前生效的通道（含「继承自平台共享通道」的判定）
 		emailAdmin.POST("/channel", h.AdminEmailChannel)
+		// 策略、场景、预览、概览、投递详情、抑制名单
+		emailAdmin.POST("/scenes", h.EmailSceneCatalog)
+		emailAdmin.POST("/policy", h.AdminEmailPolicy)
+		emailAdmin.POST("/policy/save", h.AdminEmailPolicySave)
+		emailAdmin.POST("/preview", h.AdminEmailPreview)
+		emailAdmin.POST("/overview", h.AdminEmailOverview)
+		emailAdmin.POST("/deliveries/detail", h.AdminEmailDeliveryDetail)
+		emailAdmin.POST("/suppressions", h.AdminEmailSuppressionList)
+		emailAdmin.POST("/suppressions/create", h.AdminEmailSuppressionCreate)
+		emailAdmin.POST("/suppressions/delete", h.AdminEmailSuppressionDelete)
 	}
 
 	payCompat := router.Group("/api/admin/app/payment-config")

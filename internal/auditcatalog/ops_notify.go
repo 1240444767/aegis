@@ -42,6 +42,15 @@ func init() {
 		Write("POST /api/admin/system/email/configs/:configId/test", "发送平台测试邮件", "邮件配置", SeverityLow),
 		View("GET /api/admin/system/email/deliveries", "查看平台邮件投递记录", ""),
 		View("GET /api/admin/system/email/stats", "查看平台邮件投递统计", ""),
+		View("GET /api/admin/system/email/overview", "查看平台邮件概览", ""),
+		View("GET /api/admin/system/email/scenes", "查看邮件场景目录", ""),
+		View("GET /api/admin/system/email/policy", "查看平台邮件策略", ""),
+		Write("PUT /api/admin/system/email/policy", "保存平台邮件策略", "邮件策略", SeverityMedium),
+		View("POST /api/admin/system/email/preview", "预览平台邮件模板", ""),
+		View("GET /api/admin/system/email/deliveries/:deliveryId", "查看平台邮件投递详情", "投递记录"),
+		View("GET /api/admin/system/email/suppressions", "查看平台邮件抑制名单", ""),
+		Write("POST /api/admin/system/email/suppressions", "加入平台邮件抑制名单", "抑制名单", SeverityMedium),
+		Write("DELETE /api/admin/system/email/suppressions/:suppressionId", "移出平台邮件抑制名单", "抑制名单", SeverityMedium),
 
 		// 应用邮件通道（兼容接口）
 		View("POST /api/admin/app/email-config/channel", "查看应用生效邮件通道", ""),
@@ -54,6 +63,15 @@ func init() {
 		Write("POST /api/admin/app/email-config/test", "发送应用测试邮件", "邮件配置", SeverityLow),
 		View("POST /api/admin/app/email-config/deliveries", "查看应用邮件投递记录", ""),
 		View("POST /api/admin/app/email-config/stats", "查看应用邮件投递统计", ""),
+		View("POST /api/admin/app/email-config/overview", "查看应用邮件概览", ""),
+		View("POST /api/admin/app/email-config/scenes", "查看邮件场景目录（兼容接口）", ""),
+		View("POST /api/admin/app/email-config/policy", "查看应用邮件策略", ""),
+		Write("POST /api/admin/app/email-config/policy/save", "保存应用邮件策略", "邮件策略", SeverityMedium),
+		View("POST /api/admin/app/email-config/preview", "预览应用邮件模板", ""),
+		View("POST /api/admin/app/email-config/deliveries/detail", "查看应用邮件投递详情", "投递记录"),
+		View("POST /api/admin/app/email-config/suppressions", "查看应用邮件抑制名单", ""),
+		Write("POST /api/admin/app/email-config/suppressions/create", "加入应用邮件抑制名单", "抑制名单", SeverityMedium),
+		Write("POST /api/admin/app/email-config/suppressions/delete", "移出应用邮件抑制名单", "抑制名单", SeverityMedium),
 
 		// 消息模板
 		View("GET /api/admin/system/templates", "查看消息模板", ""),

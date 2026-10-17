@@ -23,7 +23,15 @@ func (h *Handler) SendEmailCode(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	result, err := h.email.SendVerificationCode(c.Request.Context(), req.AppID, req.Email, req.Purpose, normalizeEmailExpire(req.ExpireMinutes), req.ConfigName)
+	// 频次按客户端 IP 与收件地址双重计（规则见应用的邮件策略）
+	result, err := h.email.SendCode(c.Request.Context(), service.CodeRequest{
+		AppID:         req.AppID,
+		Email:         req.Email,
+		Purpose:       req.Purpose,
+		ExpireMinutes: normalizeEmailExpire(req.ExpireMinutes),
+		ConfigName:    req.ConfigName,
+		IP:            c.ClientIP(),
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -51,7 +59,13 @@ func (h *Handler) SendPasswordResetEmail(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	result, err := h.email.SendPasswordResetEmail(c.Request.Context(), req.AppID, req.Email, req.ResetURL, req.ConfigName)
+	result, err := h.email.SendPasswordResetLink(c.Request.Context(), service.ResetLinkRequest{
+		AppID:      req.AppID,
+		Email:      req.Email,
+		ResetURL:   req.ResetURL,
+		ConfigName: req.ConfigName,
+		IP:         c.ClientIP(),
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -981,9 +995,10 @@ func (h *Handler) WorkflowEngineStatus(c *gin.Context) {
 	response.Success(c, 200, "获取成功", h.workflow.EngineStatus())
 }
 
+// normalizeEmailExpire 调用方希望的有效期。不传返回 0，由应用邮件策略决定；传了也只能比策略里的短。
 func normalizeEmailExpire(value int) int {
 	if value <= 0 {
-		return 5
+		return 0
 	}
 	if value > 60 {
 		return 60
