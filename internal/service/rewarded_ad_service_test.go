@@ -59,12 +59,12 @@ func TestRewardedAdUserTokenRoundTrip(t *testing.T) {
 func TestRewardedAdCallbackURL(t *testing.T) {
 	svc := newRewardedAdServiceForTest("master")
 	url, absolute := svc.callbackURL("voyage")
-	if !absolute || url != "https://api.example.com/api/apps/voyage/ads/huijing/callback" {
+	if !absolute || url != "https://api.example.com/api/apps/voyage/ads/apex/callback" {
 		t.Fatalf("callbackURL = %q (%v)", url, absolute)
 	}
 	svc.apiBaseURL = ""
 	url, absolute = svc.callbackURL("voyage")
-	if absolute || url != "/api/apps/voyage/ads/huijing/callback" {
+	if absolute || url != "/api/apps/voyage/ads/apex/callback" {
 		t.Fatalf("未配置 API_BASE_URL 时应只给路径，得到 %q", url)
 	}
 }

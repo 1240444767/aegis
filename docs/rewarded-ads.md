@@ -1,7 +1,9 @@
 # 激励广告
 
 用户看完一段激励视频，按「奖励场景」发放会员 / 积分 / 经验 / 抽奖次数。
-目前接入的平台是**灰鲸**（huimiaokeji，底层为 ToBid / WindMill 聚合）。
+目前接入的平台是 **Apex**（ApexAdx，底层为 ToBid / WindMill 聚合，平台标识 `apex`）。2026-10 起取代灰鲸（`huijing`）：
+两家回调协议相同，迁移 `000103_rewarded_ads_apex` 把已有配置的平台改成 `apex`，但 Security Key 是各平台各自签发的，
+迁移后要在控制台填入 Apex 后台的 Security Key，并把回调地址换成下面的新路径。旧的 `/ads/huijing/callback` 已删除。
 
 ## 一次观看怎么才算数
 
@@ -34,7 +36,7 @@
 ## 用户标识
 
 `/ads/rewarded` 下发的 `userId` 形如 `42.1a2b3c4d5e6f7a8b`：用户 ID + HMAC 签名（密钥派生自 `SECURITY_MASTER_KEY`）。
-客户端必须把它**原样**传给 SDK 的 `HJRewardAdRequest(placementId, userId, options)`。
+客户端必须把它**原样**传给 SDK 的 `ApexAdxRewardRequest(placementId, userId, options)`。
 
 平台的回调签名只覆盖 `transId`、不覆盖 `userId`。不带签名的话，能伪造一次回调的人就能把奖励记到任意账号头上；
 带上签名后，回调里的 `userId` 只能是我们发出去的那一个。认不出的用户记为 `user_not_found`，不发奖。
@@ -44,11 +46,13 @@
 ### 平台回调（服务端命名空间，无令牌）
 
 ```
-GET /api/apps/{appKey}/ads/huijing/callback?userId=…&transId=…&sign=…&placementId=…&rewardAmount=…&rewardName=…&extrainfo=…
+GET /api/apps/{appKey}/ads/apex/callback?userId={{USER_ID}}&transId={{TRANS_ID}}&sign={{SIGN}}&extrainfo={{EXTRAINFO}}&placementId={{PLACEMENT_ID}}
 → {"isValid": true | false}
 ```
 
-参数名与灰鲸后台「配置回调URL」的默认模板一致；`user_id` / `USER_ID` 等写法也认。
+参数宏与 [Apex 服务端回调文档](https://doc.apexadx.com/server/reward-callback)一致，平台替换成实际值后 GET 调用；
+`user_id` / `USER_ID` 等写法也认，`rewardAmount` / `rewardName` / `networkId` 有就记下。控制台复制出的地址已带好这串宏。
+`extrainfo` 是客户端放进 SDK options 的内容（App 放 `aegisScene`，Apex 自己会再加一个 `BUSTRANSID`）。
 `isValid` 回答「这次观看算不算数」：验签不过、应用没开、用户认不出、被限额挡下都是 `false`；
 `dual` 模式下等客户端上报时是 `true`。响应不套本项目的信封 —— 对方只认它自己的格式。
 
@@ -107,9 +111,11 @@ GET /api/apps/{appKey}/ads/huijing/callback?userId=…&transId=…&sign=…&plac
 客户端的场景列表带 `membership`，`rewardSummary` 也会补上一句会员权益（如「会员天数 1 天（会员可用 AI 对话，会员期间免广告）」，
 只列启用中的功能）。
 
-## 灰鲸后台怎么配
+## Apex 后台怎么配
 
-1. 【流量管理】→【广告位管理】→ 激励视频广告位 →【配置回调URL】；
-2. 打开「服务器回调」，回调地址填控制台「激励广告 → 配置 → 回调地址」里的那一条，参数沿用默认模板；
-3. Security Key 填一串随机值，并在控制台同一处填入相同的值；
-4. 控制台里把场景的「广告位 ID」填成该广告位的 ID。
+1. 在 Apex 后台的激励视频广告位上开启服务端回调，回调地址填控制台「激励广告 → 配置 → 回调地址」复制出的那一条（已带参数宏）；
+2. 把 Apex 后台给出的 Security Key 填进控制台同一处（两边必须一致，签名是 `sha256(SecurityKey + ":" + transId)`）；
+3. 控制台里「平台应用 ID」填 Apex 应用 ID（只作核对展示），场景的「广告位 ID」填该广告位的 ID。
+
+Apex 给的测试应用（应用 ID `68758`，激励视频 `4892299192457961`）只对包名 `com.ld.cww.apex` 生效，
+Voyage 用 `-PvoyageAdTest=true` 打这个包。

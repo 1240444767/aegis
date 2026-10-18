@@ -819,7 +819,7 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
      * `pending` 还在等广告平台的服务端回调 —— 隔一两秒用同一个 [transId] 再调一次即可，
      * 重复上报是安全的，奖励只会发一次。
      *
-     * [verified] / [errorCode] 是 SDK 自己的奖励校验结论（`HJRewardVerify`），
+     * [verified] / [errorCode] 是 SDK 自己的奖励校验结论（Apex `AdRewardVerify`），
      * 只在服务端配置为客户端校验模式时作数。
      */
     @Throws(IOException::class)

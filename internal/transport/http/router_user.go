@@ -73,7 +73,7 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appServer.POST("/vip/verify", h.VerifyVipMembership)
 		// 广告平台的服务端回调：由平台服务器 GET 调用，凭 sha256(securityKey:transId) 验签，
 		// 既没有用户令牌也没有应用密钥 —— 所以它在这个命名空间而不在网关里。
-		appServer.GET("/ads/huijing/callback", h.RewardedAdHuijingCallback)
+		appServer.GET("/ads/apex/callback", h.RewardedAdCallback)
 		// OpenAI / Anthropic 兼容网关：把任意 SDK 的 baseURL 指到
 		// /api/apps/{appkey}/ai/v1，api key 填函数调用密钥即可。
 		appServer.POST("/ai/v1/chat/completions", h.AppAIChatCompletions)

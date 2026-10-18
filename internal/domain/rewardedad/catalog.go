@@ -76,7 +76,7 @@ func VerifyModes() []string {
 
 // Providers 已支持的广告平台。
 func Providers() []string {
-	return []string{ProviderHuijing}
+	return []string{ProviderApex}
 }
 
 // ValidVerifyMode 校验模式是否合法。
@@ -350,25 +350,25 @@ func ReasonMessage(status, reason string) string {
 	return "未获得奖励"
 }
 
-// HuijingSign 灰鲸服务端回调的签名：sha256(securityKey + ":" + transId) 的十六进制小写。
-func HuijingSign(securityKey, transID string) string {
+// CallbackSign Apex（ToBid）服务端回调的签名：sha256(securityKey + ":" + transId) 的十六进制小写。
+func CallbackSign(securityKey, transID string) string {
 	sum := sha256.Sum256([]byte(securityKey + ":" + transID))
 	return hex.EncodeToString(sum[:])
 }
 
-// VerifyHuijingSign 常数时间比较签名，大小写不敏感。
-func VerifyHuijingSign(securityKey, transID, sign string) bool {
+// VerifyCallbackSign 常数时间比较签名，大小写不敏感。
+func VerifyCallbackSign(securityKey, transID, sign string) bool {
 	if securityKey == "" || transID == "" || sign == "" {
 		return false
 	}
-	expected := HuijingSign(securityKey, transID)
+	expected := CallbackSign(securityKey, transID)
 	got := strings.ToLower(strings.TrimSpace(sign))
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(got)) == 1
 }
 
 // sceneExtraKeys 客户端放进 SDK options 里表示场景的键。
 //
-// 灰鲸把 HJRewardAdRequest 的 options 原样作为 EXTRAINFO 回传，但文档没有约定序列化形态，
+// Apex 把 ApexAdxRewardRequest（展示时为 show 的参数）的 options 原样作为 EXTRAINFO 回传，但文档没有约定序列化形态，
 // 实测既见过 JSON 对象，也可能是 a=b&c=d。两种都认；认不出来就当没有，交给客户端上报。
 var sceneExtraKeys = []string{"aegisScene", "aegis_scene", "scene"}
 

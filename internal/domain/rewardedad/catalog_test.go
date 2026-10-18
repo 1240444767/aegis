@@ -11,23 +11,23 @@ import (
 // 文档给的签名算法：sha256(securityKey + ":" + transId)。
 // 期望值是 ToBid 系平台文档里公开的示例向量，独立于本实现；签名对不上时
 // 错误只会说「不对」而不说「哪里不对」，所以要有字面量钉着。
-func TestHuijingSignMatchesDocumentedAlgorithm(t *testing.T) {
+func TestCallbackSignMatchesDocumentedAlgorithm(t *testing.T) {
 	const (
 		key   = "D46C4341E83F33DB0DF2BC42816F21B7"
 		trans = "a78f36ed-95e5-4049-9647-dfc87e6df0e1"
 		want  = "db10d4a82a32597a101841988bbee1bf5f3ebca9a512456817e301d89c721270"
 	)
-	if got := HuijingSign(key, trans); got != want {
-		t.Fatalf("HuijingSign = %q, want %q", got, want)
+	if got := CallbackSign(key, trans); got != want {
+		t.Fatalf("CallbackSign = %q, want %q", got, want)
 	}
-	if !VerifyHuijingSign(key, trans, strings.ToUpper(want)) {
+	if !VerifyCallbackSign(key, trans, strings.ToUpper(want)) {
 		t.Fatal("大写的签名也应当通过")
 	}
-	got := HuijingSign("key", "trans")
-	if VerifyHuijingSign("", "trans", got) || VerifyHuijingSign("key", "trans", "") {
+	got := CallbackSign("key", "trans")
+	if VerifyCallbackSign("", "trans", got) || VerifyCallbackSign("key", "trans", "") {
 		t.Fatal("密钥或签名为空时必须拒绝")
 	}
-	if VerifyHuijingSign("key", "other", got) {
+	if VerifyCallbackSign("key", "other", got) {
 		t.Fatal("换了 transId 的签名不应通过")
 	}
 }

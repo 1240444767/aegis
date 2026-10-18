@@ -76,7 +76,7 @@ func NewRewardedAdService(log *zap.Logger, pg *pgrepo.Repository, cfg config.Con
 
 // ── 管理端：配置 ──
 
-// AdminConfig 读取配置。没配过时返回一份默认值（未启用、灰鲸、双方确认）。
+// AdminConfig 读取配置。没配过时返回一份默认值（未启用、Apex、双方确认）。
 func (s *RewardedAdService) AdminConfig(ctx context.Context, appID int64, appKey string) (*rewardedad.AdminConfig, error) {
 	cfg, err := s.pg.GetRewardedAdConfig(ctx, appID)
 	if err != nil {
@@ -102,9 +102,9 @@ func (s *RewardedAdService) SaveConfig(ctx context.Context, input rewardedad.Sav
 		UpdatedBy:     input.Operator,
 	}
 	if next.Provider == "" {
-		next.Provider = rewardedad.ProviderHuijing
+		next.Provider = rewardedad.ProviderApex
 	}
-	if next.Provider != rewardedad.ProviderHuijing {
+	if next.Provider != rewardedad.ProviderApex {
 		return nil, apperrors.New(40000, http.StatusBadRequest, "暂不支持该广告平台")
 	}
 	if !rewardedad.ValidProviderAppID(next.ProviderAppID) {
@@ -262,7 +262,7 @@ func (s *RewardedAdService) checkFeaturesExist(ctx context.Context, appID int64,
 func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *rewardedad.AdminConfig {
 	callback, absolute := s.callbackURL(appKey)
 	view := &rewardedad.AdminConfig{
-		Provider:         rewardedad.ProviderHuijing,
+		Provider:         rewardedad.ProviderApex,
 		VerifyMode:       rewardedad.VerifyDual,
 		Scenes:           []rewardedad.Scene{},
 		CallbackURL:      callback,
@@ -290,10 +290,10 @@ func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *re
 
 // callbackURL 填进广告平台「配置回调URL」的地址。
 //
-// 参数名与灰鲸后台默认模板一致（userId / transId / sign …），平台会把宏替换后以 GET 调用；
+// 参数名与 Apex 文档的回调模板一致（userId / transId / sign / extrainfo / placementId），平台会把宏替换后以 GET 调用；
 // 配了 API_BASE_URL 时给出绝对地址，否则只给路径，由控制台补上当前站点。
 func (s *RewardedAdService) callbackURL(appKey string) (string, bool) {
-	path := "/api/apps/" + url.PathEscape(appKey) + "/ads/huijing/callback"
+	path := "/api/apps/" + url.PathEscape(appKey) + "/ads/apex/callback"
 	if s.apiBaseURL == "" {
 		return path, false
 	}
@@ -597,8 +597,8 @@ func (s *RewardedAdService) MyViews(ctx context.Context, appID, userID int64, pa
 
 // ── 平台回调 ──
 
-// HuijingCallbackInput 灰鲸服务端回调带来的参数（GET 查询串）。
-type HuijingCallbackInput struct {
+// AdCallbackInput Apex 服务端回调带来的参数（GET 查询串）。
+type AdCallbackInput struct {
 	AppID        int64
 	UserID       string
 	TransID      string
@@ -610,18 +610,18 @@ type HuijingCallbackInput struct {
 	Extra        string
 }
 
-// HuijingCallback 处理一次平台回调，返回给平台的 isValid。
+// AdCallback 处理一次平台回调，返回给平台的 isValid。
 //
 // isValid 回答的是「这次观看算不算数」：验签不过、应用没开、用户认不出、被限额挡下都是 false；
 // 双方确认模式下等客户端上报时是 true（观看本身成立）。平台没收到响应会每 200ms 重试 3 次，
 // 重试落在同一行上，结论不变。
-func (s *RewardedAdService) HuijingCallback(ctx context.Context, input HuijingCallbackInput) (bool, string) {
+func (s *RewardedAdService) AdCallback(ctx context.Context, input AdCallbackInput) (bool, string) {
 	cfg, err := s.pg.GetRewardedAdConfig(ctx, input.AppID)
 	if err != nil {
 		s.log.Error("rewarded ad callback: load config failed", zap.Int64("appid", input.AppID), zap.Error(err))
 		return false, "internal"
 	}
-	if cfg == nil || !cfg.Enabled || cfg.Provider != rewardedad.ProviderHuijing {
+	if cfg == nil || !cfg.Enabled || cfg.Provider != rewardedad.ProviderApex {
 		return false, rewardedad.ReasonDisabled
 	}
 	transID := strings.TrimSpace(input.TransID)
@@ -639,7 +639,7 @@ func (s *RewardedAdService) HuijingCallback(ctx context.Context, input HuijingCa
 			s.log.Error("rewarded ad callback: decrypt key failed", zap.Int64("appid", input.AppID), zap.Error(err))
 			return false, "internal"
 		}
-		if !rewardedad.VerifyHuijingSign(key, transID, input.Sign) {
+		if !rewardedad.VerifyCallbackSign(key, transID, input.Sign) {
 			s.log.Warn("rewarded ad callback: bad signature",
 				zap.Int64("appid", input.AppID), zap.String("transId", transID))
 			return false, "bad_sign"

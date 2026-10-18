@@ -37,10 +37,20 @@ import { useRewardedAdConfigQuery, useSaveRewardedAdConfigMutation } from "@/lib
 import { cn } from "@/lib/utils";
 import { useAdminVipFeaturesQuery, useAdminVipPlansQuery } from "@/lib/vip-hooks";
 
-/** 灰鲸后台「配置回调URL」里默认的参数名，与后端回调处理器认的名字一致。 */
-const CALLBACK_PARAMS = ["userId", "transId", "sign", "placementId", "rewardAmount", "rewardName", "extrainfo"];
+/**
+ * Apex 回调地址要自带参数宏（见 doc.apexadx.com/server/reward-callback），平台看完广告后替换成实际值再 GET。
+ * 参数名与后端回调处理器认的名字一致。
+ */
+const CALLBACK_PARAMS: [string, string][] = [
+  ["userId", "USER_ID"],
+  ["transId", "TRANS_ID"],
+  ["sign", "SIGN"],
+  ["extrainfo", "EXTRAINFO"],
+  ["placementId", "PLACEMENT_ID"]
+];
+const CALLBACK_QUERY = `?${CALLBACK_PARAMS.map(([name, macro]) => `${name}={{${macro}}}`).join("&")}`;
 
-const PROVIDER_LABELS: Record<string, string> = { huijing: "灰鲸" };
+const PROVIDER_LABELS: Record<string, string> = { apex: "Apex" };
 
 /**
  * 数字项一律按字符串存（理由同卡密批次编辑器：存 number 的话输入框清不空）。
@@ -111,7 +121,7 @@ function seedDraft(scope: string, config?: RewardedAdConfig): Draft {
   return {
     scope,
     enabled: config?.enabled ?? false,
-    provider: config?.provider || "huijing",
+    provider: config?.provider || "apex",
     providerAppId: config?.providerAppId ?? "",
     verifyMode: config?.verifyMode ?? "dual",
     dailyLimit: String(config?.dailyLimit ?? 0),
@@ -156,9 +166,11 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
   const plans = (plansQuery.data ?? []).filter((plan) => !plan.lifetime);
   const vipFeatures = featuresQuery.data ?? [];
   const callbackUrl = config
-    ? config.callbackAbsolute || typeof window === "undefined"
-      ? config.callbackUrl
-      : `${window.location.origin}${config.callbackUrl}`
+    ? `${
+        config.callbackAbsolute || typeof window === "undefined"
+          ? config.callbackUrl
+          : `${window.location.origin}${config.callbackUrl}`
+      }${CALLBACK_QUERY}`
     : "";
 
   const toggleReward = (scene: SceneDraft, spec: CardKeyRewardSpec, checked: boolean) => {
@@ -274,7 +286,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {(config?.providers ?? ["huijing"]).map((provider) => (
+                  {(config?.providers ?? ["apex"]).map((provider) => (
                     <SelectItem key={provider} value={provider}>
                       {PROVIDER_LABELS[provider] ?? provider}
                     </SelectItem>
@@ -286,7 +298,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
               <Input
                 className="h-8 font-mono text-xs"
                 value={current.providerAppId}
-                placeholder="231525"
+                placeholder="68758"
                 onChange={(event) => patch({ providerAppId: event.target.value })}
               />
             </FieldGroup>
@@ -327,7 +339,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
             </div>
             <div className="flex flex-wrap items-center gap-1">
               <span className="mr-1 text-[11px] text-muted-foreground">参数</span>
-              {CALLBACK_PARAMS.map((name) => (
+              {CALLBACK_PARAMS.map(([name]) => (
                 <Badge key={name} variant="outline" size="sm" className="font-mono font-normal">
                   {name}
                 </Badge>

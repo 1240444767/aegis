@@ -12,8 +12,9 @@ import (
 
 // 广告平台。
 const (
-	// ProviderHuijing 灰鲸（huimiaokeji）聚合广告，底层是 ToBid / WindMill。
-	ProviderHuijing = "huijing"
+	// ProviderApex Apex（ApexAdx）聚合广告，底层是 ToBid / WindMill。2026-10 起取代灰鲸
+	// （huijing，同样基于 ToBid，回调协议相同），旧配置由迁移 000103 改成 apex。
+	ProviderApex = "apex"
 )
 
 // 校验模式：一次观看在什么条件下算数。

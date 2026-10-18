@@ -293,19 +293,19 @@ func (h *Handler) AppRewardedAdRecords(c *gin.Context) {
 
 // ── 广告平台回调 ──
 
-// RewardedAdHuijingCallback 灰鲸激励视频的服务端回调（GET）。
+// RewardedAdCallback Apex 激励视频的服务端回调（GET）。
 //
-// 由灰鲸服务器发起，没有用户令牌也没有应用密钥可带，凭 sha256(securityKey:transId) 验签。
+// 由 Apex 服务器发起，没有用户令牌也没有应用密钥可带，凭 sha256(securityKey:transId) 验签。
 // 响应体是平台规定的 {"isValid": bool}，不套本项目的信封 —— 与支付回调回 "success" 同理，
 // 对方只认它自己的格式。参数名大小写两种写法都认（后台模板是 camelCase，宏名是 SNAKE）。
-func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
+func (h *Handler) RewardedAdCallback(c *gin.Context) {
 	app, err := h.app.GetAppByKey(c.Request.Context(), strings.TrimSpace(c.Param("appkey")))
 	if err != nil || app == nil {
 		c.JSON(http.StatusOK, gin.H{"isValid": false})
 		return
 	}
 	amount, _ := strconv.Atoi(firstQuery(c, "rewardAmount", "reward_amount", "REWARD_AMOUNT"))
-	valid, _ := h.rewardedAd.HuijingCallback(c.Request.Context(), service.HuijingCallbackInput{
+	valid, _ := h.rewardedAd.AdCallback(c.Request.Context(), service.AdCallbackInput{
 		AppID:        app.ID,
 		UserID:       firstQuery(c, "userId", "user_id", "USER_ID"),
 		TransID:      firstQuery(c, "transId", "trans_id", "TRANS_ID"),
