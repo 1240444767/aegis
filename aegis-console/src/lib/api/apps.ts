@@ -535,8 +535,21 @@ export function getPasswordPolicyTemplates(token: string) {
   return apiRequest<PasswordPolicyTemplateCatalog>("/api/admin/apps/password-policy/templates", { token });
 }
 
+/**
+ * 旧版后端把空的规则 / 里程碑列表序列化成 null（Go 的 nil 切片），而各签到组件都直接当数组用
+ * （`policy.milestones.length`），一份没有里程碑的策略就能让整个页签崩掉。在取数这一层补成空数组。
+ */
+function withSignInPolicyLists<T extends { policy: SignInRewardPolicy }>(view: T): T {
+  return {
+    ...view,
+    policy: { ...view.policy, rules: view.policy.rules ?? [], milestones: view.policy.milestones ?? [] }
+  };
+}
+
 export function getAdminAppSignInReward(token: string, appKey: string) {
-  return apiRequest<SignInRewardPolicyView>(`/api/admin/apps/${appKey}/signin-reward`, { token });
+  return apiRequest<SignInRewardPolicyView>(`/api/admin/apps/${appKey}/signin-reward`, { token }).then(
+    withSignInPolicyLists
+  );
 }
 
 export function getAdminAppSignInStats(token: string, appKey: string, params?: { days?: number }) {
@@ -570,7 +583,7 @@ export function updateAdminAppSignInReward(
     method: "PUT",
     token,
     body: JSON.stringify(payload)
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function getAdminAppAutoSign(token: string, appKey: string) {
@@ -598,7 +611,7 @@ export function testAdminAppSignInReward(
     method: "POST",
     token,
     body: JSON.stringify(payload)
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function resetAdminAppSignInReward(token: string, appKey: string) {
@@ -606,7 +619,7 @@ export function resetAdminAppSignInReward(token: string, appKey: string) {
     method: "POST",
     token,
     body: JSON.stringify({})
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function getSignInRewardTemplates(token: string) {

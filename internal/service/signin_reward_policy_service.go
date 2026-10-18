@@ -633,18 +633,14 @@ func summarizeSignInReward(appliedRules []appdomain.SignInRewardAppliedRule) (st
 }
 
 func cloneSignInRewardRules(items []appdomain.SignInRewardRule) []appdomain.SignInRewardRule {
-	if len(items) == 0 {
-		return nil
-	}
+	// 空也给非 nil 的切片：nil 会序列化成 null，控制台把它当数组用（policy.milestones.length）就崩了。
 	out := make([]appdomain.SignInRewardRule, len(items))
 	copy(out, items)
 	return out
 }
 
 func cloneSignInRewardMilestones(items []appdomain.SignInRewardMilestone) []appdomain.SignInRewardMilestone {
-	if len(items) == 0 {
-		return nil
-	}
+	// 空也给非 nil 的切片：nil 会序列化成 null，控制台把它当数组用（policy.milestones.length）就崩了。
 	out := make([]appdomain.SignInRewardMilestone, len(items))
 	copy(out, items)
 	return out
