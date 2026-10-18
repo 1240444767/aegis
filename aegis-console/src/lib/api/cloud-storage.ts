@@ -16,6 +16,8 @@ export type CloudNamespace = {
 
 export type CloudStorageTarget = {
   configId: number;
+  /** 写入目标是存储池时为池 ID（此时 provider 为 "pool"） */
+  poolId?: number;
   configName: string;
   provider: string;
   scope: string;
@@ -31,6 +33,8 @@ export type CloudStorageOption = {
   accessMode: "public" | "private" | string;
   enabled: boolean;
   isDefault: boolean;
+  /** 选项是存储池时为池 ID（此时 configId 为 0、provider 为 "pool"） */
+  poolId?: number;
 };
 
 export type CloudStorageCaps = {

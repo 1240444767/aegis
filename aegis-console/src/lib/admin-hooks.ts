@@ -36,14 +36,10 @@ import {
   getAdminVipTransactions,
   grantAdminVip,
   saveAdminVipPlan,
-  createAppStorageConfig,
-  createGlobalStorageConfig,
   createWorkflow,
   createWorkflowFromTemplate,
   deleteAdminPaymentConfig,
   deleteAdminSite,
-  deleteAppStorageConfig,
-  deleteGlobalStorageConfig,
   deleteWorkflow,
   getAdminAppPasswordPolicy,
   getAdminAppSignInRecords,
@@ -98,10 +94,6 @@ import {
   getAdminDashboard,
   getAppOnlineStats,
   getAppOnlineUsers,
-  getAppStorageConfigDetail,
-  getAppStorageConfigs,
-  getGlobalStorageConfigDetail,
-  getGlobalStorageConfigs,
   getSystemOnlineStats,
   getWorkflowDetail,
   getWorkflowEngineStatus,
@@ -129,8 +121,6 @@ import {
   testAdminAppPasswordPolicy,
   testAdminAppSignInReward,
   testAdminPaymentConfig,
-  testAppStorageConfig,
-  testGlobalStorageConfig,
   completeWorkflowTask,
   toggleAdminSitePin,
   updateAdminAccountAccess,
@@ -166,8 +156,6 @@ import {
   adjustUserExperience,
   updateAdminPaymentConfig,
   updateAdminSite,
-  updateAppStorageConfig,
-  updateGlobalStorageConfig,
   updateWorkflow,
   uploadAdminAvatar,
   validateWorkflowDefinition,
@@ -1949,146 +1937,6 @@ export function useBatchReviewAdminRoleApplicationsMutation() {
         queryClient.invalidateQueries({ queryKey: ["admin-role-application-statistics"] })
       ]);
     }
-  });
-}
-
-export function useGlobalStorageConfigsQuery(provider?: string) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-global", token, provider],
-    queryFn: () => getGlobalStorageConfigs(token as string, provider),
-    enabled: Boolean(token)
-  });
-}
-
-export function useAppStorageConfigsQuery(appid?: number | null, provider?: string) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-app", token, appid, provider],
-    queryFn: () => getAppStorageConfigs(token as string, appid as number, provider),
-    enabled: Boolean(token && appid)
-  });
-}
-
-export function useGlobalStorageConfigDetailQuery(configId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-global-detail", token, configId],
-    queryFn: () => getGlobalStorageConfigDetail(token as string, configId as number),
-    enabled: Boolean(token && configId)
-  });
-}
-
-export function useAppStorageConfigDetailQuery(appid?: number | null, configId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-app-detail", token, appid, configId],
-    queryFn: () => getAppStorageConfigDetail(token as string, appid as number, configId as number),
-    enabled: Boolean(token && appid && configId)
-  });
-}
-
-export function useCreateGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createGlobalStorageConfig>[1]) =>
-      createGlobalStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useUpdateGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof updateGlobalStorageConfig>[1]) =>
-      updateGlobalStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useDeleteGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (configId: number) => deleteGlobalStorageConfig(token as string, configId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useTestGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  return useMutation({
-    mutationFn: (configId: number) => testGlobalStorageConfig(token as string, configId)
-  });
-}
-
-export function useCreateAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createAppStorageConfig>[1]) =>
-      createAppStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useUpdateAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof updateAppStorageConfig>[1]) =>
-      updateAppStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useDeleteAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: { appid: number; configId: number }) =>
-      deleteAppStorageConfig(token as string, payload.appid, payload.configId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useTestAppStorageConfigMutation() {
-  const token = useAdminToken();
-  return useMutation({
-    mutationFn: (payload: { appid: number; configId: number }) =>
-      testAppStorageConfig(token as string, payload.appid, payload.configId)
   });
 }
 

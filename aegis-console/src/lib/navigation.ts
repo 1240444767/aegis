@@ -393,17 +393,21 @@ export const navigationGroups: NavigationGroup[] = [
         ]
       },
       {
-        title: "存储管理",
+        title: "存储中心",
         href: "/storage",
         icon: Database,
-        summary: "对象存储配置",
+        summary: "对象存储、存储池与迁移",
         children: [
-          { title: "全局配置", tab: "global" },
-          { title: "应用级配置", tab: "app" },
+          { title: "概览", tab: "overview" },
+          { title: "存储源", tab: "global" },
+          { title: "存储池", tab: "pools" },
+          { title: "迁移", tab: "migrations" },
+          { title: "运行事件", tab: "events" },
+          { title: "应用存储", tab: "app" },
           { title: "文件管理", tab: "files" },
           { title: "上传规则", tab: "rules" },
           { title: "CDN 与安全", tab: "cdn" },
-          { title: "用量统计", tab: "usage" }
+          { title: "用量", tab: "usage" }
         ]
       },
       {

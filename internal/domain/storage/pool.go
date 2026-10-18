@@ -276,6 +276,8 @@ type ConfigOverview struct {
 	State        string             `json:"state"`
 	Capabilities ConfigCapabilities `json:"capabilities"`
 	PoolIDs      []int64            `json:"poolIds"`
+	// CapacityBytes 所在池给它设的容量上限（多个池取最小），0 为不限。
+	CapacityBytes int64 `json:"capacityBytes"`
 }
 
 // Overview 存储中心总览。

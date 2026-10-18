@@ -183,9 +183,13 @@ export function CloudStorageConfigPanel({ appKey }: { appKey: string }) {
               <SelectContent>
                 <SelectItem value={DEFAULT_TARGET}>应用默认存储</SelectItem>
                 {options.map((option) => (
-                  <SelectItem key={option.configId} value={option.configName} disabled={!option.enabled}>
-                    {option.configName} · {providerLabel(option.provider)} ·{" "}
-                    {option.scope === "global" ? "平台级" : "应用级"}
+                  <SelectItem
+                    key={option.poolId ? `pool-${option.poolId}` : `config-${option.configId}`}
+                    value={option.configName}
+                    disabled={!option.enabled}
+                  >
+                    {option.configName} · {providerLabel(option.provider)}
+                    {option.poolId ? "" : option.scope === "global" ? " · 平台级" : " · 应用级"}
                     {option.accessMode === "public" ? " · 公开" : ""}
                     {!option.enabled ? " · 未启用" : ""}
                   </SelectItem>

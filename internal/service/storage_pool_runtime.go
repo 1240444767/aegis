@@ -252,12 +252,13 @@ func (s *StorageService) Overview(ctx context.Context) (*storagedomain.Overview,
 			state = s.pools.configState(cfg.ID, capacity[cfg.ID], storagedomain.PoolDefaultWarnPct)
 		}
 		item := storagedomain.ConfigOverview{
-			Config:       storagedomain.RedactConfig(cfg),
-			Usage:        &usage,
-			Health:       &health,
-			State:        state,
-			Capabilities: s.capabilities(&cfg),
-			PoolIDs:      poolIDs[cfg.ID],
+			Config:        storagedomain.RedactConfig(cfg),
+			Usage:         &usage,
+			Health:        &health,
+			State:         state,
+			Capabilities:  s.capabilities(&cfg),
+			PoolIDs:       poolIDs[cfg.ID],
+			CapacityBytes: capacity[cfg.ID],
 		}
 		if item.PoolIDs == nil {
 			item.PoolIDs = []int64{}

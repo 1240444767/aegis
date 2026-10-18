@@ -2909,28 +2909,6 @@ export type RoleWithPermissions = RoleDefinition & {
   permissionGroups: PermissionGroup[];
 };
 
-export type StorageConfig = {
-  id: number;
-  scope: string;
-  appid?: number | null;
-  provider: string;
-  config_name: string;
-  access_mode: string;
-  enabled: boolean;
-  is_default: boolean;
-  proxy_download: boolean;
-  base_url?: string;
-  root_path?: string;
-  description?: string;
-  config_data?: Record<string, unknown>;
-  created_at?: string;
-  updated_at?: string;
-};
-
-export type StorageConfigDetail = StorageConfig & {
-  [key: string]: unknown;
-};
-
 export type WorkflowStatistics = {
   appid: number;
   totalWorkflows: number;

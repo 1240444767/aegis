@@ -1097,6 +1097,32 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 写入、修订、配额与回收站的语义全部由后端决定，见 [docs/cloud-storage.md](../docs/cloud-storage.md)。
 
+## 存储中心（/storage）
+
+后端契约见 [docs/storage.md](../docs/storage.md)。页面按 `?tab=` 切十个面板，**键沿用旧页面**
+（`global` 是「存储源」、`app` 是「应用存储」），已分享的深链不失效；`overview` 是默认页。
+
+| 文件 | 职责 |
+|---|---|
+| `lib/api/storage-center.ts` / `lib/storage-center-hooks.ts` | 存储源、提供商目录、总览、池、事件、检测、CORS、转向、迁移的 API 与 hooks（写操作整组失效） |
+| `components/storage/storage-shared.tsx` | 品牌徽章（Simple Icons，未收录用中性图标）、状态徽标、容量条、策略 / 角色元信息、MB/GB/TB 换算 |
+| `storage-overview-panel.tsx` | 汇总、异常告警、各存储用量图、进行中的迁移、最近事件、池概况 |
+| `storage-sources-panel.tsx` + `storage-source-sheet.tsx` + `storage-source-dialogs.tsx` | 存储源卡片网格（平台级 / 应用级共用）、目录驱动的新建与编辑、深度检测、CORS |
+| `storage-pools-panel.tsx` + `storage-pool-editor.tsx` | 池卡片（成员容量与状态、恢复写入）、模拟写入、编辑器（拖动排序即优先级） |
+| `storage-migrations-panel.tsx` / `storage-events-panel.tsx` | 迁移任务与读取转向；运行事件时间线（概览复用紧凑版） |
+| `storage-rules-panel.tsx` / `storage-cdn-panel.tsx` / `storage-usage-panel.tsx` | 结构化上传规则、CDN 与防盗链、用量趋势与类型分布 |
+| `file-manager.tsx` 等 | 文件管理（未改动） |
+
+五条硬约束：
+
+1. **表单由后端目录驱动。** 字段、密钥标记、能力、品牌色都来自 `GET /api/admin/app/storage-config/providers`；
+   新增提供商只改后端，这里零改动。不要在前端再抄一份字段表。
+2. **密钥一律留空即不修改。** 存储源的密钥、CDN 签名密钥出网已被抹除（`secrets_set` / `signUrlSecretSet`
+   只告诉你配没配过），编辑表单显示「已配置，留空不修改」，提交原样带空串。
+3. **成员顺序就是优先级。** 编辑器按列表顺序写 `priority = index × 10`，不另给优先级输入框。
+4. **轮询跟着状态走。** 总览在概览 / 存储池页 5 秒一刷、其余 30 秒；迁移列表只在有任务排队或进行中时 2 秒一刷。
+5. **池只收平台级存储源。** 应用存储页不出现池相关的东西；成员下拉只列 `scope = global` 的源。
+
 ## 内容中心（/content）
 
 三个页签同步到 URL（`?tab=banners|notices|announcements`）：
