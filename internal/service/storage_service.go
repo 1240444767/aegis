@@ -226,7 +226,12 @@ func (s *StorageService) Save(ctx context.Context, mutation storagedomain.Config
 		item.Description = strings.TrimSpace(*mutation.Description)
 	}
 	if mutation.ConfigData != nil {
-		item.ConfigData = mutation.ConfigData
+		// 密钥字段留空表示不修改：编辑表单拿不到密钥原值（出网已抹除），提交时也就不会带。
+		if current != nil && current.Provider == item.Provider {
+			item.ConfigData = storagedomain.MergeSecrets(item.Provider, mutation.ConfigData, current.ConfigData)
+		} else {
+			item.ConfigData = mutation.ConfigData
+		}
 	}
 	if item.Scope == storagedomain.ScopeGlobal {
 		item.AppID = nil

@@ -17,6 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// AdminStorageProviders 存储提供商目录：驱动控制台的「添加存储」与动态配置表单。
+func (h *Handler) AdminStorageProviders(c *gin.Context) {
+	response.Success(c, 200, "获取成功", gin.H{"providers": storagedomain.Catalog()})
+}
+
 func (h *Handler) AdminAppStorageConfigList(c *gin.Context) {
 	h.adminStorageConfigList(c, storagedomain.ScopeApp)
 }
@@ -34,6 +39,9 @@ func (h *Handler) adminStorageConfigList(c *gin.Context, scope string) {
 	if err != nil {
 		h.writeError(c, err)
 		return
+	}
+	for i := range items {
+		items[i] = storagedomain.RedactConfig(items[i])
 	}
 	response.Success(c, 200, "获取成功", items)
 }
@@ -56,7 +64,7 @@ func (h *Handler) adminStorageConfigDetail(c *gin.Context, scope string) {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "获取成功", item)
+	response.Success(c, 200, "获取成功", storagedomain.RedactConfig(*item))
 }
 
 func (h *Handler) AdminAppStorageConfigCreate(c *gin.Context) {
@@ -117,7 +125,7 @@ func (h *Handler) adminStorageConfigSaveWithReq(c *gin.Context, scope string, re
 	if id > 0 {
 		message = "更新成功"
 	}
-	response.Success(c, 200, message, item)
+	response.Success(c, 200, message, storagedomain.RedactConfig(*item))
 }
 
 func (h *Handler) AdminAppStorageConfigDelete(c *gin.Context) {

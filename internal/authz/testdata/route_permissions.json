@@ -7812,5 +7812,12 @@
     "permission": "platform:storage:write",
     "appScoped": false,
     "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/app/storage-config/providers",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
   }
 ]

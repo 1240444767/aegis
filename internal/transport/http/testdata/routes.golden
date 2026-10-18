@@ -109,6 +109,7 @@ DELETE	/api/v1/apps/:appkey/me/sessions/:tokenHash	RevokeUserSession
 DELETE	/api/v1/apps/:appkey/notifications/:notificationId	DeleteNotification
 GET	/	Homepage
 GET	/announcements	AnnouncementsPage
+GET	/api/admin/app/storage-config/providers	AdminStorageProviders
 GET	/api/admin/apps	AdminApps
 GET	/api/admin/apps/:appkey	AdminApp
 GET	/api/admin/apps/:appkey/account-deletion/catalog	AdminAccountDeletionCatalog

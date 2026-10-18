@@ -72,6 +72,7 @@ func init() {
 	// 存储中心：存储池、运行事件、深度检测、CORS、迁移
 	Register("storage",
 		View("GET /api/admin/platform/storage/overview", "查看存储中心总览", ""),
+		View("GET /api/admin/app/storage-config/providers", "查看存储提供商目录", ""),
 		View("GET /api/admin/platform/storage/events", "查看存储运行事件", ""),
 		Write("POST /api/admin/platform/storage/usage/collect", "采集存储用量快照", "", SeverityLow),
 		View("GET /api/admin/platform/storage/pools", "查看存储池列表", ""),

@@ -156,6 +156,7 @@ func registerAdminAppConfigRoutes(router *gin.Engine, h *Handler, deps RouterDep
 	appStorageAdmin.Use(middleware.AdminAccess(adminService, appService, governanceService))
 	appStorageAdmin.Use(middleware.AuditMiddleware(auditService))
 	{
+		appStorageAdmin.GET("/providers", h.AdminStorageProviders)
 		appStorageAdmin.POST("/list", h.AdminAppStorageConfigList)
 		appStorageAdmin.POST("/detail", h.AdminAppStorageConfigDetail)
 		appStorageAdmin.POST("/create", h.AdminAppStorageConfigCreate)

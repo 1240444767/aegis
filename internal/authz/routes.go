@@ -315,6 +315,7 @@ var adminRouteRules = []RouteRule{
 	{Pattern: "/api/admin/app/email-config/suppressions", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/*", Permission: PermEmailWrite, Scope: ScopeApp},
 
+	{Pattern: "/api/admin/app/storage-config/providers", Note: "存储提供商静态目录（字段声明与能力），不含任何配置值"},
 	{Pattern: "/api/admin/app/storage-config/list", Permission: PermStorageRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/storage-config/detail", Permission: PermStorageRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/storage-config/*", Permission: PermStorageWrite, Scope: ScopeApp},

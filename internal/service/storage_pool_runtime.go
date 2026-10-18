@@ -252,7 +252,7 @@ func (s *StorageService) Overview(ctx context.Context) (*storagedomain.Overview,
 			state = s.pools.configState(cfg.ID, capacity[cfg.ID], storagedomain.PoolDefaultWarnPct)
 		}
 		item := storagedomain.ConfigOverview{
-			Config:       redactStorageConfig(cfg),
+			Config:       storagedomain.RedactConfig(cfg),
 			Usage:        &usage,
 			Health:       &health,
 			State:        state,
@@ -279,40 +279,6 @@ func (s *StorageService) Overview(ctx context.Context) (*storagedomain.Overview,
 		overview.WriteTarget = target
 	}
 	return overview, nil
-}
-
-// redactStorageConfig 总览里不带密钥：编辑时控制台另取详情。
-func redactStorageConfig(cfg storagedomain.Config) storagedomain.Config {
-	redacted := make(map[string]any, len(cfg.ConfigData))
-	for key, value := range cfg.ConfigData {
-		if isSecretStorageField(key) {
-			if text, ok := value.(string); ok && text != "" {
-				redacted[key] = "••••" + lastRunes(text, 4)
-			}
-			continue
-		}
-		redacted[key] = value
-	}
-	cfg.ConfigData = redacted
-	return cfg
-}
-
-func isSecretStorageField(key string) bool {
-	key = strings.ToLower(key)
-	for _, marker := range []string{"secret", "password", "token", "key_secret", "account_key", "connection_string"} {
-		if strings.Contains(key, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func lastRunes(s string, n int) string {
-	r := []rune(s)
-	if len(r) <= n {
-		return ""
-	}
-	return string(r[len(r)-n:])
 }
 
 // capabilities 提供商能做什么。

@@ -249,11 +249,34 @@ func TestStoragePoolIntegration(t *testing.T) {
 	if len(overview.Migrations) == 0 || len(overview.Pools) == 0 {
 		t.Fatalf("总览缺内容：%+v", overview)
 	}
+	// 密钥字段出网抹除，只报告「已配置」。
+	r2, err := storage.Save(ctx, storagedomain.ConfigMutation{
+		Scope: storagedomain.ScopeGlobal, Provider: ptrTo(storagedomain.ProviderR2), ConfigName: ptrTo("pool-r2"),
+		AccessMode: ptrTo(storagedomain.AccessPrivate),
+		ConfigData: map[string]any{"account_id": strings.Repeat("ab", 16), "bucket": "b", "access_key_id": "AK", "secret_access_key": "SECRET"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM storage_configs WHERE id = $1`, r2.ID) })
+	redacted := storagedomain.RedactConfig(*r2)
+	if _, leaked := redacted.ConfigData["secret_access_key"]; leaked || len(redacted.SecretsSet) != 1 {
+		t.Fatalf("密钥应被抹除并报告已配置：%+v", redacted)
+	}
+	// 编辑时不带密钥（表单拿不到原值）：保存后原密钥保留，其余字段照改。
+	updated, err := storage.Save(ctx, storagedomain.ConfigMutation{
+		ID: r2.ID, Scope: storagedomain.ScopeGlobal,
+		ConfigData: map[string]any{"account_id": strings.Repeat("ab", 16), "bucket": "renamed", "access_key_id": "AK", "secret_access_key": ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ConfigData["secret_access_key"] != "SECRET" || updated.ConfigData["bucket"] != "renamed" {
+		t.Fatalf("留空的密钥应保留原值：%+v", updated.ConfigData)
+	}
 	for _, item := range overview.Configs {
-		for key, value := range item.Config.ConfigData {
-			if isSecretStorageField(key) && !strings.HasPrefix(value.(string), "••••") && value.(string) != "" {
-				t.Fatalf("总览不应带出密钥：%s", key)
-			}
+		if _, leaked := item.Config.ConfigData["secret_access_key"]; leaked {
+			t.Fatalf("总览不应带出密钥：%s", item.Config.ConfigName)
 		}
 	}
 }
@@ -284,3 +307,4 @@ func waitMigration(t *testing.T, storage *StorageService, id int64) {
 	m, _ := storage.GetMigration(context.Background(), id)
 	t.Fatalf("迁移没有在 20 秒内结束：%+v", m)
 }
+

@@ -42,7 +42,9 @@ type Config struct {
 	ConfigData    map[string]any `json:"config_data"`
 	// RedirectConfigID 这个配置的对象已迁往（或另有一份在）哪个配置。读取在本配置找不到对象、
 	// 或本配置已停用时转去那里读，引用里记的仍是本配置 —— 迁移不必改写散落各处的 storage:// 引用。
-	RedirectConfigID *int64    `json:"redirect_config_id,omitempty"`
+	RedirectConfigID *int64 `json:"redirect_config_id,omitempty"`
+	// SecretsSet 出网时密钥字段的值被抹掉，这里列出哪些密钥已配置（编辑表单据此显示「已配置」）。
+	SecretsSet []string  `json:"secrets_set,omitempty"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
 }
