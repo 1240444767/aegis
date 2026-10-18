@@ -87,6 +87,40 @@ Redis 出错时限频放行并记 warn：为一次缓存抖动让所有人收不
 把带着真实令牌的链接指向自己的网站。现在链接必须落在 `resetLinks` 登记的前缀内（不传则用第一条），
 否则 42291；并且只给真实存在的账号发信 —— 不存在的地址同样返回成功、不发信也不生成令牌。
 
+## 模板服务（internal/mailtpl）
+
+平台发出的**每一封信**（验证码、重置、告知、欢迎、通知、凭证、注销告知、通道自检）都由同一个模板服务渲染：
+
+```
+正文 body（Liquid → MJML 片段） → 套进版式 layout（Liquid → 完整 MJML） → MJML 编译 → HTML
+纯文本 text（Liquid）单独渲染；自定义正文没写纯文本模板时从 HTML 抓取
+```
+
+- **MJML**（`github.com/Boostport/mjml-go`，MJML 官方编译器的 wasm 版）：把栏、按钮、表格编译成
+  各家客户端都验证过的表格 HTML，自动内联样式、生成 Outlook 条件注释。编译约 50ms，按最终源码摘要
+  做 LRU 缓存；进程启动后台预热一次（`Warmup`）。进程常驻内存约多 100MB（wasm 运行时）。
+- **Liquid**（`github.com/osteele/liquid`，Shopify 语法）：条件、循环、过滤器；HTML 引擎开了自动转义，
+  `{{ name }}` 一律转义，原样输出要写 `{{ x | safe }}`。`include` / `render` 读不到任何文件。
+  单次渲染 3 秒超时、输出 512KB 上限，失控的循环会被拦下。
+- **组件**是 Go 实现的标签（不是片段，因为片段作用域隔离拿不到主题）：`{% code %}` `{% button %}`
+  `{% details %}` `{% notice %}` `{% link %}` `{% paragraph %}` `{% markdown %}` `{% image %}`
+  `{% divider %}` `{% spacer %}` `{% blocks %}`，版式里用 `{% content %}` 标出正文位置。
+  完整参考由 `mailtpl.TemplateReference()` 下发给控制台。
+- **内置模板**在 `internal/mailtpl/templates/`：`layout.mjml.liquid`（页眉、卡片、页脚）、`text.liquid`、
+  `bodies/*.mjml.liquid`（验证码、重置链接、字段表、按积木渲染）。
+
+### 三档自定义
+
+| 档位 | 存在哪 | 作用范围 |
+|---|---|---|
+| 品牌与主题 | `policy.brand` + `policy.theme`（底色、卡片色、圆角、字体预设、页眉样式 plain/bar/banner、Logo 对齐与高度） | 作用域的全部邮件 |
+| 文案 | `policy.scenes[key].subject/title/lead/footer`（Liquid，不转义） | 单个场景 |
+| 完整模板 | `policy.layout`（自定义版式）、`policy.scenes[key].template`（mjml 片段 / 完整 mjml 文档 / html，可带纯文本模板） | 版式影响全部邮件，正文影响单个场景 |
+
+保存时 `validatePolicyTemplates` 用示例数据把每段 Liquid 与 MJML（严格模式）都跑一遍，问题带场景名与行号返回 42292；
+预览接口不报错而是返回 `problems`（part、line、message），控制台据此在编辑器里标红。
+发信时自定义模板仍出错（多半是数据触发）就依次退回内置正文、内置版式并记 warn —— 不让一封验证码因为模板发不出去。
+
 ## 抑制名单
 
 `email_suppressions`：硬退信与投诉由回执自动加入（`applyDeliveryEvent`，按策略开关），

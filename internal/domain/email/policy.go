@@ -23,7 +23,11 @@ import (
 //
 // 没保存过策略的作用域按 DefaultPolicy 处理；新加的字段对老策略同样有合理取值（见 NormalizePolicy）。
 type Policy struct {
-	Brand       Brand                   `json:"brand"`
+	Brand Brand `json:"brand"`
+	// Theme 版式的设计令牌（底色、卡片、圆角、字体、页眉样式）
+	Theme ThemeSettings `json:"theme"`
+	// Layout 自定义版式：整个作用域所有邮件的外框（MJML + Liquid）
+	Layout LayoutTemplate `json:"layout"`
 	Code        CodePolicy              `json:"code"`
 	Scenes      map[string]SceneSetting `json:"scenes"`
 	Suppression SuppressionPolicy       `json:"suppression"`
@@ -43,6 +47,39 @@ type Brand struct {
 	// FooterText 页脚附加的一行，例如公司名称或备案信息
 	FooterText string `json:"footerText,omitempty"`
 }
+
+// ThemeSettings 版式设计令牌。留空即用内置主题（见 mailtpl.DefaultTheme）。
+type ThemeSettings struct {
+	Background string `json:"background,omitempty"`
+	Card       string `json:"card,omitempty"`
+	Radius     *int   `json:"radius,omitempty"`
+	Font       string `json:"font,omitempty"`
+	LogoAlign  string `json:"logoAlign,omitempty"`
+	LogoHeight int    `json:"logoHeight,omitempty"`
+	Header     string `json:"header,omitempty"`
+}
+
+// LayoutTemplate 自定义版式。Enabled 为 false 时源码保留但不生效，方便管理员来回对比。
+type LayoutTemplate struct {
+	Enabled bool   `json:"enabled"`
+	Source  string `json:"source,omitempty"`
+}
+
+// SceneTemplate 一个场景的完整自定义模板（MJML 或 HTML + Liquid）。
+type SceneTemplate struct {
+	Enabled bool `json:"enabled"`
+	// Format mjml（默认，片段套进版式；以 <mjml 开头的完整文档不套）或 html（完整 HTML 文档）
+	Format string `json:"format,omitempty"`
+	Body   string `json:"body,omitempty"`
+	// Text 纯文本模板，留空时从 HTML 抓取
+	Text string `json:"text,omitempty"`
+}
+
+// 模板源码上限，与 mailtpl 的渲染上限一致。
+const (
+	TemplateSourceMax = 64 << 10
+	TemplateTextMax   = 16 << 10
+)
 
 // CodePolicy 验证码规则。频次上限填 0 表示不限。
 type CodePolicy struct {
@@ -73,11 +110,21 @@ type SceneSetting struct {
 	Title   string `json:"title,omitempty"`
 	Lead    string `json:"lead,omitempty"`
 	Footer  string `json:"footer,omitempty"`
+	// Template 完整自定义模板；为空即用内置正文
+	Template *SceneTemplate `json:"template,omitempty"`
 }
 
-// IsZero 这一项既没改开关也没改文案。
+// IsZero 这一项既没改开关、也没改文案、也没有自定义模板。
 func (s SceneSetting) IsZero() bool {
-	return s.Enabled == nil && s.Subject == "" && s.Title == "" && s.Lead == "" && s.Footer == ""
+	return s.Enabled == nil && s.Subject == "" && s.Title == "" && s.Lead == "" && s.Footer == "" && s.Template == nil
+}
+
+// CustomTemplate 生效中的自定义模板；没有或未启用时返回 nil。
+func (s SceneSetting) CustomTemplate() *SceneTemplate {
+	if s.Template == nil || !s.Template.Enabled || strings.TrimSpace(s.Template.Body) == "" {
+		return nil
+	}
+	return s.Template
 }
 
 // PolicyRecord 落库的策略与元数据。
@@ -152,6 +199,15 @@ func NormalizePolicy(p Policy) Policy {
 	p.Brand.SupportEmail = strings.TrimSpace(p.Brand.SupportEmail)
 	p.Brand.FooterText = strings.TrimSpace(p.Brand.FooterText)
 
+	p.Theme.Background = strings.ToLower(strings.TrimSpace(p.Theme.Background))
+	p.Theme.Card = strings.ToLower(strings.TrimSpace(p.Theme.Card))
+	p.Theme.Font = strings.TrimSpace(p.Theme.Font)
+	p.Theme.LogoAlign = strings.TrimSpace(p.Theme.LogoAlign)
+	p.Theme.Header = strings.TrimSpace(p.Theme.Header)
+	if strings.TrimSpace(p.Layout.Source) == "" {
+		p.Layout = LayoutTemplate{}
+	}
+
 	fix := func(value *int, lo, hi, fallback int) {
 		if *value < lo || *value > hi {
 			*value = fallback
@@ -175,6 +231,17 @@ func NormalizePolicy(p Policy) Policy {
 		setting.Title = strings.TrimSpace(setting.Title)
 		setting.Lead = strings.TrimSpace(setting.Lead)
 		setting.Footer = strings.TrimSpace(setting.Footer)
+		if setting.Template != nil {
+			tpl := *setting.Template
+			if tpl.Format != "html" {
+				tpl.Format = "mjml"
+			}
+			if strings.TrimSpace(tpl.Body) == "" && strings.TrimSpace(tpl.Text) == "" {
+				setting.Template = nil
+			} else {
+				setting.Template = &tpl
+			}
+		}
 		// 开关只对可关闭的场景生效；与默认相同的开关不存，默认改了老策略跟着走
 		if !scene.Toggle || (setting.Enabled != nil && *setting.Enabled == scene.DefaultOn) {
 			setting.Enabled = nil
@@ -257,10 +324,52 @@ func ValidatePolicy(raw Policy) error {
 		return fmt.Errorf("页脚附加文字不能超过 %d 个字", brandFooterMax)
 	}
 
+	theme := raw.Theme
+	for label, color := range map[string]string{"页面底色": theme.Background, "卡片底色": theme.Card} {
+		if color = strings.ToLower(strings.TrimSpace(color)); color != "" && !accentColorPattern.MatchString(color) {
+			return fmt.Errorf("%s须是 #RRGGBB 格式", label)
+		}
+	}
+	if theme.Radius != nil && (*theme.Radius < 0 || *theme.Radius > 32) {
+		return fmt.Errorf("卡片圆角须在 0 到 32 之间")
+	}
+	if font := strings.TrimSpace(theme.Font); font != "" && !slices.Contains(ThemeFonts(), font) {
+		return fmt.Errorf("未知的字体预设：%s", font)
+	}
+	if align := strings.TrimSpace(theme.LogoAlign); align != "" && align != "left" && align != "center" {
+		return fmt.Errorf("页眉对齐只能是 left 或 center")
+	}
+	if theme.LogoHeight != 0 && (theme.LogoHeight < 20 || theme.LogoHeight > 72) {
+		return fmt.Errorf("Logo 高度须在 20 到 72 之间")
+	}
+	if header := strings.TrimSpace(theme.Header); header != "" && !slices.Contains(ThemeHeaders(), header) {
+		return fmt.Errorf("未知的页眉样式：%s", header)
+	}
+	if len(raw.Layout.Source) > TemplateSourceMax {
+		return fmt.Errorf("自定义版式不能超过 %d KB", TemplateSourceMax>>10)
+	}
+	if raw.Layout.Enabled && strings.TrimSpace(raw.Layout.Source) != "" && !layoutHasContent(raw.Layout.Source) {
+		return fmt.Errorf("自定义版式里要用 {%% content %%} 标出正文的位置")
+	}
+
 	for key, setting := range raw.Scenes {
 		scene, ok := FindScene(key)
 		if !ok {
 			return fmt.Errorf("未知的邮件场景：%s", key)
+		}
+		if tpl := setting.Template; tpl != nil {
+			if tpl.Format != "" && tpl.Format != "mjml" && tpl.Format != "html" {
+				return fmt.Errorf("「%s」的模板格式只能是 mjml 或 html", scene.Name)
+			}
+			if len(tpl.Body) > TemplateSourceMax {
+				return fmt.Errorf("「%s」的模板不能超过 %d KB", scene.Name, TemplateSourceMax>>10)
+			}
+			if len(tpl.Text) > TemplateTextMax {
+				return fmt.Errorf("「%s」的纯文本模板不能超过 %d KB", scene.Name, TemplateTextMax>>10)
+			}
+			if tpl.Enabled && strings.TrimSpace(tpl.Body) == "" {
+				return fmt.Errorf("「%s」启用了自定义模板，但模板是空的", scene.Name)
+			}
 		}
 		for _, field := range []struct {
 			label string
@@ -301,6 +410,14 @@ func ValidatePolicy(raw Policy) error {
 	}
 	return nil
 }
+
+// ThemeFonts / ThemeHeaders 主题的可选值，与 mailtpl 的预设一致。
+func ThemeFonts() []string   { return []string{"system", "sans", "serif", "rounded"} }
+func ThemeHeaders() []string { return []string{"plain", "bar", "banner"} }
+
+var contentMarker = regexp.MustCompile(`\{%-?\s*content\s*-?%\}|\{\{-?\s*content\s*-?\}\}`)
+
+func layoutHasContent(source string) bool { return contentMarker.MatchString(source) }
 
 func validateResetLink(link string) error {
 	parsed, err := url.Parse(link)

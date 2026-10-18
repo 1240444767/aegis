@@ -15,6 +15,7 @@ import (
 	"aegis/internal/middleware"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
+	"aegis/internal/mailtpl"
 	"aegis/internal/service"
 	httptransport "aegis/internal/transport/http"
 	"aegis/pkg/clientip"
@@ -260,6 +261,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	releaseService.SetAppEventPublisher(realtimeService)
 	roleApplicationService := service.NewRoleApplicationService(pg)
 	emailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
+	// 邮件模板服务（MJML 运行在 wasm 里）首次编译要实例化模块，启动后在后台预热，第一封信不必多等
+	go mailtpl.Default().Warmup(context.Background())
 	paymentService := service.NewPaymentService(log, pg, cfg.PaymentReceipt)
 	walletService := service.NewWalletService(log, pg)
 	vipService := service.NewVipService(log, pg)

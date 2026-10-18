@@ -507,6 +507,8 @@ func (s *PaymentService) buildReceiptEmail(loc *i18n.Localizer, view receiptEmai
 		Accent:       view.Visual.Accent,
 		SupportEmail: view.Visual.SupportEmail,
 		FooterText:   view.Visual.FooterText,
+		Theme:        view.Visual.Theme,
+		LayoutSource: view.Visual.Layout,
 	})
 	return subject, html
 }

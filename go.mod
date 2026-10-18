@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
+	github.com/Boostport/mjml-go v0.16.0
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.2.4
 	github.com/alibabacloud-go/dm-20151123/v2 v2.11.1
 	github.com/alibabacloud-go/dysmsapi-20170525/v5 v5.6.0
@@ -71,6 +72,7 @@ require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/openai/openai-go/v3 v3.54.0
 	github.com/oschwald/geoip2-golang v1.13.0
+	github.com/osteele/liquid v1.9.2
 	github.com/panjf2000/ants/v2 v2.12.1
 	github.com/paulmach/orb v0.13.0
 	github.com/plutov/paypal/v4 v4.17.0
@@ -151,6 +153,7 @@ require (
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect
 	github.com/alibabacloud-go/tea-utils/v2 v2.0.9 // indirect
+	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/andybalholm/cascadia v1.3.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.16 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.37 // indirect
@@ -287,6 +290,7 @@ require (
 	github.com/olekukonko/ll v0.0.9 // indirect
 	github.com/olekukonko/tablewriter v1.0.7 // indirect
 	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
+	github.com/osteele/tuesday v1.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/petar-dambovaliev/aho-corasick v0.0.0-20250424160509-463d218d4745 // indirect
@@ -364,6 +368,7 @@ require (
 	google.golang.org/grpc v1.83.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/ini.v1 v1.67.2 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	modernc.org/fileutil v1.4.0 // indirect
 	rsc.io/binaryregexp v0.2.0 // indirect

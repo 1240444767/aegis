@@ -69,32 +69,32 @@ func TestMailHTMLAvoidsUnsupportedLayout(t *testing.T) {
 	}
 }
 
-// premailer 必须真的把样式表内联进标签，否则 Gmail 会把 <style> 整块丢掉。
-// 同时媒体查询要原样留下 —— 它内联不了，只能留在 <style> 里。
-func TestMailStylesAreInlinedButMediaQueriesSurvive(t *testing.T) {
+// MJML 必须产出内联样式（Gmail 会丢掉大部分 <style>），同时保留响应式与窄屏的媒体查询，
+// 并声明只用浅色方案 —— 不声明的话，部分客户端会自作主张反色，把强调色与验证码框搅成一团。
+func TestMailStylesAreInlinedAndResponsive(t *testing.T) {
 	_, html, _ := renderCodeMailContent("远航", "默认配置", "login", "482913", 5)
-	if !strings.Contains(html, `class="m-code"`) || !strings.Contains(html, "letter-spacing:10px") {
-		t.Error("验证码样式没有被内联到标签上")
+	if !strings.Contains(html, "letter-spacing:10px") {
+		t.Error("验证码样式没有内联到标签上")
 	}
-	if !strings.Contains(html, "prefers-color-scheme") {
-		t.Error("深色模式媒体查询丢失")
-	}
-	if !strings.Contains(html, "max-width: 620px") && !strings.Contains(html, "max-width:620px") {
+	if !strings.Contains(html, "max-width:480px") && !strings.Contains(html, "max-width: 480px") {
 		t.Error("窄屏媒体查询丢失")
+	}
+	if !strings.Contains(html, `content="light only"`) {
+		t.Error("缺少浅色方案声明")
 	}
 }
 
-// Outlook 的圆角按钮靠 VML 条件注释画。html/template 会删掉模板源码里的注释，
-// 所以它必须由 Go 侧注入 —— 这条断言就是防止有人把注入改回模板里。
-func TestButtonKeepsOutlookVML(t *testing.T) {
+// Outlook 2007–2021 用 Word 排版引擎，MJML 为它输出条件注释包着的固定宽度表格。
+// 这条断言防止有人绕过 MJML 直接拼 HTML。
+func TestMailKeepsOutlookFallback(t *testing.T) {
 	html, _ := renderEmail(emailLayout{
 		AppName: "远航",
 		Title:   "重置密码",
 		Blocks:  []mailBlock{mailButton("设置新密码", "https://example.com/reset")},
 	})
-	for _, want := range []string{"[if mso]", "v:roundrect", "[if !mso]", "<![endif]-->"} {
+	for _, want := range []string{"<!--[if mso", "<![endif]-->", "设置新密码", `href="https://example.com/reset"`} {
 		if !strings.Contains(html, want) {
-			t.Errorf("按钮缺少 Outlook 兼容片段 %q", want)
+			t.Errorf("渲染结果缺少 %q", want)
 		}
 	}
 }

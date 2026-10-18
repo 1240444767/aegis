@@ -166,7 +166,8 @@ func (p *emailNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 	if appID == 0 {
 		appID = msg.Event.AppID
 	}
-	html := notifyEmailHTML(msg)
+	// 通知同样套用作用域的品牌、主题与自定义版式
+	html := notifyEmailHTML(msg, hub.email.brandFor(ctx, appID))
 	var lastErr error
 	sent := 0
 	for _, to := range recipients {
@@ -192,7 +193,7 @@ func (p *emailNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 // 正文只出现一次：`msg.Body` 作为标题下的引导句，不再同时塞进正文区 ——
 // 旧实现两处都写，收到的人会看到同一段话连着重复两遍。
 // 字段表与按钮直接用模板积木，与验证码 / 凭证邮件同一套排版（含 Outlook 兼容）。
-func notifyEmailHTML(msg *notifydomain.Message) string {
+func notifyEmailHTML(msg *notifydomain.Message, brand mailBrand) string {
 	blocks := make([]mailBlock, 0, 2)
 	if len(msg.Event.Fields) > 0 {
 		details := make([]emailDetail, 0, len(msg.Event.Fields))
@@ -204,14 +205,16 @@ func notifyEmailHTML(msg *notifydomain.Message) string {
 	if link := strings.TrimSpace(msg.Event.Link); link != "" {
 		blocks = append(blocks, mailButton("查看详情", link))
 	}
-	return renderEmailLayoutWith(emailLayout{
+	layout := emailLayout{
 		AppName:    "Aegis",
 		Eyebrow:    "通知",
 		Title:      msg.Title,
 		Lead:       msg.Body,
 		Blocks:     blocks,
 		FooterNote: "这条通知按您在控制台配置的订阅规则发出。",
-	})
+	}
+	brand.apply(&layout)
+	return renderEmailLayoutWith(layout)
 }
 
 func htmlEscapeText(value string) string {

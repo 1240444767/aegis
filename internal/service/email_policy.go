@@ -2,8 +2,10 @@ package service
 
 import (
 	emaildomain "aegis/internal/domain/email"
+	"aegis/internal/mailtpl"
 	apperrors "aegis/pkg/errors"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -53,6 +55,13 @@ func (s *EmailService) SavePolicy(ctx context.Context, appID int64, policy email
 	if err := emaildomain.ValidatePolicy(policy); err != nil {
 		return nil, apperrors.New(42292, http.StatusUnprocessableEntity, err.Error())
 	}
+	scopeName, err := s.scopeName(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if err := validatePolicyTemplates(ctx, emaildomain.NormalizePolicy(policy), scopeName); err != nil {
+		return nil, err
+	}
 	if _, err := s.pg.SaveEmailPolicy(ctx, appID, emaildomain.NormalizePolicy(policy), strings.TrimSpace(operator)); err != nil {
 		return nil, err
 	}
@@ -79,10 +88,38 @@ func (s *EmailService) SceneEnabled(ctx context.Context, appID int64, sceneKey s
 	return s.policyFor(ctx, appID).SceneEnabled(sceneKey)
 }
 
-// EmailSceneCatalog 场景目录接口的出参。
+// EmailSceneCatalog 场景目录接口的出参：场景、分组、内置模板源码、模板语言参考与主题可选值。
 type EmailSceneCatalog struct {
 	Scenes     []emaildomain.Scene `json:"scenes"`
 	Categories []EmailSceneGroup   `json:"categories"`
+	Templates  EmailBuiltinSources `json:"templates"`
+	Reference  mailtpl.Reference   `json:"reference"`
+	Theme      EmailThemeCatalog   `json:"theme"`
+}
+
+// EmailBuiltinSources 内置模板源码：版式、纯文本，以及每个场景的正文。
+type EmailBuiltinSources struct {
+	Layout string            `json:"layout"`
+	Text   string            `json:"text"`
+	Bodies map[string]string `json:"bodies"`
+}
+
+// EmailThemeCatalog 主题的默认值与可选值。
+type EmailThemeCatalog struct {
+	Defaults EmailThemeDefaults `json:"defaults"`
+	Fonts    []string           `json:"fonts"`
+	Headers  []string           `json:"headers"`
+}
+
+type EmailThemeDefaults struct {
+	Accent     string `json:"accent"`
+	Background string `json:"background"`
+	Card       string `json:"card"`
+	Radius     int    `json:"radius"`
+	Font       string `json:"font"`
+	LogoAlign  string `json:"logoAlign"`
+	LogoHeight int    `json:"logoHeight"`
+	Header     string `json:"header"`
 }
 
 type EmailSceneGroup struct {
@@ -96,31 +133,91 @@ func (s *EmailService) SceneCatalog() EmailSceneCatalog {
 	for _, key := range emaildomain.SceneCategoryOrder {
 		groups = append(groups, EmailSceneGroup{Key: key, Name: emaildomain.SceneCategoryNames[key]})
 	}
-	return EmailSceneCatalog{Scenes: emaildomain.Scenes(), Categories: groups}
+	scenes := emaildomain.Scenes()
+	bodies := make(map[string]string, len(scenes))
+	for _, scene := range scenes {
+		bodies[scene.Key] = mailtpl.BuiltinBody(scene.Key)
+	}
+	bodies["blocks"] = mailtpl.BuiltinBody("blocks")
+	theme := mailtpl.DefaultTheme()
+	return EmailSceneCatalog{
+		Scenes:     scenes,
+		Categories: groups,
+		Templates:  EmailBuiltinSources{Layout: mailtpl.BuiltinLayout(), Text: mailtpl.BuiltinText(), Bodies: bodies},
+		Reference:  mailtpl.TemplateReference(),
+		Theme: EmailThemeCatalog{
+			Defaults: EmailThemeDefaults{
+				Accent: theme.Accent, Background: theme.Background, Card: theme.Card, Radius: theme.Radius,
+				Font: theme.Font, LogoAlign: theme.LogoAlign, LogoHeight: theme.LogoHeight, Header: theme.Header,
+			},
+			Fonts:   mailtpl.FontPresets(),
+			Headers: mailtpl.HeaderStyles(),
+		},
+	}
 }
 
 // ── 品牌 ──
 
-// mailBrand 策略里的落款，渲染时叠到 emailLayout 上。
+// mailBrand 策略里的落款、主题与自定义版式，渲染时叠到 emailLayout 上。
 type mailBrand struct {
 	Name         string
 	LogoURL      string
 	Accent       string
 	SupportEmail string
 	FooterText   string
+	Theme        mailtpl.Theme
+	// Layout 生效中的自定义版式源码，空即内置版式
+	Layout string
 }
 
 func brandFromPolicy(policy emaildomain.Policy, scopeName string) mailBrand {
+	layout := ""
+	if policy.Layout.Enabled {
+		layout = policy.Layout.Source
+	}
 	return mailBrand{
 		Name:         firstNonEmpty(policy.Brand.DisplayName, scopeName),
 		LogoURL:      policy.Brand.LogoURL,
 		Accent:       policy.Brand.AccentColor,
 		SupportEmail: policy.Brand.SupportEmail,
 		FooterText:   policy.Brand.FooterText,
+		Theme:        themeFromPolicy(policy),
+		Layout:       layout,
 	}
 }
 
-// brandFor 作用域的落款；凭证邮件这类自己拼正文的调用方用它补上 Logo 与强调色。
+// themeFromPolicy 策略里的主题设置叠到内置主题上。
+func themeFromPolicy(policy emaildomain.Policy) mailtpl.Theme {
+	theme := mailtpl.DefaultTheme()
+	settings := policy.Theme
+	if accent := strings.TrimSpace(policy.Brand.AccentColor); accent != "" {
+		theme.Accent = accent
+	}
+	if settings.Background != "" {
+		theme.Background = settings.Background
+	}
+	if settings.Card != "" {
+		theme.Card = settings.Card
+	}
+	if settings.Radius != nil {
+		theme.Radius = *settings.Radius
+	}
+	if settings.Font != "" {
+		theme.Font = settings.Font
+	}
+	if settings.LogoAlign != "" {
+		theme.LogoAlign = settings.LogoAlign
+	}
+	if settings.LogoHeight > 0 {
+		theme.LogoHeight = settings.LogoHeight
+	}
+	if settings.Header != "" {
+		theme.Header = settings.Header
+	}
+	return theme.Normalize()
+}
+
+// brandFor 作用域的落款；凭证邮件这类自己拼正文的调用方用它补上品牌、主题与版式。
 func (s *EmailService) brandFor(ctx context.Context, appID int64) mailBrand {
 	scopeName, err := s.scopeName(ctx, appID)
 	if err != nil {
@@ -138,11 +235,13 @@ func (b mailBrand) apply(layout *emailLayout) {
 	layout.Accent = b.Accent
 	layout.SupportEmail = b.SupportEmail
 	layout.FooterText = b.FooterText
+	layout.Theme = b.Theme
+	layout.LayoutSource = b.Layout
 }
 
 // ── 按场景合成 ──
 
-// sceneMail 一封按场景渲染的信：正文积木由调用方给，文案来自目录与策略。
+// sceneMail 一封按场景渲染的信：正文积木由调用方给，文案来自目录与策略，模板来自内置正文或策略里的自定义模板。
 type sceneMail struct {
 	Scene     string
 	Vars      map[string]string
@@ -155,30 +254,95 @@ type sceneMail struct {
 }
 
 // composeScene 渲染一封场景邮件，返回主题、HTML 与纯文本。
+//
+// 文案（主题、标题、引导语、页脚提示）是 Liquid：默认文案里的 {{app}} {{code}} 与管理员写的
+// {{ brand.name | upcase }} 走同一个引擎。自定义模板与文案都在保存时校验过，发信时仍出错就退回默认，
+// 不让一封验证码因为模板问题发不出去。
 func composeScene(policy emaildomain.Policy, brand mailBrand, mail sceneMail) (string, string, string) {
+	prepared := prepareScene(policy, brand, mail)
+	html, text := renderEmailWith(prepared.layout, prepared.subject, prepared.templates, prepared.vars)
+	return prepared.subject, html, text
+}
+
+// preparedScene 场景邮件渲染前的全部输入。
+type preparedScene struct {
+	subject   string
+	layout    emailLayout
+	templates mailtpl.Templates
+	vars      map[string]any
+}
+
+func prepareScene(policy emaildomain.Policy, brand mailBrand, mail sceneMail) preparedScene {
 	scene, ok := emaildomain.FindScene(mail.Scene)
 	if !ok {
 		scene, _ = emaildomain.FindScene(emaildomain.SceneCodeGeneric)
 	}
-	vars := map[string]string{"app": brand.Name}
+	vars := sceneVars(brand, mail)
+	setting := policy.Scenes[scene.Key]
+	engine := mailtpl.Default()
+	renderCopy := func(override, fallback string) string {
+		if override != "" {
+			if out, err := engine.RenderPlainWith(mailtpl.PartCopy, override, vars); err == nil {
+				return strings.TrimSpace(out)
+			}
+		}
+		out, err := engine.RenderPlainWith(mailtpl.PartCopy, fallback, vars)
+		if err != nil {
+			return fallback
+		}
+		return strings.TrimSpace(out)
+	}
+	subject := strings.Join(strings.Fields(renderCopy(setting.Subject, scene.Defaults.Subject)), " ")
+	lead := renderCopy(setting.Lead, scene.Defaults.Lead)
+	if mail.LeadDefault != "" && setting.Lead == "" {
+		lead = mail.LeadDefault
+	}
+	eyebrow := mail.Eyebrow
+	if eyebrow == "" {
+		eyebrow = scene.CategoryName
+	}
+	layout := emailLayout{
+		Eyebrow:    eyebrow,
+		Title:      renderCopy(setting.Title, scene.Defaults.Title),
+		Lead:       lead,
+		Preheader:  mail.Preheader,
+		Blocks:     mail.Blocks,
+		FooterNote: renderCopy(setting.Footer, scene.Defaults.Footer),
+	}
+	brand.apply(&layout)
+	templates := mailtpl.Templates{BodyKey: scene.Key, Layout: layout.LayoutSource}
+	if custom := setting.CustomTemplate(); custom != nil {
+		templates.Body, templates.Format, templates.Text = custom.Body, custom.Format, custom.Text
+	}
+	return preparedScene{subject: subject, layout: layout, templates: templates, vars: vars}
+}
+
+// sceneVars 交给场景模板的变量：调用方给的场景变量，加上从积木里取出的字段表与链接。
+func sceneVars(brand mailBrand, mail sceneMail) map[string]any {
+	vars := map[string]any{"app": brand.Name}
 	for key, value := range mail.Vars {
 		vars[key] = value
 	}
-	copyText := policy.ResolveCopy(scene, vars)
-	if mail.LeadDefault != "" && policy.Scenes[scene.Key].Lead == "" {
-		copyText.Lead = mail.LeadDefault
+	for _, block := range mail.Blocks {
+		switch block.Kind {
+		case "details":
+			if _, ok := vars["details"]; !ok {
+				rows := make([]mailtpl.Row, 0, len(block.Details))
+				for _, detail := range block.Details {
+					rows = append(rows, mailtpl.Row{Label: detail.Label, Value: detail.Value})
+				}
+				vars["details"] = mailtpl.RowsBinding(rows)
+			}
+		case "button":
+			if _, ok := vars["reset_url"]; !ok && block.URL != "" {
+				vars["reset_url"] = block.URL
+			}
+		}
 	}
-	layout := emailLayout{
-		Eyebrow:    mail.Eyebrow,
-		Title:      copyText.Title,
-		Lead:       copyText.Lead,
-		Preheader:  mail.Preheader,
-		Blocks:     mail.Blocks,
-		FooterNote: copyText.Footer,
+	if _, ok := vars["details"]; !ok {
+		vars["details"] = []any{}
 	}
-	brand.apply(&layout)
-	html, text := renderEmail(layout)
-	return copyText.Subject, html, text
+	return vars
 }
 
 // codeSceneMail 验证码邮件的场景描述。
@@ -195,7 +359,7 @@ func codeSceneMail(purpose string, code string, expireMinutes int, email string)
 		Preheader: fmt.Sprintf("验证码 %s，%d 分钟内有效", trimmed, expireMinutes),
 		Blocks: []mailBlock{
 			mailCode(trimmed, expireMinutes),
-			mailParagraph("请不要把这串数字转发给任何人。"),
+			mailParagraph("请不要把这串数字转发给任何人，包括自称客服的人。"),
 		},
 	}
 }
@@ -208,12 +372,13 @@ type EmailPreviewRequest struct {
 	Policy *emaildomain.Policy
 }
 
-// EmailPreview 预览结果。
+// EmailPreview 预览结果。模板有问题时 HTML 可能为空，Problems 给出每条问题的位置（编辑器据此标红）。
 type EmailPreview struct {
-	Scene   string `json:"scene"`
-	Subject string `json:"subject"`
-	HTML    string `json:"html"`
-	Text    string `json:"text"`
+	Scene    string                  `json:"scene"`
+	Subject  string                  `json:"subject"`
+	HTML     string                  `json:"html"`
+	Text     string                  `json:"text"`
+	Problems []mailtpl.TemplateError `json:"problems"`
 }
 
 // Preview 用草稿策略（没给就用已保存的）渲染一个场景的示例邮件。
@@ -237,9 +402,76 @@ func (s *EmailService) Preview(ctx context.Context, appID int64, request EmailPr
 		return nil, err
 	}
 	brand := brandFromPolicy(policy, scopeName)
-	sample := scene.SampleVars(brand.Name)
-	subject, html, text := composeScene(policy, brand, sampleSceneMail(scene, sample, policy))
-	return &EmailPreview{Scene: scene.Key, Subject: subject, HTML: html, Text: text}, nil
+	prepared := prepareScene(policy, brand, sampleSceneMail(scene, scene.SampleVars(brand.Name), policy))
+	theme, message := prepared.layout.theme(), prepared.layout.message(prepared.subject, prepared.vars)
+	preview := &EmailPreview{Scene: scene.Key, Subject: prepared.subject, Problems: []mailtpl.TemplateError{}}
+	// 预览不走发信时的「出错退回默认」：管理员正在改的就是这份模板，问题要原样告诉他
+	engine := mailtpl.Default()
+	result, err := engine.Render(ctx, theme, message, prepared.templates)
+	if err != nil {
+		var templateErr *mailtpl.TemplateError
+		if errors.As(err, &templateErr) {
+			preview.Problems = append(preview.Problems, *templateErr)
+			return preview, nil
+		}
+		return nil, err
+	}
+	preview.HTML, preview.Text = result.HTML, result.Text
+	// 用了自定义模板时再按 MJML 严格模式过一遍：能渲染出来的模板也可能有标签放错位置
+	if prepared.templates.Body != "" || prepared.templates.Layout != "" {
+		preview.Problems = append(preview.Problems, engine.Validate(ctx, theme, message, prepared.templates)...)
+	}
+	return preview, nil
+}
+
+// validatePolicyTemplates 保存前把策略里的每一段 Liquid 与 MJML 都跑一遍：
+// 文案的语法、自定义版式、每个启用的场景模板（用示例数据渲染并按 MJML 严格模式校验）。
+func validatePolicyTemplates(ctx context.Context, policy emaildomain.Policy, scopeName string) error {
+	engine := mailtpl.Default()
+	brand := brandFromPolicy(policy, scopeName)
+	for _, scene := range emaildomain.Scenes() {
+		setting, ok := policy.Scenes[scene.Key]
+		if !ok && !policy.Layout.Enabled {
+			continue
+		}
+		for _, field := range []struct{ label, value string }{
+			{"主题", setting.Subject}, {"标题", setting.Title}, {"引导语", setting.Lead}, {"页脚提示", setting.Footer},
+		} {
+			if field.value == "" {
+				continue
+			}
+			if err := engine.Check(mailtpl.PartCopy, field.value); err != nil {
+				return templateAppError(scene.Name+"的"+field.label, err)
+			}
+		}
+		// 自定义版式影响每一个场景；只开了版式时也要逐个场景过一遍
+		if setting.CustomTemplate() == nil && !policy.Layout.Enabled {
+			continue
+		}
+		prepared := prepareScene(policy, brand, sampleSceneMail(scene, scene.SampleVars(brand.Name), policy))
+		problems := engine.Validate(ctx, prepared.layout.theme(), prepared.layout.message(prepared.subject, prepared.vars), prepared.templates)
+		if len(problems) > 0 {
+			return templateAppError(scene.Name, &problems[0])
+		}
+	}
+	if policy.Layout.Enabled {
+		// 没有专属正文的信（通知、凭证、注销告知）也套这份版式
+		sample := emailLayout{
+			Title: "示例通知", Lead: "这是一封示例通知。", Blocks: []mailBlock{mailParagraph("正文内容"), mailNotice("提示", "说明文字")},
+		}
+		brand.apply(&sample)
+		problems := engine.Validate(ctx, sample.theme(), sample.message("示例", nil),
+			mailtpl.Templates{Layout: sample.LayoutSource, BodyKey: "blocks"})
+		if len(problems) > 0 {
+			return templateAppError("自定义版式", &problems[0])
+		}
+	}
+	return nil
+}
+
+// templateAppError 把模板错误包成带场景名的 42292。
+func templateAppError(owner string, err error) error {
+	return apperrors.New(42292, http.StatusUnprocessableEntity, "「"+owner+"」"+err.Error())
 }
 
 // sampleSceneMail 每个场景的示例正文，与真实发信用的积木一致。

@@ -231,6 +231,54 @@ func TestEmailPolicyIntegration(t *testing.T) {
 		t.Fatalf("重置令牌应能验证：%v %v", ok, err)
 	}
 
+	// ── 自定义主题、版式与场景模板 ──
+	broken := policy
+	broken.Scenes = map[string]emaildomain.SceneSetting{
+		emaildomain.SceneWelcome: {Enabled: ptrTo(true), Template: &emaildomain.SceneTemplate{Enabled: true, Body: "<mj-text>hi</mj-text>\n{% if name %}\n没闭合"}},
+	}
+	if _, err := svc.SavePolicy(ctx, appID, broken, "root"); errCode(err) != 42292 || !strings.Contains(err.Error(), "欢迎信") || !strings.Contains(err.Error(), "行") {
+		t.Fatalf("坏模板应在保存时报出场景与行号，得到 %v", err)
+	}
+	broken.Scenes = nil
+	broken.Layout = emaildomain.LayoutTemplate{Enabled: true, Source: "<mjml><mj-body></mj-body></mjml>"}
+	if _, err := svc.SavePolicy(ctx, appID, broken, "root"); errCode(err) != 42292 {
+		t.Fatalf("没有 {%% content %%} 的版式应被拒，得到 %v", err)
+	}
+	radius := 4
+	policy.Theme = emaildomain.ThemeSettings{Background: "#0F172A", Radius: &radius, Font: "serif", Header: "banner"}
+	policy.Layout = emaildomain.LayoutTemplate{Enabled: true, Source: `<mjml><mj-body background-color="{{ theme.background }}"><mj-section><mj-column>
+<mj-text color="#ffffff">自定义版式·{{ brand.name }}</mj-text>
+{% content %}
+</mj-column></mj-section></mj-body></mjml>`}
+	policy.Scenes[emaildomain.SceneWelcome] = emaildomain.SceneSetting{
+		Enabled: ptrTo(true),
+		Subject: "欢迎 {{ name | default: \"朋友\" }} 加入 {{ app }}",
+		Template: &emaildomain.SceneTemplate{Enabled: true, Body: `{% markdown %}**{{ name }}**，欢迎！登录邮箱 {{ email | mask_email }}{% endmarkdown %}
+{% button url: "https://app.example.com/start", label: "开始使用" %}`, Text: "{{ name }} 欢迎"},
+	}
+	if _, err := svc.SavePolicy(ctx, appID, policy, "root"); err != nil {
+		t.Fatalf("合法的自定义模板应能保存：%v", err)
+	}
+	if err := svc.SendWelcomeEmail(ctx, appID, "gina@example.com", "阿吉", ""); err != nil {
+		t.Fatal(err)
+	}
+	mail = outbox.last(t)
+	if mail.Subject != "欢迎 阿吉 加入 星河通行证" || mail.Text != "阿吉 欢迎" {
+		t.Fatalf("自定义主题行或纯文本不对：%q / %q", mail.Subject, mail.Text)
+	}
+	for _, want := range []string{"自定义版式·星河通行证", "<strong>阿吉</strong>", "g**a@example.com", "开始使用", "#0f172a"} {
+		if !strings.Contains(mail.HTML, want) {
+			t.Errorf("自定义模板的信缺 %q", want)
+		}
+	}
+	// 没有自定义正文的场景同样套用自定义版式
+	if _, err := svc.SendCode(ctx, CodeRequest{AppID: appID, Email: "hank@example.com", Purpose: "login"}); err != nil {
+		t.Fatal(err)
+	}
+	if mail = outbox.last(t); !strings.Contains(mail.HTML, "自定义版式·星河通行证") || !strings.Contains(mail.HTML, "letter-spacing:10px") {
+		t.Error("验证码邮件应套用自定义版式并保留内置的验证码组件")
+	}
+
 	// ── 预览：每个场景都渲染得出来 ──
 	for _, scene := range emaildomain.Scenes() {
 		preview, err := svc.Preview(ctx, appID, EmailPreviewRequest{Scene: scene.Key})
