@@ -86,5 +86,10 @@ func registerPlatformStorageRoutes(router *gin.Engine, h *Handler, deps RouterDe
 		storageCenter.POST("/migrations/:migrationId/pause", h.AdminPauseStorageMigration)
 		storageCenter.POST("/migrations/:migrationId/resume", h.AdminResumeStorageMigration)
 		storageCenter.POST("/migrations/:migrationId/cancel", h.AdminCancelStorageMigration)
+		storageCenter.POST("/cloudflare/connect", h.AdminCloudflareConnect)
+		storageCenter.POST("/cloudflare/resources", h.AdminCloudflareResources)
+		storageCenter.POST("/cloudflare/buckets", h.AdminCloudflareCreateBucket)
+		storageCenter.POST("/cloudflare/bucket", h.AdminCloudflareBucketDetail)
+		storageCenter.POST("/cloudflare/setup", h.AdminCloudflareSetup)
 	}
 }

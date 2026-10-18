@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	storagedomain "aegis/internal/domain/storage"
+	"aegis/internal/service"
 	"aegis/pkg/response"
 )
 
@@ -298,4 +299,83 @@ func storagePathID(c *gin.Context, name string) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// ── Cloudflare 快速接入 ──────────────────────────
+//
+// 令牌放在请求体里（审计中间件按键名抹除 token），只在这几次请求里用，不落库。
+
+// AdminCloudflareConnect 校验令牌并列出能访问的账户。
+func (h *Handler) AdminCloudflareConnect(c *gin.Context) {
+	var req service.CloudflareTokenInput
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.storage.ConnectCloudflare(c.Request.Context(), req.Token)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "已连接", result)
+}
+
+// AdminCloudflareResources 账户下的桶与域名。
+func (h *Handler) AdminCloudflareResources(c *gin.Context) {
+	var req service.CloudflareTokenInput
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.storage.CloudflareResources(c.Request.Context(), req)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "获取成功", result)
+}
+
+// AdminCloudflareCreateBucket 建桶。
+func (h *Handler) AdminCloudflareCreateBucket(c *gin.Context) {
+	var req service.CloudflareBucketInput
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	bucket, err := h.storage.CreateCloudflareBucket(c.Request.Context(), req)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "存储桶已创建", bucket)
+}
+
+// AdminCloudflareBucketDetail 桶的公开访问与 CORS 现状。
+func (h *Handler) AdminCloudflareBucketDetail(c *gin.Context) {
+	var req service.CloudflareBucketInput
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	detail, err := h.storage.CloudflareBucketDetail(c.Request.Context(), req)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "获取成功", detail)
+}
+
+// AdminCloudflareSetup 一键配置 R2 存储源。
+func (h *Handler) AdminCloudflareSetup(c *gin.Context) {
+	var req service.CloudflareSetupInput
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.storage.SetupCloudflareR2(c.Request.Context(), req)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "配置完成", result)
 }

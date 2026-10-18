@@ -52,6 +52,9 @@ type StorageService struct {
 	r2 *s3StorageProvider
 	// migrations 进行中的迁移任务，见 storage_migration.go
 	migrations *storageMigrationRunner
+	// cloudflareBaseURL / cloudflareHTTP Cloudflare API 的地址与客户端；空即官方地址与出海网关（测试注入假服务）。
+	cloudflareBaseURL string
+	cloudflareHTTP    *http.Client
 
 	stopOnce sync.Once
 	stop     chan struct{}

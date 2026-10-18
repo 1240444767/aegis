@@ -828,6 +828,11 @@ POST	/api/admin/platform/storage-config/detail	AdminGlobalStorageConfigDetail
 POST	/api/admin/platform/storage-config/list	AdminGlobalStorageConfigList
 POST	/api/admin/platform/storage-config/test	AdminGlobalStorageConfigTest
 POST	/api/admin/platform/storage-config/update	AdminGlobalStorageConfigUpdate
+POST	/api/admin/platform/storage/cloudflare/bucket	AdminCloudflareBucketDetail
+POST	/api/admin/platform/storage/cloudflare/buckets	AdminCloudflareCreateBucket
+POST	/api/admin/platform/storage/cloudflare/connect	AdminCloudflareConnect
+POST	/api/admin/platform/storage/cloudflare/resources	AdminCloudflareResources
+POST	/api/admin/platform/storage/cloudflare/setup	AdminCloudflareSetup
 POST	/api/admin/platform/storage/configs/:configId/probe	AdminProbeStorageConfig
 POST	/api/admin/platform/storage/configs/:configId/reset-health	AdminResetStorageHealth
 POST	/api/admin/platform/storage/migrations	AdminCreateStorageMigration

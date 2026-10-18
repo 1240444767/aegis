@@ -278,6 +278,11 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/platform/storage-config/list"):                                       AdminStorageConfigListRequest{},          // AdminGlobalStorageConfigList
 		routeKey("POST", "/api/admin/platform/storage-config/test"):                                       AdminStorageConfigDetailRequest{},        // AdminGlobalStorageConfigTest
 		routeKey("POST", "/api/admin/platform/storage-config/update"):                                     AdminStorageConfigSaveRequest{},          // AdminGlobalStorageConfigUpdate
+		routeKey("POST", "/api/admin/platform/storage/cloudflare/bucket"):                                 service.CloudflareBucketInput{},          // AdminCloudflareBucketDetail
+		routeKey("POST", "/api/admin/platform/storage/cloudflare/buckets"):                                service.CloudflareBucketInput{},          // AdminCloudflareCreateBucket
+		routeKey("POST", "/api/admin/platform/storage/cloudflare/connect"):                                service.CloudflareTokenInput{},           // AdminCloudflareConnect
+		routeKey("POST", "/api/admin/platform/storage/cloudflare/resources"):                              service.CloudflareTokenInput{},           // AdminCloudflareResources
+		routeKey("POST", "/api/admin/platform/storage/cloudflare/setup"):                                  service.CloudflareSetupInput{},           // AdminCloudflareSetup
 		routeKey("PUT", "/api/admin/platform/storage/configs/{configId}/cors"):                            StorageCORSRequest{},                     // AdminSetStorageCORS
 		routeKey("POST", "/api/admin/platform/storage/migrations"):                                        storage.MigrationInput{},                 // AdminCreateStorageMigration
 		routeKey("POST", "/api/admin/platform/storage/pools"):                                             storage.PoolInput{},                      // AdminCreateStoragePool

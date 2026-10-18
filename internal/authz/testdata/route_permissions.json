@@ -7819,5 +7819,40 @@
     "permission": "",
     "appScoped": false,
     "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/connect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/resources",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/buckets",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/bucket",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/setup",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
   }
 ]

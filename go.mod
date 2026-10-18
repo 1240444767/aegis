@@ -101,7 +101,7 @@ require (
 	github.com/tencentyun/cos-go-sdk-v5 v0.7.75
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/things-go/go-socks5 v0.1.1
-	github.com/tidwall/gjson v1.19.0
+	github.com/tidwall/gjson v1.20.0
 	github.com/trustelem/zxcvbn v1.0.1
 	github.com/ulule/limiter/v3 v3.11.2
 	github.com/vanng822/go-premailer v1.35.0
@@ -200,6 +200,7 @@ require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/clbanning/mxj v1.8.4 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/cloudflare/cloudflare-go/v7 v7.13.0 // indirect
 	github.com/cloudwego/base64x v0.1.6 // indirect
 	github.com/consensys/gnark-crypto v0.20.1 // indirect
 	github.com/corazawaf/libinjection-go v0.3.2 // indirect
@@ -328,7 +329,7 @@ require (
 	github.com/supranational/blst v0.3.16 // indirect
 	github.com/test-go/testify v1.1.4 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
-	github.com/tidwall/pretty v1.2.1 // indirect
+	github.com/tidwall/pretty v1.2.2 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect

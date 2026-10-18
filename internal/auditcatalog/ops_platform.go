@@ -92,5 +92,10 @@ func init() {
 		Write("POST /api/admin/platform/storage/migrations/:migrationId/pause", "暂停存储迁移", "迁移任务", SeverityMedium),
 		Write("POST /api/admin/platform/storage/migrations/:migrationId/resume", "继续存储迁移", "迁移任务", SeverityMedium),
 		Write("POST /api/admin/platform/storage/migrations/:migrationId/cancel", "取消存储迁移", "迁移任务", SeverityHigh),
+		Write("POST /api/admin/platform/storage/cloudflare/connect", "连接 Cloudflare 账户", "", SeverityLow),
+		Write("POST /api/admin/platform/storage/cloudflare/resources", "查看 Cloudflare 存储桶", "", SeverityInfo),
+		Write("POST /api/admin/platform/storage/cloudflare/buckets", "创建 R2 存储桶", "存储桶", SeverityHigh),
+		Write("POST /api/admin/platform/storage/cloudflare/bucket", "查看 R2 存储桶详情", "存储桶", SeverityInfo),
+		Write("POST /api/admin/platform/storage/cloudflare/setup", "快速接入 R2 存储", "存储配置", SeverityHigh),
 	)
 }
