@@ -602,7 +602,11 @@ func (s *StorageService) ReadObjectBytes(ctx context.Context, configID int64, ob
 	}
 	reader, err := provider.Open(ctx, cfg, objectKey)
 	if err != nil {
-		return nil, "", apperrors.New(40481, http.StatusNotFound, "资源不可用")
+		unavailable := apperrors.New(40481, http.StatusNotFound, "资源不可用")
+		if isStorageObjectNotFound(err) {
+			return nil, "", storageObjectMissingError{unavailable}
+		}
+		return nil, "", unavailable
 	}
 	defer closeSilently(reader.Body)
 	if limit <= 0 {

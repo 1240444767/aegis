@@ -8,12 +8,17 @@
 
 ## 内容放在哪
 
-内容**不进数据库**。每次写入都经 `StorageService.UploadForApp` 传到应用解析出的存储配置
+内容的正本在存储桶里。每次写入都经 `StorageService.UploadForApp` 传到应用解析出的存储配置
 （与 `/storage/upload` 同一套解析：指定了配置名就用那个，否则应用级默认 → 平台级默认），
 因此 S3 / MinIO / 阿里云 OSS / 腾讯云 COS / 七牛 / WebDAV / OneDrive / Dropbox /
 Google Drive / Azure Blob / 本地磁盘都能直接用，平台治理的「限制存储」也随之生效。
 
-数据库里只有索引与账目：
+不超过 1 MiB（`DatabaseCopyLimit`）的修订另在 `app_cloud_item_revisions.content` 里存一份副本，
+读取时**副本优先**，没有副本才读存储桶（迁移 000104 之前的修订在下次被读到时补写，补写前核对 sha256）。
+起因：生产曾用本地磁盘存储，放在容器里的 `data/storage` 每次重新部署都被清空，修订行还指向那些对象，
+读取一直失败。超过 1 MiB 的内容仍只在存储桶里，所以本地存储务必挂持久卷，或者换外部对象存储。
+
+数据库里另有索引与账目：
 
 | 表 | 一行是什么 |
 |---|---|
@@ -127,11 +132,12 @@ base64 膨胀三分之一），更大的走 multipart 上传（上限 25 MiB）�
 | 40466 | CLOUD_REVISION_NOT_FOUND | 修订不存在或已被裁掉 |
 | 40965 | CLOUD_REVISION_CONFLICT | `ifRevision` 与当前修订不一致 |
 | 40966 | CLOUD_NOT_IN_TRASH | 恢复一个不在回收站里的条目 |
+| 41060 | CLOUD_CONTENT_LOST | 对象已不在存储里、也没有副本（HTTP 410）。重试无用，客户端拿本机数据带当前修订覆盖写 |
 | 41360 | CLOUD_QUOTA_EXCEEDED | 配额不足 |
 | 41361 | CLOUD_ITEM_TOO_LARGE | 单条目超过上限 |
 | 41362 | CLOUD_ITEM_LIMIT | 条目数已达上限 |
 | 42260–42263 | CLOUD_INVALID_* | 命名空间 / 键 / 内容 / 元数据格式不对 |
-| 50260 | CLOUD_CONTENT_UNREADABLE | 存储桶里的对象读不出来 |
+| 50260 | CLOUD_CONTENT_UNREADABLE | 存储桶暂时读不出来（HTTP 503；不用 502，Cloudflare 会把源站 502 换成自己的 HTML 页） |
 
 ## 已知边界
 

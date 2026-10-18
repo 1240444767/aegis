@@ -78,6 +78,8 @@ type CloudWritePlan struct {
 
 	StorageConfigID int64
 	ObjectKey       string
+	// Content 内容在数据库里的副本；超过 DatabaseCopyLimit 的修订为 nil，只在存储桶里。
+	Content []byte
 
 	// 应用默认配额（用户行上的覆盖值优先）与另两项限制。
 	QuotaBytes   int64
@@ -426,6 +428,24 @@ FROM app_cloud_item_revisions r JOIN app_cloud_items i ON i.id = r.item_id
 WHERE r.item_id = $1 AND r.revision = $2`, itemID, revision))
 }
 
+// GetCloudRevisionContent 修订内容在数据库里的副本；没有副本（大内容或旧修订）时返回 nil。
+func (r *Repository) GetCloudRevisionContent(ctx context.Context, revisionID int64) ([]byte, error) {
+	var content []byte
+	err := r.pool.QueryRow(ctx, `SELECT content FROM app_cloud_item_revisions WHERE id = $1`, revisionID).Scan(&content)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrCloudRevisionNotFound
+	}
+	return content, err
+}
+
+// SaveCloudRevisionContent 给没有副本的修订补写副本。只在摘要与修订记录一致时写入，
+// 免得把存储桶里一个被改过的对象当成这个修订的内容固定下来。
+func (r *Repository) SaveCloudRevisionContent(ctx context.Context, revisionID int64, sha256 string, content []byte) error {
+	_, err := r.pool.Exec(ctx, `UPDATE app_cloud_item_revisions SET content = $3
+WHERE id = $1 AND sha256 = $2 AND content IS NULL`, revisionID, sha256, content)
+	return err
+}
+
 // ListCloudRevisions 条目的全部留存修订，新的在前。
 func (r *Repository) ListCloudRevisions(ctx context.Context, itemID int64) ([]cloudstorage.Revision, error) {
 	rows, err := r.pool.Query(ctx, `SELECT `+cloudRevisionColumns+`
@@ -627,11 +647,11 @@ sha256 = $6, metadata = $7, device_id = $8, deleted_at = NULL, updated_at = NOW(
 
 	if _, err = tx.Exec(ctx, `INSERT INTO app_cloud_item_revisions
 (item_id, appid, user_id, revision, storage_config_id, object_key, content_type, encoding, size, sha256,
- metadata, device_id, source, restored_from, operator)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+ metadata, device_id, source, restored_from, operator, content)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
 		itemID, plan.AppID, plan.UserID, nextRevision, plan.StorageConfigID, plan.ObjectKey, plan.ContentType,
 		plan.Encoding, plan.Size, plan.SHA256, metadata, plan.DeviceID, plan.Source, plan.RestoredFrom,
-		plan.Operator); err != nil {
+		plan.Operator, plan.Content); err != nil {
 		return nil, err
 	}
 	if len(pruneIDs) > 0 {

@@ -478,6 +478,8 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40965, Name: "CLOUD_REVISION_CONFLICT", Message: "条目已被其它设备修改",
 		Recovery: authprotocol.RecoveryNone, Hint: "重新读取条目拿到最新 revision，与本地合并后再带新的 ifRevision 写入"},
 	{Code: 40966, Name: "CLOUD_NOT_IN_TRASH", Message: "条目不在回收站中", Recovery: authprotocol.RecoveryNone},
+	{Code: 41060, Name: "CLOUD_CONTENT_LOST", Message: "云端内容已丢失",
+		Recovery: authprotocol.RecoveryNone, Hint: "这个修订的内容在存储里已经不存在，重试也读不回来；用本机数据带当前 revision（从 revisions 取 current）重新写入即可覆盖"},
 	{Code: 41360, Name: "CLOUD_QUOTA_EXCEEDED", Message: "云存储空间不足",
 		Recovery: authprotocol.RecoveryNone, Hint: "配额计入全部留存修订与回收站；清空回收站或删除条目可以腾出空间"},
 	{Code: 41361, Name: "CLOUD_ITEM_TOO_LARGE", Message: "单个条目超过上限",
