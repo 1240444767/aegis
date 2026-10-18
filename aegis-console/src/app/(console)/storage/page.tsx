@@ -147,7 +147,12 @@ function StoragePageInner() {
         </TabsContent>
 
         <TabsContent value="migrations">
-          <StorageMigrationsPanel sources={sources} overviews={overview.data?.configs ?? []} />
+          <StorageMigrationsPanel
+            sources={sources}
+            overviews={overview.data?.configs ?? []}
+            pools={overview.data?.pools ?? []}
+            onAddSource={() => navigate("global")}
+          />
         </TabsContent>
 
         <TabsContent value="events">
