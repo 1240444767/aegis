@@ -34,6 +34,31 @@ SDK 选项、HTTP 客户端。两者都在 `StorageService` 上常驻，按配�
   与索引用量取大者（分析按小时采样会滞后，索引看不到不经 Aegis 写入的对象）。
 - **CORS**：浏览器直传要求桶允许控制台来源 PUT，控制台「一键配置 CORS」调 `PutBucketCors`。
 
+### Cloudflare 快速接入（cloudflare-go v7）
+
+`storage_cloudflare.go`。管理员贴一个 Cloudflare API 令牌，其余经 SDK 代办，令牌只在请求里用、不落库
+（请求体里的 `token` 由审计中间件按键名抹除）：
+
+1. **连接**：`Accounts.List` 列账户；先按用户令牌 `User.Tokens.Verify` 校验，不行再逐个账户
+   `Accounts.Tokens.Verify`（账户令牌）。SDK 会读 `CLOUDFLARE_API_KEY` 等环境变量，客户端显式删掉那几个头。
+2. **选桶**：三个管辖区各 `R2.Buckets.List` 一次（默认区失败即令牌没有 R2 权限，欧盟 / FedRAMP 失败忽略），
+   已接入的桶标出存储源名；`Zones.List` 按账户列域名；可直接 `R2.Buckets.New` 建桶。
+3. **一键配置**（`/cloudflare/setup`）：
+   - 凭据：签发只能读写这个桶（`com.cloudflare.edge.r2.bucket.<账户>_<管辖区>_<桶>`）外加账户分析读的令牌，
+     权限组按名称查（`Workers R2 Storage Bucket Item Write` / `Account Analytics Read`）；按连接时识别的令牌种类先走
+     账户令牌或用户令牌的签发接口，失败再试另一种。也可选「使用当前令牌」。S3 凭据由令牌派生：
+     Access Key ID = 令牌 ID，Secret = 令牌值的 SHA-256；令牌值同时存为 `api_token` 读用量。
+   - 公开访问：私有（经代理）/ `Domains.Managed.Update` 开 r2.dev / `Domains.Custom.New` 绑自定义域名（已绑跳过）。
+   - CORS：`CORS.Get` 后保留其他规则，只替换 id 为 `aegis-direct-upload` 的那条。
+   - 保存存储源（`ConfigID` 非 0 时更新原存储源，用于换凭据）→ 深度检测（新令牌要几秒才在 S3 端点生效，
+     失败间隔 3 秒重试，至多 5 次）→ 可选加入存储池。
+   凭据或保存失败就停；其余步骤失败只记在步骤里。
+4. 控制台的「在 Cloudflare 创建令牌」用账户令牌模板链接预填权限：
+   `workers_r2:edit`、`account_api_tokens:edit`、`account_settings:read`、`account_analytics:read`、`zone:read`。
+
+测试：`TestCloudflareQuickSetupIntegration` 用假 Cloudflare API（httptest）与内存 S3（RoundTripper）走完全程，
+断言令牌策略、CORS 合并、派生凭据、r2.dev、加入池、经池写入落到 R2。
+
 ## 写入目标解析（`resolveWriteTarget`）
 
 1. 指定了名称：先按存储配置名（应用级优先、平台级其次），找不到再按**池名**；
@@ -136,6 +161,11 @@ S3 的 `NoSuchKey` / `NotFound`、OSS / COS / Azure 各自的不存在错误）�
 | POST | `/configs/:configId/reset-health` | 清除退避 |
 | GET / PUT | `/configs/:configId/cors` | 读 / 写桶 CORS（`{origins}`） |
 | DELETE | `/configs/:configId/redirect` | 撤销读取转向 |
+| POST | `/cloudflare/connect` | `{token}` → 令牌种类、状态、能访问的账户 |
+| POST | `/cloudflare/resources` | `{token, accountId}` → 三个管辖区的桶（标出已接入的）与域名 |
+| POST | `/cloudflare/buckets` | 建桶 `{token, accountId, bucket, jurisdiction, locationHint}` |
+| POST | `/cloudflare/bucket` | 桶的 r2.dev、自定义域名与 CORS 现状 |
+| POST | `/cloudflare/setup` | 一键配置，返回逐步结果、存储源与检测结果 |
 | GET / POST | `/migrations` | 列表 / 新建（`{sourceConfigId, targetConfigId, deleteSource, setRedirect}`） |
 | GET | `/migrations/:migrationId` | 进度 |
 | POST | `/migrations/:migrationId/{pause,resume,cancel}` | 控制 |

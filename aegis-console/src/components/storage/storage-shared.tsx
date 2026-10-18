@@ -75,6 +75,15 @@ export function StorageBrandBadge({
   );
 }
 
+/** Cloudflare 标志（按钮里用，不带底色）。 */
+export function CloudflareMark({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={cn("size-4 text-[#F38020]", className)} fill="currentColor" aria-hidden>
+      <path d={siCloudflare.path} />
+    </svg>
+  );
+}
+
 /* ================================================================== */
 /*  状态                                                               */
 /* ================================================================== */

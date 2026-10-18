@@ -403,3 +403,97 @@ export function createStorageMigration(token: string, input: StorageMigrationInp
 export function controlStorageMigration(token: string, id: number, action: "pause" | "resume" | "cancel") {
   return apiRequest<StorageMigration>(`${CENTER}/migrations/${id}/${action}`, { method: "POST", token });
 }
+
+// ── Cloudflare 快速接入 ──
+//
+// 令牌放在请求体里，只在这几次请求里用；后端不落库。
+
+export type CloudflareConnection = {
+  tokenId: string;
+  tokenKind: "user" | "account";
+  status: string;
+  expiresOn?: string;
+  accounts: Array<{ id: string; name: string }>;
+  accountsError?: string;
+};
+
+export type CloudflareBucket = {
+  name: string;
+  jurisdiction: "default" | "eu" | "fedramp";
+  location?: string;
+  storageClass?: string;
+  createdAt?: string;
+  configId?: number;
+  configName?: string;
+};
+
+export type CloudflareZone = { id: string; name: string; status: string };
+
+export type CloudflareResources = {
+  buckets: CloudflareBucket[];
+  zones: CloudflareZone[];
+  zonesError?: string;
+};
+
+export type CloudflareBucketDetail = {
+  managedDomain?: string;
+  managedDomainEnabled: boolean;
+  customDomains: Array<{ domain: string; enabled: boolean; zoneName?: string; ownership?: string; ssl?: string }>;
+  corsOrigins: string[];
+};
+
+export type CloudflareSetupInput = {
+  token: string;
+  accountId: string;
+  bucket: string;
+  jurisdiction: string;
+  credentialMode: "create" | "reuse";
+  publicAccess: "private" | "r2dev" | "custom";
+  customDomain?: string;
+  zoneId?: string;
+  corsOrigins: string[];
+  configId?: number;
+  configName: string;
+  description?: string;
+  setDefault: boolean;
+  poolId?: number;
+  poolMode?: StorageMemberMode;
+};
+
+export type CloudflareSetupResult = {
+  steps: Array<{ name: string; status: "ok" | "failed" | "skipped"; message?: string }>;
+  config?: StorageSource;
+  probe?: StorageProbeResult;
+};
+
+const CF = `${CENTER}/cloudflare`;
+
+export function connectCloudflare(token: string, cfToken: string) {
+  return apiRequest<CloudflareConnection>(`${CF}/connect`, { method: "POST", token, body: JSON.stringify({ token: cfToken }) });
+}
+
+export function getCloudflareResources(token: string, cfToken: string, accountId: string) {
+  return apiRequest<CloudflareResources>(`${CF}/resources`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ token: cfToken, accountId })
+  });
+}
+
+export function createCloudflareBucket(
+  token: string,
+  input: { token: string; accountId: string; bucket: string; jurisdiction: string; locationHint?: string }
+) {
+  return apiRequest<CloudflareBucket>(`${CF}/buckets`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export function getCloudflareBucketDetail(
+  token: string,
+  input: { token: string; accountId: string; bucket: string; jurisdiction: string }
+) {
+  return apiRequest<CloudflareBucketDetail>(`${CF}/bucket`, { method: "POST", token, body: JSON.stringify(input) });
+}
+
+export function setupCloudflareR2(token: string, input: CloudflareSetupInput) {
+  return apiRequest<CloudflareSetupResult>(`${CF}/setup`, { method: "POST", token, body: JSON.stringify(input) });
+}

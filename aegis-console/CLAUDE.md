@@ -1109,11 +1109,12 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `storage-overview-panel.tsx` | 汇总、异常告警、各存储用量图、进行中的迁移、最近事件、池概况 |
 | `storage-sources-panel.tsx` + `storage-source-sheet.tsx` + `storage-source-dialogs.tsx` | 存储源卡片网格（平台级 / 应用级共用）、目录驱动的新建与编辑、深度检测、CORS |
 | `storage-pools-panel.tsx` + `storage-pool-editor.tsx` | 池卡片（成员容量与状态、恢复写入）、模拟写入、编辑器（拖动排序即优先级） |
+| `storage-cloudflare-wizard.tsx` | Cloudflare 快速接入：连接令牌 → 选账户与桶（可新建）→ 凭据 / 访问 / CORS / 池 → 逐步结果；R2 卡片的「更新凭据」复用它 |
 | `storage-migrations-panel.tsx` / `storage-events-panel.tsx` | 迁移任务与读取转向；运行事件时间线（概览复用紧凑版） |
 | `storage-rules-panel.tsx` / `storage-cdn-panel.tsx` / `storage-usage-panel.tsx` | 结构化上传规则、CDN 与防盗链、用量趋势与类型分布 |
 | `file-manager.tsx` 等 | 文件管理（未改动） |
 
-五条硬约束：
+六条硬约束：
 
 1. **表单由后端目录驱动。** 字段、密钥标记、能力、品牌色都来自 `GET /api/admin/app/storage-config/providers`；
    新增提供商只改后端，这里零改动。不要在前端再抄一份字段表。
@@ -1121,7 +1122,8 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    只告诉你配没配过），编辑表单显示「已配置，留空不修改」，提交原样带空串。
 3. **成员顺序就是优先级。** 编辑器按列表顺序写 `priority = index × 10`，不另给优先级输入框。
 4. **轮询跟着状态走。** 总览在概览 / 存储池页 5 秒一刷、其余 30 秒；迁移列表只在有任务排队或进行中时 2 秒一刷。
-5. **池只收平台级存储源。** 应用存储页不出现池相关的东西；成员下拉只列 `scope = global` 的源。
+5. **Cloudflare 令牌只放组件状态。** 不进 localStorage、不进查询键（键会出现在开发工具里），关闭向导即丢弃。
+6. **池只收平台级存储源。** 应用存储页不出现池相关的东西；成员下拉只列 `scope = global` 的源。
 
 ## 内容中心（/content）
 

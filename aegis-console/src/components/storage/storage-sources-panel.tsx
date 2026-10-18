@@ -5,6 +5,7 @@ import {
   CornerDownRight,
   Ellipsis,
   Globe,
+  KeyRound,
   Layers,
   Lock,
   Pencil,
@@ -55,9 +56,10 @@ import {
   useTestStorageSourceMutation
 } from "@/lib/storage-center-hooks";
 import { cn } from "@/lib/utils";
+import { StorageCloudflareWizard } from "./storage-cloudflare-wizard";
 import { StorageCORSDialog, StorageProbeDialog } from "./storage-source-dialogs";
 import { StorageSourceSheet } from "./storage-source-sheet";
-import { StateBadge, StorageBrandBadge, UsageMeter, providerMeta } from "./storage-shared";
+import { CloudflareMark, StateBadge, StorageBrandBadge, UsageMeter, providerMeta } from "./storage-shared";
 
 type SourceItem = {
   source: StorageSource;
@@ -88,6 +90,7 @@ export function StorageSourcesPanel({
   const [deleting, setDeleting] = useState<StorageSource | null>(null);
   const [probing, setProbing] = useState<{ name: string; result: StorageProbeResult | null } | null>(null);
   const [cors, setCors] = useState<{ id: number; name: string } | null>(null);
+  const [cloudflare, setCloudflare] = useState<{ existing: StorageSource | null } | null>(null);
 
   const remove = useDeleteStorageSourceMutation(scope);
   const probe = useProbeStorageMutation();
@@ -143,10 +146,18 @@ export function StorageSourcesPanel({
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3">
         <span className="text-xs tabular-nums text-muted-foreground">{sources.length} 个存储源</span>
-        <Button size="sm" onClick={() => openEditor(null)}>
-          <Plus className="size-3.5" />
-          添加存储
-        </Button>
+        <div className="flex items-center gap-2">
+          {scope === "global" ? (
+            <Button size="sm" variant="outline" onClick={() => setCloudflare({ existing: null })}>
+              <CloudflareMark />
+              Cloudflare 快速接入
+            </Button>
+          ) : null}
+          <Button size="sm" onClick={() => openEditor(null)}>
+            <Plus className="size-3.5" />
+            添加存储
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -232,6 +243,12 @@ export function StorageSourcesPanel({
                           <Stethoscope />
                           {scope === "global" ? "深度检测" : "连通测试"}
                         </DropdownMenuItem>
+                        {scope === "global" && source.provider === "r2" ? (
+                          <DropdownMenuItem onClick={() => setCloudflare({ existing: source })}>
+                            <KeyRound />
+                            更新凭据
+                          </DropdownMenuItem>
+                        ) : null}
                         {scope === "global" && caps?.cors ? (
                           <DropdownMenuItem onClick={() => setCors({ id: source.id, name: source.config_name })}>
                             <Zap />
@@ -333,6 +350,12 @@ export function StorageSourcesPanel({
         result={probing?.result ?? null}
         pending={Boolean(probing) && probe.isPending}
         onOpenChange={(open) => !open && setProbing(null)}
+      />
+      <StorageCloudflareWizard
+        open={Boolean(cloudflare)}
+        existing={cloudflare?.existing}
+        pools={pools ?? []}
+        onOpenChange={(open) => !open && setCloudflare(null)}
       />
       <StorageCORSDialog configId={cors?.id ?? null} name={cors?.name ?? ""} onOpenChange={(open) => !open && setCors(null)} />
       <AlertDialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleting(null)}>

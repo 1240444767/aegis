@@ -3,6 +3,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearStorageRedirect,
+  connectCloudflare,
+  createCloudflareBucket,
+  getCloudflareBucketDetail,
+  getCloudflareResources,
+  setupCloudflareR2,
+  type CloudflareSetupInput,
   collectStorageUsage,
   controlStorageMigration,
   createStorageMigration,
@@ -233,5 +239,52 @@ export function useCollectStorageUsageMutation() {
   return useMutation({
     mutationFn: () => collectStorageUsage(token as string),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["storage-usage-history"] })
+  });
+}
+
+// ── Cloudflare 快速接入：令牌只在组件状态里，不进查询缓存键之外的任何地方 ──
+
+export function useConnectCloudflareMutation() {
+  const token = useAdminToken();
+  return useMutation({ mutationFn: (cfToken: string) => connectCloudflare(token as string, cfToken) });
+}
+
+export function useCloudflareResourcesQuery(cfToken: string | null, accountId: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    // 令牌不进查询键：缓存键会被开发工具与日志看到。按账户区分即可，连接变了组件会整体重置。
+    queryKey: ["storage-cloudflare-resources", token, accountId],
+    queryFn: () => getCloudflareResources(token as string, cfToken as string, accountId as string),
+    enabled: Boolean(token && cfToken && accountId),
+    retry: false,
+    staleTime: 30_000
+  });
+}
+
+export function useCreateCloudflareBucketMutation() {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Parameters<typeof createCloudflareBucket>[1]) => createCloudflareBucket(token as string, input),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["storage-cloudflare-resources"] })
+  });
+}
+
+export function useCloudflareBucketDetailQuery(input: { token: string; accountId: string; bucket: string; jurisdiction: string } | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: ["storage-cloudflare-bucket", token, input?.accountId, input?.bucket, input?.jurisdiction],
+    queryFn: () => getCloudflareBucketDetail(token as string, input!),
+    enabled: Boolean(token && input),
+    retry: false
+  });
+}
+
+export function useSetupCloudflareMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidateStorage();
+  return useMutation({
+    mutationFn: (input: CloudflareSetupInput) => setupCloudflareR2(token as string, input),
+    onSuccess: invalidate
   });
 }
