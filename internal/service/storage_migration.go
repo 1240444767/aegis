@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -23,7 +24,7 @@ import (
 // 有哪些表引用了对象，以后新加的引用方也自动适用。
 //
 // 断点：按 storage_objects.id 游标推进，进程重启后从游标继续。复制失败的对象索引行留在源配置，
-// 之后再建一个迁移任务就只会扫到它们 —— 「重试失败项」就是再迁一次。
+// 「继续」把游标归零重扫源配置，只会碰到它们和还没处理的对象 —— 继续即重试失败项。
 
 const (
 	storageMigrationBatch       = 50
@@ -165,18 +166,21 @@ func (r *storageMigrationRunner) run(ctx context.Context, id int64) {
 			go func() {
 				defer wg.Done()
 				defer func() { <-slots }()
-				copied, skipped, err := r.copyObject(ctx, m, source, target, sourceProvider, targetProvider, obj)
+				copied, outcome, err := r.copyObject(ctx, m, source, target, sourceProvider, targetProvider, obj)
 				mu.Lock()
 				defer mu.Unlock()
 				switch {
 				case err != nil:
 					progress.FailedObjects++
 					progress.LastError = fmt.Sprintf("%s：%s", obj.ObjectKey, truncateStorageError(err))
-				case skipped:
+				case outcome == migrationObjectMissing:
 					progress.SkippedObjects++
 				default:
 					progress.CopiedObjects++
 					progress.CopiedBytes += copied
+					if outcome == migrationObjectRecovered {
+						progress.RecoveredObjects++
+					}
 				}
 			}()
 		}
@@ -184,7 +188,7 @@ func (r *storageMigrationRunner) run(ctx context.Context, id int64) {
 		if ctx.Err() != nil {
 			// 暂停 / 取消 / 进程退出：这一批里没完成的对象索引还在源配置，下次接着扫到。
 			_ = s.pg.AdvanceStorageMigration(context.Background(), id, pgrepo.StorageMigrationProgress{
-				CopiedObjects: progress.CopiedObjects, CopiedBytes: progress.CopiedBytes,
+				CopiedObjects: progress.CopiedObjects, CopiedBytes: progress.CopiedBytes, RecoveredObjects: progress.RecoveredObjects,
 				SkippedObjects: progress.SkippedObjects, FailedObjects: progress.FailedObjects, LastError: progress.LastError,
 			})
 			return
@@ -214,30 +218,67 @@ func (r *storageMigrationRunner) run(ctx context.Context, id int64) {
 	}
 	_, _ = s.pg.SetStorageMigrationStatus(ctx, id, storagedomain.MigrationCompleted, nil, "")
 	level := storagedomain.EventLevelInfo
-	if final.FailedObjects > 0 {
+	if final.FailedObjects > 0 || final.SkippedObjects > 0 {
 		level = storagedomain.EventLevelWarn
 	}
 	s.emitPoolEvent(ctx, 0, source.ID, level, storagedomain.EventMigration,
-		fmt.Sprintf("迁移 #%d 完成：复制 %d 个（%s），跳过 %d 个，失败 %d 个", id, final.CopiedObjects,
-			formatStorageBytes(final.CopiedBytes), final.SkippedObjects, final.FailedObjects), nil, fmt.Sprintf("%d-done", id))
+		fmt.Sprintf("迁移 #%d 完成：复制 %d 个（%s，其中 %d 个从数据库副本恢复），源已丢失 %d 个，失败 %d 个", id,
+			final.CopiedObjects, formatStorageBytes(final.CopiedBytes), final.RecoveredObjects, final.SkippedObjects,
+			final.FailedObjects), nil, fmt.Sprintf("%d-done", id))
 	s.pools.InvalidateUsage()
 }
 
-// copyObject 复制一个对象；源里已经没有这个对象时计为跳过（索引照样改到目标，免得反复扫到）。
+type migrationObjectOutcome int
+
+const (
+	migrationObjectCopied migrationObjectOutcome = iota
+	// migrationObjectRecovered 源里已经没有，从数据库副本写回了目标。
+	migrationObjectRecovered
+	// migrationObjectMissing 源里已经没有，也没有副本：索引改到目标并标记 missing。
+	migrationObjectMissing
+)
+
+// copyObject 复制一个对象。
+//
+// 源里已经没有这个对象时（典型是容器本地盘随部署清空），先找数据库里的字节副本
+// （头像副本、云存储修订内容）写回目标；没有副本就把索引改到目标并标记 missing，免得反复扫到。
 func (r *storageMigrationRunner) copyObject(ctx context.Context, m *storagedomain.Migration, source, target *storagedomain.Config,
-	sourceProvider, targetProvider storageProvider, obj storagedomain.StorageObject) (int64, bool, error) {
+	sourceProvider, targetProvider storageProvider, obj storagedomain.StorageObject) (int64, migrationObjectOutcome, error) {
 	s := r.s
 	objectCtx, cancel := context.WithTimeout(ctx, storageMigrationObjectLimit)
 	defer cancel()
 	reader, err := sourceProvider.Open(objectCtx, source, obj.ObjectKey)
 	if err != nil {
-		if isStorageObjectNotFound(err) {
-			if moveErr := s.pg.MoveStorageObject(objectCtx, obj.ID, target.ID); moveErr != nil {
-				return 0, false, moveErr
-			}
-			return 0, true, nil
+		if !isStorageObjectNotFound(err) {
+			return 0, migrationObjectCopied, err
 		}
-		return 0, false, err
+		contentType, data, copyErr := s.pg.StorageObjectCopy(objectCtx, source.ID, obj.ObjectKey)
+		if copyErr != nil {
+			return 0, migrationObjectCopied, copyErr
+		}
+		if data == nil {
+			if markErr := s.pg.MarkStorageObjectMissing(objectCtx, obj.ID, target.ID); markErr != nil {
+				return 0, migrationObjectCopied, markErr
+			}
+			return 0, migrationObjectMissing, nil
+		}
+		if obj.ContentType != "" {
+			contentType = obj.ContentType
+		}
+		if _, err := targetProvider.Upload(objectCtx, target, storagedomain.UploadInput{
+			ObjectKey:     obj.ObjectKey,
+			FileName:      obj.FileName,
+			ContentType:   contentType,
+			ContentLength: int64(len(data)),
+			Content:       bytes.NewReader(data),
+			SkipRules:     true,
+		}); err != nil {
+			return 0, migrationObjectCopied, err
+		}
+		if err := s.pg.MoveStorageObject(objectCtx, obj.ID, target.ID); err != nil {
+			return 0, migrationObjectCopied, err
+		}
+		return int64(len(data)), migrationObjectRecovered, nil
 	}
 	defer closeSilently(reader.Body)
 	size := obj.Size
@@ -257,17 +298,17 @@ func (r *storageMigrationRunner) copyObject(ctx context.Context, m *storagedomai
 		Content:       reader.Body,
 		SkipRules:     true,
 	}); err != nil {
-		return 0, false, err
+		return 0, migrationObjectCopied, err
 	}
 	if err := s.pg.MoveStorageObject(objectCtx, obj.ID, target.ID); err != nil {
-		return 0, false, err
+		return 0, migrationObjectCopied, err
 	}
 	if m.DeleteSource {
 		if err := deleteStoredObject(objectCtx, sourceProvider, source, obj.ObjectKey); err != nil && !errors.Is(err, errStorageDeleteUnsupported) {
 			s.log.Warn("迁移后删除源对象失败", zap.Int64("migration", m.ID), zap.String("key", obj.ObjectKey), zap.Error(err))
 		}
 	}
-	return size, false, nil
+	return size, migrationObjectCopied, nil
 }
 
 // ── 对外接口 ──────────────────────────
@@ -346,8 +387,7 @@ func (s *StorageService) ControlMigration(ctx context.Context, id int64, action 
 			s.migrations.cancel(id)
 		}
 	case "resume":
-		ok, err = s.pg.SetStorageMigrationStatus(ctx, id, storagedomain.MigrationPending,
-			[]string{storagedomain.MigrationPaused, storagedomain.MigrationFailed}, "")
+		ok, err = s.pg.RestartStorageMigration(ctx, id)
 		if ok {
 			s.migrations.start(id)
 		}

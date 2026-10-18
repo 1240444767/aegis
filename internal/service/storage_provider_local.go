@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -29,6 +30,10 @@ func (p *localStorageProvider) HealthCheck(_ context.Context, cfg *storagedomain
 	localCfg, err := decodeLocalConfig(cfg.ConfigData)
 	if err != nil {
 		return nil, err
+	}
+	// 新挂上的空卷里还没有根目录：建出来再检测，而不是把「还没写过文件」报成故障。
+	if err := os.MkdirAll(localCfg.RootDir, 0o755); err != nil {
+		return nil, fmt.Errorf("创建存储目录失败: %w", err)
 	}
 	info, err := os.Stat(localCfg.RootDir)
 	if err != nil {
@@ -104,6 +109,9 @@ func (p *localStorageProvider) Open(_ context.Context, cfg *storagedomain.Config
 		return nil, err
 	}
 
+	if localRootMissing(localCfg.RootDir) {
+		return nil, apperrors.New(40401, http.StatusNotFound, "文件不存在")
+	}
 	absPath, err := secureLocalStoragePath(localCfg.RootDir, objectKey)
 	if err != nil {
 		return nil, err
@@ -160,6 +168,15 @@ func decodeLocalConfig(data map[string]any) (*storagedomain.LocalConfig, error) 
 		cfg.RootDir = "data/storage"
 	}
 	return &cfg, nil
+}
+
+// localRootMissing 根目录整个不存在。
+//
+// 容器本地盘随部署清空、或新挂上的卷是空的，都会是这样：目录里的对象确实都没有了，
+// 读取应答「文件不存在」（迁移据此跳过或从副本恢复），而不是「根目录不可访问」这种故障。
+func localRootMissing(rootDir string) bool {
+	_, err := os.Stat(strings.TrimSpace(rootDir))
+	return errors.Is(err, os.ErrNotExist)
 }
 
 // secureLocalStoragePath 对本地存储路径做词法与符号链接双重约束。

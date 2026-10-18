@@ -116,9 +116,14 @@ S3 的 `NoSuchKey` / `NotFound`、OSS / COS / Azure 各自的不存在错误）�
 - 复制成功：索引行改记到目标配置（文件管理、用量跟着走）；可选删除源对象。
 - 完成后设读取转向：散落在各处的 `storage://` 引用、云存储修订、头像记录都不用改。
   **删除源对象必须同时开启转向**，否则那些引用就读不到了。
+- 源对象已丢失（提供商答复不存在；本地存储的根目录整个不存在也算，典型是容器本地盘随部署清空、
+  新挂的卷是空的）：先找数据库里的字节副本 —— 头像副本 `avatar_asset_blobs`（size 0 对应
+  `base_key`，其余对应 `variants` 里同尺寸的键）、云存储修订 `content` —— 写回目标，
+  计入 `copiedObjects` 与 `recoveredObjects`；没有副本的索引改到目标并标记 `status = 'missing'`，
+  计入 `skippedObjects`（控制台显示「源已丢失」）。两种都不算失败，任务照常推进。
 - 断点：按 `storage_objects.id` 游标推进，进程重启从游标继续；并发 4，单对象 30 分钟超时。
-  整批全失败（多半是目标不可用）就停在 `failed`，可「继续」。复制失败的对象索引留在源配置，
-  再建一个迁移任务就只会扫到它们。
+  整批全失败（多半是目标不可用）就停在 `failed`。「继续 / 重试」（`resume`）把游标归零、
+  失败计数清零后重扫源配置：已迁走的对象索引早不在源配置，重扫只会碰到失败和还没处理的那些。
 
 ## 上传规则（`storage_rules.go`）
 
@@ -176,3 +181,5 @@ S3 的 `NoSuchKey` / `NotFound`、OSS / COS / Azure 各自的不存在错误）�
 - 集成（真实 PG + 三个本地存储，一个故意坏掉）：
   `AEGIS_TEST_PG_DSN=postgres://postgres@127.0.0.1:55432/postgres go test ./internal/service -run TestStoragePoolIntegration`
   覆盖故障切换与退避、写满换成员、507、上传规则、迁移 + 转向（源停用后旧永久地址照样可读）、永久删除真删文件。
+- 迁移丢失恢复：`… -run TestStorageMigrationRecoveryIntegration`（根目录不存在的本地源、头像与云修订副本写回、
+  missing 标记、重试从头扫）。

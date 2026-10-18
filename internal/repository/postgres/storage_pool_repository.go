@@ -308,7 +308,7 @@ func (r *Repository) PruneStoragePoolEvents(ctx context.Context, before time.Tim
 // ── 迁移 ──────────────────────────
 
 const storageMigrationColumns = `m.id, m.source_config_id, m.target_config_id, m.status, m.delete_source, m.set_redirect,
-m.total_objects, m.total_bytes, m.copied_objects, m.copied_bytes, m.skipped_objects, m.failed_objects, m.last_object_id,
+m.total_objects, m.total_bytes, m.copied_objects, m.copied_bytes, m.recovered_objects, m.skipped_objects, m.failed_objects, m.last_object_id,
 m.last_error, m.created_by, m.created_at, m.started_at, m.finished_at, m.updated_at,
 COALESCE(s.config_name, ''), COALESCE(t.config_name, '')`
 
@@ -319,7 +319,7 @@ LEFT JOIN storage_configs t ON t.id = m.target_config_id`
 func scanStorageMigration(row pgx.Row) (*storagedomain.Migration, error) {
 	var m storagedomain.Migration
 	if err := row.Scan(&m.ID, &m.SourceConfigID, &m.TargetConfigID, &m.Status, &m.DeleteSource, &m.SetRedirect,
-		&m.TotalObjects, &m.TotalBytes, &m.CopiedObjects, &m.CopiedBytes, &m.SkippedObjects, &m.FailedObjects, &m.LastObjectID,
+		&m.TotalObjects, &m.TotalBytes, &m.CopiedObjects, &m.CopiedBytes, &m.RecoveredObjects, &m.SkippedObjects, &m.FailedObjects, &m.LastObjectID,
 		&m.LastError, &m.CreatedBy, &m.CreatedAt, &m.StartedAt, &m.FinishedAt, &m.UpdatedAt, &m.SourceName, &m.TargetName); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrStorageMigrationNotFound
@@ -414,20 +414,22 @@ updated_at = NOW() WHERE id = $1`
 
 // StorageMigrationProgress 一批对象处理完后推进游标与计数。
 type StorageMigrationProgress struct {
-	LastObjectID   int64
-	CopiedObjects  int64
-	CopiedBytes    int64
-	SkippedObjects int64
-	FailedObjects  int64
-	LastError      string
+	LastObjectID     int64
+	CopiedObjects    int64
+	CopiedBytes      int64
+	RecoveredObjects int64
+	SkippedObjects   int64
+	FailedObjects    int64
+	LastError        string
 }
 
 // AdvanceStorageMigration 累加计数并推进游标。
 func (r *Repository) AdvanceStorageMigration(ctx context.Context, id int64, p StorageMigrationProgress) error {
 	_, err := r.pool.Exec(ctx, `UPDATE storage_migrations SET last_object_id = GREATEST(last_object_id, $2),
 copied_objects = copied_objects + $3, copied_bytes = copied_bytes + $4, skipped_objects = skipped_objects + $5,
-failed_objects = failed_objects + $6, last_error = CASE WHEN $7::TEXT = '' THEN last_error ELSE $7::TEXT END, updated_at = NOW()
-WHERE id = $1`, id, p.LastObjectID, p.CopiedObjects, p.CopiedBytes, p.SkippedObjects, p.FailedObjects, p.LastError)
+failed_objects = failed_objects + $6, last_error = CASE WHEN $7::TEXT = '' THEN last_error ELSE $7::TEXT END,
+recovered_objects = recovered_objects + $8, updated_at = NOW()
+WHERE id = $1`, id, p.LastObjectID, p.CopiedObjects, p.CopiedBytes, p.SkippedObjects, p.FailedObjects, p.LastError, p.RecoveredObjects)
 	return err
 }
 
@@ -448,6 +450,59 @@ WHERE config_id = $1 AND id > $2 ORDER BY id LIMIT $3`, configID, afterID, limit
 		items = append(items, *item)
 	}
 	return items, rows.Err()
+}
+
+// RestartStorageMigration 继续一个暂停或失败的任务：游标归零、失败计数清空，从头再扫一遍源配置。
+//
+// 复制成功或已跳过的对象索引早已改到目标配置，重扫只会碰到上次失败和还没处理的那些 ——
+// 「继续」因此同时就是「重试失败项」，不会重复复制。
+func (r *Repository) RestartStorageMigration(ctx context.Context, id int64) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE storage_migrations SET status = 'pending', last_object_id = 0, failed_objects = 0,
+last_error = '', finished_at = NULL, updated_at = NOW()
+WHERE id = $1 AND status IN ('paused', 'failed')`, id)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// MarkStorageObjectMissing 源对象已丢失且没有副本：索引改到目标配置（免得反复扫到），
+// 在用的标记为 missing —— 文件管理与用量不再把它当成真实存在的文件。
+func (r *Repository) MarkStorageObjectMissing(ctx context.Context, objectID, targetConfigID int64) error {
+	_, err := r.pool.Exec(ctx, `UPDATE storage_objects SET config_id = $2,
+status = CASE WHEN status = 'active' THEN 'missing' ELSE status END WHERE id = $1`, objectID, targetConfigID)
+	return err
+}
+
+// StorageObjectCopy 数据库里某个对象的字节副本：头像副本（avatar_asset_blobs，size 0 是原图，
+// 其余对应 variants 里同尺寸的那一档）或云存储修订内容（app_cloud_item_revisions.content）。
+// 没有副本时 data 为 nil。
+func (r *Repository) StorageObjectCopy(ctx context.Context, configID int64, objectKey string) (string, []byte, error) {
+	var contentType string
+	var data []byte
+	err := r.pool.QueryRow(ctx, `SELECT b.content_type, b.data FROM avatar_assets a
+JOIN avatar_asset_blobs b ON b.asset_id = a.id
+WHERE a.config_id = $1 AND (
+    (b.size = 0 AND a.base_key = $2)
+    OR EXISTS (SELECT 1 FROM jsonb_array_elements(a.variants) v WHERE v->>'key' = $2 AND (v->>'size')::int = b.size)
+)
+ORDER BY a.id DESC LIMIT 1`, configID, objectKey).Scan(&contentType, &data)
+	if err == nil {
+		return contentType, data, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, err
+	}
+	err = r.pool.QueryRow(ctx, `SELECT content_type, content FROM app_cloud_item_revisions
+WHERE storage_config_id = $1 AND object_key = $2 AND content IS NOT NULL
+ORDER BY id DESC LIMIT 1`, configID, objectKey).Scan(&contentType, &data)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, nil
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return contentType, data, nil
 }
 
 // MoveStorageObject 对象复制到目标配置后，把索引行改记到目标配置下。

@@ -368,6 +368,9 @@ export type StorageMigration = {
   totalBytes: number;
   copiedObjects: number;
   copiedBytes: number;
+  /** 源对象已丢失、从数据库副本写回目标的个数（已计入 copiedObjects）。 */
+  recoveredObjects: number;
+  /** 源对象已丢失且没有副本。 */
   skippedObjects: number;
   failedObjects: number;
   lastObjectId: number;

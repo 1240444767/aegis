@@ -11,6 +11,7 @@ import {
   CornerDownRight,
   Loader2,
   Plus,
+  RotateCcw,
   Truck,
   Unlink
 } from "lucide-react";
@@ -259,8 +260,8 @@ export function StorageMigrationsPanel({
                       ) : null}
                       {migration.status === "paused" || migration.status === "failed" ? (
                         <Button size="xs" variant="outline" onClick={() => act(migration, "resume")}>
-                          <CirclePlay />
-                          继续
+                          {migration.status === "failed" ? <RotateCcw /> : <CirclePlay />}
+                          {migration.status === "failed" ? "重试" : "继续"}
                         </Button>
                       ) : null}
                       {active || migration.status === "paused" || migration.status === "failed" ? (
@@ -279,7 +280,10 @@ export function StorageMigrationsPanel({
                     <span>
                       {formatSize(migration.copiedBytes)} / {formatSize(migration.totalBytes)}
                     </span>
-                    {migration.skippedObjects ? <span>跳过 {migration.skippedObjects}</span> : null}
+                    {migration.recoveredObjects ? <span>副本恢复 {migration.recoveredObjects}</span> : null}
+                    {migration.skippedObjects ? (
+                      <span className="text-amber-600 dark:text-amber-400">源已丢失 {migration.skippedObjects}</span>
+                    ) : null}
                     {migration.failedObjects ? (
                       <span className="text-red-600 dark:text-red-400">失败 {migration.failedObjects}</span>
                     ) : null}

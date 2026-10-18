@@ -210,16 +210,19 @@ const (
 
 // Migration 把一个存储配置里已索引的对象复制到另一个配置（键不变）。
 type Migration struct {
-	ID             int64      `json:"id"`
-	SourceConfigID int64      `json:"sourceConfigId"`
-	TargetConfigID int64      `json:"targetConfigId"`
-	Status         string     `json:"status"`
-	DeleteSource   bool       `json:"deleteSource"`
-	SetRedirect    bool       `json:"setRedirect"`
-	TotalObjects   int64      `json:"totalObjects"`
-	TotalBytes     int64      `json:"totalBytes"`
-	CopiedObjects  int64      `json:"copiedObjects"`
-	CopiedBytes    int64      `json:"copiedBytes"`
+	ID             int64  `json:"id"`
+	SourceConfigID int64  `json:"sourceConfigId"`
+	TargetConfigID int64  `json:"targetConfigId"`
+	Status         string `json:"status"`
+	DeleteSource   bool   `json:"deleteSource"`
+	SetRedirect    bool   `json:"setRedirect"`
+	TotalObjects   int64  `json:"totalObjects"`
+	TotalBytes     int64  `json:"totalBytes"`
+	CopiedObjects  int64  `json:"copiedObjects"`
+	CopiedBytes    int64  `json:"copiedBytes"`
+	// RecoveredObjects 源对象已丢失、从数据库副本写回目标的个数（已计入 CopiedObjects）。
+	RecoveredObjects int64 `json:"recoveredObjects"`
+	// SkippedObjects 源对象已丢失且没有副本：索引改到目标并标记为 missing。
 	SkippedObjects int64      `json:"skippedObjects"`
 	FailedObjects  int64      `json:"failedObjects"`
 	LastObjectID   int64      `json:"lastObjectId"`
