@@ -9,6 +9,8 @@ import { useEmailPolicyQuery, useSaveEmailPolicyMutation, type EmailScope } from
 /** 目录还没到时也能渲染出一份完整的表单（与后端 DefaultPolicy 一致） */
 export const FALLBACK_POLICY: EmailPolicy = {
   brand: {},
+  theme: {},
+  layout: { enabled: false },
   code: { length: 6, ttlMinutes: 10, resendSeconds: 60, maxAttempts: 5, addressHourly: 10, addressDaily: 30, ipHourly: 60 },
   scenes: {},
   suppression: { hardBounce: true, complaint: true },
@@ -24,6 +26,8 @@ function normalize(policy?: EmailPolicy | null): EmailPolicy {
   const base = policy ?? FALLBACK_POLICY;
   return {
     brand: { ...base.brand },
+    theme: { ...(base.theme ?? {}) },
+    layout: { enabled: Boolean(base.layout?.enabled), source: base.layout?.source ?? "" },
     code: { ...FALLBACK_POLICY.code, ...base.code },
     scenes: { ...(base.scenes ?? {}) },
     suppression: { ...FALLBACK_POLICY.suppression, ...base.suppression },
@@ -35,20 +39,40 @@ function normalize(policy?: EmailPolicy | null): EmailPolicy {
 function canonical(policy: EmailPolicy) {
   const scenes: Record<string, unknown> = {};
   for (const [key, setting] of Object.entries(policy.scenes)) {
+    const template =
+      setting.template && (setting.template.body?.trim() || setting.template.text?.trim())
+        ? {
+            enabled: Boolean(setting.template.enabled),
+            format: setting.template.format === "html" ? "html" : "mjml",
+            body: setting.template.body ?? "",
+            text: setting.template.text ?? ""
+          }
+        : undefined;
     const trimmed = {
       enabled: setting.enabled,
       subject: setting.subject?.trim() || undefined,
       title: setting.title?.trim() || undefined,
       lead: setting.lead?.trim() || undefined,
-      footer: setting.footer?.trim() || undefined
+      footer: setting.footer?.trim() || undefined,
+      template
     };
     if (Object.values(trimmed).some((value) => value !== undefined)) scenes[key] = trimmed;
   }
   const brand = Object.fromEntries(
     Object.entries(policy.brand).map(([key, value]) => [key, (value ?? "").trim()]).filter(([, value]) => value)
   );
+  const theme = Object.fromEntries(
+    Object.entries(policy.theme ?? {}).filter(
+      ([key, value]) => value !== undefined && value !== null && value !== "" && !(key === "logoHeight" && value === 0)
+    )
+  );
+  const layout = policy.layout?.source?.trim()
+    ? { enabled: Boolean(policy.layout.enabled), source: policy.layout.source }
+    : null;
   return JSON.stringify({
     brand,
+    theme: Object.fromEntries(Object.entries(theme).sort(([a], [b]) => a.localeCompare(b))),
+    layout,
     code: policy.code,
     scenes: Object.fromEntries(Object.entries(scenes).sort(([a], [b]) => a.localeCompare(b))),
     suppression: policy.suppression,

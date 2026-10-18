@@ -28,6 +28,30 @@ export type EmailCodePolicy = {
   ipHourly: number;
 };
 
+/** 主题设计令牌，留空的项用内置主题 */
+export type EmailTheme = {
+  background?: string;
+  card?: string;
+  radius?: number;
+  font?: string;
+  logoAlign?: "left" | "center" | string;
+  logoHeight?: number;
+  header?: "plain" | "bar" | "banner" | string;
+};
+
+/** 自定义版式：enabled 为 false 时源码保留但不生效 */
+export type EmailLayoutTemplate = { enabled: boolean; source?: string };
+
+/** 场景的完整自定义模板 */
+export type EmailSceneTemplate = {
+  enabled: boolean;
+  /** mjml（片段套进版式；以 <mjml 开头的完整文档不套）或 html（完整 HTML 文档） */
+  format?: "mjml" | "html" | string;
+  body?: string;
+  /** 纯文本模板，留空时从 HTML 抓取 */
+  text?: string;
+};
+
 export type EmailSceneSetting = {
   /** 只对可关闭的场景有意义；缺省按场景默认 */
   enabled?: boolean;
@@ -35,10 +59,13 @@ export type EmailSceneSetting = {
   title?: string;
   lead?: string;
   footer?: string;
+  template?: EmailSceneTemplate | null;
 };
 
 export type EmailPolicy = {
   brand: EmailBrand;
+  theme: EmailTheme;
+  layout: EmailLayoutTemplate;
   code: EmailCodePolicy;
   scenes: Record<string, EmailSceneSetting>;
   suppression: { hardBounce: boolean; complaint: boolean };
@@ -74,12 +101,45 @@ export type EmailScene = {
   purposes: string[] | null;
 };
 
+export type EmailTemplateReferenceItem = { name: string; syntax: string; description: string };
+
+export type EmailTemplateReference = {
+  globals: EmailTemplateReferenceItem[];
+  theme: EmailTemplateReferenceItem[];
+  components: EmailTemplateReferenceItem[];
+  filters: EmailTemplateReferenceItem[];
+};
+
+export type EmailThemeDefaults = {
+  accent: string;
+  background: string;
+  card: string;
+  radius: number;
+  font: string;
+  logoAlign: string;
+  logoHeight: number;
+  header: string;
+};
+
 export type EmailSceneCatalog = {
   scenes: EmailScene[];
   categories: Array<{ key: string; name: string }>;
+  /** 内置模板源码：版式、纯文本、每个场景的正文（键为场景键，另有 blocks） */
+  templates: { layout: string; text: string; bodies: Record<string, string> };
+  reference: EmailTemplateReference;
+  theme: { defaults: EmailThemeDefaults; fonts: string[]; headers: string[] };
 };
 
-export type EmailPreview = { scene: string; subject: string; html: string; text: string };
+/** 模板问题。part：layout 版式 / body 正文 / text 纯文本 / copy 文案 */
+export type EmailTemplateProblem = { part: string; line?: number; message: string };
+
+export type EmailPreview = {
+  scene: string;
+  subject: string;
+  html: string;
+  text: string;
+  problems: EmailTemplateProblem[];
+};
 
 export type EmailCount = { key: string; count: number };
 
