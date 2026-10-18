@@ -214,7 +214,9 @@ func TestCloudflareQuickSetupIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM storage_pools WHERE id = $1`, poolSaved.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM storage_pools WHERE id = $1`, poolSaved.ID)
+	})
 	result, err := storage.SetupCloudflareR2(ctx, CloudflareSetupInput{
 		CloudflareTokenInput: CloudflareTokenInput{Token: fakeSetupToken, AccountID: account},
 		Bucket:               "aegis-files", CredentialMode: CloudflareCredentialCreate, PublicAccess: CloudflarePublicR2Dev,
@@ -232,7 +234,9 @@ func TestCloudflareQuickSetupIntegration(t *testing.T) {
 	if result.Config == nil {
 		t.Fatal("应保存存储源")
 	}
-	t.Cleanup(func() { _, _ = pool.Exec(context.Background(), `DELETE FROM storage_configs WHERE id = $1`, result.Config.ID) })
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(), `DELETE FROM storage_configs WHERE id = $1`, result.Config.ID)
+	})
 	if result.Probe == nil || !result.Probe.OK {
 		t.Fatalf("深度检测应通过：%+v", result.Probe)
 	}
