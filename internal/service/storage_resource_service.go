@@ -296,6 +296,12 @@ func (s *StorageResourceService) GetActiveUploadRules(ctx context.Context, confi
 // ════════════════════════════════════════════════════════════
 
 func (s *StorageResourceService) UpsertCDNConfig(ctx context.Context, configID int64, input storagedomain.UpsertCDNConfigInput) (*storagedomain.CDNConfig, error) {
+	// 签名密钥留空表示不修改：编辑表单拿不到原值。
+	if strings.TrimSpace(input.SignURLSecret) == "" {
+		if existing, err := s.pg.GetCDNConfig(ctx, configID); err == nil && existing != nil {
+			input.SignURLSecret = existing.SignURLSecret
+		}
+	}
 	if err := normalizeCDNInput(&input); err != nil {
 		return nil, err
 	}
