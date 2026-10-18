@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -18,7 +19,17 @@ import (
 type StorageResourceService struct {
 	log *zap.Logger
 	pg  *pgrepo.Repository
+	// objects 物理删除对象（StorageService.DeleteObject）。没注入时永久删除只删索引。
+	objects storageObjectRemover
 }
+
+// storageObjectRemover 从存储里删掉对象并移除索引。
+type storageObjectRemover interface {
+	DeleteObject(ctx context.Context, configID int64, objectKey string) error
+}
+
+// SetObjectRemover 注入物理删除能力（bootstrap 中调用）。
+func (s *StorageResourceService) SetObjectRemover(remover storageObjectRemover) { s.objects = remover }
 
 // NewStorageResourceService 创建存储资源服务
 func NewStorageResourceService(log *zap.Logger, pg *pgrepo.Repository) *StorageResourceService {
@@ -94,7 +105,7 @@ func (s *StorageResourceService) BatchMutateObjects(ctx context.Context, action 
 	case storagedomain.BatchActionRestore:
 		affected, err = s.pg.BatchSetObjectStatus(ctx, ids, "active")
 	case storagedomain.BatchActionPurge:
-		affected, err = s.pg.BatchPermanentDeleteObjects(ctx, ids)
+		affected, err = s.purgeObjects(ctx, ids)
 	default:
 		return nil, apperrors.New(40088, http.StatusBadRequest, "不支持的批量操作")
 	}
@@ -152,16 +163,78 @@ func (s *StorageResourceService) RestoreStorageObject(ctx context.Context, id in
 	return s.pg.RestoreStorageObject(ctx, id)
 }
 
+// PermanentDeleteStorageObject 永久删除：对象从存储里删掉，索引一并移除。
 func (s *StorageResourceService) PermanentDeleteStorageObject(ctx context.Context, id int64) error {
-	return s.pg.PermanentDeleteStorageObject(ctx, id)
+	affected, err := s.purgeObjects(ctx, []int64{id})
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return apperrors.New(40482, http.StatusNotFound, "存储对象不存在")
+	}
+	return nil
+}
+
+// purgeObjects 逐个物理删除。删除失败的对象索引保留（还能在回收站里看到、再试一次），
+// 而不是只删索引让对象在桶里变成没人知道的孤儿。
+func (s *StorageResourceService) purgeObjects(ctx context.Context, ids []int64) (int64, error) {
+	if s.objects == nil {
+		return s.pg.BatchPermanentDeleteObjects(ctx, ids)
+	}
+	objects, err := s.pg.ListStorageObjectsByIDs(ctx, ids)
+	if err != nil {
+		return 0, err
+	}
+	var affected int64
+	var firstErr error
+	for _, obj := range objects {
+		if err := s.objects.DeleteObject(ctx, obj.ConfigID, obj.ObjectKey); err != nil {
+			s.log.Warn("永久删除对象失败", zap.Int64("object_id", obj.ID), zap.String("key", obj.ObjectKey), zap.Error(err))
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		// DeleteObject 按配置 + 键清索引；同键的重复行由这里按 id 收尾。
+		_, _ = s.pg.BatchPermanentDeleteObjects(ctx, []int64{obj.ID})
+		affected++
+	}
+	if affected == 0 && firstErr != nil {
+		return 0, apperrors.New(50386, http.StatusServiceUnavailable, "删除存储中的对象失败，请稍后重试")
+	}
+	return affected, nil
 }
 
 func (s *StorageResourceService) ListDeletedObjects(ctx context.Context, configID *int64, page, limit int) ([]storagedomain.StorageObject, int64, error) {
 	return s.pg.ListDeletedObjects(ctx, configID, page, limit)
 }
 
+// CleanupDeletedObjects 清空回收站里放了超过 olderThan 的对象（物理删除）。
 func (s *StorageResourceService) CleanupDeletedObjects(ctx context.Context, olderThan time.Duration) (int64, error) {
-	return s.pg.CleanupDeletedObjects(ctx, olderThan)
+	if s.objects == nil {
+		return s.pg.CleanupDeletedObjects(ctx, olderThan)
+	}
+	cutoff := time.Now().Add(-olderThan)
+	var total int64
+	for {
+		batch, err := s.pg.DeletedStorageObjectsBefore(ctx, cutoff, 200)
+		if err != nil {
+			return total, err
+		}
+		if len(batch) == 0 {
+			return total, nil
+		}
+		ids := make([]int64, len(batch))
+		for i, obj := range batch {
+			ids[i] = obj.ID
+		}
+		affected, err := s.purgeObjects(ctx, ids)
+		total += affected
+		if err != nil || affected == 0 {
+			// 一整批都删不掉（存储不可用）：停下，免得同一批反复重试成死循环。
+			return total, err
+		}
+	}
 }
 
 // ════════════════════════════════════════════════════════════
@@ -169,6 +242,15 @@ func (s *StorageResourceService) CleanupDeletedObjects(ctx context.Context, olde
 // ════════════════════════════════════════════════════════════
 
 func (s *StorageResourceService) CreateStorageRule(ctx context.Context, input storagedomain.CreateRuleInput) (*storagedomain.StorageRule, error) {
+	input.Name = strings.TrimSpace(input.Name)
+	if input.Name == "" || len([]rune(input.Name)) > 128 {
+		return nil, apperrors.New(42277, http.StatusUnprocessableEntity, "规则名称不能为空，且不超过 128 字")
+	}
+	data, err := NormalizeStorageRule(input.RuleType, input.RuleData)
+	if err != nil {
+		return nil, err
+	}
+	input.RuleData = data
 	return s.pg.CreateStorageRule(ctx, input)
 }
 
@@ -177,7 +259,28 @@ func (s *StorageResourceService) ListStorageRules(ctx context.Context, configID 
 }
 
 func (s *StorageResourceService) UpdateStorageRule(ctx context.Context, id int64, name string, ruleData map[string]any, isActive bool) error {
-	return s.pg.UpdateStorageRule(ctx, id, name, ruleData, isActive)
+	current, err := s.pg.ListStorageRules(ctx, nil, nil)
+	if err != nil {
+		return err
+	}
+	ruleType := ""
+	for _, rule := range current {
+		if rule.ID == id {
+			ruleType = rule.RuleType
+		}
+	}
+	if ruleType == "" {
+		return apperrors.New(40489, http.StatusNotFound, "规则不存在")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || len([]rune(name)) > 128 {
+		return apperrors.New(42277, http.StatusUnprocessableEntity, "规则名称不能为空，且不超过 128 字")
+	}
+	data, err := NormalizeStorageRule(ruleType, ruleData)
+	if err != nil {
+		return err
+	}
+	return s.pg.UpdateStorageRule(ctx, id, name, data, isActive)
 }
 
 func (s *StorageResourceService) DeleteStorageRule(ctx context.Context, id int64) error {
@@ -193,7 +296,43 @@ func (s *StorageResourceService) GetActiveUploadRules(ctx context.Context, confi
 // ════════════════════════════════════════════════════════════
 
 func (s *StorageResourceService) UpsertCDNConfig(ctx context.Context, configID int64, input storagedomain.UpsertCDNConfigInput) (*storagedomain.CDNConfig, error) {
-	return s.pg.UpsertCDNConfig(ctx, configID, input)
+	if err := normalizeCDNInput(&input); err != nil {
+		return nil, err
+	}
+	saved, err := s.pg.UpsertCDNConfig(ctx, configID, input)
+	if err == nil {
+		InvalidateCDNConfig(configID)
+	}
+	return saved, err
+}
+
+// normalizeCDNInput 校验 CDN 设置：名单里的 IP / CIDR 必须能解析，免得一条笔误把所有人挡在外面。
+func normalizeCDNInput(input *storagedomain.UpsertCDNConfigInput) error {
+	input.CDNDomain = strings.TrimRight(strings.TrimSpace(input.CDNDomain), "/")
+	input.CDNProtocol = strings.ToLower(strings.TrimSpace(input.CDNProtocol))
+	if input.CDNProtocol != "http" {
+		input.CDNProtocol = "https"
+	}
+	if input.CacheMaxAge < 0 {
+		input.CacheMaxAge = 0
+	}
+	if input.SignURLEnabled && strings.TrimSpace(input.SignURLSecret) == "" {
+		return apperrors.New(42277, http.StatusUnprocessableEntity, "开启签名 URL 时必须填写签名密钥")
+	}
+	for _, entry := range input.IPWhitelist {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if strings.Contains(entry, "/") {
+			if _, _, err := net.ParseCIDR(entry); err != nil {
+				return apperrors.New(42277, http.StatusUnprocessableEntity, "IP 白名单里的网段无效："+entry)
+			}
+		} else if net.ParseIP(entry) == nil {
+			return apperrors.New(42277, http.StatusUnprocessableEntity, "IP 白名单里的地址无效："+entry)
+		}
+	}
+	return nil
 }
 
 func (s *StorageResourceService) GetCDNConfig(ctx context.Context, configID int64) (*storagedomain.CDNConfig, error) {
@@ -201,7 +340,11 @@ func (s *StorageResourceService) GetCDNConfig(ctx context.Context, configID int6
 }
 
 func (s *StorageResourceService) DeleteCDNConfig(ctx context.Context, configID int64) error {
-	return s.pg.DeleteCDNConfig(ctx, configID)
+	err := s.pg.DeleteCDNConfig(ctx, configID)
+	if err == nil {
+		InvalidateCDNConfig(configID)
+	}
+	return err
 }
 
 // ════════════════════════════════════════════════════════════
@@ -238,56 +381,6 @@ func (s *StorageResourceService) GetUsageHistory(ctx context.Context, configID i
 
 func (s *StorageResourceService) GetObjectTypeStats(ctx context.Context, configID *int64) ([]storagedomain.TypeStat, error) {
 	return s.pg.GetObjectTypeStats(ctx, configID)
-}
-
-// CollectUsageSnapshots 遍历所有存储配置，采集用量快照
-func (s *StorageResourceService) CollectUsageSnapshots(ctx context.Context) error {
-	configs, err := s.pg.ListStorageConfigs(ctx, storagedomain.ListQuery{})
-	if err != nil {
-		return err
-	}
-	for _, cfg := range configs {
-		// 统计该配置下的文件数量和大小
-		objects, _, err := s.pg.ListStorageObjects(ctx, storagedomain.ObjectListQuery{ConfigID: &cfg.ID, Status: "active", Page: 1, Limit: 1})
-		if err != nil {
-			s.log.Warn("采集用量快照失败", zap.Int64("configId", cfg.ID), zap.Error(err))
-			continue
-		}
-		_ = objects // 仅用于触发查询
-
-		// 使用聚合查询获取精确数据
-		var totalFiles, totalSize, activeFiles, deletedFiles int64
-		typeStats, err := s.pg.GetObjectTypeStats(ctx, &cfg.ID)
-		if err != nil {
-			s.log.Warn("获取类型统计失败", zap.Int64("configId", cfg.ID), zap.Error(err))
-			continue
-		}
-		for _, ts := range typeStats {
-			activeFiles += ts.Count
-			totalSize += ts.Size
-		}
-		totalFiles = activeFiles
-
-		// 统计已删除文件数
-		_, deletedCount, err := s.pg.ListDeletedObjects(ctx, &cfg.ID, 1, 1)
-		if err == nil {
-			deletedFiles = deletedCount
-			totalFiles += deletedFiles
-		}
-
-		snapshot := storagedomain.UsageSnapshot{
-			ConfigID:     cfg.ID,
-			AppID:        cfg.AppID,
-			TotalFiles:   totalFiles,
-			TotalSize:    totalSize,
-			ActiveFiles:  activeFiles,
-			DeletedFiles: deletedFiles,
-		}
-		if err := s.pg.CreateUsageSnapshot(ctx, snapshot); err != nil {
-			s.log.Warn("写入用量快照失败", zap.Int64("configId", cfg.ID), zap.Error(err))
-		}
-	}
-	return nil
 }
 
 // GetUsageStats 获取存储用量统计（组合最新快照 + 类型统计）

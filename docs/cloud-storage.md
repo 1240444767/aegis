@@ -13,6 +13,7 @@
 因此 S3 / MinIO / 阿里云 OSS / 腾讯云 COS / 七牛 / WebDAV / OneDrive / Dropbox /
 Google Drive / Azure Blob / 本地磁盘都能直接用，平台治理的「限制存储」也随之生效。
 
+写入目标也可以是一个存储池（按池名选择，见 [存储中心](storage.md)）。
 不超过 1 MiB（`DatabaseCopyLimit`）的修订另在 `app_cloud_item_revisions.content` 里存一份副本，
 读取时**副本优先**，没有副本才读存储桶（迁移 000104 之前的修订在下次被读到时补写，补写前核对 sha256）。
 起因：生产曾用本地磁盘存储，放在容器里的 `data/storage` 每次重新部署都被清空，修订行还指向那些对象，

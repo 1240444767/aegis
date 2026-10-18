@@ -66,6 +66,8 @@ type APIApp struct {
 	Governance *service.PlatformGovernanceService
 	// CloudStorage 用户云存储：后台循环清理过期回收站，退出时必须 Stop
 	CloudStorage *service.CloudStorageService
+	// Storage 存储中心：存储池探活、用量刷新、迁移任务的后台循环。
+	Storage *service.StorageService
 	// AccountDeletion 账号注销：后台循环执行到期的冷静期申请并发到期提醒，退出时必须 Stop
 	AccountDeletion *service.AccountDeletionService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
@@ -495,6 +497,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	vipService.SetPaymentService(paymentService)
 	sessionMgmtService := service.NewSessionMgmtService(log, pg, sessions, realtimeService)
 	storageResourceService := service.NewStorageResourceService(log, pg)
+	storageResourceService.SetObjectRemover(storageService)
 	userMasterService := service.NewUserMasterService(log, pg)
 	reportService := service.NewReportService(log, pg)
 	riskService := service.NewRiskService(cfg.Risk, log, pg, redisClient, cfg.Redis.KeyPrefix)
@@ -744,6 +747,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Risk:               riskService,
 		Governance:         governanceService,
 		CloudStorage:       cloudStorageService,
+		Storage:            storageService,
 		AccountDeletion:    accountDeletionService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
@@ -776,6 +780,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.CloudStorage != nil {
 		a.CloudStorage.Start(ctx)
 	}
+	if a.Storage != nil {
+		a.Storage.Start(ctx)
+	}
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Start(ctx)
 	}
@@ -807,6 +814,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.CloudStorage != nil {
 		a.CloudStorage.Stop()
+	}
+	if a.Storage != nil {
+		a.Storage.Stop()
 	}
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Stop()

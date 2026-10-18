@@ -419,6 +419,7 @@ type Stats struct {
 // StorageTarget 内容实际写往的存储配置（控制台展示「写到了哪里」）。
 type StorageTarget struct {
 	ConfigID   int64  `json:"configId"`
+	PoolID     int64  `json:"poolId,omitempty"`
 	ConfigName string `json:"configName"`
 	Provider   string `json:"provider"`
 	Scope      string `json:"scope"`

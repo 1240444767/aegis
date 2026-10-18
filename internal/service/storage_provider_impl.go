@@ -12,13 +12,13 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	storagedomain "aegis/internal/domain/storage"
 	apperrors "aegis/pkg/errors"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/aws/aws-sdk-go-v2/aws"
-	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
@@ -29,26 +29,50 @@ import (
 	cos "github.com/tencentyun/cos-go-sdk-v5"
 )
 
+// s3StorageProvider S3 兼容存储的公共内核：Amazon S3 / 任意 S3 兼容端点与 Cloudflare R2 共用。
+//
+// 差异只在三处，都由构造时注入：
+//   - resolve：怎样从 config_data 得到端点、地区、桶与凭据（R2 只要账户 ID，端点是拼出来的）；
+//   - tune：SDK 客户端的额外选项（R2 关掉 SDK 默认附加的校验和尾部）；
+//   - httpClient：R2 走出海网关，S3 兼容端点可能在内网（自建 MinIO），保留 SDK 默认的直连。
 type s3StorageProvider struct {
+	name    string
+	resolve func(data map[string]any) (*storagedomain.S3Config, error)
+	tune    func(o *awss3.Options)
+	// transfer 分片上传器的选项：它有自己的一份校验和设置，不跟客户端的走。
+	transfer   func(o *transfermanager.Options)
 	httpClient *http.Client
+	// presignReads 端点本身不对外公开（R2）：没有公开域名时，公开链接改发预签名 GET。
+	presignReads bool
+	// clients 按配置指纹缓存 SDK 客户端。每次请求都新建客户端要重新解析选项、
+	// 重建凭据缓存，上传热路径上这是纯开销。
+	clients sync.Map
 }
 
-func newS3StorageProvider(httpClient *http.Client) storageProvider {
-	return &s3StorageProvider{httpClient: httpClient}
+func newS3StorageProvider(httpClient *http.Client) *s3StorageProvider {
+	return &s3StorageProvider{name: storagedomain.ProviderS3, resolve: decodeS3StorageConfig}
 }
 
-func (p *s3StorageProvider) Name() string { return storagedomain.ProviderS3 }
+func (p *s3StorageProvider) Name() string {
+	if p.name == "" {
+		return storagedomain.ProviderS3
+	}
+	return p.name
+}
 
 func (p *s3StorageProvider) HealthCheck(ctx context.Context, cfg *storagedomain.Config) (map[string]any, error) {
 	client, raw, err := p.client(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
+	if _, err := client.HeadBucket(ctx, &awss3.HeadBucketInput{Bucket: &raw.Bucket}); err != nil {
+		return nil, err
+	}
 	output, err := client.ListObjectsV2(ctx, &awss3.ListObjectsV2Input{Bucket: &raw.Bucket, MaxKeys: aws.Int32(1)})
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"bucket": raw.Bucket, "region": raw.Region, "keyCount": len(output.Contents)}, nil
+	return map[string]any{"bucket": raw.Bucket, "region": raw.Region, "endpoint": raw.Endpoint, "keyCount": len(output.Contents)}, nil
 }
 
 func (p *s3StorageProvider) Upload(ctx context.Context, cfg *storagedomain.Config, input storagedomain.UploadInput) (*storagedomain.StoredObject, error) {
@@ -56,7 +80,11 @@ func (p *s3StorageProvider) Upload(ctx context.Context, cfg *storagedomain.Confi
 	if err != nil {
 		return nil, err
 	}
-	uploader := transfermanager.New(client)
+	var transferOptions []func(*transfermanager.Options)
+	if p.transfer != nil {
+		transferOptions = append(transferOptions, p.transfer)
+	}
+	uploader := transfermanager.New(client, transferOptions...)
 	result, err := uploader.UploadObject(ctx, &transfermanager.UploadObjectInput{
 		Bucket:        &raw.Bucket,
 		Key:           &input.ObjectKey,
@@ -99,13 +127,38 @@ func (p *s3StorageProvider) Open(ctx context.Context, cfg *storagedomain.Config,
 	}, nil
 }
 
+// s3PresignedReadMaxTTL SigV4 预签名地址的上限是 7 天。
+const s3PresignedReadMaxTTL = 7 * 24 * time.Hour
+
 func (p *s3StorageProvider) PublicURL(ctx context.Context, cfg *storagedomain.Config, objectKey string, expiresIn time.Duration) (string, error) {
-	raw, err := decodeS3StorageConfig(cfg.ConfigData)
-	if err != nil {
-		return "", err
-	}
 	if strings.TrimSpace(cfg.BaseURL) != "" {
 		return composeStaticObjectURL(cfg.BaseURL, objectKey), nil
+	}
+	if p.presignReads {
+		// R2 的 S3 端点只认签名请求：没配公开域名时只能给有时效的预签名地址，
+		// 永久地址（expiresIn = 0）给不出来 —— 保存配置时已经拦过「公开 + 不代理 + 无域名」。
+		if expiresIn <= 0 {
+			return "", fmt.Errorf("%s 未配置公开访问域名，无法生成永久地址", p.name)
+		}
+		client, raw, err := p.client(ctx, cfg)
+		if err != nil {
+			return "", err
+		}
+		signed, err := awss3.NewPresignClient(client).PresignGetObject(ctx, &awss3.GetObjectInput{
+			Bucket: &raw.Bucket, Key: &objectKey,
+		}, awss3.WithPresignExpires(min(expiresIn, s3PresignedReadMaxTTL)))
+		if err != nil {
+			return "", err
+		}
+		return signed.URL, nil
+	}
+	resolve := p.resolve
+	if resolve == nil {
+		resolve = decodeS3StorageConfig
+	}
+	raw, err := resolve(cfg.ConfigData)
+	if err != nil {
+		return "", err
 	}
 	base := strings.TrimRight(strings.TrimSpace(raw.Endpoint), "/")
 	if raw.ForcePathStyle {
@@ -120,23 +173,35 @@ func (p *s3StorageProvider) PublicURL(ctx context.Context, cfg *storagedomain.Co
 	return parsed.String(), nil
 }
 
-func (p *s3StorageProvider) client(ctx context.Context, cfg *storagedomain.Config) (*awss3.Client, *storagedomain.S3Config, error) {
-	raw, err := decodeS3StorageConfig(cfg.ConfigData)
+func (p *s3StorageProvider) client(_ context.Context, cfg *storagedomain.Config) (*awss3.Client, *storagedomain.S3Config, error) {
+	resolve := p.resolve
+	if resolve == nil {
+		resolve = decodeS3StorageConfig
+	}
+	raw, err := resolve(cfg.ConfigData)
 	if err != nil {
 		return nil, nil, err
 	}
-	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
-		awsconfig.WithRegion(raw.Region),
-		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(raw.AccessKeyID, raw.SecretAccessKey, raw.SessionToken)),
-	)
-	if err != nil {
-		return nil, nil, err
+	fingerprint := strings.Join([]string{raw.Endpoint, raw.Region, raw.Bucket, raw.AccessKeyID, raw.SecretAccessKey,
+		raw.SessionToken, strconv.FormatBool(raw.ForcePathStyle)}, "\x00")
+	if cached, ok := p.clients.Load(fingerprint); ok {
+		return cached.(*awss3.Client), raw, nil
 	}
-	client := awss3.NewFromConfig(awsCfg, func(o *awss3.Options) {
-		o.UsePathStyle = raw.ForcePathStyle
-		o.BaseEndpoint = &raw.Endpoint
-	})
-	return client, raw, nil
+	options := awss3.Options{
+		Region:       raw.Region,
+		Credentials:  aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider(raw.AccessKeyID, raw.SecretAccessKey, raw.SessionToken)),
+		BaseEndpoint: aws.String(raw.Endpoint),
+		UsePathStyle: raw.ForcePathStyle,
+	}
+	if p.httpClient != nil {
+		options.HTTPClient = p.httpClient
+	}
+	if p.tune != nil {
+		p.tune(&options)
+	}
+	client := awss3.New(options)
+	actual, _ := p.clients.LoadOrStore(fingerprint, client)
+	return actual.(*awss3.Client), raw, nil
 }
 
 type aliyunOSSProvider struct {

@@ -103,6 +103,7 @@ graph TD
 | `pkg/receipt/` | **支付凭证 PDF**：10 语言 A4 排版 + 字体决策 + 分页 | [docs](docs/payment-receipt.md) |
 | **交易与凭证** | 订单与钱包流水**两类主体**都能出凭证；同一笔钱只出一份（挂着订单的流水由订单出具） | [docs](docs/payment-receipt.md#两类凭证主体) |
 | **会员与试用** | 会员判定收成一个入口（是不是会员 / 还剩多久 / 是不是**试用** / 试用还能不能领）；试用是套餐的一种，一人一次由唯一约束保证。功能权益**跟随套餐当前配置**（改套餐即对在期会员生效，含降级），退款冲正与扣减会让对应那段会员期不再算数 | [service](internal/service/CLAUDE.md#权益跟随套餐会员段segmentgo--vip_segment_repositorygo) |
+| **存储中心** | 十二家提供商（含 Cloudflare R2，S3 与 R2 共用 aws-sdk-go-v2 内核）；**存储池**按优先级 / 轮询 / 权重 / 最少占用选成员，满了或出错自动换成员，失败指数退避 + 后台探活恢复；读取支持迁移后的转向与池内回退；跨存储迁移断点续传；上传规则、CDN 防盗链、永久删除真删对象 | [docs](docs/storage.md) |
 | **用户云存储** | 每个用户一块私有空间，按「命名空间 / 键」存任意文档；内容走应用的存储配置（十一家提供商通用），库里只存索引与账目。修订号乐观并发、修订可回滚、删除先进回收站；配额计入全部留存修订，管理员可逐人覆盖与冻结 | [docs](docs/cloud-storage.md) |
 | **激励广告** | 看完激励视频按场景发会员 / 积分 / 经验 / 抽奖次数。平台回调验签（`sha256(securityKey:transId)`）与客户端上报靠 `transId` 对上，默认**两方到齐才发**；限额与冷却在锁住用户行后判定，`UNIQUE(appid, trans_id)` 兜底一次一发。送出的会员带场景的**会员权益**（功能、是否免广告），跟随场景当前配置 | [docs](docs/rewarded-ads.md) |
 | **广告服务策略** | 是否同意广告服务记在**账号**上：拒绝或未选择的用户只有应用配置的**基础服务**，有效会员可免除；条款版本只升不降，调高即全员重新选择。未登录时客户端记本机、登录后 `ifAbsent` 同步；开屏广告逐次记录并挂到账号上，`eventId` 去重、按账号/设备频控 | [docs](docs/ad-policy.md) |
@@ -402,7 +403,7 @@ docker build -f deploy/docker/console.Dockerfile \
 | 权限控制 | Casbin v2 (RBAC) |
 | 密码强度 | zxcvbn（trustelem 端口，猜测次数估算）+ PRECIS RFC 8265 OpaqueString（x/text，归一化与合法性）+ 自带中文语境弱口令补充表，详见 [internal/service](internal/service/CLAUDE.md#密码强度评估--zxcvbn不是字符类规则) |
 | 富文本净化 | bluemonday（公告正文写入时净化，白名单放行 tiptap 的排版标签与 class，拒绝 style 与事件属性）+ html2text（提取纯文本摘要），详见 [internal/service](internal/service/CLAUDE.md#应用级内容中心app_contentgo) |
-| 多云存储 | Azure Blob / Aliyun OSS / AWS S3 / Tencent COS / Qiniu / WebDAV |
+| 多云存储 | Cloudflare R2 / AWS S3（aws-sdk-go-v2）/ MinIO / Azure Blob / Aliyun OSS / Tencent COS / Qiniu / WebDAV / OneDrive / Dropbox / Google Drive / 本地磁盘，经存储池统一调度，详见 [docs/storage.md](docs/storage.md) |
 | OAuth2 | QQ / 微信 / GitHub / Google / Microsoft / 微博 |
 | 支付渠道 | 17 个内置渠道，均由 `Provider.Describe()` 自描述（详见 [internal/service/CLAUDE.md](internal/service/CLAUDE.md#支付网关)）：<br>内部钱包 / 支付宝 (smartwalle) / 微信支付 (官方 wechatpay-go) / 易支付系聚合（易支付·彩虹·虎皮椒·PAYJS·码支付·V免签）/ 爱发电 / Stripe (stripe-go) / PayPal (plutov) / Paddle / Lemon Squeezy / Square / Razorpay / Coinbase Commerce |
 | 邮件出口 | 九档可插拔 provider，一律优先官方 SDK：`smtp` 直连（go-mail）/ `zeabur` REST / `ses`（aws-sdk-go-v2 sesv2，Raw MIME 带附件）/ `resend`（resend-go）/ `sendgrid`（sendgrid-go）/ `mailgun`（mailgun-go v5）/ `postmark`（REST，无官方 Go SDK）/ `aliyun`（dm-20151123）/ `tencent`（tencentcloud-sdk-go ses）。配置全部落库、控制台动态表单由服务商自述驱动，详见 [docs/email.md](docs/email.md)<br>**Zeabur 平台封禁出站 SMTP 端口**，部署在其上时不能用 `smtp` 档 |

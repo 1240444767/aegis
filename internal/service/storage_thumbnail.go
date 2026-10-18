@@ -81,18 +81,14 @@ func (s *StorageService) RenderThumbnail(ctx context.Context, configID int64, ob
 	if err != nil {
 		return nil, err
 	}
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil, apperrors.New(40482, http.StatusNotFound, "未配置可用存储服务")
 	}
 	if err := validateStorageObjectKey(objectKey); err != nil {
 		return nil, err
 	}
-	provider, err := s.buildProvider(cfg)
-	if err != nil {
-		return nil, err
-	}
 
-	reader, err := provider.Open(ctx, cfg, objectKey)
+	reader, _, err := s.openStoredObject(ctx, cfg, objectKey)
 	if err != nil {
 		s.log.Warn("缩略图读取源对象失败", zap.Int64("config_id", configID),
 			zap.String("provider", cfg.Provider), zap.String("key", objectKey), zap.Error(err))

@@ -68,4 +68,28 @@ func init() {
 		Write("POST /api/admin/platform/storage-config/delete", "删除平台存储配置", "存储配置", SeverityHigh),
 		Write("POST /api/admin/platform/storage-config/test", "测试平台存储配置", "存储配置", SeverityLow),
 	)
+
+	// 存储中心：存储池、运行事件、深度检测、CORS、迁移
+	Register("storage",
+		View("GET /api/admin/platform/storage/overview", "查看存储中心总览", ""),
+		View("GET /api/admin/platform/storage/events", "查看存储运行事件", ""),
+		Write("POST /api/admin/platform/storage/usage/collect", "采集存储用量快照", "", SeverityLow),
+		View("GET /api/admin/platform/storage/pools", "查看存储池列表", ""),
+		View("GET /api/admin/platform/storage/pools/:poolId", "查看存储池详情", "存储池"),
+		Write("POST /api/admin/platform/storage/pools", "新建存储池", "存储池", SeverityHigh),
+		Write("PUT /api/admin/platform/storage/pools/:poolId", "编辑存储池", "存储池", SeverityHigh),
+		Write("DELETE /api/admin/platform/storage/pools/:poolId", "删除存储池", "存储池", SeverityHigh),
+		Write("POST /api/admin/platform/storage/pools/:poolId/simulate", "模拟存储池写入", "存储池", SeverityInfo),
+		Write("POST /api/admin/platform/storage/configs/:configId/probe", "深度检测存储配置", "存储配置", SeverityLow),
+		Write("POST /api/admin/platform/storage/configs/:configId/reset-health", "清除存储退避状态", "存储配置", SeverityMedium),
+		View("GET /api/admin/platform/storage/configs/:configId/cors", "查看存储桶 CORS 规则", "存储配置"),
+		Write("PUT /api/admin/platform/storage/configs/:configId/cors", "写入存储桶 CORS 规则", "存储配置", SeverityHigh),
+		Write("DELETE /api/admin/platform/storage/configs/:configId/redirect", "撤销存储读取转向", "存储配置", SeverityHigh),
+		View("GET /api/admin/platform/storage/migrations", "查看存储迁移任务", ""),
+		View("GET /api/admin/platform/storage/migrations/:migrationId", "查看存储迁移详情", "迁移任务"),
+		Write("POST /api/admin/platform/storage/migrations", "新建存储迁移", "迁移任务", SeverityHigh),
+		Write("POST /api/admin/platform/storage/migrations/:migrationId/pause", "暂停存储迁移", "迁移任务", SeverityMedium),
+		Write("POST /api/admin/platform/storage/migrations/:migrationId/resume", "继续存储迁移", "迁移任务", SeverityMedium),
+		Write("POST /api/admin/platform/storage/migrations/:migrationId/cancel", "取消存储迁移", "迁移任务", SeverityHigh),
+	)
 }

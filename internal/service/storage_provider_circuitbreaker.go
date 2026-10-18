@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -58,15 +59,54 @@ func (p *circuitBreakeredStorageProvider) Upload(ctx context.Context, cfg *stora
 	return value, nil
 }
 
+// Open 有两处与其他操作不同：
+//
+//   - 响应体要活过这次调用。resilience 在 fn 返回后就取消 callCtx，而 S3 / R2 的 GetObject
+//     把响应体留给调用方之后再读 —— 跟着 callCtx 走的话，代理下载读到一半就是 context canceled。
+//     所以 Open 用外层 ctx 派生的上下文，只在打开的过程中跟随 callCtx 的超时，打开之后脱钩，
+//     响应体 Close 时再取消；
+//   - 「对象不存在」不算存储故障：读取转向、池内回退会先在原处读到 404 再去别处，
+//     计入熔断失败的话，流量一大就把一个好好的存储熔断了。
 func (p *circuitBreakeredStorageProvider) Open(ctx context.Context, cfg *storagedomain.Config, objectKey string) (*storagedomain.ObjectReader, error) {
+	type outcome struct {
+		reader  *storagedomain.ObjectReader
+		missing error
+	}
 	breakerName := circuitbreaker.Name(p.name, "open")
-	value, err := resilience.Execute(ctx, breakerName, storageResilienceOptions("open"), func(callCtx context.Context) (*storagedomain.ObjectReader, error) {
-		return p.upstream.Open(callCtx, cfg, objectKey)
+	value, err := resilience.Execute(ctx, breakerName, storageResilienceOptions("open"), func(callCtx context.Context) (outcome, error) {
+		bodyCtx, cancel := context.WithCancel(ctx)
+		stop := context.AfterFunc(callCtx, cancel)
+		reader, err := p.upstream.Open(bodyCtx, cfg, objectKey)
+		stop()
+		if err != nil {
+			cancel()
+			if isStorageObjectNotFound(err) {
+				return outcome{missing: err}, nil
+			}
+			return outcome{}, err
+		}
+		reader.Body = &cancelOnClose{ReadCloser: reader.Body, cancel: cancel}
+		return outcome{reader: reader}, nil
 	})
 	if err != nil {
 		return nil, classifyStorageBreakerError(p.upstream.Name(), err)
 	}
-	return value, nil
+	if value.missing != nil {
+		return nil, value.missing
+	}
+	return value.reader, nil
+}
+
+// cancelOnClose 响应体关闭时取消它所属的请求上下文。
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
 }
 
 func (p *circuitBreakeredStorageProvider) PublicURL(ctx context.Context, cfg *storagedomain.Config, objectKey string, expiresIn time.Duration) (string, error) {
@@ -148,11 +188,17 @@ func storageResilienceOptions(operation string) resilience.Options {
 		Burst:       24,
 	}
 	switch operation {
-	case "upload", "open":
+	case "upload":
 		options.Timeout = timeutil.Seconds(20)
 		options.MaxRetries = 1
 		options.RatePerSec = 8
 		options.Burst = 16
+	case "open":
+		// 读是代理下载、头像、缩略图的热路径，限得和写一样紧会让一页图片排队。
+		options.Timeout = timeutil.Seconds(20)
+		options.MaxRetries = 1
+		options.RatePerSec = 64
+		options.Burst = 128
 	}
 	return options
 }

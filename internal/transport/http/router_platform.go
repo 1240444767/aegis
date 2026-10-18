@@ -60,4 +60,31 @@ func registerPlatformStorageRoutes(router *gin.Engine, h *Handler, deps RouterDe
 		globalStorageAdmin.POST("/delete", h.AdminGlobalStorageConfigDelete)
 		globalStorageAdmin.POST("/test", h.AdminGlobalStorageConfigTest)
 	}
+
+	// 存储中心：存储池、运行事件、深度检测、CORS、迁移。
+	storageCenter := router.Group("/api/admin/platform/storage")
+	storageCenter.Use(middleware.AdminAccess(adminService, appService, governanceService))
+	storageCenter.Use(middleware.AuditMiddleware(auditService))
+	{
+		storageCenter.GET("/overview", h.AdminStorageOverview)
+		storageCenter.GET("/events", h.AdminStorageEvents)
+		storageCenter.POST("/usage/collect", h.AdminCollectStorageUsage)
+		storageCenter.GET("/pools", h.AdminStoragePools)
+		storageCenter.POST("/pools", h.AdminCreateStoragePool)
+		storageCenter.GET("/pools/:poolId", h.AdminStoragePool)
+		storageCenter.PUT("/pools/:poolId", h.AdminUpdateStoragePool)
+		storageCenter.DELETE("/pools/:poolId", h.AdminDeleteStoragePool)
+		storageCenter.POST("/pools/:poolId/simulate", h.AdminSimulateStoragePool)
+		storageCenter.POST("/configs/:configId/probe", h.AdminProbeStorageConfig)
+		storageCenter.POST("/configs/:configId/reset-health", h.AdminResetStorageHealth)
+		storageCenter.GET("/configs/:configId/cors", h.AdminStorageCORS)
+		storageCenter.PUT("/configs/:configId/cors", h.AdminSetStorageCORS)
+		storageCenter.DELETE("/configs/:configId/redirect", h.AdminClearStorageRedirect)
+		storageCenter.GET("/migrations", h.AdminStorageMigrations)
+		storageCenter.POST("/migrations", h.AdminCreateStorageMigration)
+		storageCenter.GET("/migrations/:migrationId", h.AdminStorageMigration)
+		storageCenter.POST("/migrations/:migrationId/pause", h.AdminPauseStorageMigration)
+		storageCenter.POST("/migrations/:migrationId/resume", h.AdminResumeStorageMigration)
+		storageCenter.POST("/migrations/:migrationId/cancel", h.AdminCancelStorageMigration)
+	}
 }

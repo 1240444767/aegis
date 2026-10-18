@@ -156,6 +156,10 @@ var adminRouteRules = []RouteRule{
 	{Pattern: "/api/admin/platform/storage-config/list", Permission: PermPlatformStorageRead},
 	{Pattern: "/api/admin/platform/storage-config/detail", Permission: PermPlatformStorageRead},
 	{Pattern: "/api/admin/platform/storage-config/*", Permission: PermPlatformStorageWrite},
+	// 存储中心：读（总览、池、事件、迁移进度、CORS 现状）与写（池、检测、CORS、迁移、转向）。
+	// 深度检测会真的往桶里写一个探测对象，所以算写。
+	{Methods: readMethods, Pattern: "/api/admin/platform/storage/*", Permission: PermPlatformStorageRead},
+	{Pattern: "/api/admin/platform/storage/*", Permission: PermPlatformStorageWrite},
 	{Pattern: "/api/admin/platform/apps/:appkey/revoke-sessions", Permission: PermPlatformAppDanger},
 	{Pattern: "/api/admin/platform/governance/appeals/:appealId/review", Permission: PermPlatformAppealReview},
 	{Methods: readMethods, Pattern: "/api/admin/platform/*", Permission: PermPlatformAppRead},

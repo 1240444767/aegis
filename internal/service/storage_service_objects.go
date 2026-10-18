@@ -18,10 +18,19 @@ import (
 // 上传仍走 UploadForApp（治理闸门、魔数识别、索引都在那条路径上），
 // 这里补的是那条路径之外缺的两块。
 
-// ResolveTarget 解析应用按 configName 会写往的存储配置（不出网）。
-// 空 configName 与 /storage/upload 不带 config_name 时的解析完全一致。
-func (s *StorageService) ResolveTarget(ctx context.Context, appID int64, configName string) (*storagedomain.Config, error) {
-	return s.resolveConfig(ctx, storagedomain.ResolveOptions{AppID: appID, ConfigName: strings.TrimSpace(configName)})
+// DescribeWriteTarget 应用按 name 写入时会落到哪里（存储配置或存储池，不出网）。
+// 空 name 与 /storage/upload 不带 config_name 时的解析完全一致。
+func (s *StorageService) DescribeWriteTarget(ctx context.Context, appID int64, name string) (*storagedomain.WriteTargetInfo, error) {
+	target, err := s.resolveWriteTarget(ctx, appID, strings.TrimSpace(name))
+	if err != nil {
+		return nil, err
+	}
+	if target.pool != nil {
+		return &storagedomain.WriteTargetInfo{Kind: "pool", PoolID: target.pool.ID, Name: target.pool.Name,
+			Provider: "pool", Scope: storagedomain.ScopeGlobal}, nil
+	}
+	return &storagedomain.WriteTargetInfo{Kind: "config", ConfigID: target.config.ID, Name: target.config.ConfigName,
+		Provider: target.config.Provider, Scope: target.config.Scope}, nil
 }
 
 // DeleteObject 从存储桶里物理删除一个对象，并移除它在存储中心的索引行。
@@ -54,7 +63,18 @@ func (s *StorageService) DeleteObject(ctx context.Context, configID int64, objec
 		s.log.Warn("存储配置已不存在，仅移除对象索引",
 			zap.Int64("config_id", configID), zap.String("key", objectKey))
 	}
-	return s.pg.DeleteStorageObjectIndex(ctx, configID, objectKey)
+	if err := s.pg.DeleteStorageObjectIndex(ctx, configID, objectKey); err != nil {
+		return err
+	}
+	// 迁移过的对象：引用里记的是源配置，对象与索引行已在转向的目标配置里，一并删掉，
+	// 否则修订裁剪、回收站清理会在目标存储里留下永远没人管的对象。
+	if cfg != nil && cfg.RedirectConfigID != nil && *cfg.RedirectConfigID != configID {
+		target, err := s.pg.GetStorageConfigByID(ctx, *cfg.RedirectConfigID)
+		if err == nil && target != nil && target.RedirectConfigID == nil {
+			return s.DeleteObject(ctx, target.ID, objectKey)
+		}
+	}
+	return nil
 }
 
 // CreatePrivateObjectLink 为对象签发**代理**下载地址，无论存储配置是不是公开访问。

@@ -124,6 +124,8 @@ type CloudStorageOption struct {
 	AccessMode string `json:"accessMode"`
 	Enabled    bool   `json:"enabled"`
 	IsDefault  bool   `json:"isDefault"`
+	// PoolID 选项是存储池时为池 ID（此时 ConfigID 为 0）。
+	PoolID int64 `json:"poolId,omitempty"`
 }
 
 // CloudStorageAdminConfig 管理端配置视图：配置本身 + 实际写往哪里 + 可选的存储配置。
@@ -182,10 +184,10 @@ func (s *CloudStorageService) SaveConfig(ctx context.Context, input cloudstorage
 	}
 	if input.Enabled {
 		// 开启时必须能解析出一个可用的存储配置，否则用户的第一次写入才报「未配置存储」。
-		if _, err := s.storage.ResolveTarget(ctx, input.AppID, input.StorageConfigName); err != nil {
+		if _, err := s.storage.DescribeWriteTarget(ctx, input.AppID, input.StorageConfigName); err != nil {
 			if input.StorageConfigName != "" {
 				return nil, apperrors.New(40000, http.StatusBadRequest,
-					fmt.Sprintf("存储配置 %q 不存在或未启用", input.StorageConfigName))
+					fmt.Sprintf("存储配置或存储池 %q 不存在或未启用", input.StorageConfigName))
 			}
 			return nil, apperrors.New(40000, http.StatusBadRequest, "当前应用没有可用的存储配置，请先在存储管理中添加")
 		}
@@ -228,12 +230,23 @@ func (s *CloudStorageService) adminConfigView(ctx context.Context, cfg cloudstor
 			})
 		}
 	}
+	// 存储池也能作为写入目标：按池名选择。
+	pools, err := s.pg.ListStoragePools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, pool := range pools {
+		view.StorageOptions = append(view.StorageOptions, CloudStorageOption{
+			ConfigName: pool.Name, Provider: "pool", Scope: storagedomain.ScopeGlobal,
+			AccessMode: storagedomain.AccessPrivate, Enabled: pool.Enabled, IsDefault: pool.IsDefault, PoolID: pool.ID,
+		})
+	}
 	return view, nil
 }
 
 // resolveTarget 内容实际会写往哪里；解析失败时把原因带回去给控制台展示。
 func (s *CloudStorageService) resolveTarget(ctx context.Context, cfg cloudstorage.Config) *cloudstorage.StorageTarget {
-	target, err := s.storage.ResolveTarget(ctx, cfg.AppID, cfg.StorageConfigName)
+	target, err := s.storage.DescribeWriteTarget(ctx, cfg.AppID, cfg.StorageConfigName)
 	if err != nil {
 		message := "未找到可用的存储配置"
 		if appErr, ok := errors.AsType[*apperrors.AppError](err); ok {
@@ -242,7 +255,7 @@ func (s *CloudStorageService) resolveTarget(ctx context.Context, cfg cloudstorag
 		return &cloudstorage.StorageTarget{ConfigName: cfg.StorageConfigName, Error: message}
 	}
 	return &cloudstorage.StorageTarget{
-		ConfigID: target.ID, ConfigName: target.ConfigName, Provider: target.Provider, Scope: target.Scope,
+		ConfigID: target.ConfigID, PoolID: target.PoolID, ConfigName: target.Name, Provider: target.Provider, Scope: target.Scope,
 	}
 }
 

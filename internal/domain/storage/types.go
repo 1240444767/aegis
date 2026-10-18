@@ -13,6 +13,7 @@ const (
 	AccessPrivate = "private"
 
 	ProviderS3          = "s3"
+	ProviderR2          = "r2"
 	ProviderMinIO       = "minio"
 	ProviderAliyunOSS   = "aliyun_oss"
 	ProviderTencentCOS  = "tencent_cos"
@@ -39,8 +40,11 @@ type Config struct {
 	RootPath      string         `json:"root_path,omitempty"`
 	Description   string         `json:"description,omitempty"`
 	ConfigData    map[string]any `json:"config_data"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	// RedirectConfigID 这个配置的对象已迁往（或另有一份在）哪个配置。读取在本配置找不到对象、
+	// 或本配置已停用时转去那里读，引用里记的仍是本配置 —— 迁移不必改写散落各处的 storage:// 引用。
+	RedirectConfigID *int64    `json:"redirect_config_id,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type ConfigMutation struct {
@@ -92,6 +96,8 @@ type UploadInput struct {
 	Content       io.Reader
 	UploadedBy    *int64 // 上传者 ID（管理员或用户）
 	UploaderType  string // "user" / "admin"
+	// SkipRules 不套用上传规则（迁移复制等系统内部写入）。
+	SkipRules bool
 }
 
 type StoredObject struct {
@@ -159,6 +165,26 @@ type S3Config struct {
 	SessionToken    string `json:"session_token,omitempty"`
 	UseSSL          bool   `json:"use_ssl"`
 	ForcePathStyle  bool   `json:"force_path_style"`
+}
+
+// R2Config Cloudflare R2。端点由账户 ID 与管辖区拼出，地区固定为 auto。
+type R2Config struct {
+	AccountID       string `json:"account_id"`
+	Bucket          string `json:"bucket"`
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	// Jurisdiction default / eu / fedramp。受管辖区限制的桶只能经对应端点访问。
+	Jurisdiction string `json:"jurisdiction,omitempty"`
+	// APIToken 可选：带 Account Analytics 读权限的 Cloudflare API 令牌，用来读桶的真实用量。
+	APIToken string `json:"api_token,omitempty"`
+}
+
+// BucketUsage 提供商报告的桶用量。
+type BucketUsage struct {
+	Bytes     int64      `json:"bytes"`
+	Objects   int64      `json:"objects"`
+	Source    string     `json:"source"`
+	SampledAt *time.Time `json:"sampledAt,omitempty"`
 }
 
 type MinIOConfig struct {

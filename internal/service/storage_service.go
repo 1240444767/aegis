@@ -13,6 +13,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	authdomain "aegis/internal/domain/auth"
@@ -44,6 +45,16 @@ type StorageService struct {
 	governance *PlatformGovernanceService
 	// links 代理地址的签名器，见 storage_link_token.go
 	links *storageLinkSigner
+	// pools 存储池运行时：健康记录、退避、用量缓存，见 storage_pool.go
+	pools *storagePoolEngine
+	// s3 / r2 常驻：它们按配置指纹缓存 SDK 客户端，每次新建 provider 缓存就白存了。
+	s3 *s3StorageProvider
+	r2 *s3StorageProvider
+	// migrations 进行中的迁移任务，见 storage_migration.go
+	migrations *storageMigrationRunner
+
+	stopOnce sync.Once
+	stop     chan struct{}
 }
 
 // SetLinkSigningKey 注入平台主密钥（bootstrap 中调用）。不注入时用进程内随机密钥，
@@ -63,17 +74,23 @@ func (s *StorageService) SetPluginService(p *PluginService) {
 }
 
 func NewStorageService(log *zap.Logger, pg *pgrepo.Repository, redis *redislib.Client, keyPrefix string) *StorageService {
-	return &StorageService{
+	service := &StorageService{
 		log:       log,
 		pg:        pg,
 		redis:     redis,
 		keyPrefix: keyPrefix,
 		links:     newEphemeralStorageLinkSigner(),
+		pools:     newStoragePoolEngine(),
+		s3:        newS3StorageProvider(nil),
+		r2:        newR2Provider(),
+		stop:      make(chan struct{}),
 		httpClient: &http.Client{
 			Timeout:   storageOutboundTimeout,
 			Transport: newStorageOutboundTransport(),
 		},
 	}
+	service.migrations = newStorageMigrationRunner(service)
+	return service
 }
 
 // EnsureDefaultLocalConfig 确保存在至少一个可用的全局存储配置，如果没有则自动创建本地存储
@@ -232,6 +249,11 @@ func (s *StorageService) Save(ctx context.Context, mutation storagedomain.Config
 	if _, err := s.buildProvider(&item); err != nil {
 		return nil, err
 	}
+	if item.Provider == storagedomain.ProviderR2 && item.AccessMode == storagedomain.AccessPublic &&
+		!item.ProxyDownload && strings.TrimSpace(item.BaseURL) == "" {
+		return nil, apperrors.New(42284, http.StatusUnprocessableEntity,
+			"R2 的 S3 端点不对外公开：公开直链需要填写公开访问域名（自定义域名或 r2.dev 子域），否则请开启代理下载")
+	}
 	saved, err := s.pg.UpsertStorageConfig(ctx, item)
 	if err != nil {
 		return nil, err
@@ -305,11 +327,14 @@ func (s *StorageService) UploadForApp(ctx context.Context, appID int64, input st
 			return nil, err
 		}
 	}
-	cfg, err := s.resolveConfig(ctx, storagedomain.ResolveOptions{AppID: appID, ConfigName: input.ConfigName})
+	target, err := s.resolveWriteTarget(ctx, appID, input.ConfigName)
 	if err != nil {
 		return nil, err
 	}
-	return s.uploadWithConfig(ctx, appID, cfg, input)
+	if target.pool != nil {
+		return s.uploadToPool(ctx, appID, target.pool, input)
+	}
+	return s.uploadWithConfig(ctx, appID, target.config, input)
 }
 
 func (s *StorageService) CreateObjectLink(ctx context.Context, session *authdomain.Session, req storagedomain.LinkRequest) (*storagedomain.LinkResult, string, error) {
@@ -320,22 +345,38 @@ func (s *StorageService) CreateObjectLink(ctx context.Context, session *authdoma
 }
 
 func (s *StorageService) CreateObjectLinkForApp(ctx context.Context, appID int64, req storagedomain.LinkRequest) (*storagedomain.LinkResult, string, error) {
-	cfg, err := s.resolveConfig(ctx, storagedomain.ResolveOptions{AppID: appID, ConfigName: req.ConfigName})
+	target, err := s.resolveWriteTarget(ctx, appID, req.ConfigName)
 	if err != nil {
 		return nil, "", err
 	}
-	objectKey := normalizeObjectKey(cfg.RootPath, req.ObjectKey)
-	if err := validateStorageObjectKey(objectKey); err != nil {
-		return nil, "", err
+	// 写入目标是池时，对象可能落在任何一个成员里：逐个成员按索引找。
+	candidates := []*storagedomain.Config{target.config}
+	if target.pool != nil {
+		configs, err := s.poolConfigs(ctx, target.pool)
+		if err != nil {
+			return nil, "", err
+		}
+		candidates = candidates[:0]
+		for _, member := range target.pool.Members {
+			if cfg := configs[member.ConfigID]; cfg != nil {
+				candidates = append(candidates, cfg)
+			}
+		}
 	}
-	indexed, err := s.pg.GetStorageObjectByKey(ctx, cfg.ID, appID, objectKey)
-	if err != nil {
-		return nil, "", err
+	for _, cfg := range candidates {
+		objectKey := normalizeObjectKey(cfg.RootPath, req.ObjectKey)
+		if err := validateStorageObjectKey(objectKey); err != nil {
+			return nil, "", err
+		}
+		indexed, err := s.pg.GetStorageObjectByKey(ctx, cfg.ID, appID, objectKey)
+		if err != nil {
+			return nil, "", err
+		}
+		if indexed != nil && indexed.Status == "active" {
+			return s.signObjectLink(ctx, appID, cfg, objectKey, req.Download, strings.TrimSpace(req.FileName), req.ExpiresIn)
+		}
 	}
-	if indexed == nil || indexed.Status != "active" {
-		return nil, "", apperrors.New(40482, http.StatusNotFound, "存储对象不存在")
-	}
-	return s.createObjectLinkWithConfig(ctx, appID, cfg, req)
+	return nil, "", apperrors.New(40482, http.StatusNotFound, "存储对象不存在")
 }
 
 func (s *StorageService) uploadWithConfig(ctx context.Context, appID int64, cfg *storagedomain.Config, input storagedomain.UploadInput) (*storagedomain.StoredObject, error) {
@@ -363,11 +404,23 @@ func (s *StorageService) uploadWithConfig(ctx context.Context, appID int64, cfg 
 			zap.String("declared", masqueradedAs), zap.String("detected", input.ContentType),
 			zap.String("file_name", input.FileName))
 	}
+	if !input.SkipRules {
+		if err := s.enforceUploadRules(ctx, appID, cfg, input); err != nil {
+			return nil, err
+		}
+	}
 
+	started := time.Now()
 	item, err := provider.Upload(ctx, cfg, input)
 	if err != nil {
 		s.log.Warn("storage upload failed", zap.Int64("appid", appID), zap.Int64("config_id", cfg.ID), zap.String("provider", cfg.Provider), zap.Error(err))
-		return nil, apperrors.New(50081, http.StatusBadGateway, "文件上传失败")
+		s.recordBackendFailure(ctx, cfg, err)
+		// 503 而不是 502：Cloudflare 会把源站的 502 换成自己的 HTML 错误页，客户端拿不到错误码。
+		return nil, &storageBackendError{AppError: apperrors.New(50081, http.StatusServiceUnavailable, "文件上传失败"), cause: err}
+	}
+	s.recordBackendSuccess(ctx, cfg, time.Since(started))
+	if item.Size <= 0 && input.ContentLength > 0 {
+		item.Size = input.ContentLength
 	}
 	item.ConfigID = cfg.ID
 	item.Provider = cfg.Provider
@@ -435,10 +488,6 @@ func (s *StorageService) CreateIndexedObjectLink(ctx context.Context, appID int6
 	return s.signObjectLink(ctx, appID, cfg, objectKey, download, fileName, expiresIn)
 }
 
-func (s *StorageService) createObjectLinkWithConfig(ctx context.Context, appID int64, cfg *storagedomain.Config, req storagedomain.LinkRequest) (*storagedomain.LinkResult, string, error) {
-	return s.signObjectLink(ctx, appID, cfg, normalizeObjectKey(cfg.RootPath, req.ObjectKey), req.Download, strings.TrimSpace(req.FileName), req.ExpiresIn)
-}
-
 // signObjectLink 为**已归一化**的对象键签发访问链接（公开直链或代理票据）
 func (s *StorageService) signObjectLink(ctx context.Context, appID int64, cfg *storagedomain.Config, objectKey string, download bool, fileName string, expiresIn time.Duration) (*storagedomain.LinkResult, string, error) {
 	if objectKey == "" {
@@ -467,9 +516,9 @@ func (s *StorageService) signObjectLink(ctx context.Context, appID int64, cfg *s
 		if err != nil {
 			return nil, "", err
 		}
-		link, err := provider.PublicURL(ctx, cfg, objectKey, expiresIn)
+		link, err := s.publicObjectURL(ctx, cfg, provider, objectKey, expiresIn, false)
 		if err != nil {
-			return nil, "", apperrors.New(50082, http.StatusBadGateway, "生成文件地址失败")
+			return nil, "", apperrors.New(50082, http.StatusServiceUnavailable, "生成文件地址失败")
 		}
 		result.URL = link
 		result.ProxyRequired = false
@@ -503,22 +552,26 @@ func (s *StorageService) PermanentObjectLink(ctx context.Context, appID int64, c
 	if err != nil {
 		return "", err
 	}
-	if cfg == nil || !cfg.Enabled {
+	// 停用但设了读取转向的配置（迁移走了）照样给代理地址：读取会转去目标配置。
+	if cfg == nil || (!cfg.Enabled && cfg.RedirectConfigID == nil) {
 		return "", apperrors.New(40482, http.StatusNotFound, "未配置可用存储服务")
 	}
 	if err := validateStorageObjectKey(objectKey); err != nil {
 		return "", err
 	}
-	if cfg.AccessMode == storagedomain.AccessPublic && !cfg.ProxyDownload {
+	if cfg.Enabled && cfg.AccessMode == storagedomain.AccessPublic && !cfg.ProxyDownload {
 		provider, err := s.buildProvider(cfg)
 		if err != nil {
 			return "", err
 		}
-		link, err := provider.PublicURL(ctx, cfg, objectKey, 0)
+		link, err := s.publicObjectURL(ctx, cfg, provider, objectKey, 0, true)
 		if err != nil {
-			return "", apperrors.New(50082, http.StatusBadGateway, "生成文件地址失败")
+			return "", apperrors.New(50082, http.StatusServiceUnavailable, "生成文件地址失败")
 		}
-		return link, nil
+		if link != "" {
+			return link, nil
+		}
+		// 开了 CDN 签名：直链有时效，永久地址只能走代理。
 	}
 	token, err := s.links.Encode(storageLinkClaims{
 		ConfigID:  cfg.ID,
@@ -538,7 +591,17 @@ func StorageProxyPath(token string) string {
 	return "/api/storage/proxy/" + url.PathEscape(token)
 }
 
+// OpenProxyObject 解析代理令牌并打开对象（不做防盗链判定，内部调用用）。
 func (s *StorageService) OpenProxyObject(ctx context.Context, ticketID string) (*storagedomain.ProxyTicket, *storagedomain.Config, *storagedomain.ObjectReader, error) {
+	return s.openProxyObject(ctx, ticketID, nil)
+}
+
+// OpenProxyObjectFor 代理下载入口：先按 CDN 设置里的 IP / Referer 名单判定，再打开对象。
+func (s *StorageService) OpenProxyObjectFor(ctx context.Context, ticketID string, request ProxyRequest) (*storagedomain.ProxyTicket, *storagedomain.Config, *storagedomain.ObjectReader, error) {
+	return s.openProxyObject(ctx, ticketID, &request)
+}
+
+func (s *StorageService) openProxyObject(ctx context.Context, ticketID string, request *ProxyRequest) (*storagedomain.ProxyTicket, *storagedomain.Config, *storagedomain.ObjectReader, error) {
 	var ticket *storagedomain.ProxyTicket
 	if isStorageLinkToken(ticketID) {
 		decoded, ok := s.links.Decode(ticketID, time.Now())
@@ -560,14 +623,18 @@ func (s *StorageService) OpenProxyObject(ctx context.Context, ticketID string) (
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil, nil, nil, apperrors.New(40481, http.StatusNotFound, "资源不可用")
 	}
-	provider, err := s.buildProvider(cfg)
-	if err != nil {
-		return nil, nil, nil, err
+	if request != nil {
+		if err := checkProxyAccess(s.cdnConfig(ctx, cfg.ID), *request); err != nil {
+			return nil, nil, nil, err
+		}
 	}
-	reader, err := provider.Open(ctx, cfg, ticket.ObjectKey)
+	reader, servedBy, err := s.openStoredObject(ctx, cfg, ticket.ObjectKey)
+	if err == nil {
+		cfg = servedBy
+	}
 	if err != nil {
 		s.log.Warn("storage proxy open failed", zap.Int64("config_id", cfg.ID), zap.String("provider", cfg.Provider), zap.String("key", ticket.ObjectKey), zap.Error(err))
 		return nil, nil, nil, apperrors.New(40481, http.StatusNotFound, "资源不可用")
@@ -590,17 +657,13 @@ func (s *StorageService) ReadObjectBytes(ctx context.Context, configID int64, ob
 	if err != nil {
 		return nil, "", err
 	}
-	if cfg == nil || !cfg.Enabled {
+	if cfg == nil {
 		return nil, "", apperrors.New(40482, http.StatusNotFound, "未配置可用存储服务")
 	}
 	if err := validateStorageObjectKey(objectKey); err != nil {
 		return nil, "", err
 	}
-	provider, err := s.buildProvider(cfg)
-	if err != nil {
-		return nil, "", err
-	}
-	reader, err := provider.Open(ctx, cfg, objectKey)
+	reader, _, err := s.openStoredObject(ctx, cfg, objectKey)
 	if err != nil {
 		unavailable := apperrors.New(40481, http.StatusNotFound, "资源不可用")
 		if isStorageObjectNotFound(err) {
@@ -657,7 +720,12 @@ func (s *StorageService) buildProvider(cfg *storagedomain.Config) (storageProvid
 		if _, err := decodeS3StorageConfig(cfg.ConfigData); err != nil {
 			return nil, err
 		}
-		provider = newS3StorageProvider(s.httpClient)
+		provider = s.s3
+	case storagedomain.ProviderR2:
+		if _, err := decodeR2Config(cfg.ConfigData); err != nil {
+			return nil, err
+		}
+		provider = s.r2
 	case storagedomain.ProviderMinIO:
 		if _, err := decodeMinIOConfig(cfg.ConfigData); err != nil {
 			return nil, err
@@ -869,7 +937,7 @@ func randomHex(size int) (string, error) {
 
 func isSupportedStorageProvider(value string) bool {
 	switch strings.TrimSpace(value) {
-	case storagedomain.ProviderS3, storagedomain.ProviderAliyunOSS, storagedomain.ProviderTencentCOS, storagedomain.ProviderQiniuKodo, storagedomain.ProviderWebDAV, storagedomain.ProviderOneDrive, storagedomain.ProviderDropbox, storagedomain.ProviderGoogleDrive, storagedomain.ProviderAzureBlob, storagedomain.ProviderLocal:
+	case storagedomain.ProviderS3, storagedomain.ProviderR2, storagedomain.ProviderMinIO, storagedomain.ProviderAliyunOSS, storagedomain.ProviderTencentCOS, storagedomain.ProviderQiniuKodo, storagedomain.ProviderWebDAV, storagedomain.ProviderOneDrive, storagedomain.ProviderDropbox, storagedomain.ProviderGoogleDrive, storagedomain.ProviderAzureBlob, storagedomain.ProviderLocal:
 		return true
 	default:
 		return false

@@ -23,6 +23,7 @@ package httptransport
 import (
 	"aegis/internal/domain/app"
 	"aegis/internal/domain/authprotocol"
+	"aegis/internal/domain/storage"
 	"aegis/internal/domain/system"
 	"aegis/internal/service"
 )
@@ -277,6 +278,11 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/platform/storage-config/list"):                                       AdminStorageConfigListRequest{},          // AdminGlobalStorageConfigList
 		routeKey("POST", "/api/admin/platform/storage-config/test"):                                       AdminStorageConfigDetailRequest{},        // AdminGlobalStorageConfigTest
 		routeKey("POST", "/api/admin/platform/storage-config/update"):                                     AdminStorageConfigSaveRequest{},          // AdminGlobalStorageConfigUpdate
+		routeKey("PUT", "/api/admin/platform/storage/configs/{configId}/cors"):                            StorageCORSRequest{},                     // AdminSetStorageCORS
+		routeKey("POST", "/api/admin/platform/storage/migrations"):                                        storage.MigrationInput{},                 // AdminCreateStorageMigration
+		routeKey("POST", "/api/admin/platform/storage/pools"):                                             storage.PoolInput{},                      // AdminCreateStoragePool
+		routeKey("PUT", "/api/admin/platform/storage/pools/{poolId}"):                                     storage.PoolInput{},                      // AdminUpdateStoragePool
+		routeKey("POST", "/api/admin/platform/storage/pools/{poolId}/simulate"):                           StoragePoolSimulateRequest{},             // AdminSimulateStoragePool
 		routeKey("PUT", "/api/admin/profile"):                                                             AdminProfileUpdateRequest{},              // UpdateAdminProfile
 		routeKey("POST", "/api/admin/profile/account"):                                                    AdminAccountChangeRequest{},              // ChangeAdminAccount
 		routeKey("GET", "/api/admin/profile/account/availability"):                                        AdminAccountAvailabilityQuery{},          // AdminAccountAvailability

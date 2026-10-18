@@ -7,6 +7,9 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/bloberror"
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go"
 	"github.com/minio/minio-go/v7"
 	cos "github.com/tencentyun/cos-go-sdk-v5"
 
@@ -43,6 +46,19 @@ func isStorageObjectNotFound(err error) bool {
 		return appErr.HTTPStatus == http.StatusNotFound
 	}
 	if code := minio.ToErrorResponse(err).Code; code == "NoSuchKey" {
+		return true
+	}
+	// aws-sdk-go-v2（S3 / R2）：GetObject 回 NoSuchKey，HeadObject 没有响应体只有 404（NotFound）。
+	var noSuchKey *s3types.NoSuchKey
+	if errors.As(err, &noSuchKey) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) && (apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound") {
+		return true
+	}
+	var responseErr *awshttp.ResponseError
+	if errors.As(err, &responseErr) && responseErr.HTTPStatusCode() == http.StatusNotFound {
 		return true
 	}
 	if ossErr, ok := errors.AsType[oss.ServiceError](err); ok {

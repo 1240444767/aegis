@@ -236,7 +236,10 @@ func (h *Handler) StorageObjectLink(c *gin.Context) {
 }
 
 func (h *Handler) StorageProxyDownload(c *gin.Context) {
-	ticket, _, reader, err := h.storage.OpenProxyObject(c.Request.Context(), c.Param("ticket"))
+	ticket, cfg, reader, err := h.storage.OpenProxyObjectFor(c.Request.Context(), c.Param("ticket"), service.ProxyRequest{
+		ClientIP: c.ClientIP(),
+		Referer:  c.GetHeader("Referer"),
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -259,7 +262,10 @@ func (h *Handler) StorageProxyDownload(c *gin.Context) {
 		c.Header("Content-Security-Policy", "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'")
 		c.Header("X-Frame-Options", "DENY")
 	}
-	if reader.CacheControl != "" {
+	if policy := h.storage.ProxyCacheControl(c.Request.Context(), cfg.ID); policy != "" {
+		// CDN 与安全里配的缓存时长优先：那是管理员对这个存储的明确要求。
+		c.Header("Cache-Control", policy)
+	} else if reader.CacheControl != "" {
 		c.Header("Cache-Control", reader.CacheControl)
 	} else if ticket != nil && ticket.ExpiresAt.IsZero() {
 		// 永久地址：同一地址永远指向同一个对象键。对象键可能被覆盖写，

@@ -41,6 +41,8 @@ DELETE	/api/admin/notify/channels/:id	AdminDeleteNotifyChannel
 DELETE	/api/admin/notify/deliveries	AdminPurgeNotifyDeliveries
 DELETE	/api/admin/notify/subscriptions/:id	AdminDeleteNotifySubscription
 DELETE	/api/admin/notify/templates/:id	AdminDeleteNotifyTemplate
+DELETE	/api/admin/platform/storage/configs/:configId/redirect	AdminClearStorageRedirect
+DELETE	/api/admin/platform/storage/pools/:poolId	AdminDeleteStoragePool
 DELETE	/api/admin/profile/avatar	RemoveAdminAvatar
 DELETE	/api/admin/profile/passkey/:credentialId	DeleteAdminPasskey
 DELETE	/api/admin/system/ai/configs/:configId	AdminPlatformAIConfigDelete
@@ -279,6 +281,13 @@ GET	/api/admin/platform/catalog	AdminPlatformGovernanceCatalog
 GET	/api/admin/platform/governance/actions	AdminPlatformGovernanceActions
 GET	/api/admin/platform/governance/appeals	AdminPlatformListAppeals
 GET	/api/admin/platform/overview	AdminPlatformOverview
+GET	/api/admin/platform/storage/configs/:configId/cors	AdminStorageCORS
+GET	/api/admin/platform/storage/events	AdminStorageEvents
+GET	/api/admin/platform/storage/migrations	AdminStorageMigrations
+GET	/api/admin/platform/storage/migrations/:migrationId	AdminStorageMigration
+GET	/api/admin/platform/storage/overview	AdminStorageOverview
+GET	/api/admin/platform/storage/pools	AdminStoragePools
+GET	/api/admin/platform/storage/pools/:poolId	AdminStoragePool
 GET	/api/admin/profile	AdminProfile
 GET	/api/admin/profile/account/availability	AdminAccountAvailability
 GET	/api/admin/profile/passkey	ListAdminPasskeys
@@ -818,6 +827,15 @@ POST	/api/admin/platform/storage-config/detail	AdminGlobalStorageConfigDetail
 POST	/api/admin/platform/storage-config/list	AdminGlobalStorageConfigList
 POST	/api/admin/platform/storage-config/test	AdminGlobalStorageConfigTest
 POST	/api/admin/platform/storage-config/update	AdminGlobalStorageConfigUpdate
+POST	/api/admin/platform/storage/configs/:configId/probe	AdminProbeStorageConfig
+POST	/api/admin/platform/storage/configs/:configId/reset-health	AdminResetStorageHealth
+POST	/api/admin/platform/storage/migrations	AdminCreateStorageMigration
+POST	/api/admin/platform/storage/migrations/:migrationId/cancel	AdminCancelStorageMigration
+POST	/api/admin/platform/storage/migrations/:migrationId/pause	AdminPauseStorageMigration
+POST	/api/admin/platform/storage/migrations/:migrationId/resume	AdminResumeStorageMigration
+POST	/api/admin/platform/storage/pools	AdminCreateStoragePool
+POST	/api/admin/platform/storage/pools/:poolId/simulate	AdminSimulateStoragePool
+POST	/api/admin/platform/storage/usage/collect	AdminCollectStorageUsage
 POST	/api/admin/profile/account	ChangeAdminAccount
 POST	/api/admin/profile/avatar	UploadAdminAvatar
 POST	/api/admin/profile/passkey/register	FinishAdminPasskeyRegistration
@@ -1212,6 +1230,8 @@ PUT	/api/admin/apps/:appkey/versions/:vid	AdminUpdateVersion
 PUT	/api/admin/notify/channels/:id	AdminSaveNotifyChannel
 PUT	/api/admin/notify/subscriptions/:id	AdminSaveNotifySubscription
 PUT	/api/admin/notify/templates/:id	AdminSaveNotifyTemplate
+PUT	/api/admin/platform/storage/configs/:configId/cors	AdminSetStorageCORS
+PUT	/api/admin/platform/storage/pools/:poolId	AdminUpdateStoragePool
 PUT	/api/admin/profile	UpdateAdminProfile
 PUT	/api/admin/system/admins/:adminId/access	AdminUpdateAccountAccess
 PUT	/api/admin/system/admins/:adminId/status	AdminUpdateAccountStatus

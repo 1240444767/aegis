@@ -7672,5 +7672,145 @@
     "path": "/api/admin/system/email/suppressions/:suppressionId",
     "permission": "email:write",
     "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/overview",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/events",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/usage/collect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/pools",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/pools",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/pools/:poolId/simulate",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/configs/:configId/probe",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/configs/:configId/reset-health",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/configs/:configId/cors",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/platform/storage/configs/:configId/cors",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/platform/storage/configs/:configId/redirect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/migrations",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/migrations/:migrationId",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/pause",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/resume",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/cancel",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
   }
 ]
