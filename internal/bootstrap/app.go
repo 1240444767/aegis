@@ -266,6 +266,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	versionService := service.NewVersionService(pg)
 	releaseService := service.NewReleaseService(log, pg, redisClient, nil)
 	releaseService.SetAppEventPublisher(realtimeService)
+	// 版本管控：加密上报 + 签名裁决 + 网关闸门（docs/client-control.md）
+	clientControlService := service.NewClientControlService(log, pg, redisClient, cfg)
+	clientControlService.SetAppEventPublisher(realtimeService)
 	roleApplicationService := service.NewRoleApplicationService(pg)
 	emailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
 	// 邮件模板服务（MJML 运行在 wasm 里）首次编译要实例化模块，启动后在后台预热，第一封信不必多等
@@ -647,6 +650,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Site:             siteService,
 		Version:          versionService,
 		Release:          releaseService,
+		ClientControl:    clientControlService,
 		PlatformSettings: systemService,
 		PlatformBanner:   platformBannerService,
 		Governance:       governanceService,
@@ -707,6 +711,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		ClientIP:       clientIPResolver,
 		DocsPortalURL:  cfg.DocsPortalURL,
 		ConsoleBaseURL: cfg.ConsoleBaseURL,
+
+		// 闸门与上报共用同一个服务：同一份缓存、同一套判定
+		ClientControlGate: clientControlService,
 	})
 	if err != nil {
 		_ = accountBanService.Close(context.Background())
