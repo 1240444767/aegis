@@ -22,6 +22,8 @@ data class AegisConfig(
     val endpoints: Map<String, String> = emptyMap(),
     val operations: List<Operation> = emptyList(),
     val errors: List<ErrorDescriptor> = emptyList(),
+    /** 版本管控通道（公钥与参数）；服务端未提供时为 null。见 [AegisClientControlApi]。 */
+    val clientControl: AegisClientControlSpec? = null,
 )
 
 @Serializable

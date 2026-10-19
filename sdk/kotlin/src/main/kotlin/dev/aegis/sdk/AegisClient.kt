@@ -94,6 +94,12 @@ class AegisClient private constructor(
     /** 用户云存储：按「命名空间 / 键」存放任意文档，带修订与回收站。见 [AegisCloudApi]。 */
     val cloud: AegisCloudApi = AegisCloudApi(this)
 
+    /**
+     * 版本管控：加密上报包名、版本、签名证书，取回服务端签名的裁决（放行 / 提醒 / 强制更新 / 停用）。
+     * 免登录可用。见 [AegisClientControlApi]。
+     */
+    val control: AegisClientControlApi = AegisClientControlApi(this)
+
     // ── /config ───────────────────────────────────────────────────────
 
     /**
@@ -200,6 +206,15 @@ class AegisClient private constructor(
     internal fun realtimeUrl(): HttpUrl =
         baseUrl.newBuilder().addPathSegments("api/ws").build()
 
+    /**
+     * 免登录的 GET（已登录则带令牌），读超时放宽到 [readTimeoutSeconds]。长轮询用：
+     * 默认的 OkHttp 读超时（10 秒）短于服务端挂起时间，会把每一次「没有变化」都变成超时异常。
+     */
+    internal fun callWithReadTimeout(path: String, query: Map<String, String>, readTimeoutSeconds: Long): JsonElement {
+        val client = http.newBuilder().readTimeout(readTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS).build()
+        return execute(buildRequest("GET", path, null, query), requireAuth = false, allowRetry = true, optionalAuth = true, httpClient = client)
+    }
+
     /** 把信封里的 data 解成具体类型；各 Api 门面用它，未覆盖的字段自动忽略。 */
     internal fun <T> decodeAs(element: JsonElement, serializer: kotlinx.serialization.DeserializationStrategy<T>): T =
         json.decodeFromJsonElement(serializer, element)
@@ -284,6 +299,7 @@ class AegisClient private constructor(
         requireAuth: Boolean,
         allowRetry: Boolean,
         optionalAuth: Boolean = false,
+        httpClient: OkHttpClient = http,
     ): JsonElement {
         val prepared = if (requireAuth) {
             val token = tokens.accessToken()
@@ -297,7 +313,7 @@ class AegisClient private constructor(
         }
 
         val envelope = try {
-            http.newCall(prepared).execute().use { response ->
+            httpClient.newCall(prepared).execute().use { response ->
                 val text = response.body?.string().orEmpty()
                 if (text.isBlank()) {
                     throw AegisException.network("HTTP ${response.code}：响应为空")
@@ -320,7 +336,7 @@ class AegisClient private constructor(
 
         if (failure.isRetryableAfterConfigRefresh) {
             config(forceRefresh = true)
-            return execute(request, requireAuth, allowRetry = false, optionalAuth = optionalAuth)
+            return execute(request, requireAuth, allowRetry = false, optionalAuth = optionalAuth, httpClient = httpClient)
         }
         if (failure.isRetryableWithRefresh && requireAuth && tokens.refreshToken() != null) {
             auth.refresh()

@@ -21,6 +21,8 @@ func TestKotlinSDKCoversEveryGatewayOperation(t *testing.T) {
 	sources := []string{
 		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisApi.kt",
 		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisClient.kt",
+		// 版本管控自带加密通道，单独成文件
+		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisClientControl.kt",
 	}
 	var combined strings.Builder
 	for _, path := range sources {
