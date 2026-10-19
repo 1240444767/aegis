@@ -157,6 +157,13 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/invite/codes/{codeId}/status"):                          InviteCodeStatusRequest{},                // AdminSetInviteCodeStatus
 		routeKey("GET", "/api/admin/apps/{appkey}/invite/relations"):                                      InviteRelationQuery{},                    // AdminListInviteRelations
 		routeKey("PUT", "/api/admin/apps/{appkey}/invite/settings"):                                       InviteSettingsRequest{},                  // AdminSaveInviteSettings
+		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/boards/{key}"):                              LeaderboardAdminBoardQuery{},             // AdminLeaderboardBoard
+		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/exclusions"):                                LeaderboardExclusionQuery{},              // AdminLeaderboardExclusions
+		routeKey("POST", "/api/admin/apps/{appkey}/leaderboard/exclusions"):                               LeaderboardExclusionRequest{},            // AdminAddLeaderboardExclusions
+		routeKey("PUT", "/api/admin/apps/{appkey}/leaderboard/settings"):                                  LeaderboardSettingsRequest{},             // AdminSaveLeaderboardSettings
+		routeKey("POST", "/api/admin/apps/{appkey}/leaderboard/settle"):                                   LeaderboardSettleRequest{},               // AdminSettleLeaderboard
+		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots"):                                 LeaderboardSnapshotQuery{},               // AdminLeaderboardSnapshots
+		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots/{snapshotId}/entries"):            LeaderboardEntryQuery{},                  // AdminLeaderboardSnapshotEntries
 		routeKey("GET", "/api/admin/apps/{appkey}/lottery/activities"):                                    LotteryActivityListQuery{},               // AdminListLotteryActivities
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                   LotteryActivityCreateRequest{},           // AdminCreateLotteryActivity
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{id}"):                               LotteryActivityUpdateRequest{},           // AdminUpdateLotteryActivity
@@ -638,7 +645,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/invite/bind"):                                             InviteBindRequest{},                      // AppBindInvite
 		routeKey("PUT", "/api/v1/apps/{appkey}/invite/code"):                                              InviteCodeUpdateRequest{},                // AppUpdateInviteCode
 		routeKey("POST", "/api/v1/apps/{appkey}/invite/preview"):                                          InvitePreviewRequest{},                   // AppPreviewInvite
+		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/boards/{key}"):                                 LeaderboardPageQuery{},                   // AppLeaderboardBoard
+		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/boards/{key}/periods"):                         LeaderboardPeriodsQuery{},                // AppLeaderboardPeriods
+		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/boards/{key}/periods/{periodKey}"):             LeaderboardPageQuery{},                   // AppLeaderboardPeriod
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/points/{type}"):                                LeaderboardListQuery{},                   // LeaderboardPoints
+		routeKey("PUT", "/api/v1/apps/{appkey}/leaderboard/preference"):                                   LeaderboardPreferenceRequest{},           // AppUpdateLeaderboardPreference
+		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/rewards"):                                      LeaderboardPageQuery{},                   // AppLeaderboardRewards
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/signin/{type}"):                                LeaderboardListQuery{},                   // LeaderboardSignIn
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes"):                                   RecoveryCodesRegenerateRequest{},         // GenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes/regenerate"):                        RecoveryCodesRegenerateRequest{},         // RegenerateRecoveryCodes

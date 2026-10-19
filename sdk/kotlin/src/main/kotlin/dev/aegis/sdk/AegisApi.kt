@@ -799,6 +799,51 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun leaderboardSignIn(type: String): JsonElement =
         client.call("GET", "/leaderboard/signin/$type", requireAuth = true)
 
+    // ── 积分排行榜（docs/leaderboard.md）──
+
+    /** 排行榜首页：开启的榜单（周期、奖励档位）与我的偏好（匿名、是否被移出）。 */
+    @Throws(IOException::class)
+    fun leaderboardBoards(): JsonElement = client.call("GET", "/leaderboard/boards", requireAuth = true)
+
+    /** 一个榜单的实时名次。key: `points_total` | `points_daily` | `points_weekly` | `points_monthly` | `experience` | `level` */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardBoard(key: String, page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/leaderboard/boards/${encodePathSegment(key)}", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 周期榜的往期列表（已结算的快照），新的在前。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardPeriods(key: String, limit: Int = 12): JsonElement =
+        client.call(
+            "GET", "/leaderboard/boards/${encodePathSegment(key)}/periods",
+            query = mapOf("limit" to limit.toString()), requireAuth = true,
+        )
+
+    /** 往期榜单：某一期结算时冻结的名次、我在这一期的名次与奖励。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardPeriod(key: String, periodKey: String, page: Int = 1, limit: Int = 20): JsonElement =
+        client.call(
+            "GET", "/leaderboard/boards/${encodePathSegment(key)}/periods/${encodePathSegment(periodKey)}",
+            query = pageQuery(page, limit), requireAuth = true,
+        )
+
+    /** 我的榜单奖励记录。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardRewards(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/leaderboard/rewards", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 我的排行榜偏好：`anonymous` 匿名上榜。 */
+    @Throws(IOException::class)
+    fun leaderboardPreference(): JsonElement = client.call("GET", "/leaderboard/preference", requireAuth = true)
+
+    /** 开关匿名上榜：名次与奖励照旧，别人看到的是「匿名用户」。 */
+    @Throws(IOException::class)
+    fun updateLeaderboardPreference(anonymous: Boolean): JsonElement =
+        client.call("PUT", "/leaderboard/preference", mapOf("anonymous" to anonymous), requireAuth = true)
+
     // ── 激励广告 ──
 
     /**

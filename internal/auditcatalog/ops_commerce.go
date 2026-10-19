@@ -93,6 +93,19 @@ func init() {
 		Write("POST /api/admin/apps/:appkey/invite/relations/:relationId/cancel", "取消邀请人奖励", "邀请记录", SeverityMedium),
 		View("GET /api/admin/apps/:appkey/invite/stats", "查看邀请统计", ""),
 
+		// 积分排行榜
+		View("GET /api/admin/apps/:appkey/leaderboard/settings", "查看排行榜设置", ""),
+		Write("PUT /api/admin/apps/:appkey/leaderboard/settings", "修改排行榜设置", "", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/leaderboard/boards/:key", "查看排行榜名次", "排行榜"),
+		View("GET /api/admin/apps/:appkey/leaderboard/exclusions", "查看排行榜移出名单", ""),
+		Write("POST /api/admin/apps/:appkey/leaderboard/exclusions", "移出排行榜", "用户", SeverityMedium),
+		Write("DELETE /api/admin/apps/:appkey/leaderboard/exclusions/:userId", "移回排行榜", "用户", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/leaderboard/snapshots", "查看排行榜结算记录", ""),
+		View("GET /api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/entries", "查看排行榜结算明细", "结算记录"),
+		Write("POST /api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry", "重试排行榜奖励发放", "结算记录", SeverityHigh),
+		Write("POST /api/admin/apps/:appkey/leaderboard/settle", "手动结算排行榜", "排行榜", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/leaderboard/stats", "查看排行榜概览", ""),
+
 		// 账号注销
 		View("GET /api/admin/apps/:appkey/account-deletion/catalog", "查看注销配置目录", ""),
 		View("GET /api/admin/apps/:appkey/account-deletion/settings", "查看注销配置", ""),

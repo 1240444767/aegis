@@ -3665,7 +3665,7 @@ func (r *Repository) GetLevelRankings(ctx context.Context, appID int64, page int
 	offset := (page - 1) * limit
 
 	var total int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true`, appID).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW())`, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
@@ -3703,7 +3703,7 @@ WITH ranked AS (
         ORDER BY level ASC
         LIMIT 1
     ) next_level ON true
-    WHERE u.appid = $1 AND u.enabled = true
+    WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 )
 SELECT id, account, current_level, level_name, experience, nickname, avatar, level_progress
 FROM ranked
@@ -3761,14 +3761,14 @@ func (r *Repository) GetTodaySignRankings(ctx context.Context, appID int64, now 
 	signDate := now.Format("2006-01-02")
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM daily_signins ds JOIN users u ON u.id = ds.user_id WHERE ds.appid = $1 AND ds.sign_date = $2 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM daily_signins ds JOIN users u ON u.id = ds.user_id WHERE ds.appid = $1 AND ds.sign_date = $2 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID, signDate).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ds.signed_at, ds.consecutive_days
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1 AND ds.sign_date = $2
 ORDER BY ds.signed_at ASC, ds.id ASC
@@ -3825,14 +3825,14 @@ func (r *Repository) GetConsecutiveSignRankings(ctx context.Context, appID int64
 	offset := (page - 1) * limit
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM sign_stats ss JOIN users u ON u.id = ss.user_id WHERE ss.appid = $1 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM sign_stats ss JOIN users u ON u.id = ss.user_id WHERE ss.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ss.consecutive_days, ss.total_sign_days, ss.last_sign_date, ss.last_sign_at
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ss.appid = $1
 ORDER BY ss.consecutive_days DESC, ss.total_sign_days DESC, ss.user_id ASC
@@ -3892,14 +3892,14 @@ func (r *Repository) GetMonthlySignRankings(ctx context.Context, appID int64, no
 	period := now.Format("2006-01")
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM sign_monthly_stats sms JOIN users u ON u.id = sms.user_id WHERE sms.appid = $1 AND sms.month_key = $2 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM sign_monthly_stats sms JOIN users u ON u.id = sms.user_id WHERE sms.appid = $1 AND sms.month_key = $2 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID, monthKey).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), sms.sign_days, sms.total_integral_reward, sms.total_experience_reward, sms.last_sign_at
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE sms.appid = $1 AND sms.month_key = $2
 ORDER BY sms.sign_days DESC, sms.last_sign_at ASC, sms.user_id ASC
@@ -3971,11 +3971,11 @@ func (r *Repository) getUserMetricRankings(ctx context.Context, appID int64, pag
 	offset := (page - 1) * limit
 
 	var total int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true`, appID).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW())`, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
-	query := `SELECT u.id, u.account, ` + metric + `, COALESCE(p.nickname, ''), COALESCE(p.avatar, '') FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.appid = $1 AND u.enabled = true ORDER BY ` + metric + ` DESC, u.id ASC LIMIT $2 OFFSET $3`
+	query := `SELECT u.id, u.account, ` + metric + `, COALESCE(p.nickname, ''), COALESCE(p.avatar, '') FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW()) ORDER BY ` + metric + ` DESC, u.id ASC LIMIT $2 OFFSET $3`
 	rows, err := r.pool.Query(ctx, query, appID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -4025,7 +4025,7 @@ func (r *Repository) getMyMetricRank(ctx context.Context, appID int64, userID in
 		}
 		return nil, err
 	}
-	rankQuery := `SELECT COUNT(*) + 1 FROM users WHERE appid = $1 AND enabled = true AND ` + metric + ` > (SELECT ` + metric + ` FROM users WHERE id = $2 AND appid = $1)`
+	rankQuery := `SELECT COUNT(*) + 1 FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW()) AND ` + metric + ` > (SELECT ` + metric + ` FROM users WHERE id = $2 AND appid = $1)`
 	var rank int64
 	if err := r.pool.QueryRow(ctx, rankQuery, appID, userID).Scan(&rank); err != nil {
 		return nil, err
@@ -4086,7 +4086,7 @@ FROM target`
 	}
 
 	rankQuery := `
-WITH current_user AS (
+WITH target_user AS (
     SELECT
         COALESCE(curr.level, 1) AS current_level,
         u.experience
@@ -4113,10 +4113,10 @@ all_users AS (
         ORDER BY level DESC
         LIMIT 1
     ) curr ON true
-    WHERE u.appid = $1 AND u.enabled = true
+    WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 )
 SELECT COUNT(*) + 1
-FROM all_users au, current_user cu
+FROM all_users au, target_user cu
 WHERE au.current_level > cu.current_level
    OR (au.current_level = cu.current_level AND au.experience > cu.experience)`
 
@@ -4135,7 +4135,7 @@ func (r *Repository) GetMyTodaySignRank(ctx context.Context, appID int64, userID
 	signDate := now.Format("2006-01-02")
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ds.signed_at, ds.consecutive_days, ds.id
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1 AND ds.user_id = $2 AND ds.sign_date = $3
 LIMIT 1`
@@ -4151,7 +4151,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE ds.appid = $1 AND ds.sign_date = $2
   AND (ds.signed_at < $3 OR (ds.signed_at = $3 AND ds.id < $4))`
 	var rank int64
@@ -4170,7 +4170,7 @@ WHERE ds.appid = $1 AND ds.sign_date = $2
 func (r *Repository) GetMyConsecutiveSignRank(ctx context.Context, appID int64, userID int64) (*pointdomain.RankingItem, error) {
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ss.consecutive_days, ss.total_sign_days, ss.last_sign_date, ss.last_sign_at
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ss.appid = $1 AND ss.user_id = $2
 LIMIT 1`
@@ -4184,7 +4184,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE ss.appid = $1
   AND (ss.consecutive_days > $2 OR (ss.consecutive_days = $2 AND ss.total_sign_days > $3) OR (ss.consecutive_days = $2 AND ss.total_sign_days = $3 AND ss.user_id < $4))`
 	var rank int64
@@ -4205,7 +4205,7 @@ func (r *Repository) GetMyMonthlySignRank(ctx context.Context, appID int64, user
 	period := now.Format("2006-01")
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), sms.sign_days, sms.last_sign_at
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE sms.appid = $1 AND sms.month_key = $2 AND sms.user_id = $3
 LIMIT 1`
@@ -4218,7 +4218,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE sms.appid = $1 AND sms.month_key = $2
   AND (sms.sign_days > $3 OR (sms.sign_days = $3 AND sms.last_sign_at < $4) OR (sms.sign_days = $3 AND sms.last_sign_at = $4 AND sms.user_id < $5))`
 	var rank int64

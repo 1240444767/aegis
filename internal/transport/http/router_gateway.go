@@ -192,6 +192,16 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/leaderboard/me", h.LeaderboardMe)
 		appGatewayAuthed.GET("/leaderboard/points/:type", h.LeaderboardPoints)
 		appGatewayAuthed.GET("/leaderboard/signin/:type", h.LeaderboardSignIn)
+		// 积分排行榜（新版，docs/leaderboard.md）：榜单 / 往期 / 我的奖励记录 / 匿名偏好。
+		// 叠一层排行榜专用限流（每用户每分钟 60 次），与 /api/leaderboard 同一档。
+		leaderboardLimit := middleware.LeaderboardRateLimit(60)
+		appGatewayAuthed.GET("/leaderboard/boards", leaderboardLimit, h.AppLeaderboardBoards)
+		appGatewayAuthed.GET("/leaderboard/boards/:key", leaderboardLimit, h.AppLeaderboardBoard)
+		appGatewayAuthed.GET("/leaderboard/boards/:key/periods", leaderboardLimit, h.AppLeaderboardPeriods)
+		appGatewayAuthed.GET("/leaderboard/boards/:key/periods/:periodKey", leaderboardLimit, h.AppLeaderboardPeriod)
+		appGatewayAuthed.GET("/leaderboard/rewards", leaderboardLimit, h.AppLeaderboardRewards)
+		appGatewayAuthed.GET("/leaderboard/preference", leaderboardLimit, h.AppLeaderboardPreference)
+		appGatewayAuthed.PUT("/leaderboard/preference", leaderboardLimit, h.AppUpdateLeaderboardPreference)
 
 		// 站内信
 		appGatewayAuthed.GET("/notifications", h.Notifications)

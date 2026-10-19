@@ -16,6 +16,7 @@ DELETE	/api/admin/apps/:appkey/function-kv	AdminDeleteAppFunctionKV
 DELETE	/api/admin/apps/:appkey/functions/:functionName	AdminDeleteAppFunction
 DELETE	/api/admin/apps/:appkey/functions/:functionName/versions/:version	AdminDeleteAppFunctionVersion
 DELETE	/api/admin/apps/:appkey/invite/codes/:codeId	AdminDeleteInviteCode
+DELETE	/api/admin/apps/:appkey/leaderboard/exclusions/:userId	AdminRemoveLeaderboardExclusion
 DELETE	/api/admin/apps/:appkey/login-baseline/:userid	ResetAdminAppLoginBaseline
 DELETE	/api/admin/apps/:appkey/lottery/activities/:id	AdminDeleteLotteryActivity
 DELETE	/api/admin/apps/:appkey/lottery/prizes/:id	AdminDeleteLotteryPrize
@@ -173,6 +174,12 @@ GET	/api/admin/apps/:appkey/invite/codes	AdminListInviteCodes
 GET	/api/admin/apps/:appkey/invite/relations	AdminListInviteRelations
 GET	/api/admin/apps/:appkey/invite/settings	AdminInviteSettings
 GET	/api/admin/apps/:appkey/invite/stats	AdminInviteStats
+GET	/api/admin/apps/:appkey/leaderboard/boards/:key	AdminLeaderboardBoard
+GET	/api/admin/apps/:appkey/leaderboard/exclusions	AdminLeaderboardExclusions
+GET	/api/admin/apps/:appkey/leaderboard/settings	AdminLeaderboardSettings
+GET	/api/admin/apps/:appkey/leaderboard/snapshots	AdminLeaderboardSnapshots
+GET	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/entries	AdminLeaderboardSnapshotEntries
+GET	/api/admin/apps/:appkey/leaderboard/stats	AdminLeaderboardStats
 GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
 GET	/api/admin/apps/:appkey/lottery/activities/:id	AdminGetLotteryActivity
@@ -560,8 +567,14 @@ GET	/api/v1/apps/:appkey/feedback/:feedbackId	AppGetFeedback
 GET	/api/v1/apps/:appkey/feedback/categories	AppFeedbackCategories
 GET	/api/v1/apps/:appkey/invite	AppInviteCenter
 GET	/api/v1/apps/:appkey/invite/invitees	AppInvitees
+GET	/api/v1/apps/:appkey/leaderboard/boards	AppLeaderboardBoards
+GET	/api/v1/apps/:appkey/leaderboard/boards/:key	AppLeaderboardBoard
+GET	/api/v1/apps/:appkey/leaderboard/boards/:key/periods	AppLeaderboardPeriods
+GET	/api/v1/apps/:appkey/leaderboard/boards/:key/periods/:periodKey	AppLeaderboardPeriod
 GET	/api/v1/apps/:appkey/leaderboard/me	LeaderboardMe
 GET	/api/v1/apps/:appkey/leaderboard/points/:type	LeaderboardPoints
+GET	/api/v1/apps/:appkey/leaderboard/preference	AppLeaderboardPreference
+GET	/api/v1/apps/:appkey/leaderboard/rewards	AppLeaderboardRewards
 GET	/api/v1/apps/:appkey/leaderboard/signin/:type	LeaderboardSignIn
 GET	/api/v1/apps/:appkey/leaderboard/summary	LeaderboardSummary
 GET	/api/v1/apps/:appkey/me	AppMe
@@ -745,6 +758,9 @@ POST	/api/admin/apps/:appkey/governance/appeals/:appealId/withdraw	AdminAppWithd
 POST	/api/admin/apps/:appkey/invite/codes	AdminCreateInviteCodes
 POST	/api/admin/apps/:appkey/invite/relations/:relationId/cancel	AdminCancelInviteRelation
 POST	/api/admin/apps/:appkey/invite/relations/:relationId/settle	AdminSettleInviteRelation
+POST	/api/admin/apps/:appkey/leaderboard/exclusions	AdminAddLeaderboardExclusions
+POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
+POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
 POST	/api/admin/apps/:appkey/lottery/activities/:id/prizes	AdminCreateLotteryPrize
 POST	/api/admin/apps/:appkey/lottery/activities/:id/seed/commit	AdminLotteryCommitSeed
@@ -1213,6 +1229,7 @@ PUT	/api/admin/apps/:appkey/functions/:functionName	AdminUpdateAppFunction
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId	AdminUpdateInviteCode
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId/status	AdminSetInviteCodeStatus
 PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
+PUT	/api/admin/apps/:appkey/leaderboard/settings	AdminSaveLeaderboardSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:id	AdminUpdateLotteryActivity
 PUT	/api/admin/apps/:appkey/lottery/prizes/:id	AdminUpdateLotteryPrize
 PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
@@ -1293,6 +1310,7 @@ PUT	/api/user/settings	UpdateSettings
 PUT	/api/user/update-site	UpdateSite
 PUT	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppPutCloudItem
 PUT	/api/v1/apps/:appkey/invite/code	AppUpdateInviteCode
+PUT	/api/v1/apps/:appkey/leaderboard/preference	AppUpdateLeaderboardPreference
 PUT	/api/v1/apps/:appkey/me/auto-sign	AppUpdateAutoSign
 PUT	/api/v1/apps/:appkey/me/profile	UpdateProfile
 PUT	/api/v1/apps/:appkey/me/settings	UpdateSettings

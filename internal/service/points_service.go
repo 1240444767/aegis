@@ -9,6 +9,7 @@ import (
 	"time"
 
 	authdomain "aegis/internal/domain/auth"
+	"aegis/internal/domain/leaderboard"
 	pointdomain "aegis/internal/domain/points"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
@@ -65,7 +66,33 @@ func (s *PointsService) GetMyLevel(ctx context.Context, session *authdomain.Sess
 	return profile, nil
 }
 
+// GetRankings 旧版排行榜。account 一律脱敏后返回（字段名不变，兼容老客户端）：
+// 账号可能就是手机号、邮箱，排行榜是给所有人看的。规则同新排行榜（docs/leaderboard.md「身份展示」）。
 func (s *PointsService) GetRankings(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {
+	resp, err := s.getRankings(ctx, session, rankingType, page, limit)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	return maskRankingAccounts(resp), nil
+}
+
+// maskRankingAccounts 返回一份账号已脱敏的副本：singleflight 的结果在并发请求之间共享，不能原地改。
+func maskRankingAccounts(resp *pointdomain.RankingResponse) *pointdomain.RankingResponse {
+	out := *resp
+	out.Items = make([]pointdomain.RankingItem, len(resp.Items))
+	for i, item := range resp.Items {
+		item.Account = leaderboard.MaskAccount(item.Account)
+		out.Items[i] = item
+	}
+	if resp.MyRank != nil {
+		my := *resp.MyRank
+		my.Account = leaderboard.MaskAccount(my.Account)
+		out.MyRank = &my
+	}
+	return &out
+}
+
+func (s *PointsService) getRankings(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {
 	switch rankingType {
 	case "", "integral":
 		return s.getCachedPointsRanking(ctx, session, "integral", page, limit)

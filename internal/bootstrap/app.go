@@ -70,6 +70,8 @@ type APIApp struct {
 	Storage *service.StorageService
 	// AccountDeletion 账号注销：后台循环执行到期的冷静期申请并发到期提醒，退出时必须 Stop
 	AccountDeletion *service.AccountDeletionService
+	// Leaderboard 积分排行榜：后台循环结算到期的周期榜并发放奖励，退出时必须 Stop
+	Leaderboard *service.LeaderboardService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
 	AuthProviderHealth *service.AuthProviderHealthService
 	// Egress 出海代理网关管理面；EgressGateway 是进程级单例，
@@ -439,6 +441,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	inviteService.SetEventPublisher(realtimeService)
 	inviteService.SetAppNames(appService)
 	signInService.SetAfterSignIn(inviteService.OnSignIn)
+	// 积分排行榜：实时榜走 Redis 缓存；周期榜到期由 API 进程的后台循环结算、发奖，奖励到账走站内信。
+	leaderboardService := service.NewLeaderboardService(log, pg, sessions)
+	leaderboardService.SetNotifier(notificationService)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
@@ -633,6 +638,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AdPolicy:         adPolicyService,
 		PointsStore:      pointsStoreService,
 		Invite:           inviteService,
+		Leaderboard:      leaderboardService,
 		AccountDeletion:  accountDeletionService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
@@ -749,6 +755,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		CloudStorage:       cloudStorageService,
 		Storage:            storageService,
 		AccountDeletion:    accountDeletionService,
+		Leaderboard:        leaderboardService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
 		EgressGateway:      egressGateway,
@@ -786,6 +793,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Start(ctx)
 	}
+	if a.Leaderboard != nil {
+		a.Leaderboard.Start(ctx)
+	}
 	if a.OwnsEgress && a.EgressGateway != nil {
 		a.EgressGateway.Start(ctx)
 	}
@@ -820,6 +830,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Stop()
+	}
+	if a.Leaderboard != nil {
+		a.Leaderboard.Stop()
 	}
 	if a.Database != nil {
 		a.Database.Stop()

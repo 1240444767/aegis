@@ -200,6 +200,20 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "leaderboardMe", Method: "GET", Path: "/leaderboard/me", Auth: true, Summary: "我在各榜单的排名"},
 	{Key: "leaderboardPoints", Method: "GET", Path: "/leaderboard/points/{type}", Auth: true, Summary: "积分榜（type: integral | experience | level）"},
 	{Key: "leaderboardSignIn", Method: "GET", Path: "/leaderboard/signin/{type}", Auth: true, Summary: "签到榜（type: today | consecutive | monthly）"},
+	// 积分排行榜（新版，docs/leaderboard.md）：未开启时 /leaderboard/boards 回 enabled=false（不报错），入口整个隐藏。
+	// 接口永远不返回原始账号；匿名上榜的人对别人显示「匿名用户」。
+	{Key: "leaderboardBoards", Method: "GET", Path: "/leaderboard/boards", Auth: true,
+		Summary: "排行榜首页：开启的榜单（当前周期、奖励档位）与我的偏好（匿名、是否被移出）"},
+	{Key: "leaderboardBoard", Method: "GET", Path: "/leaderboard/boards/{key}", Auth: true,
+		Summary: "一个榜单的实时名次（并列同名次，只在前 topLimit 名内分页）与我的名次（含距上一名的差距）"},
+	{Key: "leaderboardPeriods", Method: "GET", Path: "/leaderboard/boards/{key}/periods", Auth: true,
+		Summary: "周期榜的往期列表（已结算的快照），新的在前"},
+	{Key: "leaderboardPeriod", Method: "GET", Path: "/leaderboard/boards/{key}/periods/{periodKey}", Auth: true,
+		Summary: "往期榜单：结算时冻结的名次、我在这一期的名次与奖励"},
+	{Key: "leaderboardRewards", Method: "GET", Path: "/leaderboard/rewards", Auth: true, Summary: "我的榜单奖励记录"},
+	{Key: "leaderboardPreference", Method: "GET", Path: "/leaderboard/preference", Auth: true, Summary: "我的排行榜偏好（匿名上榜）"},
+	{Key: "leaderboardPreferenceUpdate", Method: "PUT", Path: "/leaderboard/preference", Auth: true,
+		Summary: "开关匿名上榜：名次与奖励照旧，别人看到的是「匿名用户」"},
 
 	// ── 站内信 ──
 	{Key: "notifications", Method: "GET", Path: "/notifications", Auth: true, Summary: "站内信列表"},
@@ -451,6 +465,15 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: errCodeInviteNotEligible, Name: "INVITE_NOT_ELIGIBLE", Message: "暂不满足邀请条件",
 		Recovery: authprotocol.RecoveryNone, Hint: "/invite 的 canInvite 为 false，inviteMessage 说明还差什么"},
 	{Code: errCodeInviteCodeTaken, Name: "INVITE_CODE_TAKEN", Message: "邀请码已被占用", Recovery: authprotocol.RecoveryNone},
+	// ── 积分排行榜 ──
+	{Code: errCodeLeaderboardDisabled, Name: "LEADERBOARD_DISABLED", Message: "排行榜暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/leaderboard/boards 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodeLeaderboardNotFound, Name: "LEADERBOARD_NOT_FOUND", Message: "排行榜不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "榜单 key 不存在或该榜未开启；以 /leaderboard/boards 返回的榜单为准"},
+	{Code: errCodeLeaderboardSnapshotNotFound, Name: "LEADERBOARD_PERIOD_NOT_FOUND", Message: "该期榜单不存在或尚未结算",
+		Recovery: authprotocol.RecoveryNone, Hint: "往期以 /leaderboard/boards/{key}/periods 返回的期号为准"},
+	{Code: errCodeLeaderboardAnonymousForbidden, Name: "LEADERBOARD_ANONYMOUS_FORBIDDEN", Message: "当前应用不允许匿名上榜",
+		Recovery: authprotocol.RecoveryNone, Hint: "/leaderboard/boards 的 me.allowAnonymous 为 false 时不要展示匿名开关"},
 	// ── 激励广告 ──
 	// 只有「这次上报本身不成立」才是错误；限额、冷却等「看了但不发」的结论
 	// 在 /ads/rewarded/claim 的返回体里（status=rejected + reason），不走错误码。

@@ -271,6 +271,19 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/invite/relations/:relationId/settle", h.AdminSettleInviteRelation)
 		admin.POST("/apps/:appkey/invite/relations/:relationId/cancel", h.AdminCancelInviteRelation)
 		admin.GET("/apps/:appkey/invite/stats", h.AdminInviteStats)
+		// 积分排行榜：设置（含榜单与权益目录）/ 实时与往期榜（真实账号）/ 移出名单 / 结算记录、明细、重试 /
+		// 手动结算 / 概览。权限与积分商城同级（app:read / app:write）。
+		admin.GET("/apps/:appkey/leaderboard/settings", h.AdminLeaderboardSettings)
+		admin.PUT("/apps/:appkey/leaderboard/settings", h.AdminSaveLeaderboardSettings)
+		admin.GET("/apps/:appkey/leaderboard/boards/:key", h.AdminLeaderboardBoard)
+		admin.GET("/apps/:appkey/leaderboard/exclusions", h.AdminLeaderboardExclusions)
+		admin.POST("/apps/:appkey/leaderboard/exclusions", h.AdminAddLeaderboardExclusions)
+		admin.DELETE("/apps/:appkey/leaderboard/exclusions/:userId", h.AdminRemoveLeaderboardExclusion)
+		admin.GET("/apps/:appkey/leaderboard/snapshots", h.AdminLeaderboardSnapshots)
+		admin.GET("/apps/:appkey/leaderboard/snapshots/:snapshotId/entries", h.AdminLeaderboardSnapshotEntries)
+		admin.POST("/apps/:appkey/leaderboard/snapshots/:snapshotId/retry", h.AdminRetryLeaderboardSnapshot)
+		admin.POST("/apps/:appkey/leaderboard/settle", h.AdminSettleLeaderboard)
+		admin.GET("/apps/:appkey/leaderboard/stats", h.AdminLeaderboardStats)
 		// 账号注销：配置、申请与审核、重新注册限制、统计。某个用户的注销挂在 users/:userId 之下。
 		admin.GET("/apps/:appkey/account-deletion/catalog", h.AdminAccountDeletionCatalog)
 		admin.GET("/apps/:appkey/account-deletion/settings", h.AdminAccountDeletionSettings)

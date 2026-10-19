@@ -115,6 +115,13 @@ func gatewayRequestModels() map[string]any {
 		"inviteCode":     InviteCodeUpdateRequest{},
 		"invitePreview":  InvitePreviewRequest{},
 
+		// 积分排行榜
+		"leaderboardBoard":            LeaderboardPageQuery{},
+		"leaderboardPeriods":          LeaderboardPeriodsQuery{},
+		"leaderboardPeriod":           LeaderboardPageQuery{},
+		"leaderboardRewards":          LeaderboardPageQuery{},
+		"leaderboardPreferenceUpdate": LeaderboardPreferenceRequest{},
+
 		// 站内信
 		"notifications":         NotificationQuery{},
 		"notificationRead":      NotificationReadRequest{},
