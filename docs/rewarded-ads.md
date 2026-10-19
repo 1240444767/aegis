@@ -118,5 +118,4 @@ GET /api/apps/{appKey}/ads/apex/callback?userId={{USER_ID}}&transId={{TRANS_ID}}
 3. 控制台里「平台应用 ID」填 Apex 应用 ID（只作核对展示），场景的「广告位 ID」填该广告位的 ID。
 
 Voyage 的正式 Apex 应用 ID 是 `84371`（包名 `com.cityray.aihrplus.vgjx`）：「平台应用 ID」填它，Security Key 与场景广告位都用这个应用下的。
-Apex 给的测试应用（应用 ID `68758`，激励视频 `4892299192457961`）登记的包名是 `com.ld.cww.apex`，
-Voyage 用 `-PvoyageAdTest=true` 打联调包（改用测试应用与测试广告位，包名不变）。测试广告位不能填进正式配置。
+Voyage 的所有构建都用这个应用，不再使用 Apex 的测试应用（`68758`）与测试广告位，测试广告位也不要填进配置。
