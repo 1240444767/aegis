@@ -713,6 +713,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
 | `components/apps/leaderboard/` | 排行榜区块：概览 / 设置 / 奖励 / 实时榜 / 移出名单 / 结算记录（见下节） |
 | `lib/api/leaderboard.ts` / `lib/leaderboard-hooks.ts` | 排行榜域 API 与 React Query hooks |
+| `components/apps/lottery/` | 抽奖区块：活动 / 统计 / 抽奖记录（见下节） |
+| `lib/api/lottery.ts` / `lib/lottery-hooks.ts` | 抽奖域 API 与 React Query hooks |
 | `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
 | `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
 | `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品、邀请奖励与排行榜奖励共用 |
@@ -1073,6 +1075,34 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    周期没结束时后端回 40922，弹窗里原样显示。
 
 名次、口径、结算与发放全部在后端，规则见 [docs/leaderboard.md](../docs/leaderboard.md)。
+
+## 抽奖区块（/apps/{appKey}?tab=lottery）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 抽奖记录三个视图的切换，跨视图带活动与「待发放」筛选 |
+| `components/apps/lottery/lottery-activities-panel.tsx` | 活动卡片：状态与形态、抽奖方式、奖品与公示概率、累计 / 今日 / 待发放；上线 / 暂停 / 结束、编辑、删除 |
+| `components/apps/lottery/lottery-activity-editor.tsx` | 活动编辑抽屉：基本信息与时间、三种次数与视频抽奖场景、奖盘、保底、规则；底部列出奖盘的待修正项 |
+| `components/apps/lottery/lottery-prize-board.tsx` | 奖盘：九宫格是 3×3 的盘（外圈顺时针 0–7 从左上角起，中心 GO），转盘是可增删、上下移的列表；右侧改选中的一格 |
+| `components/apps/lottery/lottery-activity-form.ts` | 草稿模型：种子（新活动的默认 8 格）、载荷、与后端 `ValidateInput` 同规则同说法的校验 |
+| `components/apps/lottery/lottery-stats-panel.tsx` | 单活动统计：8 个数字、趋势（次数与中奖为柱、人数为线）、次数来源、奖品抽中数与库存 |
+| `components/apps/lottery/lottery-draws-panel.tsx` | 抽奖记录：活动 / 用户 / 状态 / 来源 / 只看中奖 / 关键词 / 时间筛选；待发放的「标记已发放」写给用户的话 |
+| `components/apps/lottery/lottery-shared.tsx` | 状态 / 形态 / 来源文案、徽标、九宫格位置表、公示概率、奖品摘要与默认名 |
+
+五条硬约束：
+
+1. **活动连同全部奖品一次保存**（POST / PUT 整体），没有单独的奖品接口：九宫格恰好 8 格、保底奖属于本活动、
+   至少一个不限库存的奖品都是整张奖盘的约束。已有奖品必须带 `id` 回传，否则后端当成删了再建，已抽中数量清零。
+2. **保底奖按位置指定**（`pityPosition`），草稿里按行键记（`pityKey`），保存时换算成下标：奖品挪位置时保底跟着奖品走。
+   保底奖改成「谢谢参与」或被删除时草稿里的保底奖随之清空。
+3. **公示概率与后端 `lottery.Probabilities` 同一算法**（有库存奖品的权重合计作分母、四舍五入到 0.01），
+   编辑时按草稿实时算；改了算法两边显示的概率就会对不上，而用户端看到的是后端那一份。
+4. **奖品表单由后端目录驱动**（`/lottery/catalog`）：类型、取值形态、上下界、可选套餐（已去掉试用）与功能、
+   发「抽奖次数」的激励广告场景都来自目录。场景归激励广告区块配置，这里只选；激励广告未开启或没有这类场景时如实提示。
+5. **前端校验只是提示**，保存时第一条问题 toast；后端的 40000 原因原样 toast。删除有记录的活动后端回 40927，
+   toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
+
+旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
 
 ## 账号注销区块（/apps/{appKey}?tab=account-deletion）
 

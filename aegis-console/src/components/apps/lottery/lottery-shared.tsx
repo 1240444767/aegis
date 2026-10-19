@@ -1,0 +1,195 @@
+"use client";
+
+import { Badge } from "@/components/ui/badge";
+import { formatStoreDate, termLabel } from "@/components/apps/points-store/points-store-shared";
+import { vipPlanTerm } from "@/components/apps/vip/vip-shared";
+import type {
+  LotteryAdminActivity,
+  LotteryDrawStatus,
+  LotteryFeatureRef,
+  LotteryPlanRef,
+  LotteryReward,
+  LotteryRewardSpec,
+  LotterySource,
+  LotteryStatus,
+  LotteryUIMode
+} from "@/lib/api/lottery";
+
+/**
+ * 抽奖的展示口径：状态、形态、来源、奖品摘要与公示概率。集中在一处，
+ * 活动列表、编辑抽屉、统计与抽奖记录说的是同一套话。
+ */
+
+const STATUS_META: Record<LotteryStatus, { label: string; variant: "success" | "warning" | "secondary" | "outline" }> = {
+  draft: { label: "草稿", variant: "outline" },
+  active: { label: "进行中", variant: "success" },
+  paused: { label: "已暂停", variant: "warning" },
+  ended: { label: "已结束", variant: "secondary" }
+};
+
+export const LOTTERY_STATUSES: LotteryStatus[] = ["draft", "active", "paused", "ended"];
+
+export function lotteryStatusLabel(status: LotteryStatus) {
+  return STATUS_META[status]?.label ?? status;
+}
+
+export function LotteryStatusBadge({ status }: { status: LotteryStatus }) {
+  const meta = STATUS_META[status] ?? STATUS_META.draft;
+  return (
+    <Badge variant={meta.variant} size="sm">
+      {meta.label}
+    </Badge>
+  );
+}
+
+export const UI_MODE_LABEL: Record<LotteryUIMode, string> = {
+  grid: "九宫格",
+  wheel: "转盘"
+};
+
+export const SOURCE_LABEL: Record<LotterySource, string> = {
+  free: "免费",
+  bonus: "次数",
+  points: "积分"
+};
+
+const DRAW_STATUS_META: Record<LotteryDrawStatus, { label: string; variant: "success" | "warning" | "info" }> = {
+  granted: { label: "已到账", variant: "success" },
+  pending: { label: "待发放", variant: "warning" },
+  fulfilled: { label: "已发放", variant: "info" }
+};
+
+export const DRAW_STATUSES: LotteryDrawStatus[] = ["granted", "pending", "fulfilled"];
+
+export function drawStatusLabel(status: LotteryDrawStatus) {
+  return DRAW_STATUS_META[status]?.label ?? status;
+}
+
+export function DrawStatusBadge({ status }: { status: LotteryDrawStatus }) {
+  const meta = DRAW_STATUS_META[status] ?? DRAW_STATUS_META.granted;
+  return (
+    <Badge variant={meta.variant} size="sm">
+      {meta.label}
+    </Badge>
+  );
+}
+
+/**
+ * 九宫格外圈的位置 → 3×3 格子里的 [行, 列]。顺时针，从左上角起：
+ *
+ *   0 1 2
+ *   7 G 3      （G 为中心的抽奖按钮）
+ *   6 5 4
+ *
+ * 与 App 端的跑马灯顺序一致，改了这张表两边转出来的格子就对不上。
+ */
+export const GRID_CELLS: ReadonlyArray<readonly [number, number]> = [
+  [0, 0],
+  [0, 1],
+  [0, 2],
+  [1, 2],
+  [2, 2],
+  [2, 1],
+  [2, 0],
+  [1, 0]
+];
+
+type WeightedPrize = { weight: number; quantity: number; used: number };
+
+function inStock(prize: WeightedPrize) {
+  return prize.quantity < 0 || prize.used < prize.quantity;
+}
+
+/**
+ * 常规抽取下每个奖品的公示概率（百分比，两位小数），按传入顺序。
+ * 与后端 `lottery.Probabilities` 同一算法：分母是有库存奖品的权重合计，售罄或权重为 0 的为 0。
+ */
+export function prizeProbabilities(prizes: WeightedPrize[]) {
+  const total = prizes.reduce((sum, prize) => (inStock(prize) ? sum + Math.max(0, prize.weight) : sum), 0);
+  return prizes.map((prize) => {
+    if (total === 0 || !inStock(prize) || prize.weight <= 0) return 0;
+    const percent = (prize.weight * 100) / total;
+    return Math.floor(percent * 100 + 0.5) / 100;
+  });
+}
+
+export function formatProbability(value: number) {
+  return `${value.toFixed(2)}%`;
+}
+
+/** 奖品类型的中文名（目录里查不到时原样显示 type） */
+export function kindLabelOf(type: string, kinds: LotteryRewardSpec[]) {
+  return kinds.find((spec) => spec.type === type)?.label ?? type;
+}
+
+/** 一个奖品发什么的一句话摘要（「积分 30 点」「会员 7 天」） */
+export function describeLotteryReward(
+  reward: LotteryReward,
+  kinds: LotteryRewardSpec[],
+  plans: LotteryPlanRef[],
+  features: LotteryFeatureRef[]
+) {
+  const spec = kinds.find((item) => item.type === reward.type);
+  const label = spec?.label ?? reward.type;
+  switch (spec?.value) {
+    case "ref": {
+      const plan = plans.find((item) => item.id === reward.refId);
+      return plan ? `${plan.name}（${vipPlanTerm(plan)}）` : `${label} #${reward.refId ?? 0}`;
+    }
+    case "feature": {
+      const feature = features.find((item) => item.tag === reward.tag);
+      return `${feature?.name || reward.tag || label} ${termLabel(reward.amount ?? 0)}`;
+    }
+    case "text":
+      return reward.text || label;
+    case "amount":
+      return `${label} ${reward.amount ?? 0}${spec.unit ? ` ${spec.unit}` : ""}`;
+    default:
+      return label;
+  }
+}
+
+/**
+ * 奖品没起名字时后端生成的名字（`lottery.DefaultPrizeName`），用作名称输入框的占位。
+ * 只是预览：最终以保存后后端给的名字为准。
+ */
+export function defaultPrizeName(
+  reward: LotteryReward,
+  kinds: LotteryRewardSpec[],
+  plans: LotteryPlanRef[],
+  features: LotteryFeatureRef[]
+) {
+  switch (reward.type) {
+    case "none":
+      return kinds.find((item) => item.type === "none")?.label ?? "谢谢参与";
+    case "points":
+      return `${reward.amount ?? 0} 积分`;
+    case "experience":
+      return `${reward.amount ?? 0} 经验`;
+    case "lottery_draws":
+      return `抽奖 ${reward.amount ?? 0} 次`;
+    case "vip_days":
+      return `会员 ${reward.amount ?? 0} 天`;
+  }
+  return Array.from(describeLotteryReward(reward, kinds, plans, features)).slice(0, 16).join("");
+}
+
+/** 活动时间窗：两头都有写「起 至 止」，只有一头写「起」或「截至」，都没有为空 */
+export function activityWindow(startTime?: string, endTime?: string) {
+  if (startTime && endTime) return `${formatStoreDate(startTime)} 至 ${formatStoreDate(endTime)}`;
+  if (startTime) return `${formatStoreDate(startTime)} 起`;
+  if (endTime) return `截至 ${formatStoreDate(endTime)}`;
+  return "";
+}
+
+/** 进行中的活动此刻在不在时间窗内：未开始 / 已过期，都不是则为空 */
+export function activityPhase(activity: Pick<LotteryAdminActivity, "status" | "startTime" | "endTime">, now = Date.now()) {
+  if (activity.status !== "active") return null;
+  if (activity.startTime && new Date(activity.startTime).getTime() > now) return "未开始";
+  if (activity.endTime && new Date(activity.endTime).getTime() <= now) return "已过期";
+  return null;
+}
+
+export function formatCount(value?: number) {
+  return (value ?? 0).toLocaleString("zh-CN");
+}

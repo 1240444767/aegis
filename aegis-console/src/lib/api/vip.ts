@@ -93,6 +93,7 @@ export type VipSource =
   | "points_store"
   | "invite"
   | "leaderboard"
+  | "lottery"
   | "admin_revoke"
   | "legacy_import"
   | "unknown";

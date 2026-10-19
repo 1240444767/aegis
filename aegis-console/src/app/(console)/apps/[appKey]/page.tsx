@@ -16,7 +16,7 @@ import { AppAuthProtocolPanel } from "@/components/apps/app-auth-protocol-panel"
 import { AppAuthSessionPanel } from "@/components/apps/app-auth-session-panel";
 import { AppCaptchaPanel } from "@/components/apps/app-captcha-panel";
 import { AppInfoPanel } from "@/components/apps/app-info-panel";
-import { AppLotteryPanel } from "@/components/apps/app-lottery-panel";
+import { AppLotteryPanel } from "@/components/apps/lottery/app-lottery-panel";
 import { AppRewardedAdPanel } from "@/components/apps/rewarded-ad/app-rewarded-ad-panel";
 import { AppAdPolicyPanel } from "@/components/apps/ad-policy/app-ad-policy-panel";
 import { AppCloudStoragePanel } from "@/components/apps/cloud-storage/app-cloud-storage-panel";

@@ -1,187 +1,309 @@
-import { apiRequest, buildQuery } from "./client";
+import { apiRequest, buildQuery } from "@/lib/api/client";
 
-// ── 类型 ──
+/**
+ * 抽奖域 API（管理端）。
+ *
+ * 应用级抽奖活动：九宫格（恰好 8 个奖品）或转盘（2–12 个），每人每天的免费次数、
+ * 抽奖次数余额（看激励视频、卡密、积分商城等发放）、积分抽奖，以及「连续 N 次未中必中」的保底。
+ * 结果只在服务端产生；活动连同全部奖品一次保存（整张奖盘的约束分开保存会有违反约束的中间态）。
+ * 奖品表单由后端目录驱动（`/lottery/catalog`）。规则见 docs/lottery.md。
+ */
 
-export type LotteryActivity = {
+export type LotteryUIMode = "grid" | "wheel";
+export type LotteryStatus = "draft" | "active" | "paused" | "ended";
+export type LotterySource = "free" | "bonus" | "points";
+export type LotteryDrawStatus = "granted" | "pending" | "fulfilled";
+/** 奖品取值形态：空为不需要取值（谢谢参与） */
+export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "text";
+
+/** 一档奖品的自述，由后端目录下发，前端不另抄一份 */
+export type LotteryRewardSpec = {
+  type: string;
+  label: string;
+  hint: string;
+  value: LotteryRewardValue;
+  unit?: string;
+  min?: number;
+  max?: number;
+};
+
+export type LotteryPlanRef = {
   id: number;
-  appid: number;
   name: string;
-  description?: string;
-  uiMode: "wheel" | "grid";
-  status: "draft" | "active" | "paused" | "ended";
-  joinMode: "manual" | "auto" | "both";
-  autoJoinRules?: Record<string, unknown>;
-  costType: "free" | "points";
-  costAmount: number;
+  durationDays: number;
+  lifetime: boolean;
+  trial: boolean;
+  features: string[];
+};
+
+export type LotteryFeatureRef = {
+  tag: string;
+  name: string;
+  isActive: boolean;
+};
+
+/** 发「抽奖次数」的激励广告场景 */
+export type LotteryVideoScene = {
+  key: string;
+  name: string;
+  enabled: boolean;
+  drawsPerView: number;
   dailyLimit: number;
-  totalLimit: number;
-  startTime: string;
-  endTime: string;
-  seedHash?: string;
-  seedValue?: string;
-  chainTxHash?: string;
-  chainNetwork?: string;
-  createdAt: string;
-  updatedAt: string;
+};
+
+export type LotteryCatalog = {
+  kinds: LotteryRewardSpec[];
+  uiModes: LotteryUIMode[];
+  statuses: LotteryStatus[];
+  sources: LotterySource[];
+  gridPrizeCount: number;
+  wheelMinPrizes: number;
+  wheelMaxPrizes: number;
+  /** 可选的会员套餐（已去掉试用套餐） */
+  plans: LotteryPlanRef[];
+  /** 可选的功能（只含启用中的） */
+  features: LotteryFeatureRef[];
+  videoScenes: LotteryVideoScene[];
+  /** 激励广告总开关 */
+  rewardedAds: boolean;
+};
+
+export type LotteryReward = {
+  type: string;
+  /** 整数量；功能解锁时是天数，0 为永久 */
+  amount?: number;
+  refId?: number;
+  tag?: string;
+  text?: string;
+};
+
+export type LotteryRewardResult = {
+  type: string;
+  label: string;
+  detail: string;
+  transactionNo?: string;
+  expireAt?: string;
+  pending?: boolean;
 };
 
 export type LotteryPrize = {
   id: number;
   activityId: number;
   name: string;
-  type: "points" | "experience" | "item" | "coupon" | "custom";
-  value: string;
-  imageUrl?: string;
+  /** 与 reward.type 相同 */
+  kind: string;
+  reward: LotteryReward;
+  imageUrl: string;
+  /** 总库存，-1 为不限 */
   quantity: number;
+  /** 已抽中次数（不限库存的奖品不维护） */
   used: number;
+  /** 0 表示不参与常规抽取（只作保底奖或兜底奖） */
   weight: number;
+  /** 在奖盘上的位置；九宫格为外圈顺时针 0–7，从左上角起 */
   position: number;
-  isDefault: boolean;
-  extra?: Record<string, unknown>;
+  fallback: boolean;
   createdAt: string;
   updatedAt: string;
 };
 
+export type LotteryActivity = {
+  id: number;
+  appid: number;
+  name: string;
+  description: string;
+  rules: string;
+  uiMode: LotteryUIMode;
+  status: LotteryStatus;
+  startTime?: string;
+  endTime?: string;
+  freeDaily: number;
+  pointsCost: number;
+  /** 积分抽奖每日上限，0 为不限 */
+  pointsDaily: number;
+  /** 激励广告场景，空为不开放视频抽奖 */
+  videoScene: string;
+  /** 0 为关闭 */
+  pityThreshold: number;
+  pityPrizeId?: number;
+  sortOrder: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 列表上的一行：活动 + 奖品 + 汇总 */
+export type LotteryAdminActivity = LotteryActivity & {
+  prizes: LotteryPrize[];
+  totalDraws: number;
+  totalUsers: number;
+  todayDraws: number;
+  pending: number;
+};
+
+export type LotteryPrizePayload = {
+  /** 0 为新建；带 id 为更新（保留已抽中数量） */
+  id: number;
+  name: string;
+  reward: LotteryReward;
+  imageUrl: string;
+  quantity: number;
+  weight: number;
+  position: number;
+  fallback: boolean;
+};
+
+export type LotteryActivityPayload = {
+  name: string;
+  description: string;
+  rules: string;
+  uiMode: LotteryUIMode;
+  status: LotteryStatus;
+  startTime: string | null;
+  endTime: string | null;
+  freeDaily: number;
+  pointsCost: number;
+  pointsDaily: number;
+  videoScene: string;
+  pityThreshold: number;
+  /** 保底奖在 prizes 里的 position；关闭保底时为 null */
+  pityPosition: number | null;
+  sortOrder: number;
+  prizes: LotteryPrizePayload[];
+};
+
 export type LotteryDraw = {
   id: number;
+  drawNo: string;
+  appid: number;
   activityId: number;
+  activityName?: string;
   userId: number;
-  prizeId: number;
-  prizeSnapshot: Record<string, unknown>;
-  drawSeed?: string;
-  drawProof?: string;
-  status: "awarded" | "claimed" | "expired";
-  claimedAt?: string;
+  account?: string;
+  nickname?: string;
+  prizeId?: number;
+  prizeName: string;
+  prizeKind: string;
+  reward: LotteryReward;
+  position: number;
+  source: LotterySource;
+  pointsCost?: number;
+  pity?: boolean;
+  status: LotteryDrawStatus;
+  results: LotteryRewardResult[];
+  note?: string;
+  handledBy?: string;
+  handledAt?: string;
+  requestId?: string;
+  deviceId?: string;
+  clientIp?: string;
   createdAt: string;
 };
 
-export type LotteryDrawResult = {
-  draw: LotteryDraw;
-  prize: LotteryPrize;
-  seedHash?: string;
-  drawSeed?: string;
-  drawProof?: string;
-  prizeIndex: number;
+export type LotteryDrawParams = {
+  activityId?: number;
+  userId?: number;
+  status?: LotteryDrawStatus;
+  source?: LotterySource;
+  /** 只看抽中的（排除谢谢参与） */
+  winning?: boolean;
+  keyword?: string;
+  start?: string;
+  end?: string;
+  page?: number;
+  limit?: number;
 };
 
-export type LotterySeedCommitment = {
-  id: number;
-  activityId: number;
-  round: number;
-  seedHash: string;
-  seedValue?: string;
-  committedAt: string;
-  revealedAt?: string;
-  chainTxHash?: string;
-};
-
-export type LotteryVerifyResult = {
-  valid: boolean;
-  seedHash: string;
-  seedValue?: string;
-  chainTxHash?: string;
-  chainNetwork?: string;
-  message: string;
-};
-
-export type LotteryActivityStats = {
-  activityId: number;
-  totalDraws: number;
-  totalUsers: number;
-  participants: number;
-  prizeStats: { prizeId: number; name: string; type: string; quantity: number; used: number; weight: number }[];
-};
-
-export type PagedResult<T> = {
+export type LotteryPage<T> = {
   items: T[];
+  total: number;
   page: number;
   limit: number;
-  total: number;
   totalPages: number;
 };
 
-// ── 管理员 API ──
+export type LotteryStats = {
+  activityId: number;
+  days: number;
+  summary: {
+    todayDraws: number;
+    todayUsers: number;
+    todayWins: number;
+    totalDraws: number;
+    totalUsers: number;
+    pointsSpent: number;
+    pending: number;
+    pityHits: number;
+  };
+  trend: Array<{ date: string; draws: number; wins: number; users: number }>;
+  sources: Array<{ source: LotterySource; draws: number }>;
+  prizes: Array<{ prizeId?: number; name: string; kind: string; draws: number; quantity: number; used: number }>;
+};
 
-export function getAdminLotteryActivities(token: string, appKey: string, params?: { status?: string; keyword?: string; page?: number; limit?: number }) {
-  return apiRequest<PagedResult<LotteryActivity>>(`/api/admin/apps/${appKey}/lottery/activities${buildQuery(params ?? {})}`, { token });
+const base = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}/lottery`;
+
+// ── 目录 ──
+
+export function getLotteryCatalog(token: string, appKey: string) {
+  return apiRequest<LotteryCatalog>(`${base(appKey)}/catalog`, { token });
 }
 
-export function getAdminLotteryActivity(token: string, appKey: string, id: number) {
-  return apiRequest<LotteryActivity>(`/api/admin/apps/${appKey}/lottery/activities/${id}`, { token });
+// ── 活动 ──
+
+export function listLotteryActivities(token: string, appKey: string) {
+  return apiRequest<LotteryAdminActivity[]>(`${base(appKey)}/activities`, { token });
 }
 
-export function createAdminLotteryActivity(token: string, appKey: string, payload: {
-  name: string; description?: string; uiMode?: string; joinMode?: string;
-  autoJoinRules?: Record<string, unknown>; costType?: string; costAmount?: number;
-  dailyLimit?: number; totalLimit?: number; startTime: string; endTime: string;
-}) {
-  return apiRequest<LotteryActivity>(`/api/admin/apps/${appKey}/lottery/activities`, { method: "POST", token, body: JSON.stringify(payload) });
+export function createLotteryActivity(token: string, appKey: string, payload: LotteryActivityPayload) {
+  return apiRequest<LotteryAdminActivity>(`${base(appKey)}/activities`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
 }
 
-export function updateAdminLotteryActivity(token: string, appKey: string, id: number, payload: Record<string, unknown>) {
-  return apiRequest<LotteryActivity>(`/api/admin/apps/${appKey}/lottery/activities/${id}`, { method: "PUT", token, body: JSON.stringify(payload) });
+export function updateLotteryActivity(
+  token: string,
+  appKey: string,
+  activityId: number,
+  payload: LotteryActivityPayload
+) {
+  return apiRequest<LotteryAdminActivity>(`${base(appKey)}/activities/${activityId}`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
 }
 
-export function deleteAdminLotteryActivity(token: string, appKey: string, id: number) {
-  return apiRequest<void>(`/api/admin/apps/${appKey}/lottery/activities/${id}`, { method: "DELETE", token });
+/** 上线前后端按当前奖盘再校验一次 */
+export function setLotteryActivityStatus(token: string, appKey: string, activityId: number, status: LotteryStatus) {
+  return apiRequest<LotteryAdminActivity>(`${base(appKey)}/activities/${activityId}/status`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ status })
+  });
 }
 
-export function commitLotterySeed(token: string, appKey: string, id: number) {
-  return apiRequest<LotterySeedCommitment>(`/api/admin/apps/${appKey}/lottery/activities/${id}/commit-seed`, { method: "POST", token });
+/** 有抽奖记录的活动不能删除（40927），改为结束 */
+export function deleteLotteryActivity(token: string, appKey: string, activityId: number) {
+  return apiRequest<{ deleted: boolean }>(`${base(appKey)}/activities/${activityId}`, { method: "DELETE", token });
 }
 
-export function revealLotterySeed(token: string, appKey: string, id: number) {
-  return apiRequest<LotterySeedCommitment>(`/api/admin/apps/${appKey}/lottery/activities/${id}/reveal-seed`, { method: "POST", token });
+export function getLotteryStats(token: string, appKey: string, activityId: number, days: number) {
+  return apiRequest<LotteryStats>(`${base(appKey)}/activities/${activityId}/stats${buildQuery({ days })}`, { token });
 }
 
-export function getAdminLotteryPrizes(token: string, appKey: string, activityId: number) {
-  return apiRequest<LotteryPrize[]>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/prizes`, { token });
+// ── 抽奖记录 ──
+
+export function listLotteryDraws(token: string, appKey: string, params?: LotteryDrawParams) {
+  return apiRequest<LotteryPage<LotteryDraw>>(`${base(appKey)}/draws${buildQuery(params ?? {})}`, { token });
 }
 
-export function createAdminLotteryPrize(token: string, appKey: string, activityId: number, payload: {
-  name: string; type: string; value?: string; imageUrl?: string; quantity?: number; weight?: number; position?: number; isDefault?: boolean;
-}) {
-  return apiRequest<LotteryPrize>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/prizes`, { method: "POST", token, body: JSON.stringify(payload) });
-}
-
-export function updateAdminLotteryPrize(token: string, appKey: string, activityId: number, prizeId: number, payload: Record<string, unknown>) {
-  return apiRequest<LotteryPrize>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/prizes/${prizeId}`, { method: "PUT", token, body: JSON.stringify(payload) });
-}
-
-export function deleteAdminLotteryPrize(token: string, appKey: string, activityId: number, prizeId: number) {
-  return apiRequest<void>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/prizes/${prizeId}`, { method: "DELETE", token });
-}
-
-export function getAdminLotteryDraws(token: string, appKey: string, activityId: number, params?: { page?: number; limit?: number }) {
-  return apiRequest<PagedResult<LotteryDraw>>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/draws${buildQuery(params ?? {})}`, { token });
-}
-
-export function getAdminLotteryStats(token: string, appKey: string, activityId: number) {
-  return apiRequest<LotteryActivityStats>(`/api/admin/apps/${appKey}/lottery/activities/${activityId}/stats`, { token });
-}
-
-// ── 用户 API ──
-
-export function getUserLotteryActivities(token: string) {
-  return apiRequest<LotteryActivity[]>("/api/lottery/activities", { token });
-}
-
-export function getUserLotteryActivity(token: string, id: number) {
-  return apiRequest<{ activity: LotteryActivity; prizes: LotteryPrize[] }>(`/api/lottery/activities/${id}`, { token });
-}
-
-export function joinLotteryActivity(token: string, id: number) {
-  return apiRequest<void>(`/api/lottery/activities/${id}/join`, { method: "POST", token });
-}
-
-export function drawLottery(token: string, id: number) {
-  return apiRequest<LotteryDrawResult>(`/api/lottery/activities/${id}/draw`, { method: "POST", token });
-}
-
-export function getUserLotteryDraws(token: string, params?: { page?: number; limit?: number }) {
-  return apiRequest<PagedResult<LotteryDraw>>(`/api/lottery/my-draws${buildQuery(params ?? {})}`, { token });
-}
-
-export function verifyLotteryActivity(token: string, id: number) {
-  return apiRequest<LotteryVerifyResult>(`/api/lottery/activities/${id}/verify`, { token });
+/** 人工发放的奖品标记已发放；note 写进给用户的站内信（重复标记 40926） */
+export function fulfillLotteryDraw(token: string, appKey: string, drawId: number, note: string) {
+  return apiRequest<LotteryDraw>(`${base(appKey)}/draws/${drawId}/fulfill`, {
+    method: "POST",
+    token,
+    body: JSON.stringify({ note })
+  });
 }

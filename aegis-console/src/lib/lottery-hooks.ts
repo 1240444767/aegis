@@ -1,0 +1,137 @@
+"use client";
+
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  createLotteryActivity,
+  deleteLotteryActivity,
+  fulfillLotteryDraw,
+  getLotteryCatalog,
+  getLotteryStats,
+  listLotteryActivities,
+  listLotteryDraws,
+  setLotteryActivityStatus,
+  updateLotteryActivity,
+  type LotteryActivityPayload,
+  type LotteryDrawParams,
+  type LotteryStatus
+} from "@/lib/api/lottery";
+import { useAdminToken } from "@/lib/admin-hooks";
+
+/**
+ * 抽奖域 hooks。
+ *
+ * 失效关系集中在这里：改活动影响活动列表与统计里的奖品；标记发放影响记录、
+ * 活动上的待发放数与统计。整组失效，不在组件里逐个点名。
+ * 目录里的激励广告场景归激励广告区块管，改了场景要等目录自然过期或重新进入区块。
+ */
+
+const KEY = {
+  catalog: "admin-lottery-catalog",
+  activities: "admin-lottery-activities",
+  draws: "admin-lottery-draws",
+  stats: "admin-lottery-stats"
+} as const;
+
+const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats];
+
+function useInvalidateLotteryScope() {
+  const queryClient = useQueryClient();
+  return async () => {
+    await Promise.all(LOTTERY_SCOPE.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  };
+}
+
+export function useLotteryCatalogQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.catalog, token, appKey],
+    queryFn: () => getLotteryCatalog(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+// ── 活动 ──
+
+export function useLotteryActivitiesQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.activities, token, appKey],
+    queryFn: () => listLotteryActivities(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useSaveLotteryActivityMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (input: { activityId?: number; payload: LotteryActivityPayload }) =>
+      input.activityId
+        ? updateLotteryActivity(token as string, appKey as string, input.activityId, input.payload)
+        : createLotteryActivity(token as string, appKey as string, input.payload),
+    onSuccess: invalidate
+  });
+}
+
+export function useSetLotteryActivityStatusMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (input: { activityId: number; status: LotteryStatus }) =>
+      setLotteryActivityStatus(token as string, appKey as string, input.activityId, input.status),
+    onSuccess: invalidate
+  });
+}
+
+export function useDeleteLotteryActivityMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (activityId: number) => deleteLotteryActivity(token as string, appKey as string, activityId),
+    onSuccess: invalidate
+  });
+}
+
+export function useLotteryStatsQuery(appKey?: string | null, activityId?: number | null, days = 14) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.stats, token, appKey, activityId, days],
+    queryFn: () => getLotteryStats(token as string, appKey as string, activityId as number, days),
+    enabled: Boolean(token && appKey && activityId)
+  });
+}
+
+// ── 抽奖记录 ──
+
+export function useLotteryDrawsQuery(appKey?: string | null, params?: LotteryDrawParams) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [
+      KEY.draws,
+      token,
+      appKey,
+      params?.activityId ?? 0,
+      params?.userId ?? 0,
+      params?.status ?? "",
+      params?.source ?? "",
+      params?.winning ?? false,
+      params?.keyword ?? "",
+      params?.start ?? "",
+      params?.end ?? "",
+      params?.page ?? 1,
+      params?.limit ?? 20
+    ],
+    queryFn: () => listLotteryDraws(token as string, appKey as string, params),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useFulfillLotteryDrawMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (input: { drawId: number; note: string }) =>
+      fulfillLotteryDraw(token as string, appKey as string, input.drawId, input.note),
+    onSuccess: invalidate
+  });
+}

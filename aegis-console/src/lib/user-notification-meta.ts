@@ -21,6 +21,7 @@ export const USER_NOTIFICATION_ROUTES = [
   { value: "points", label: "积分中心" },
   { value: "points_store", label: "积分商城" },
   { value: "leaderboard", label: "排行榜" },
+  { value: "lottery", label: "幸运抽奖" },
   { value: "signin", label: "签到" },
   { value: "membership", label: "会员" },
   { value: "wallet", label: "钱包" },
