@@ -298,7 +298,7 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
               <Input
                 className="h-8 font-mono text-xs"
                 value={current.providerAppId}
-                placeholder="68758"
+                placeholder="84371"
                 onChange={(event) => patch({ providerAppId: event.target.value })}
               />
             </FieldGroup>
