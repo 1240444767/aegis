@@ -694,6 +694,8 @@ func (s *ClientControlService) Spec(ctx context.Context, app *appdomain.App) (*a
 	signer, err := s.signingKey(ring, sign)
 	s.keyMu.Unlock()
 	if err != nil {
+		// 私钥解不开几乎总是主密钥换了：/config 会因此不再下发 clientControl，必须让运维看见。
+		s.log.Warn("client control signing key unusable", zap.Int64("appid", app.ID), zap.String("key_id", sign.KeyID), zap.Error(err))
 		return nil, err
 	}
 	boxPublic := base64.RawURLEncoding.EncodeToString(box.PublicKey)
