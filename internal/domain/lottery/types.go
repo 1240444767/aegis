@@ -1,187 +1,433 @@
+// Package lottery 应用级抽奖：活动、奖品、抽奖记录与每个人的抽奖次数。
+//
+// 结果只在服务端产生：客户端只说「我要用哪一种次数抽一次」，抽中什么、发不发、发多少
+// 全部在同一个数据库事务里决定并到账，客户端拿到的只是这次的结果。不存在「客户端上报抽中了 X，
+// 服务端照着发」这条路 —— 那等于把奖池交给了任何能抓包的人。
+//
+// 次数有三种来源，各自计数、互不挤占：
+//
+//   - free   每人每天的免费次数（活动配置）
+//   - bonus  应用级的抽奖次数余额（lottery_draw_grants）：看激励广告、卡密、积分商城、邀请等发的「抽奖次数」
+//   - points 每次消耗若干积分（活动配置，可设每日上限）
+//
+// 「视频抽奖」不是第四种来源：活动指定一个激励广告场景，那个场景发的是抽奖次数，
+// 广告看完、两方确认之后次数进 bonus，客户端再用 bonus 抽。看没看完由广告平台的服务端回调说了算。
 package lottery
 
-import "time"
+import (
+	"time"
 
-// ── 活动 ──
+	"aegis/internal/domain/pointstore"
+)
 
+// 界面形态：九宫格固定 8 个奖品；转盘 2–12 个。
+const (
+	UIModeGrid  = "grid"
+	UIModeWheel = "wheel"
+)
+
+// 活动状态。只有 active 且在时间窗内的活动能抽。
+const (
+	StatusDraft  = "draft"
+	StatusActive = "active"
+	StatusPaused = "paused"
+	StatusEnded  = "ended"
+)
+
+// 次数来源。
+const (
+	SourceFree   = "free"
+	SourceBonus  = "bonus"
+	SourcePoints = "points"
+)
+
+// 抽奖记录状态。
+const (
+	// DrawGranted 奖品已在抽奖事务里到账（含「谢谢参与」）
+	DrawGranted = "granted"
+	// DrawPending 人工发放的奖品，等管理员处理
+	DrawPending = "pending"
+	// DrawFulfilled 人工发放的奖品已由管理员标记发放
+	DrawFulfilled = "fulfilled"
+)
+
+// 规模上界。
+const (
+	GridPrizeCount      = 8
+	WheelMinPrizes      = 2
+	WheelMaxPrizes      = 12
+	MaxNameRunes        = 32
+	MaxDescriptionRunes = 200
+	MaxRulesRunes       = 2000
+	MaxPrizeNameRunes   = 16
+	MaxFreeDaily        = 100
+	MaxPointsDaily      = 1000
+	MaxPointsCost       = 1_000_000
+	MaxWeight           = 1_000_000
+	MaxQuantity         = 100_000_000
+	MaxPityThreshold    = 1000
+	MaxNoteRunes        = 500
+	MaxRequestIDLength  = 64
+)
+
+// Reward 奖品发的东西，与积分商城同构（同一套账本、同一套描述）。
+type Reward = pointstore.Reward
+
+// RewardResult 一次发放的结果。
+type RewardResult = pointstore.RewardResult
+
+// Activity 一个抽奖活动。
 type Activity struct {
-	ID            int64          `json:"id"`
-	AppID         int64          `json:"appid"`
-	Name          string         `json:"name"`
-	Description   string         `json:"description,omitempty"`
-	UIMode        string         `json:"uiMode"`        // wheel | grid
-	Status        string         `json:"status"`        // draft | active | paused | ended
-	JoinMode      string         `json:"joinMode"`      // manual | auto | both
-	AutoJoinRules map[string]any `json:"autoJoinRules,omitempty"`
-	CostType      string         `json:"costType"`      // free | points
-	CostAmount    int            `json:"costAmount"`
-	DailyLimit    int            `json:"dailyLimit"`    // 0 = 不限
-	TotalLimit    int            `json:"totalLimit"`    // 0 = 不限
-	StartTime     time.Time      `json:"startTime"`
-	EndTime       time.Time      `json:"endTime"`
-	SeedHash      string         `json:"seedHash,omitempty"`
-	SeedValue     string         `json:"seedValue,omitempty"`
-	ChainTxHash   string         `json:"chainTxHash,omitempty"`
-	ChainNetwork  string         `json:"chainNetwork,omitempty"`
-	CreatedAt     time.Time      `json:"createdAt"`
-	UpdatedAt     time.Time      `json:"updatedAt"`
+	ID          int64      `json:"id"`
+	AppID       int64      `json:"appid"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Rules       string     `json:"rules"`
+	UIMode      string     `json:"uiMode"`
+	Status      string     `json:"status"`
+	StartTime   *time.Time `json:"startTime,omitempty"`
+	EndTime     *time.Time `json:"endTime,omitempty"`
+	// FreeDaily 每人每天免费抽几次，0 为不送
+	FreeDaily int `json:"freeDaily"`
+	// PointsCost 每次消耗多少积分，0 为不开放积分抽奖；PointsDaily 积分抽奖每天上限，0 为不限
+	PointsCost  int64 `json:"pointsCost"`
+	PointsDaily int   `json:"pointsDaily"`
+	// VideoScene 激励广告场景，看完发抽奖次数；空为不开放视频抽奖
+	VideoScene string `json:"videoScene"`
+	// PityThreshold 连续这么多次没抽中（谢谢参与）时，这一次必中 PityPrizeID；0 为关闭
+	PityThreshold int    `json:"pityThreshold"`
+	PityPrizeID   *int64 `json:"pityPrizeId,omitempty"`
+	SortOrder     int    `json:"sortOrder"`
+	CreatedBy     string `json:"createdBy,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
 }
 
-type ActivityMutation struct {
-	ID            int64
-	Name          *string
-	Description   *string
-	UIMode        *string
-	Status        *string
-	JoinMode      *string
-	AutoJoinRules map[string]any
-	CostType      *string
-	CostAmount    *int
-	DailyLimit    *int
-	TotalLimit    *int
+// Prize 一个奖品，占奖盘上的一格。
+type Prize struct {
+	ID         int64  `json:"id"`
+	ActivityID int64  `json:"activityId"`
+	Name       string `json:"name"`
+	// Kind 与 Reward.Type 相同；「谢谢参与」为 none，Reward 只有 Type
+	Kind     string `json:"kind"`
+	Reward   Reward `json:"reward"`
+	ImageURL string `json:"imageUrl"`
+	// Quantity 总库存，-1 为不限；Used 已抽中次数
+	Quantity int64 `json:"quantity"`
+	Used     int64 `json:"used"`
+	// Weight 抽中权重，0 表示不参与常规抽取（只作保底奖或兜底奖）
+	Weight int `json:"weight"`
+	// Position 在奖盘上的位置（九宫格为外圈顺时针 0–7）
+	Position int `json:"position"`
+	// Fallback 抽中的奖品恰好被抢光时改发它（必须不限库存）
+	Fallback  bool      `json:"fallback"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// InStock 还有没有库存。
+func (p Prize) InStock() bool {
+	return p.Quantity < 0 || p.Used < p.Quantity
+}
+
+// Winning 是否算「抽中」：除了「谢谢参与」都算。
+func (p Prize) Winning() bool {
+	return p.Kind != KindNone
+}
+
+// ActivityInput 新建 / 整体更新活动（含全部奖品）。
+//
+// 奖品与活动一起保存：九宫格要求恰好 8 格、保底奖必须是本活动的奖品、
+// 至少一个不限库存的奖品 —— 这些都是「整张奖盘」的约束，分开保存就会有
+// 「改到一半违反约束」的中间态。
+type ActivityInput struct {
+	AppID         int64
+	Name          string
+	Description   string
+	Rules         string
+	UIMode        string
+	Status        string
 	StartTime     *time.Time
 	EndTime       *time.Time
+	FreeDaily     int
+	PointsCost    int64
+	PointsDaily   int
+	VideoScene    string
+	PityThreshold int
+	// PityPosition 保底奖在 Prizes 里的 Position（奖品是新建时还没有 ID）；-1 为不设
+	PityPosition int
+	SortOrder    int
+	Prizes       []PrizeInput
+	Operator     string
 }
 
-type ActivityListQuery struct {
-	AppID   int64
-	Status  string
+// PrizeInput 一个奖品的输入；ID 为 0 表示新建，非 0 表示更新已有奖品（保留已抽中计数）。
+type PrizeInput struct {
+	ID       int64  `json:"id"`
+	Name     string `json:"name"`
+	Reward   Reward `json:"reward"`
+	ImageURL string `json:"imageUrl"`
+	Quantity int64  `json:"quantity"`
+	Weight   int    `json:"weight"`
+	Position int    `json:"position"`
+	Fallback bool   `json:"fallback"`
+}
+
+// AdminActivity 管理端列表上的一行：活动 + 奖品 + 汇总。
+type AdminActivity struct {
+	Activity
+	Prizes     []Prize `json:"prizes"`
+	TotalDraws int64   `json:"totalDraws"`
+	TotalUsers int64   `json:"totalUsers"`
+	TodayDraws int64   `json:"todayDraws"`
+	Pending    int64   `json:"pending"`
+}
+
+// Draw 一次抽奖。奖品信息存快照：奖品被改、被删之后，记录说的仍是当时抽中的那一份。
+type Draw struct {
+	ID           int64          `json:"id"`
+	DrawNo       string         `json:"drawNo"`
+	AppID        int64          `json:"appid"`
+	ActivityID   int64          `json:"activityId"`
+	ActivityName string         `json:"activityName,omitempty"`
+	UserID       int64          `json:"userId"`
+	Account      string         `json:"account,omitempty"`
+	Nickname     string         `json:"nickname,omitempty"`
+	PrizeID      *int64         `json:"prizeId,omitempty"`
+	PrizeName    string         `json:"prizeName"`
+	PrizeKind    string         `json:"prizeKind"`
+	Reward       Reward         `json:"reward"`
+	Position     int            `json:"position"`
+	Source       string         `json:"source"`
+	PointsCost   int64          `json:"pointsCost,omitempty"`
+	Pity         bool           `json:"pity,omitempty"`
+	Status       string         `json:"status"`
+	Results      []RewardResult `json:"results"`
+	Note         string         `json:"note,omitempty"`
+	HandledBy    string         `json:"handledBy,omitempty"`
+	HandledAt    *time.Time     `json:"handledAt,omitempty"`
+	RequestID    string         `json:"requestId,omitempty"`
+	DeviceID     string         `json:"deviceId,omitempty"`
+	ClientIP     string         `json:"clientIp,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+}
+
+// DrawQuery 抽奖记录筛选。
+type DrawQuery struct {
+	AppID      int64
+	ActivityID int64
+	UserID     int64
+	Status     string
+	Source     string
+	// Winning 只看抽中的（排除谢谢参与）
+	Winning bool
 	Keyword string
+	Start   *time.Time
+	End     *time.Time
 	Page    int
 	Limit   int
 }
 
-type ActivityListResult struct {
-	Items      []Activity `json:"items"`
-	Page       int        `json:"page"`
-	Limit      int        `json:"limit"`
-	Total      int64      `json:"total"`
-	TotalPages int        `json:"totalPages"`
+// Page 分页结果。
+type Page[T any] struct {
+	Items      []T   `json:"items"`
+	Total      int64 `json:"total"`
+	Page       int   `json:"page"`
+	Limit      int   `json:"limit"`
+	TotalPages int   `json:"totalPages"`
 }
 
-// ── 奖品 ──
-
-type Prize struct {
-	ID         int64          `json:"id"`
-	ActivityID int64          `json:"activityId"`
-	Name       string         `json:"name"`
-	Type       string         `json:"type"`    // points | experience | item | coupon | custom
-	Value      string         `json:"value"`   // 数量或描述
-	ImageURL   string         `json:"imageUrl,omitempty"`
-	Quantity   int            `json:"quantity"` // -1 = 无限
-	Used       int            `json:"used"`
-	Weight     int            `json:"weight"`
-	Position   int            `json:"position"`
-	IsDefault  bool           `json:"isDefault"` // 保底奖
-	Extra      map[string]any `json:"extra,omitempty"`
-	CreatedAt  time.Time      `json:"createdAt"`
-	UpdatedAt  time.Time      `json:"updatedAt"`
-}
-
-type PrizeMutation struct {
-	ID        int64
-	Name      *string
-	Type      *string
-	Value     *string
-	ImageURL  *string
-	Quantity  *int
-	Weight    *int
-	Position  *int
-	IsDefault *bool
-	Extra     map[string]any
-}
-
-// ── 参与记录 ──
-
-type Participant struct {
-	ID         int64     `json:"id"`
-	ActivityID int64     `json:"activityId"`
-	UserID     int64     `json:"userId"`
-	JoinType   string    `json:"joinType"` // manual | auto
-	JoinedAt   time.Time `json:"joinedAt"`
-}
-
-// ── 抽奖记录 ──
-
-type Draw struct {
-	ID            int64          `json:"id"`
-	ActivityID    int64          `json:"activityId"`
-	UserID        int64          `json:"userId"`
-	PrizeID       int64          `json:"prizeId"`
-	PrizeSnapshot map[string]any `json:"prizeSnapshot"`
-	DrawSeed      string         `json:"drawSeed,omitempty"`
-	DrawProof     string         `json:"drawProof,omitempty"`
-	Status        string         `json:"status"` // awarded | claimed | expired
-	ClaimedAt     *time.Time     `json:"claimedAt,omitempty"`
-	CreatedAt     time.Time      `json:"createdAt"`
-}
-
-type DrawListQuery struct {
-	ActivityID int64
+// DrawInput 用户抽一次。
+type DrawInput struct {
+	AppID      int64
 	UserID     int64
-	Status     string
-	Page       int
-	Limit      int
+	ActivityID int64
+	// Source 指定用哪一种次数；为空时按 free → bonus → points 的顺序自动选
+	Source    string
+	RequestID string
+	DeviceID  string
+	ClientIP  string
+	UserAgent string
+	// DayStart 「今天」从什么时候算起（应用时区的零点），由服务层算好传进来
+	DayStart time.Time
+	Now      time.Time
 }
 
-type DrawListResult struct {
-	Items      []Draw `json:"items"`
-	Page       int    `json:"page"`
-	Limit      int    `json:"limit"`
-	Total      int64  `json:"total"`
-	TotalPages int    `json:"totalPages"`
-}
-
-// ── 种子承诺 ──
-
-type SeedCommitment struct {
-	ID          int64      `json:"id"`
-	ActivityID  int64      `json:"activityId"`
-	Round       int        `json:"round"`
-	SeedHash    string     `json:"seedHash"`
-	SeedValue   string     `json:"seedValue,omitempty"`
-	CommittedAt time.Time  `json:"committedAt"`
-	RevealedAt  *time.Time `json:"revealedAt,omitempty"`
-	ChainTxHash string     `json:"chainTxHash,omitempty"`
-}
-
-// ── 抽奖结果 ──
-
+// DrawResult 一次抽奖的结果。Replayed 为 true 表示同一个 requestId 的重复提交，原样返回第一次的结果。
 type DrawResult struct {
-	Draw       Draw   `json:"draw"`
-	Prize      Prize  `json:"prize"`
-	SeedHash   string `json:"seedHash,omitempty"`
-	DrawSeed   string `json:"drawSeed,omitempty"`
-	DrawProof  string `json:"drawProof,omitempty"`
-	PrizeIndex int    `json:"prizeIndex"`
+	Draw     Draw    `json:"draw"`
+	Prize    *Prize  `json:"-"`
+	Chances  Chances `json:"chances"`
+	Pity     *Pity   `json:"pity,omitempty"`
+	Replayed bool    `json:"replayed"`
 }
 
-// ── 验证结果 ──
-
-type VerifyResult struct {
-	Valid        bool   `json:"valid"`
-	SeedHash     string `json:"seedHash"`
-	SeedValue    string `json:"seedValue,omitempty"`
-	ChainTxHash  string `json:"chainTxHash,omitempty"`
-	ChainNetwork string `json:"chainNetwork,omitempty"`
-	Message      string `json:"message"`
+// UserFacts 判定次数所需的事实，仓储层一次取齐。
+type UserFacts struct {
+	FreeUsedToday   int
+	PointsUsedToday int
+	Bonus           int64
+	Integral        int64
+	MissStreak      int
+	TotalDraws      int64
 }
 
-// ── 统计 ──
-
-type ActivityStats struct {
-	ActivityID    int64            `json:"activityId"`
-	TotalDraws    int64            `json:"totalDraws"`
-	TotalUsers    int64            `json:"totalUsers"`
-	Participants  int64            `json:"participants"`
-	PrizeStats    []PrizeStatItem  `json:"prizeStats"`
+// Chances 一个人在一个活动里现在能抽几次。
+type Chances struct {
+	Free   FreeChances   `json:"free"`
+	Bonus  int64         `json:"bonus"`
+	Points PointsChances `json:"points"`
+	Video  VideoChances  `json:"video"`
+	// Next 「点一下抽奖」会用哪一种次数，空表示没有可用次数（客户端引导去看视频或明天再来）
+	Next string `json:"next"`
 }
 
-type PrizeStatItem struct {
-	PrizeID  int64  `json:"prizeId"`
+// FreeChances 免费次数。
+type FreeChances struct {
+	Daily     int `json:"daily"`
+	Used      int `json:"used"`
+	Remaining int `json:"remaining"`
+}
+
+// PointsChances 积分抽奖。Remaining 为 -1 表示不限次数（仍受余额约束）。
+type PointsChances struct {
+	Enabled   bool  `json:"enabled"`
+	Cost      int64 `json:"cost"`
+	Daily     int   `json:"daily"`
+	Used      int   `json:"used"`
+	Remaining int   `json:"remaining"`
+	Balance   int64 `json:"balance"`
+	// Affordable 余额够不够抽一次
+	Affordable bool `json:"affordable"`
+}
+
+// VideoChances 视频抽奖：激励广告场景今天还能看几次。
+//
+// 客户端用 scene / placementId / userId 去加载广告，看完按激励广告的流程上报，
+// 到账的是抽奖次数（进 bonus），再用 bonus 抽。
+type VideoChances struct {
+	Enabled     bool   `json:"enabled"`
+	Scene       string `json:"scene,omitempty"`
+	PlacementID string `json:"placementId,omitempty"`
+	// UserID 传给广告 SDK 的签名用户标识（与 /ads/rewarded 的 userId 相同）
+	UserID string `json:"userId,omitempty"`
+	// DrawsPerView 看一次发几次抽奖
+	DrawsPerView int64 `json:"drawsPerView"`
+	DailyLimit   int   `json:"dailyLimit"`
+	// Remaining 今天还能看几次，-1 为不限
+	Remaining         int  `json:"remaining"`
+	CooldownRemaining int  `json:"cooldownRemaining"`
+	Available         bool `json:"available"`
+}
+
+// Pity 保底进度。
+type Pity struct {
+	Threshold int    `json:"threshold"`
+	PrizeID   int64  `json:"prizeId"`
+	PrizeName string `json:"prizeName"`
+	// Remaining 最多再抽几次必中（1 表示下一次必中）
+	Remaining int `json:"remaining"`
+}
+
+// ClientActivity 用户端看到的活动。
+type ClientActivity struct {
+	ID          int64         `json:"id"`
+	Name        string        `json:"name"`
+	Description string        `json:"description"`
+	Rules       string        `json:"rules"`
+	UIMode      string        `json:"uiMode"`
+	StartTime   *time.Time    `json:"startTime,omitempty"`
+	EndTime     *time.Time    `json:"endTime,omitempty"`
+	Prizes      []ClientPrize `json:"prizes"`
+}
+
+// ClientPrize 用户端看到的奖品：不含库存与权重，只带公示概率。
+type ClientPrize struct {
+	ID       int64  `json:"id"`
 	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Quantity int    `json:"quantity"`
-	Used     int    `json:"used"`
-	Weight   int    `json:"weight"`
+	Kind     string `json:"kind"`
+	Detail   string `json:"detail"`
+	ImageURL string `json:"imageUrl,omitempty"`
+	Position int    `json:"position"`
+	// Probability 常规抽取下抽中它的概率（百分比，保留到 0.01），不含保底与库存的影响
+	Probability float64 `json:"probability"`
+	SoldOut     bool    `json:"soldOut,omitempty"`
+}
+
+// ClientState 用户端的一个活动页：活动、我的次数、保底进度。
+type ClientState struct {
+	Activity   ClientActivity `json:"activity"`
+	Chances    Chances        `json:"chances"`
+	Pity       *Pity          `json:"pity,omitempty"`
+	ServerTime time.Time      `json:"serverTime"`
+}
+
+// ClientList 用户端的活动列表。
+type ClientList struct {
+	Activities []ClientActivitySummary `json:"activities"`
+	ServerTime time.Time               `json:"serverTime"`
+}
+
+// ClientActivitySummary 列表上的一个活动。
+type ClientActivitySummary struct {
+	ID          int64      `json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	UIMode      string     `json:"uiMode"`
+	StartTime   *time.Time `json:"startTime,omitempty"`
+	EndTime     *time.Time `json:"endTime,omitempty"`
+}
+
+// HandleInput 管理员处理一条人工发放的记录。
+type HandleInput struct {
+	AppID    int64
+	DrawID   int64
+	Note     string
+	Operator string
+}
+
+// StatsDay 一天的统计。
+type StatsDay struct {
+	Date  string `json:"date"`
+	Draws int64  `json:"draws"`
+	Wins  int64  `json:"wins"`
+	Users int64  `json:"users"`
+}
+
+// StatsSource 按次数来源的统计。
+type StatsSource struct {
+	Source string `json:"source"`
+	Draws  int64  `json:"draws"`
+}
+
+// StatsPrize 按奖品的统计。
+type StatsPrize struct {
+	PrizeID  *int64 `json:"prizeId,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Draws    int64  `json:"draws"`
+	Quantity int64  `json:"quantity"`
+	Used     int64  `json:"used"`
+}
+
+// StatsSummary 概览数字。
+type StatsSummary struct {
+	TodayDraws  int64 `json:"todayDraws"`
+	TodayUsers  int64 `json:"todayUsers"`
+	TodayWins   int64 `json:"todayWins"`
+	TotalDraws  int64 `json:"totalDraws"`
+	TotalUsers  int64 `json:"totalUsers"`
+	PointsSpent int64 `json:"pointsSpent"`
+	Pending     int64 `json:"pending"`
+	PityHits    int64 `json:"pityHits"`
+}
+
+// Stats 一个活动的概览。
+type Stats struct {
+	ActivityID int64         `json:"activityId"`
+	Days       int           `json:"days"`
+	Summary    StatsSummary  `json:"summary"`
+	Trend      []StatsDay    `json:"trend"`
+	Sources    []StatsSource `json:"sources"`
+	Prizes     []StatsPrize  `json:"prizes"`
 }

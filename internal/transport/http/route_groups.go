@@ -160,8 +160,6 @@ var routeGroups = []routeGroup{
 		Prefix: "/api/wallet"},
 	{Realm: realmUser, Title: "会员", Tag: tagAPI, Auth: authBearer,
 		Prefix: "/api/vip"},
-	{Realm: realmUser, Title: "抽奖", Tag: tagAPI, Auth: authBearer,
-		Prefix: "/api/lottery"},
 	{Realm: realmUser, Title: "排行榜", Tag: tagAPI, Auth: authBearer,
 		Prefix: "/api/leaderboard"},
 	{Realm: realmUser, Title: "验证码", Tag: tagAPI, Auth: authPublic,

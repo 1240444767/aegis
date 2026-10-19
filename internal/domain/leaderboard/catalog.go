@@ -100,6 +100,8 @@ var integralCategories = []CategoryRule{
 	{Category: "invite", Label: "邀请奖励", Rule: CategoryCounted},
 	{Category: "vip_bonus", Label: "会员套餐赠送", Rule: CategoryCounted},
 	{Category: "purchase", Label: "积分充值", Rule: CategoryCounted},
+	// 抽奖：抽中的积分计入；积分抽奖的消耗是扣减，天然不进周期榜
+	{Category: "lottery", Label: "抽奖", Rule: CategoryCounted},
 	{Category: CategoryAdminAdjust, Label: "管理员调整", Rule: CategoryAdmin},
 	{Category: "points_store", Label: "积分兑换（扣减）", Rule: CategoryExcluded},
 	{Category: "points_store_refund", Label: "积分兑换取消退回", Rule: CategoryExcluded},

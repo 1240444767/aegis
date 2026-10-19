@@ -131,9 +131,6 @@ func immutableConfigSections(previous, current config.Config) []string {
 	if !reflect.DeepEqual(previous.Memory, current.Memory) {
 		changed = append(changed, "memory")
 	}
-	if !reflect.DeepEqual(previous.Lottery, current.Lottery) {
-		changed = append(changed, "lottery")
-	}
 	if !reflect.DeepEqual(previous.CrashLog, current.CrashLog) {
 		changed = append(changed, "crashlog")
 	}

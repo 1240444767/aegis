@@ -80,19 +80,6 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appServer.POST("/ai/v1/messages", h.AppAIMessages)
 	}
 
-	// 用户抽奖路由
-	lotteryUser := router.Group("/api/lottery")
-	lotteryUser.Use(middleware.Auth(authService))
-	{
-		lotteryUser.GET("/activities", h.UserLotteryActivities)
-		lotteryUser.GET("/activities/:id", h.UserLotteryActivityDetail)
-		lotteryUser.GET("/activities/:id/prizes", h.UserLotteryActivityPrizes)
-		lotteryUser.GET("/activities/:id/verify", h.UserLotteryVerify)
-		lotteryUser.POST("/join", h.UserLotteryJoin)
-		lotteryUser.POST("/draw", h.UserLotteryDraw)
-		lotteryUser.GET("/draws", h.UserLotteryDrawHistory)
-	}
-
 	userPublic := router.Group("/api/user")
 	{
 		userPublic.GET("/banner", h.UserBanner)

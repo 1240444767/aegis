@@ -420,19 +420,16 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.DELETE("/user-settings/cleanup", h.AdminCleanupUserSettings)
 
 		// 抽奖系统管理路由
+		admin.GET("/apps/:appkey/lottery/catalog", h.AdminLotteryCatalog)
 		admin.GET("/apps/:appkey/lottery/activities", h.AdminListLotteryActivities)
 		admin.POST("/apps/:appkey/lottery/activities", h.AdminCreateLotteryActivity)
-		admin.GET("/apps/:appkey/lottery/activities/:id", h.AdminGetLotteryActivity)
-		admin.PUT("/apps/:appkey/lottery/activities/:id", h.AdminUpdateLotteryActivity)
-		admin.DELETE("/apps/:appkey/lottery/activities/:id", h.AdminDeleteLotteryActivity)
-		admin.GET("/apps/:appkey/lottery/activities/:id/prizes", h.AdminListLotteryPrizes)
-		admin.POST("/apps/:appkey/lottery/activities/:id/prizes", h.AdminCreateLotteryPrize)
-		admin.PUT("/apps/:appkey/lottery/prizes/:id", h.AdminUpdateLotteryPrize)
-		admin.DELETE("/apps/:appkey/lottery/prizes/:id", h.AdminDeleteLotteryPrize)
-		admin.GET("/apps/:appkey/lottery/activities/:id/stats", h.AdminLotteryActivityStats)
-		admin.POST("/apps/:appkey/lottery/activities/:id/seed/commit", h.AdminLotteryCommitSeed)
-		admin.POST("/apps/:appkey/lottery/activities/:id/seed/reveal", h.AdminLotteryRevealSeed)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId", h.AdminGetLotteryActivity)
+		admin.PUT("/apps/:appkey/lottery/activities/:activityId", h.AdminUpdateLotteryActivity)
+		admin.PUT("/apps/:appkey/lottery/activities/:activityId/status", h.AdminSetLotteryActivityStatus)
+		admin.DELETE("/apps/:appkey/lottery/activities/:activityId", h.AdminDeleteLotteryActivity)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId/stats", h.AdminLotteryStats)
 		admin.GET("/apps/:appkey/lottery/draws", h.AdminListLotteryDraws)
+		admin.POST("/apps/:appkey/lottery/draws/:drawId/fulfill", h.AdminFulfillLotteryDraw)
 
 		// 版本发布管理 RESTful 路由
 		admin.GET("/apps/:appkey/versions", h.AdminListVersions)

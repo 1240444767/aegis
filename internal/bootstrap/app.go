@@ -400,8 +400,6 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	replayRepo := redisrepo.NewReplayRepository(redisClient, cfg.Redis.KeyPrefix)
 	replayGuard := middleware.NewReplayGuard(cfg.ReplayProtection, cfg.JWT.Secret, replayRepo, log)
 	authProtocolService := service.NewAuthProtocolService(log, pg, replayRepo, cfg.Security.MasterKey)
-	chainCommitter := service.NewChainCommitter(cfg.Lottery.ChainRPCURL, cfg.Lottery.ChainPrivateKey, cfg.Lottery.ChainID, log)
-	lotteryService := service.NewLotteryService(log, pg, pointsService, chainCommitter)
 	memoryManager := service.NewMemoryManager(cfg.Memory, log, redisClient, cfg.Redis.KeyPrefix)
 	// 数据库生命周期与泄漏监控：与 MemoryManager 同构（构造即可用，Start 拉起后台采集）
 	databaseManager := service.NewDatabaseManager(log, cfg.Database, cfg.Postgres, pgHandle, redisClient, cfg.Redis.KeyPrefix, service.DatabaseRolePrimary)
@@ -431,6 +429,10 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 未注入时该方式直接报「未启用」而不是空指针。
 	authService.SetCardKeyService(cardKeyService)
 	rewardedAdService := service.NewRewardedAdService(log, pg, cfg)
+	// 抽奖：视频抽奖读激励广告场景的剩余次数，看完发的抽奖次数进应用级余额
+	lotteryService := service.NewLotteryService(log, pg, rewardedAdService)
+	lotteryService.SetNotifier(notificationService)
+	lotteryService.SetEventPublisher(realtimeService)
 	// 广告服务策略：开屏广告与激励视频传给 SDK 的是同一个带签名的用户标识。
 	adPolicyService := service.NewAdPolicyService(log, pg, rewardedAdService)
 	adPolicyService.SetEventPublishers(realtimeService, realtimeService)
@@ -517,6 +519,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	riskService.SetLocationService(locationService)
 	authService.SetRiskService(riskService)
 	inviteService.SetRiskService(riskService)
+	lotteryService.SetRiskService(riskService)
 	adminService.SetRiskService(riskService)
 	// 对外 OAuth2 / OIDC 授权服务器（Ory Hydra 承载协议，Aegis 负责登录与同意页）
 	oauth2ServerService := service.NewOAuth2ServerService(cfg, log, pg, authService, appService, avatarService)

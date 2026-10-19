@@ -185,6 +185,16 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsStoreRedeem", Method: "POST", Path: "/points/store/redeem", Auth: true,
 		Summary: "用积分兑换一件商品（requestId 幂等）；含人工发放的商品兑换后为 pending"},
 	{Key: "pointsStoreRedemptions", Method: "GET", Path: "/points/store/redemptions", Auth: true, Summary: "我的兑换记录"},
+	// 抽奖：抽中什么只由服务端决定并在同一个事务里到账，客户端只说用哪一种次数抽一次。
+	// 次数三种来源：每日免费（free）、抽奖次数余额（bonus，看激励广告 / 卡密 / 积分商城等发放）、积分（points）。
+	// 视频抽奖 = 活动页 chances.video 给出的激励广告场景：按激励广告流程看完并上报，到账的是抽奖次数，再用 bonus 抽。
+	{Key: "lotteryActivities", Method: "GET", Path: "/lottery", Auth: true,
+		Summary: "进行中的抽奖活动（没有时为空列表，入口应当隐藏）"},
+	{Key: "lotteryState", Method: "GET", Path: "/lottery/activities/{activityId}", Auth: true,
+		Summary: "抽奖活动页：奖品与公示概率、我的各种次数（含视频抽奖的广告场景）、保底进度"},
+	{Key: "lotteryDraw", Method: "POST", Path: "/lottery/activities/{activityId}/draw", Auth: true,
+		Summary: "抽一次（source: free / bonus / points，留空自动选；requestId 幂等）；返回结果与抽完后的次数"},
+	{Key: "lotteryDraws", Method: "GET", Path: "/lottery/draws", Auth: true, Summary: "我的抽奖记录（activityId 可选）"},
 	// 邀请：未开启时 /invite 回 enabled=false（不报错），入口整个隐藏。注册表单上的邀请码字段由
 	// /config 的 auth.invite 决定，填了的码随 /auth/register 的 inviteCode 一起提交。
 	{Key: "invite", Method: "GET", Path: "/invite", Auth: true,
@@ -441,6 +451,26 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRedeeming, Name: "POINTS_STORE_REDEEMING", Message: "兑换正在处理",
 		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	// ── 抽奖 ──
+	// 与活动页 chances 的判定一一对应：显示「还剩 0 次」与点了之后的报错是同一件事。
+	{Code: errCodeLotteryNotFound, Name: "LOTTERY_NOT_FOUND", Message: "活动不存在或已下线",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动被删除、暂停或还是草稿，重新拉一次 /lottery"},
+	{Code: errCodeLotteryNotStarted, Name: "LOTTERY_NOT_STARTED", Message: "活动尚未开始", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryEnded, Name: "LOTTERY_ENDED", Message: "活动已结束", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryFreeExhausted, Name: "LOTTERY_FREE_EXHAUSTED", Message: "今日免费次数已用完",
+		Recovery: authprotocol.RecoveryNone, Hint: "可改用 bonus / points，或引导看视频（chances.video）"},
+	{Code: errCodeLotteryPointsLimit, Name: "LOTTERY_POINTS_DAILY_LIMIT", Message: "今日积分抽奖次数已用完",
+		Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryNoChance, Name: "LOTTERY_NO_CHANCE", Message: "没有可用的抽奖次数",
+		Recovery: authprotocol.RecoveryNone, Hint: "指定 bonus 但余额为 0，或不指定来源且三种次数都没有（chances.next 为空）"},
+	{Code: errCodeLotterySourceUnavailable, Name: "LOTTERY_SOURCE_UNAVAILABLE", Message: "该抽奖方式未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动未开放积分抽奖，或 source 不是 free / bonus / points"},
+	{Code: errCodeLotteryPrizeUnavailable, Name: "LOTTERY_PRIZE_UNAVAILABLE", Message: "奖品配置已失效",
+		Recovery: authprotocol.RecoveryNone, Hint: "抽中的奖品引用的套餐或功能已失效，整次抽奖已回滚，次数与积分未扣"},
+	{Code: errCodeLotteryDrawing, Name: "LOTTERY_DRAWING", Message: "抽奖正在处理",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	{Code: errCodeLotteryRiskBlocked, Name: "LOTTERY_RISK_BLOCKED", Message: "当前环境存在风险，暂时无法抽奖",
+		Recovery: authprotocol.RecoveryNone},
 	// ── 账号注销 ──
 	{Code: errCodeDeletionDisabled, Name: "ACCOUNT_DELETION_DISABLED", Message: "账号注销暂未开放",
 		Recovery: authprotocol.RecoveryNone, Hint: "/me/deletion 的 enabled 为 false 时入口应当整个隐藏"},

@@ -105,6 +105,10 @@ func gatewayRequestModels() map[string]any {
 		"pointsStoreRedeem":      PointsStoreRedeemRequest{},
 		"pointsStoreRedemptions": PaginationQuery{},
 
+		// 抽奖
+		"lotteryDraw":  LotteryDrawRequest{},
+		"lotteryDraws": LotteryDrawsQuery{},
+
 		// 功能时长
 		"featureTimeLease":  FeatureTimeLeaseRequest{},
 		"featureTimeSettle": FeatureTimeSettleRequest{},

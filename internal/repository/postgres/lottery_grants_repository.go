@@ -8,8 +8,8 @@ import (
 
 // 抽奖次数余额。
 //
-// 抽奖此前没有「次数」这个概念：dailyLimit / totalLimit 是数 lottery_draws 的历史行
-// 数出来的，没有任何地方存得下「这个人还剩几次」。卡密要发抽奖次数就必须先有这个账户。
+// 应用级的抽奖次数余额（抽奖的 bonus 来源）：看激励广告、卡密、积分商城、邀请、排行榜与抽奖本身
+// 发的「抽奖次数」都进这里，任意活动可用。扣减在抽奖事务里（DrawLottery），与发奖同成同败。
 
 // grantLotteryDrawsTx 事务内发放抽奖次数（供卡密核销在同一事务里调用）。
 //
@@ -28,32 +28,6 @@ SET balance = lottery_draw_grants.balance + EXCLUDED.balance,
     updated_at = NOW()
 RETURNING balance`, appID, userID, amount).Scan(&balance)
 	return balance, err
-}
-
-// ConsumeLotteryDrawGrant 消耗一次赠送次数；返回是否真的扣到了。
-//
-// 条件 UPDATE 而不是「读余额 → 判断 → 写回」：后者在同一用户连点两次时
-// 两个请求会读到同一个余额，各自减一，结果扣了一次却抽了两把。
-// `balance > 0` 写在 WHERE 里，判断与扣减是同一条语句。
-func (r *Repository) ConsumeLotteryDrawGrant(ctx context.Context, appID int64, userID int64) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `UPDATE lottery_draw_grants
-SET balance = balance - 1, total_consumed = total_consumed + 1, updated_at = NOW()
-WHERE appid = $1 AND user_id = $2 AND balance > 0`, appID, userID)
-	if err != nil {
-		return false, err
-	}
-	return tag.RowsAffected() > 0, nil
-}
-
-// RefundLotteryDrawGrant 把已扣的一次还回去。
-//
-// 抽奖链路在扣次数之后仍有可能失败（奖池被抽空、写记录失败）。次数是用户花钱买的，
-// 失败还不还回去的区别，用户是能直接看出来的。
-func (r *Repository) RefundLotteryDrawGrant(ctx context.Context, appID int64, userID int64) error {
-	_, err := r.pool.Exec(ctx, `UPDATE lottery_draw_grants
-SET balance = balance + 1, total_consumed = GREATEST(total_consumed - 1, 0), updated_at = NOW()
-WHERE appid = $1 AND user_id = $2`, appID, userID)
-	return err
 }
 
 // GetLotteryDrawBalance 查询剩余赠送次数；没有账户时返回 0。

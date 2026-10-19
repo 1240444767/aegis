@@ -20,8 +20,7 @@ DELETE	/api/admin/apps/:appkey/functions/:functionName/versions/:version	AdminDe
 DELETE	/api/admin/apps/:appkey/invite/codes/:codeId	AdminDeleteInviteCode
 DELETE	/api/admin/apps/:appkey/leaderboard/exclusions/:userId	AdminRemoveLeaderboardExclusion
 DELETE	/api/admin/apps/:appkey/login-baseline/:userid	ResetAdminAppLoginBaseline
-DELETE	/api/admin/apps/:appkey/lottery/activities/:id	AdminDeleteLotteryActivity
-DELETE	/api/admin/apps/:appkey/lottery/prizes/:id	AdminDeleteLotteryPrize
+DELETE	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminDeleteLotteryActivity
 DELETE	/api/admin/apps/:appkey/notices	DeleteAdminNotices
 DELETE	/api/admin/apps/:appkey/notices/:noticeId	DeleteAdminNotice
 DELETE	/api/admin/apps/:appkey/notifications	DeleteAdminAppNotifications
@@ -190,9 +189,9 @@ GET	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/entries	AdminLeade
 GET	/api/admin/apps/:appkey/leaderboard/stats	AdminLeaderboardStats
 GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
-GET	/api/admin/apps/:appkey/lottery/activities/:id	AdminGetLotteryActivity
-GET	/api/admin/apps/:appkey/lottery/activities/:id/prizes	AdminListLotteryPrizes
-GET	/api/admin/apps/:appkey/lottery/activities/:id/stats	AdminLotteryActivityStats
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminGetLotteryActivity
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId/stats	AdminLotteryStats
+GET	/api/admin/apps/:appkey/lottery/catalog	AdminLotteryCatalog
 GET	/api/admin/apps/:appkey/lottery/draws	AdminListLotteryDraws
 GET	/api/admin/apps/:appkey/notices	AdminNotices
 GET	/api/admin/apps/:appkey/notices/export	ExportAdminNotices
@@ -491,11 +490,6 @@ GET	/api/leaderboard/signin/:type	LeaderboardSignIn
 GET	/api/leaderboard/summary	LeaderboardSummary
 GET	/api/legal/documents	PublicLegalCatalog
 GET	/api/legal/documents/:docType	PublicLegalDocument
-GET	/api/lottery/activities	UserLotteryActivities
-GET	/api/lottery/activities/:id	UserLotteryActivityDetail
-GET	/api/lottery/activities/:id/prizes	UserLotteryActivityPrizes
-GET	/api/lottery/activities/:id/verify	UserLotteryVerify
-GET	/api/lottery/draws	UserLotteryDrawHistory
 GET	/api/notifications	Notifications
 GET	/api/notifications/:notificationId	NotificationDetail
 GET	/api/notifications/preferences	NotificationPreferences
@@ -589,6 +583,9 @@ GET	/api/v1/apps/:appkey/leaderboard/preference	AppLeaderboardPreference
 GET	/api/v1/apps/:appkey/leaderboard/rewards	AppLeaderboardRewards
 GET	/api/v1/apps/:appkey/leaderboard/signin/:type	LeaderboardSignIn
 GET	/api/v1/apps/:appkey/leaderboard/summary	LeaderboardSummary
+GET	/api/v1/apps/:appkey/lottery	AppLotteryActivities
+GET	/api/v1/apps/:appkey/lottery/activities/:activityId	AppLotteryState
+GET	/api/v1/apps/:appkey/lottery/draws	AppLotteryDraws
 GET	/api/v1/apps/:appkey/me	AppMe
 GET	/api/v1/apps/:appkey/me/2fa/recovery-codes	ListRecoveryCodes
 GET	/api/v1/apps/:appkey/me/audits/login	UserLoginAudits
@@ -784,9 +781,7 @@ POST	/api/admin/apps/:appkey/leaderboard/exclusions	AdminAddLeaderboardExclusion
 POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
 POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
-POST	/api/admin/apps/:appkey/lottery/activities/:id/prizes	AdminCreateLotteryPrize
-POST	/api/admin/apps/:appkey/lottery/activities/:id/seed/commit	AdminLotteryCommitSeed
-POST	/api/admin/apps/:appkey/lottery/activities/:id/seed/reveal	AdminLotteryRevealSeed
+POST	/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill	AdminFulfillLotteryDraw
 POST	/api/admin/apps/:appkey/notices	CreateAdminNotice
 POST	/api/admin/apps/:appkey/notifications/bulk	AdminBulkNotifyUsers
 POST	/api/admin/apps/:appkey/notifications/delete-by-filter	DeleteAdminAppNotificationsByFilter
@@ -1087,8 +1082,6 @@ POST	/api/email/webhook/tencent/:scope	TencentEmailWebhook
 POST	/api/email/webhook/tencent/:scope/:config	TencentEmailWebhook
 POST	/api/email/webhook/zeabur/:scope	ZeaburEmailWebhook
 POST	/api/email/webhook/zeabur/:scope/:config	ZeaburEmailWebhook
-POST	/api/lottery/draw	UserLotteryDraw
-POST	/api/lottery/join	UserLotteryJoin
 POST	/api/notifications/clear	ClearNotifications
 POST	/api/notifications/delete-batch	DeleteNotificationsBatch
 POST	/api/notifications/read	ReadNotification
@@ -1189,6 +1182,7 @@ POST	/api/v1/apps/:appkey/feedback/:feedbackId/replies	AppReplyFeedback
 POST	/api/v1/apps/:appkey/feedback/attachments	AppUploadFeedbackAttachment
 POST	/api/v1/apps/:appkey/invite/bind	AppBindInvite
 POST	/api/v1/apps/:appkey/invite/preview	AppPreviewInvite
+POST	/api/v1/apps/:appkey/lottery/activities/:activityId/draw	AppLotteryDraw
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes	GenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes/regenerate	RegenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/totp/disable	DisableTOTP
@@ -1259,8 +1253,8 @@ PUT	/api/admin/apps/:appkey/invite/codes/:codeId	AdminUpdateInviteCode
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId/status	AdminSetInviteCodeStatus
 PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
 PUT	/api/admin/apps/:appkey/leaderboard/settings	AdminSaveLeaderboardSettings
-PUT	/api/admin/apps/:appkey/lottery/activities/:id	AdminUpdateLotteryActivity
-PUT	/api/admin/apps/:appkey/lottery/prizes/:id	AdminUpdateLotteryPrize
+PUT	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminUpdateLotteryActivity
+PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/status	AdminSetLotteryActivityStatus
 PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider	AdminUpdateAppOAuthProvider
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider/enabled	AdminSetAppOAuthProviderEnabled

@@ -749,6 +749,54 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun pointsStoreRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/points/store/redemptions", query = pageQuery(page, limit), requireAuth = true)
 
+    // ── 抽奖（docs/lottery.md）──
+
+    /** 进行中的抽奖活动。没有活动时 `activities` 为空（不报错），入口应当整个隐藏。 */
+    @Throws(IOException::class)
+    fun lotteryActivities(): JsonElement = client.call("GET", "/lottery", requireAuth = true)
+
+    /**
+     * 抽奖活动页：活动与奖品（`probability` 为公示概率）、我的各种次数（`chances`）与保底进度（`pity`）。
+     *
+     * `chances.next` 是「点一下抽奖」会用的次数来源，为空表示没有可用次数。
+     * 视频抽奖看 `chances.video`：用其中的 `scene` / `placementId` / `userId` 按激励广告的流程看完并上报
+     * （[AegisEngagementApi.claimRewardedAd]），到账的是抽奖次数，再用 `bonus` 抽。
+     */
+    @Throws(IOException::class)
+    fun lotteryState(activityId: Long): JsonElement =
+        client.call("GET", "/lottery/activities/$activityId", requireAuth = true)
+
+    /**
+     * 抽一次。抽中什么由服务端决定并在同一个事务里到账，返回 `draw`（含 `position`，奖盘上的格子）、
+     * 抽完后的 `chances` 与 `pity`。
+     *
+     * [source] 为 `free` / `bonus` / `points`，为空时按 free → bonus → points 自动选。
+     * [requestId] 由调用方生成（建议 UUID），网络重试时带同一个值：服务端原样返回第一次的结果
+     * （`replayed = true`），不会多抽一次。失败码：40402 活动不存在 / 40923 未开始 / 40924 已结束 /
+     * 42913 免费次数用完 / 42914 积分抽奖今日已满 / 42915 没有可用次数 / 40307 积分不足 /
+     * 40928 该方式未开放 / 40929 奖品已失效（已回滚） / 40348 风控拦截。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun drawLottery(
+        activityId: Long,
+        source: String? = null,
+        requestId: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/lottery/activities/$activityId/draw",
+        mapOf("source" to source, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
+    )
+
+    /** 我的抽奖记录，新的在前；[activityId] 为空时不限活动。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun lotteryDraws(activityId: Long? = null, page: Int = 1, limit: Int = 20): JsonElement {
+        val query = pageQuery(page, limit).toMutableMap()
+        if (activityId != null) query["activityId"] = activityId.toString()
+        return client.call("GET", "/lottery/draws", query = query, requireAuth = true)
+    }
+
     /**
      * 邀请页：我的邀请码（`code`，不满足邀请条件时为空、原因在 `inviteMessage`）、分享文案与链接、
      * 双方奖励与阶梯（`milestones`）、统计（`stats`），以及我还能不能填写邀请码（`bind`）。

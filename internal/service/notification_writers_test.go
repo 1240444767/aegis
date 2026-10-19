@@ -114,6 +114,7 @@ func TestNotificationWriterTypesAreCategorized(t *testing.T) {
 		"notificationdomain.TypePointsStore":     notificationdomain.TypePointsStore,
 		"notificationdomain.TypeInvite":          notificationdomain.TypeInvite,
 		"notificationdomain.TypeLeaderboard":     notificationdomain.TypeLeaderboard,
+		"notificationdomain.TypeLottery":         notificationdomain.TypeLottery,
 		"notificationdomain.TypeTicket":          notificationdomain.TypeTicket,
 	}
 	names := make([]string, 0, len(literals))

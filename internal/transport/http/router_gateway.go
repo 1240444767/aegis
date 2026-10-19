@@ -186,6 +186,12 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/points/store", h.AppPointsStore)
 		appGatewayAuthed.POST("/points/store/redeem", h.AppRedeemPointsStoreItem)
 		appGatewayAuthed.GET("/points/store/redemptions", h.AppPointsStoreRedemptions)
+		// 抽奖：活动列表、活动页（奖品与公示概率、我的次数、保底进度）、抽一次、我的记录。
+		// 抽中什么由服务端在一个事务里决定并到账；视频抽奖走激励广告场景，看完发的是抽奖次数。
+		appGatewayAuthed.GET("/lottery", h.AppLotteryActivities)
+		appGatewayAuthed.GET("/lottery/activities/:activityId", h.AppLotteryState)
+		appGatewayAuthed.POST("/lottery/activities/:activityId/draw", h.AppLotteryDraw)
+		appGatewayAuthed.GET("/lottery/draws", h.AppLotteryDraws)
 		// 邀请：邀请页 / 我邀请的人 / 注册后限时补填 / 换我的邀请码
 		appGatewayAuthed.GET("/invite", h.AppInviteCenter)
 		appGatewayAuthed.GET("/invite/invitees", h.AppInvitees)

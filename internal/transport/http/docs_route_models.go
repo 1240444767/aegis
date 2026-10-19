@@ -170,12 +170,10 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/leaderboard/settle"):                                   LeaderboardSettleRequest{},               // AdminSettleLeaderboard
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots"):                                 LeaderboardSnapshotQuery{},               // AdminLeaderboardSnapshots
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots/{snapshotId}/entries"):            LeaderboardEntryQuery{},                  // AdminLeaderboardSnapshotEntries
-		routeKey("GET", "/api/admin/apps/{appkey}/lottery/activities"):                                    LotteryActivityListQuery{},               // AdminListLotteryActivities
-		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                   LotteryActivityCreateRequest{},           // AdminCreateLotteryActivity
-		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{id}"):                               LotteryActivityUpdateRequest{},           // AdminUpdateLotteryActivity
-		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{id}/prizes"):                       LotteryPrizeCreateRequest{},              // AdminCreateLotteryPrize
-		routeKey("GET", "/api/admin/apps/{appkey}/lottery/draws"):                                         LotteryDrawListQuery{},                   // AdminListLotteryDraws
-		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/prizes/{id}"):                                   LotteryPrizeUpdateRequest{},              // AdminUpdateLotteryPrize
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                   LotteryActivityRequest{},                 // AdminCreateLotteryActivity
+		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}"):                       LotteryActivityRequest{},                 // AdminUpdateLotteryActivity
+		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/status"):                LotteryStatusRequest{},                   // AdminSetLotteryActivityStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/draws/{drawId}/fulfill"):                       LotteryFulfillRequest{},                  // AdminFulfillLotteryDraw
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notices"):                                            AdminBatchIDsRequest{},                   // DeleteAdminNotices
 		routeKey("GET", "/api/admin/apps/{appkey}/notices"):                                               AdminNoticeListQuery{},                   // AdminNotices
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notifications"):                                      AdminNotificationDeleteRequest{},         // DeleteAdminAppNotifications
@@ -542,10 +540,6 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/email/verify-reset-token"):                                                 EmailVerifyResetRequest{},                // VerifyResetToken
 		routeKey("GET", "/api/leaderboard/points/{type}"):                                                 LeaderboardListQuery{},                   // LeaderboardPoints
 		routeKey("GET", "/api/leaderboard/signin/{type}"):                                                 LeaderboardListQuery{},                   // LeaderboardSignIn
-		routeKey("GET", "/api/lottery/activities"):                                                        LotteryActivityListQuery{},               // UserLotteryActivities
-		routeKey("POST", "/api/lottery/draw"):                                                             LotteryDrawRequest{},                     // UserLotteryDraw
-		routeKey("GET", "/api/lottery/draws"):                                                             LotteryMyDrawListQuery{},                 // UserLotteryDrawHistory
-		routeKey("POST", "/api/lottery/join"):                                                             LotteryJoinRequest{},                     // UserLotteryJoin
 		routeKey("GET", "/api/notifications"):                                                             NotificationQuery{},                      // Notifications
 		routeKey("POST", "/api/notifications/clear"):                                                      NotificationClearRequest{},               // ClearNotifications
 		routeKey("POST", "/api/notifications/delete-batch"):                                               NotificationDeleteBatchRequest{},         // DeleteNotificationsBatch
@@ -663,6 +657,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/v1/apps/{appkey}/leaderboard/preference"):                                   LeaderboardPreferenceRequest{},           // AppUpdateLeaderboardPreference
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/rewards"):                                      LeaderboardPageQuery{},                   // AppLeaderboardRewards
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/signin/{type}"):                                LeaderboardListQuery{},                   // LeaderboardSignIn
+		routeKey("POST", "/api/v1/apps/{appkey}/lottery/activities/{activityId}/draw"):                    LotteryDrawRequest{},                     // AppLotteryDraw
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes"):                                   RecoveryCodesRegenerateRequest{},         // GenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes/regenerate"):                        RecoveryCodesRegenerateRequest{},         // RegenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/totp/disable"):                                     TOTPDisableRequest{},                     // DisableTOTP

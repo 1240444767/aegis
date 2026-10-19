@@ -78,7 +78,6 @@ type Config struct {
 	Banner           BannerConfig
 	CrashLog         CrashLogConfig
 	ReplayProtection ReplayProtectionConfig
-	Lottery          LotteryConfig
 	Memory           MemoryConfig
 	Tracing          TracingConfig
 	// Egress 出海代理网关：按目标域名后缀把出站流量路由到境外线路。
@@ -666,12 +665,6 @@ type AdminBootstrapConfig struct {
 	Email       string
 }
 
-type LotteryConfig struct {
-	ChainRPCURL     string // 以太坊 RPC 地址（为空则跳过链上提交）
-	ChainPrivateKey string // 链上提交私钥（hex）
-	ChainID         int64  // 链 ID（0 = 自动检测）
-}
-
 type MemoryConfig struct {
 	GCAutoTune      bool          `mapstructure:"gc_auto_tune"`      // 是否启用自适应 GC 调优（默认 true）
 	MemoryLimitMB   int64         `mapstructure:"memory_limit_mb"`   // 软内存上限 MB（0 = 自动检测系统可用内存的 80%）
@@ -1096,11 +1089,6 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			}
 			return s
 		}(),
-		Lottery: LotteryConfig{
-			ChainRPCURL:     v.GetString("LOTTERY_CHAIN_RPC_URL"),
-			ChainPrivateKey: v.GetString("LOTTERY_CHAIN_PRIVATE_KEY"),
-			ChainID:         v.GetInt64("LOTTERY_CHAIN_ID"),
-		},
 		Memory: MemoryConfig{
 			GCAutoTune:      getBool(v, "MEMORY_GC_AUTO_TUNE", true),
 			MemoryLimitMB:   v.GetInt64("MEMORY_LIMIT_MB"),

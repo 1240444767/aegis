@@ -134,19 +134,16 @@ func init() {
 		Write("PUT /api/admin/apps/:appkey/auto-sign", "修改自动签到策略", "", SeverityMedium),
 
 		// 抽奖
+		View("GET /api/admin/apps/:appkey/lottery/catalog", "查看抽奖奖品目录", ""),
 		View("GET /api/admin/apps/:appkey/lottery/activities", "查看抽奖活动列表", ""),
-		View("GET /api/admin/apps/:appkey/lottery/activities/:id", "查看抽奖活动详情", "抽奖活动"),
-		View("GET /api/admin/apps/:appkey/lottery/activities/:id/stats", "查看抽奖活动统计", "抽奖活动"),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId", "查看抽奖活动详情", "抽奖活动"),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/stats", "查看抽奖活动统计", "抽奖活动"),
 		Write("POST /api/admin/apps/:appkey/lottery/activities", "新建抽奖活动", "抽奖活动", SeverityMedium),
-		Write("PUT /api/admin/apps/:appkey/lottery/activities/:id", "编辑抽奖活动", "抽奖活动", SeverityMedium),
-		Write("DELETE /api/admin/apps/:appkey/lottery/activities/:id", "删除抽奖活动", "抽奖活动", SeverityHigh),
-		Write("POST /api/admin/apps/:appkey/lottery/activities/:id/seed/commit", "提交抽奖随机种子", "抽奖活动", SeverityHigh),
-		Write("POST /api/admin/apps/:appkey/lottery/activities/:id/seed/reveal", "公开抽奖随机种子", "抽奖活动", SeverityHigh),
-		View("GET /api/admin/apps/:appkey/lottery/activities/:id/prizes", "查看抽奖奖品", "抽奖活动"),
-		Write("POST /api/admin/apps/:appkey/lottery/activities/:id/prizes", "新建抽奖奖品", "抽奖奖品", SeverityMedium),
-		Write("PUT /api/admin/apps/:appkey/lottery/prizes/:id", "编辑抽奖奖品", "抽奖奖品", SeverityMedium),
-		Write("DELETE /api/admin/apps/:appkey/lottery/prizes/:id", "删除抽奖奖品", "抽奖奖品", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/lottery/activities/:activityId", "编辑抽奖活动与奖品", "抽奖活动", SeverityMedium),
+		Write("PUT /api/admin/apps/:appkey/lottery/activities/:activityId/status", "修改抽奖活动状态", "抽奖活动", SeverityMedium),
+		Write("DELETE /api/admin/apps/:appkey/lottery/activities/:activityId", "删除抽奖活动", "抽奖活动", SeverityHigh),
 		View("GET /api/admin/apps/:appkey/lottery/draws", "查看抽奖记录", ""),
+		Write("POST /api/admin/apps/:appkey/lottery/draws/:drawId/fulfill", "标记抽奖奖品已发放", "抽奖记录", SeverityMedium),
 
 		// 支付配置与订单（兼容接口）
 		View("POST /api/admin/app/payment-config/list", "查看支付配置列表（兼容接口）", ""),

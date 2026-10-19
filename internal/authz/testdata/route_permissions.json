@@ -1331,28 +1331,56 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/catalog",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/activities",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
   {
-    "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
-    "permission": "app:read",
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/activities",
+    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },
   {
     "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/prizes",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
   {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/status",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
     "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/stats",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/stats",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
@@ -1361,6 +1389,13 @@
     "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/draws",
     "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill",
+    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },
@@ -2668,41 +2703,6 @@
   },
   {
     "method": "GET",
-    "path": "/api/lottery/activities",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id/prizes",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id/verify",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/draws",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
     "path": "/api/system/monitor",
     "permission": "",
     "appScoped": false,
@@ -3453,34 +3453,6 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/vip/features",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/seed/commit",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/seed/reveal",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/prizes",
     "permission": "app:write",
     "appScoped": true,
     "unmapped": false
@@ -5797,20 +5769,6 @@
   },
   {
     "method": "POST",
-    "path": "/api/lottery/join",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "POST",
-    "path": "/api/lottery/draw",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "POST",
     "path": "/api/storage/upload",
     "permission": "",
     "appScoped": false,
@@ -6114,20 +6072,6 @@
     "method": "DELETE",
     "path": "/api/admin/apps/:appkey/notifications",
     "permission": "app:notification:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "DELETE",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "DELETE",
-    "path": "/api/admin/apps/:appkey/lottery/prizes/:id",
-    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },
@@ -6786,20 +6730,6 @@
     "method": "PUT",
     "path": "/api/admin/apps/:appkey/banners/:bannerId",
     "permission": "content:banner:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "PUT",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "PUT",
-    "path": "/api/admin/apps/:appkey/lottery/prizes/:id",
-    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },

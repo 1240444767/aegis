@@ -9,6 +9,7 @@ import (
 
 	"aegis/internal/domain/invite"
 	"aegis/internal/domain/leaderboard"
+	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 )
 
@@ -61,6 +62,7 @@ func TestIntegralCategoriesCoverEveryWriter(t *testing.T) {
 		"pointstore.IntegralCategoryRefund": pointstore.IntegralCategoryRefund,
 		"invite.IntegralCategory":           invite.IntegralCategory,
 		"leaderboard.IntegralCategory":      leaderboard.IntegralCategory,
+		"lotterydomain.IntegralCategory":    lotterydomain.IntegralCategory,
 	}
 	callPattern := regexp.MustCompile(`applyIntegralChangeTx\(ctx, tx,(?s:.{0,300}?)"(?:earn|consume)",\s*([^,\s]+),`)
 	structPattern := regexp.MustCompile(`integralChange\{(?s:.{0,300}?)Category:\s*([^,\s]+),`)

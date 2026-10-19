@@ -603,7 +603,7 @@ func (r *Repository) ActivityReport(ctx context.Context, appID int64, start, end
 	baseQuery := `
 		SELECT COUNT(DISTINCT d.user_id) AS participants,
 			COUNT(*) AS draws,
-			COUNT(*) FILTER (WHERE d.prize_id IS NOT NULL) AS wins
+			COUNT(*) FILTER (WHERE d.prize_kind <> 'none') AS wins
 		FROM lottery_draws d
 		JOIN lottery_activities a ON d.activity_id = a.id
 		WHERE a.appid = $1 AND d.created_at BETWEEN $2::timestamptz AND $3::timestamptz`
@@ -626,10 +626,9 @@ func (r *Repository) ActivityReport(ctx context.Context, appID int64, start, end
 
 	// 奖品消耗分布
 	prizeQuery := `
-		SELECT COALESCE(p.name, '未中奖') AS label, COUNT(*)
+		SELECT COALESCE(NULLIF(d.prize_name, ''), '未中奖') AS label, COUNT(*)
 		FROM lottery_draws d
 		JOIN lottery_activities a ON d.activity_id = a.id
-		LEFT JOIN lottery_prizes p ON d.prize_id = p.id
 		WHERE a.appid = $1 AND d.created_at BETWEEN $2::timestamptz AND $3::timestamptz`
 	prizeArgs := []any{appID, start, end}
 	if activityID != nil {
