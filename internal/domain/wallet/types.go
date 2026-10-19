@@ -22,6 +22,8 @@ const (
 	TxnTypePointsExchange = "points_exchange"
 	// TxnTypeInvite 邀请奖励入账。同理不计入累计充值。
 	TxnTypeInvite = "invite"
+	// TxnTypeLeaderboard 排行榜奖励入账。同理不计入累计充值。
+	TxnTypeLeaderboard = "leaderboard"
 )
 
 // Wallet 用户钱包
