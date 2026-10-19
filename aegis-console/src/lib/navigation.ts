@@ -163,6 +163,22 @@ export const navigationGroups: NavigationGroup[] = [
         summary: "版本与渠道"
       },
       {
+        title: "版本管控",
+        href: "/client-control",
+        icon: ShieldCheck,
+        summary: "停用版本与非官方安装包",
+        permission: "version:read",
+        children: [
+          { title: "概览", tab: "overview" },
+          { title: "规则", tab: "rules" },
+          { title: "版本分布", tab: "versions" },
+          { title: "设备", tab: "devices" },
+          { title: "模拟", tab: "simulate" },
+          { title: "密钥", tab: "keys" },
+          { title: "设置", tab: "settings" }
+        ]
+      },
+      {
         // 与 /apps?tab=payment 的分工是「运营 vs 配置」：那边配渠道密钥与限额，
         // 这里看已经发生的钱。同一件事只有一个入口，两边不重复。
         title: "交易",
