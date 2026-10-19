@@ -360,10 +360,11 @@ export function getAdminAppSessionAudits(
 export function getAdminAppNotifications(
   token: string,
   appKey: string,
-  params?: { keyword?: string; type?: string; level?: string; page?: number; limit?: number }
+  params?: { keyword?: string; category?: string; type?: string; level?: string; page?: number; limit?: number }
 ) {
   const query = buildQuery({
     keyword: params?.keyword,
+    category: params?.category,
     type: params?.type,
     level: params?.level,
     page: params?.page,

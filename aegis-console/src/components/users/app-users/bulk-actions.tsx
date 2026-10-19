@@ -13,16 +13,6 @@ import {
   DialogHeader,
   DialogTitle
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import {
   BanDurationField,
   BanReasonField,
@@ -32,10 +22,10 @@ import {
   useNow
 } from "@/components/users/ban-form";
 import { ApiError } from "@/lib/api-client";
+import { BulkNotifyDialog } from "@/components/users/app-users/bulk-notify-dialog";
 import {
   useBatchBanAppUsersMutation,
-  useBatchUpdateAppUserStatusMutation,
-  useBulkNotifyAppUsersMutation
+  useBatchUpdateAppUserStatusMutation
 } from "@/lib/app-user-hooks";
 import { cn } from "@/lib/utils";
 
@@ -225,111 +215,6 @@ function BulkBanDialog({
               确认封禁
             </Button>
           </div>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ── 批量站内信 ──────────────────────────
-
-const NOTIFY_LEVELS = [
-  { value: "info", label: "普通" },
-  { value: "warning", label: "提醒" },
-  { value: "critical", label: "重要" }
-];
-
-function BulkNotifyDialog({
-  open,
-  onOpenChange,
-  appKey,
-  selectedIds,
-  onDone
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  appKey: string | null;
-  selectedIds: number[];
-  onDone: () => void;
-}) {
-  const mutation = useBulkNotifyAppUsersMutation(appKey);
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [level, setLevel] = useState("info");
-
-  const canSubmit = title.trim().length > 0 && content.trim().length > 0;
-
-  async function submit() {
-    try {
-      await mutation.mutateAsync({
-        userIds: selectedIds,
-        type: "system",
-        title: title.trim(),
-        content: content.trim(),
-        level
-      });
-      toast.success(`已向 ${selectedIds.length} 个用户发送站内信`);
-      setTitle("");
-      setContent("");
-      onOpenChange(false);
-      onDone();
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "发送失败");
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
-        <DialogHeader>
-          <DialogTitle className="text-sm">给 {selectedIds.length} 个用户发站内信</DialogTitle>
-          <DialogDescription>发送到用户站内信收件箱。</DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">标题</Label>
-            <Input
-              value={title}
-              className="h-8 text-xs"
-              placeholder="例如：账号安全提醒"
-              onChange={(event) => setTitle(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">正文</Label>
-            <Textarea
-              rows={4}
-              value={content}
-              placeholder="正文内容"
-              onChange={(event) => setContent(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-xs text-muted-foreground">级别</Label>
-            <Select value={level} onValueChange={setLevel}>
-              <SelectTrigger size="sm" className="h-8 w-32 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {NOTIFY_LEVELS.map((item) => (
-                  <SelectItem key={item.value} value={item.value} className="text-xs">
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
-            取消
-          </Button>
-          <Button size="sm" disabled={!canSubmit || mutation.isPending} onClick={submit}>
-            {mutation.isPending ? <Loader2 className="mr-1 size-3 animate-spin" /> : null}
-            发送
-          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

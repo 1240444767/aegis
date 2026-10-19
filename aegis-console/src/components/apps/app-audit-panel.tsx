@@ -1,14 +1,24 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { ListPagination } from "@/components/payment/payment-list-parts";
+import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useNow } from "@/components/users/ban-form";
 import { useAdminAppLoginAuditsQuery, useAdminAppSessionAuditsQuery, useAdminAppNotificationsQuery } from "@/lib/admin-hooks";
+import type { NotificationItem } from "@/lib/api/types";
+import { formatShortDateTime } from "@/lib/datetime";
+import {
+  USER_NOTIFICATION_CATEGORIES,
+  describeUserNotificationAction,
+  userNotificationCategoryLabel,
+  userNotificationLevelLabel
+} from "@/lib/user-notification-meta";
 
 function fmtTime(v?: string | null) {
-  if (!v) return "—";
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? "—" : d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  return formatShortDateTime(v);
 }
 
 function str(v: unknown, fb = "—") { return typeof v === "string" && v.trim() ? v : fb; }
@@ -103,33 +113,101 @@ function SessionAuditTable({ appKey }: { appKey: string }) {
   );
 }
 
-function NotificationTable({ appKey }: { appKey: string }) {
-  const query = useAdminAppNotificationsQuery(appKey, { page: 1, limit: 20 });
-  const items = useMemo(() => {
-    const list = query.data;
-    return Array.isArray(list) ? list : (list as any)?.items || [];
-  }, [query.data]);
+const NOTIFICATION_PAGE_SIZE = 20;
 
-  if (query.isLoading) return <Skeleton className="h-40 w-full rounded-lg" />;
-  if (!items.length) return <div className="py-8 text-center text-xs text-muted-foreground">暂无通知数据</div>;
+/** 应用用户站内信列表：按分类筛选，带分类、动作、状态与过期时间。 */
+function NotificationTable({ appKey }: { appKey: string }) {
+  const [category, setCategory] = useState("all");
+  const [page, setPage] = useState(1);
+  const now = useNow();
+  const query = useAdminAppNotificationsQuery(appKey, {
+    category: category === "all" ? undefined : category,
+    page,
+    limit: NOTIFICATION_PAGE_SIZE
+  });
+  const data = query.data;
+  const items: NotificationItem[] = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, data?.totalPages ?? 1);
 
   return (
-    <div className="overflow-hidden rounded-xl border">
-      <Table>
-        <TableHeader><TableRow className="hover:bg-transparent">
-          <TableHead>标题</TableHead><TableHead>类型</TableHead><TableHead>级别</TableHead><TableHead>时间</TableHead>
-        </TableRow></TableHeader>
-        <TableBody>
-          {items.map((item: Record<string, unknown>, i: number) => (
-            <TableRow key={`${item.id || i}`}>
-              <TableCell className="text-xs font-medium">{str(item.title)}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{str(item.type)}</TableCell>
-              <TableCell className="text-xs text-muted-foreground">{str(item.level)}</TableCell>
-              <TableCell className="text-xs tabular-nums text-muted-foreground">{fmtTime(item.createdAt as string)}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Select
+          value={category}
+          onValueChange={(value) => {
+            setCategory(value);
+            setPage(1);
+          }}
+        >
+          <SelectTrigger size="sm" className="h-8 w-36 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all" className="text-xs">
+              全部分类
+            </SelectItem>
+            {USER_NOTIFICATION_CATEGORIES.map((item) => (
+              <SelectItem key={item.value} value={item.value} className="text-xs">
+                {item.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      {query.isLoading ? (
+        <Skeleton className="h-40 w-full rounded-lg" />
+      ) : !items.length ? (
+        <div className="py-8 text-center text-xs text-muted-foreground">暂无通知数据</div>
+      ) : (
+        <div className="overflow-hidden rounded-xl border">
+          <Table>
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>标题</TableHead>
+                <TableHead>收件人</TableHead>
+                <TableHead>分类</TableHead>
+                <TableHead>级别</TableHead>
+                <TableHead>跳转</TableHead>
+                <TableHead>状态</TableHead>
+                <TableHead>过期时间</TableHead>
+                <TableHead>时间</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {items.map((item) => {
+                const expired = item.expiresAt ? new Date(item.expiresAt).getTime() <= now : false;
+                return (
+                  <TableRow key={item.id}>
+                    <TableCell className="max-w-[240px] truncate text-xs font-medium" title={item.content}>
+                      {str(item.title)}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{str(item.account, item.userId ? `#${item.userId}` : "—")}</TableCell>
+                    <TableCell className="text-xs">{item.categoryLabel || userNotificationCategoryLabel(item.category) || "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{userNotificationLevelLabel(item.level) || "—"}</TableCell>
+                    <TableCell className="max-w-[160px] truncate text-xs text-muted-foreground" title={item.action?.target}>
+                      {describeUserNotificationAction(item.action) || "—"}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {item.status === "read" ? (
+                        <Badge variant="outline" size="sm">已读</Badge>
+                      ) : (
+                        <Badge variant="info" size="sm">未读</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums text-muted-foreground">
+                      {item.expiresAt ? (expired ? <span className="text-amber-600">已过期</span> : fmtTime(item.expiresAt)) : "—"}
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums text-muted-foreground">{fmtTime(item.createdAt)}</TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+          <ListPagination page={page} totalPages={totalPages} total={total} unit="条" onPage={setPage} />
+        </div>
+      )}
     </div>
   );
 }

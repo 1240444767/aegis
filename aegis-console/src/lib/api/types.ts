@@ -3107,10 +3107,17 @@ export type NotificationItem = {
   account?: string;
   nickname?: string;
   type?: string;
+  /** 分类 key 与中文名（docs/notification-center.md） */
+  category?: string;
+  categoryLabel?: string;
   title?: string;
   content?: string;
   level?: string;
   status?: string;
+  /** 跳转动作：route 为应用内页面（target 是路由键），url 为 https 链接 */
+  action?: { type: "route" | "url"; target: string; label?: string } | null;
+  image?: string | null;
+  expiresAt?: string | null;
   readAt?: string | null;
   createdAt?: string;
   updatedAt?: string;

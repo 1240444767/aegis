@@ -22,7 +22,8 @@ import {
   getAdminUserSessionAudits,
   getAdminUserWallet,
   getAdminUserWalletTransactions,
-  revokeAdminUserBan
+  revokeAdminUserBan,
+  type BulkNotifyPayload
 } from "@/lib/api/app-users";
 import {
   claimAdminVipTrial,
@@ -368,13 +369,7 @@ export function useBatchBanAppUsersMutation(appKey?: Key) {
 export function useBulkNotifyAppUsersMutation(appKey?: Key) {
   const token = useAdminToken();
   return useMutation({
-    mutationFn: (payload: {
-      userIds: number[];
-      type: string;
-      title: string;
-      content: string;
-      level?: string;
-    }) => bulkNotifyAdminAppUsers(token as string, appKey as string, payload)
+    mutationFn: (payload: BulkNotifyPayload) => bulkNotifyAdminAppUsers(token as string, appKey as string, payload)
   });
 }
 

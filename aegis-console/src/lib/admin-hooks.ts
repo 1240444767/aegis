@@ -346,7 +346,7 @@ export function useAdminAppSessionAuditsQuery(
 
 export function useAdminAppNotificationsQuery(
   appKey?: string | null,
-  params?: { keyword?: string; type?: string; level?: string; page?: number; limit?: number }
+  params?: { keyword?: string; category?: string; type?: string; level?: string; page?: number; limit?: number }
 ) {
   const token = useAdminToken();
   return useQuery({
@@ -355,6 +355,7 @@ export function useAdminAppNotificationsQuery(
       token,
       appKey,
       params?.keyword,
+      params?.category,
       params?.type,
       params?.level,
       params?.page,
