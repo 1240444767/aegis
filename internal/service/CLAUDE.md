@@ -69,7 +69,7 @@
 | `location_service.go` | `LocationService` | IP 地理位置查询（city + ASN），Redis 缓存 |
 | `migration_service.go` | `MigrationService` | 遗留 MySQL 用户迁移 |
 | `monitor_service.go` | `MonitorService` | 系统监控数据聚合（所有服务汇总） |
-| `notification_service.go` | `NotificationService` | **应用用户**站内信（notifications 表，外键 users） |
+| `notification_service.go` | `NotificationService` | **应用用户**站内信（notifications 表，外键 users）：唯一写入口 `Deliver`（分类、动作、实时事件），消息中心读写与推送偏好，见 [docs](../../docs/notification-center.md) |
 | `admin_inbox_service.go` | `AdminInboxService` | **管理员**收件箱（admin_notifications 表，外键 admin_accounts）+ 角标实时推送 |
 | `realtime_publisher.go` | — | 仅发布的 NATS 实时事件发布器，供 Worker 把事件送达连在 API 实例上的客户端 |
 | `notify_hub.go` | `NotifyHub` | **统一通知出口**：订阅匹配 → 模板渲染 → 多渠道投递 → 留痕重试 |
