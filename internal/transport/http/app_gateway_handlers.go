@@ -50,6 +50,12 @@ func (h *Handler) AppConfig(c *gin.Context) {
 	if h.invite != nil {
 		config.Auth.Invite = h.invite.Capability(c.Request.Context(), app.ID)
 	}
+	// 版本管控通道的公钥随 config 下发；取不到时不下发，客户端沿用已保存的裁决。
+	if h.clientControl != nil {
+		if spec, err := h.clientControl.Spec(c.Request.Context(), app); err == nil {
+			config.ClientControl = spec
+		}
+	}
 	// sealed 档的公钥有轮换窗口，缓存时间必须短于轮换后的 24h 兼容期。
 	c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
 	response.Success(c, http.StatusOK, "获取成功", config)

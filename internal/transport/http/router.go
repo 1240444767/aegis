@@ -26,6 +26,7 @@ type Handler struct {
 	site            *service.SiteService
 	version         *service.VersionService
 	release         *service.ReleaseService
+	clientControl   ClientControlAPI
 	roleApp         *service.RoleApplicationService
 	email           *service.EmailService
 	payment         *service.PaymentService
@@ -169,6 +170,8 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 		trafficRamp.Handler(),
 		replayGuard.Handler(),
 		middleware.AppGateway(authProtocolService),
+		// 版本管控的服务端执行点：读 AppGateway 写入的 aegis.app_id，必须排在它之后
+		middleware.ClientControlGate(deps.ClientControlGate),
 		middleware.AppEncryption(appService),
 		middleware.Location(locationService),
 	)

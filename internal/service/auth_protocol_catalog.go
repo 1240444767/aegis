@@ -317,6 +317,10 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "releaseChannels", Method: "GET", Path: "/releases/channels", Auth: true, Summary: "可自助加入的发布渠道"},
 	{Key: "releaseChannelJoin", Method: "POST", Path: "/releases/channels/{code}/join", Auth: true, Summary: "加入发布渠道"},
 	{Key: "releaseChannelLeave", Method: "POST", Path: "/releases/channels/{code}/leave", Auth: true, Summary: "退出发布渠道"},
+
+	// ── 版本管控（免登录；上报与裁决走独立加密通道，见 docs/client-control.md）──
+	{Key: "clientControlCheck", Method: "POST", Path: "/client-control/check", Summary: "加密上报包名、版本与签名，取回签名裁决：放行 / 提醒 / 强制更新 / 停用"},
+	{Key: "clientControlWatch", Method: "GET", Path: "/client-control/watch", Summary: "长轮询：策略版本变化时立即返回，客户端随即重新校验"},
 }
 
 // gatewayErrors 机器可读的错误码目录。
@@ -572,6 +576,16 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40484, Name: "TRIAL_NOT_AVAILABLE", Message: "当前应用未开放试用",
 		Recovery: authprotocol.RecoveryNone, Hint: "管理员没有配置启用中的试用套餐，入口应当整个隐藏"},
 	{Code: 40970, Name: "NONCE_REPLAYED", Message: "请求 nonce 已使用", Recovery: authprotocol.RecoveryNewNonce},
+	// 版本管控（docs/client-control.md）
+	{Code: 40329, Name: "CLIENT_BLOCKED", Message: "当前客户端已停用", Recovery: authprotocol.RecoveryNone,
+		Hint: "服务端已停用这个包名或版本；客户端应立即调 /client-control/check 取签名裁决并展示停用页"},
+	{Code: 40326, Name: "CLIENT_UPDATE_REQUIRED", Message: "当前版本需要更新", Recovery: authprotocol.RecoveryNone,
+		Hint: "客户端应立即调 /client-control/check 取签名裁决，引导用户更新；/releases/* 不受影响"},
+	{Code: 40457, Name: "CLIENT_CONTROL_KEY_UNKNOWN", Message: "管控加密密钥不存在或已失效",
+		Recovery: authprotocol.RecoveryRefreshConfig,
+		Hint:     "强制刷新 /config 取新的 clientControl.boxKey，用新密钥重新加密后重试一次"},
+	{Code: 50391, Name: "CLIENT_CONTROL_UNAVAILABLE", Message: "版本管控未启用", Recovery: authprotocol.RecoveryNone,
+		Hint: "服务端未部署版本管控；客户端沿用已保存的裁决"},
 	{Code: 42670, Name: "UPGRADE_REQUIRED", Message: "该应用要求使用加密载荷",
 		Recovery: authprotocol.RecoveryRefreshConfig, Hint: "应用已升到 sealed 档，不能再发明文"},
 	{Code: 50372, Name: "SIGNING_SECRET_MISSING", Message: "尚未签发应用密钥",

@@ -371,6 +371,11 @@ var adminRouteRules = []RouteRule{
 	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/releases/simulate", Permission: PermVersionRead, Scope: ScopeApp},
 	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/releases/notes/preview", Permission: PermVersionRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/releases/*", Permission: PermVersionWrite, Scope: ScopeApp},
+	// 版本管控：读、模拟判定只要读权限；设置、规则、密钥轮换、删除设备记录、通知复查要写权限
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/client-control", Permission: PermVersionRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/client-control/simulate", Permission: PermVersionRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionWrite, Scope: ScopeApp},
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeWrite, Scope: ScopeApp},
 

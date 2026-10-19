@@ -1396,6 +1396,10 @@ func setDefaults(cfg *Config) {
 			"X-Device-OS",
 			"X-Device-OS-Version",
 			"X-App-Version",
+			// 版本管控的身份上报（docs/client-control.md）
+			"X-App-Version-Code",
+			"X-App-Package",
+			"X-App-Cert",
 		}
 	}
 	if len(cfg.CORS.ExposeHeaders) == 0 {

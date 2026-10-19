@@ -71,6 +71,9 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayOptional.GET("/releases/check", h.AppReleaseCheck)
 		appGatewayOptional.GET("/releases/latest", h.AppReleaseLatest)
 		appGatewayOptional.POST("/releases/events", h.AppReleaseEvent)
+		// 版本管控：加密上报身份、取签名裁决，以及免登录的长轮询变更通知（见 docs/client-control.md）
+		appGatewayOptional.POST("/client-control/check", h.AppClientControlCheck)
+		appGatewayOptional.GET("/client-control/watch", h.AppClientControlWatch)
 		// 广告服务策略与开屏上报：未登录也要知道基础服务有哪些、开屏能不能放；
 		// 带令牌时按账号回答，开屏记录也挂到账号上。
 		appGatewayOptional.GET("/ads/policy", h.AppAdPolicy)

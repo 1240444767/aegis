@@ -11,6 +11,8 @@ DELETE	/api/admin/apps/:appkey/card-keys/batches/:batchId	AdminDeleteCardKeyBatc
 DELETE	/api/admin/apps/:appkey/card-keys/codes/:cardId/devices/:deviceId	AdminUnbindCardKeyDevice
 DELETE	/api/admin/apps/:appkey/channels/:cid	AdminDeleteVersionChannel
 DELETE	/api/admin/apps/:appkey/channels/:cid/users	AdminRemoveVersionChannelUsers
+DELETE	/api/admin/apps/:appkey/client-control/devices/:deviceId	AdminDeleteClientControlDevice
+DELETE	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminDeleteClientControlRule
 DELETE	/api/admin/apps/:appkey/function-keys/:keyId	AdminRevokeAppFunctionKey
 DELETE	/api/admin/apps/:appkey/function-kv	AdminDeleteAppFunctionKV
 DELETE	/api/admin/apps/:appkey/functions/:functionName	AdminDeleteAppFunction
@@ -151,6 +153,12 @@ GET	/api/admin/apps/:appkey/card-keys/redemptions	AdminListCardKeyRedemptions
 GET	/api/admin/apps/:appkey/channels	AdminListVersionChannels
 GET	/api/admin/apps/:appkey/channels/:cid	AdminGetVersionChannel
 GET	/api/admin/apps/:appkey/channels/:cid/users	AdminListVersionChannelUsers
+GET	/api/admin/apps/:appkey/client-control	AdminClientControlOverview
+GET	/api/admin/apps/:appkey/client-control/devices	AdminClientControlDevices
+GET	/api/admin/apps/:appkey/client-control/keys	AdminClientControlKeys
+GET	/api/admin/apps/:appkey/client-control/rules	AdminClientControlRules
+GET	/api/admin/apps/:appkey/client-control/settings	AdminClientControlSettings
+GET	/api/admin/apps/:appkey/client-control/versions	AdminClientControlVersions
 GET	/api/admin/apps/:appkey/cloud-storage/config	AdminCloudStorageConfig
 GET	/api/admin/apps/:appkey/cloud-storage/stats	AdminCloudStorageStats
 GET	/api/admin/apps/:appkey/cloud-storage/users	AdminCloudStorageUsers
@@ -559,6 +567,7 @@ GET	/api/v1/apps/:appkey/auth/oauth/bindings	ListMyOAuthBindings
 GET	/api/v1/apps/:appkey/auth/oauth/callback	AppOAuthCallback
 GET	/api/v1/apps/:appkey/banners	AppBanners
 GET	/api/v1/apps/:appkey/card-keys/mine	AppMyCardKeys
+GET	/api/v1/apps/:appkey/client-control/watch	AppClientControlWatch
 GET	/api/v1/apps/:appkey/cloud	AppCloudStatus
 GET	/api/v1/apps/:appkey/cloud/items	AppCloudItems
 GET	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppCloudItem
@@ -751,6 +760,13 @@ POST	/api/admin/apps/:appkey/card-keys/codes/disable	AdminDisableCardKeys
 POST	/api/admin/apps/:appkey/card-keys/codes/restore	AdminRestoreCardKeys
 POST	/api/admin/apps/:appkey/channels	AdminCreateVersionChannel
 POST	/api/admin/apps/:appkey/channels/:cid/users	AdminAddVersionChannelUsers
+POST	/api/admin/apps/:appkey/client-control/keys/:kind/rotate	AdminRotateClientControlKey
+POST	/api/admin/apps/:appkey/client-control/refresh	AdminRefreshClientControl
+POST	/api/admin/apps/:appkey/client-control/rules	AdminCreateClientControlRule
+POST	/api/admin/apps/:appkey/client-control/rules/:ruleId/disable	AdminDisableClientControlRule
+POST	/api/admin/apps/:appkey/client-control/rules/:ruleId/enable	AdminEnableClientControlRule
+POST	/api/admin/apps/:appkey/client-control/rules/reorder	AdminReorderClientControlRules
+POST	/api/admin/apps/:appkey/client-control/simulate	AdminSimulateClientControl
 POST	/api/admin/apps/:appkey/cloud-storage/purge-expired	AdminPurgeExpiredCloudTrash
 POST	/api/admin/apps/:appkey/function-keys	AdminCreateAppFunctionKey
 POST	/api/admin/apps/:appkey/functions	AdminCreateAppFunction
@@ -1159,6 +1175,7 @@ POST	/api/v1/apps/:appkey/auth/sms/code	AppSMSCode
 POST	/api/v1/apps/:appkey/banners/:bannerId/click	AppBannerClick
 POST	/api/v1/apps/:appkey/captcha	AppCaptcha
 POST	/api/v1/apps/:appkey/card-keys/redeem	AppRedeemCardKey
+POST	/api/v1/apps/:appkey/client-control/check	AppClientControlCheck
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/link	AppCloudItemLink
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/restore	AppRestoreCloudItem
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/rollback	AppRollbackCloudItem
@@ -1232,6 +1249,8 @@ PUT	/api/admin/apps/:appkey/banners/order	ReorderAdminBanners
 PUT	/api/admin/apps/:appkey/captcha-config	AdminUpdateCaptchaConfig
 PUT	/api/admin/apps/:appkey/card-keys/batches/:batchId/status	AdminSetCardKeyBatchStatus
 PUT	/api/admin/apps/:appkey/channels/:cid	AdminUpdateVersionChannel
+PUT	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminUpdateClientControlRule
+PUT	/api/admin/apps/:appkey/client-control/settings	AdminUpdateClientControlSettings
 PUT	/api/admin/apps/:appkey/cloud-storage/config	AdminSaveCloudStorageConfig
 PUT	/api/admin/apps/:appkey/commerce	UpdateAdminAppCommerceSettings
 PUT	/api/admin/apps/:appkey/encryption	UpdateAdminAppEncryption

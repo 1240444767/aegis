@@ -138,6 +138,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/channels/{cid}"):                                        AdminVersionChannelBody{},                // AdminUpdateVersionChannel
 		routeKey("DELETE", "/api/admin/apps/{appkey}/channels/{cid}/users"):                               VersionChannelUsersRequest{},             // AdminRemoveVersionChannelUsers
 		routeKey("POST", "/api/admin/apps/{appkey}/channels/{cid}/users"):                                 VersionChannelUsersRequest{},             // AdminAddVersionChannelUsers
+		routeKey("POST", "/api/admin/apps/{appkey}/client-control/refresh"):                               RefreshRequest{},                         // AdminRefreshClientControl
+		routeKey("POST", "/api/admin/apps/{appkey}/client-control/rules"):                                 app.ClientControlRuleInput{},             // AdminCreateClientControlRule
+		routeKey("POST", "/api/admin/apps/{appkey}/client-control/rules/reorder"):                         AdminClientControlReorderRequest{},       // AdminReorderClientControlRules
+		routeKey("PUT", "/api/admin/apps/{appkey}/client-control/rules/{ruleId}"):                         app.ClientControlRuleInput{},             // AdminUpdateClientControlRule
+		routeKey("PUT", "/api/admin/apps/{appkey}/client-control/settings"):                               app.ClientControlSettingsPatch{},         // AdminUpdateClientControlSettings
+		routeKey("POST", "/api/admin/apps/{appkey}/client-control/simulate"):                              AdminClientControlSimulateRequest{},      // AdminSimulateClientControl
 		routeKey("PUT", "/api/admin/apps/{appkey}/cloud-storage/config"):                                  SaveCloudStorageConfigRequest{},          // AdminSaveCloudStorageConfig
 		routeKey("GET", "/api/admin/apps/{appkey}/cloud-storage/users"):                                   CloudStorageUserListQuery{},              // AdminCloudStorageUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/commerce"):                                              app.CommerceSettings{},                   // UpdateAdminAppCommerceSettings
@@ -633,6 +639,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/register"):                                           authprotocol.RegisterInput{},             // AppRegister
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/sms/code"):                                           authprotocol.SMSCodeInput{},              // AppSMSCode
 		routeKey("POST", "/api/v1/apps/{appkey}/card-keys/redeem"):                                        RedeemCardKeyRequest{},                   // AppRedeemCardKey
+		routeKey("POST", "/api/v1/apps/{appkey}/client-control/check"):                                    service.ClientControlSealedRequest{},     // AppClientControlCheck
 		routeKey("GET", "/api/v1/apps/{appkey}/cloud/items"):                                              CloudItemListQuery{},                     // AppCloudItems
 		routeKey("DELETE", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}"):                         CloudItemDeleteQuery{},                   // AppDeleteCloudItem
 		routeKey("GET", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}"):                            CloudItemReadQuery{},                     // AppCloudItem

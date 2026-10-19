@@ -60,6 +60,7 @@ type RouterDeps struct {
 	Site             *service.SiteService
 	Version          *service.VersionService
 	Release          *service.ReleaseService
+	ClientControl    ClientControlAPI
 	PlatformSettings *service.PlatformSettingsService
 	PlatformBanner   *service.PlatformBannerService
 	Governance       *service.PlatformGovernanceService
@@ -128,6 +129,8 @@ type RouterDeps struct {
 	// ClientIP 真实客户端 IP 判定器，由 middleware.ClientIP 挂在中间件栈首位。
 	// 为 nil 时（openapi / routes 等零依赖装配）退化为直接使用直连地址。
 	ClientIP *clientip.Resolver
+	// ClientControlGate 版本管控的网关闸门判定来源，通常与 ClientControl 是同一个服务；nil 时不拦截。
+	ClientControlGate middleware.ClientControlGateService
 	// DocsPortalURL 是 /docs 的 302 目标；相对路径在配了 ConsoleBaseURL 时
 	// 会拼到控制台域名下（门户本就是控制台的一个页面），见 resolveDocsPortalURL。
 	DocsPortalURL string
@@ -153,6 +156,7 @@ func (d RouterDeps) newHandler() *Handler {
 		site:               d.Site,
 		version:            d.Version,
 		release:            d.Release,
+		clientControl:      d.ClientControl,
 		roleApp:            d.RoleApplication,
 		email:              d.Email,
 		payment:            d.Payment,

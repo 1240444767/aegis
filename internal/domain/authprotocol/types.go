@@ -369,6 +369,41 @@ type Config struct {
 	Operations []Operation `json:"operations"`
 	// Errors 机器可读的错误码目录，供客户端把业务码映射成分类异常。
 	Errors []ErrorDescriptor `json:"errors"`
+	// ClientControl 版本管控通道的公钥与参数（docs/client-control.md）。与安全等级无关，未登录同样可用。
+	ClientControl *ClientControlSpec `json:"clientControl,omitempty"`
+}
+
+// ClientControlSpec 版本管控通道规格。
+//
+// /config 本身没有签名，因此 box 公钥由签名密钥签过（BoxKey.Signature），
+// 签名密钥之间以背书链相连（SigningKeys[i].Endorsement 由 EndorsedBy 指向的上一把签发）。
+// 客户端应内置（或首次使用时固定）某一把签名公钥，再顺着背书链信任后来的密钥。
+type ClientControlSpec struct {
+	Protocol       string                    `json:"protocol"`
+	Enabled        bool                      `json:"enabled"`
+	PolicyVersion  int64                     `json:"policyVersion"`
+	RecheckSeconds int                       `json:"recheckSeconds"`
+	WatchEnabled   bool                      `json:"watchEnabled"`
+	SigningKeyID   string                    `json:"signingKeyId"`
+	SigningKeys    []ClientControlSigningKey `json:"signingKeys"`
+	BoxKey         ClientControlBoxKey       `json:"boxKey"`
+	CheckPath      string                    `json:"checkPath"`
+	WatchPath      string                    `json:"watchPath"`
+}
+
+type ClientControlSigningKey struct {
+	KeyID       string `json:"keyId"`
+	PublicKey   string `json:"publicKey"`
+	Status      string `json:"status"`
+	EndorsedBy  string `json:"endorsedBy,omitempty"`
+	Endorsement string `json:"endorsement,omitempty"`
+}
+
+type ClientControlBoxKey struct {
+	KeyID        string `json:"keyId"`
+	PublicKey    string `json:"publicKey"`
+	SigningKeyID string `json:"signingKeyId"`
+	Signature    string `json:"signature"`
 }
 
 // ─────────────────────────────────────────────────────────────────────
