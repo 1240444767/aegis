@@ -53,7 +53,7 @@ App 不登录也能用，所以未登录时的选择由客户端记在本机，�
 频控只数 `shown` / `clicked`：登录用户按账号、未登录按设备。`splash.available` 是服务端的结论（开着、没被会员免除、
 同意了、没超过每日次数与间隔）；未登录时服务端不知道本机的选择，同意这一条由客户端自己判断。
 
-开屏请求要把 `adUserId` 原样传给广告 SDK（Apex `ApexAdxSplashRequest` 的 `userId`），它与激励视频是同一个带签名的用户标识，
+开屏请求要把 `adUserId` 原样传给广告 SDK（Voyage 的开屏用 Apex 插屏，即 `ApexAdxInterstitialRequest` 的 `userId`），它与激励视频是同一个带签名的用户标识，
 平台后台里同一个人的开屏与激励视频对得上。广告位 ID 留空时客户端使用包里内置的那一个。
 
 ## 接口
