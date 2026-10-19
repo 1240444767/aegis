@@ -257,6 +257,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	realtimeService.SetIdentityRepository(pg)
 	appService.SetAppEventPublisher(realtimeService)
 	notificationService := service.NewNotificationService(log, pg, sessions, realtimeService)
+	// 安全类站内信（两步验证、Passkey、密码已重置）也走统一投递，才会实时推送
+	securityService.SetNotificationService(notificationService)
+	authService.SetNotificationService(notificationService)
 	// 自动签到的成功、失败与暂停走站内信
 	autoSignService.SetNotifier(notificationService)
 	siteService := service.NewSiteService(pg)

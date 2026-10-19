@@ -1013,8 +1013,24 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     @JvmOverloads
-    fun notifications(page: Int = 1, limit: Int = 20): JsonElement =
-        client.call("GET", "/notifications", query = pageQuery(page, limit), requireAuth = true)
+    fun notifications(page: Int = 1, limit: Int = 20, status: String? = null, category: String? = null): JsonElement =
+        client.call(
+            "GET", "/notifications",
+            query = pageQuery(page, limit) + listOfNotNull(
+                status?.let { "status" to it },
+                category?.let { "category" to it },
+            ),
+            requireAuth = true,
+        )
+
+    /** 消息中心首页：总未读与每个分类的未读、总数、最新一条（docs/notification-center.md）。 */
+    @Throws(IOException::class)
+    fun notificationSummary(): JsonElement = client.call("GET", "/notifications/summary", requireAuth = true)
+
+    /** 单条消息详情。 */
+    @Throws(IOException::class)
+    fun notification(notificationId: Long): JsonElement =
+        client.call("GET", "/notifications/$notificationId", requireAuth = true)
 
     @Throws(IOException::class)
     fun unreadCount(): JsonElement = client.call("GET", "/notifications/unread-count", requireAuth = true)
@@ -1028,15 +1044,41 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
         // 服务端字段是 ids（NotificationReadBatchRequest）。
         client.call("POST", "/notifications/read-batch", mapOf("ids" to ids), requireAuth = true)
 
+    /** 全部标为已读；给了 [category] 只处理这一类。 */
     @Throws(IOException::class)
-    fun readAllNotifications(): JsonElement = client.call("POST", "/notifications/read-all", requireAuth = true)
+    @JvmOverloads
+    fun readAllNotifications(category: String? = null): JsonElement =
+        client.call("POST", "/notifications/read-all", buildBody("category" to category), requireAuth = true)
+
+    /** 标为未读。 */
+    @Throws(IOException::class)
+    fun unreadNotification(notificationId: Long): JsonElement =
+        client.call("POST", "/notifications/unread", mapOf("notificationId" to notificationId), requireAuth = true)
 
     @Throws(IOException::class)
     fun deleteNotification(notificationId: Long): JsonElement =
         client.call("DELETE", "/notifications/$notificationId", requireAuth = true)
 
+    /** 批量删除（≤ 200 条）。 */
     @Throws(IOException::class)
-    fun clearNotifications(): JsonElement = client.call("POST", "/notifications/clear", requireAuth = true)
+    fun deleteNotifications(ids: List<Long>): JsonElement =
+        client.call("POST", "/notifications/delete-batch", mapOf("ids" to ids), requireAuth = true)
+
+    /** 清空。status：`all` | `read`；给了 [category] 只清这一类。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun clearNotifications(status: String? = null, category: String? = null): JsonElement =
+        client.call("POST", "/notifications/clear", buildBody("status" to status, "category" to category), requireAuth = true)
+
+    /** 各分类的提醒开关。 */
+    @Throws(IOException::class)
+    fun notificationPreferences(): JsonElement =
+        client.call("GET", "/notifications/preferences", requireAuth = true)
+
+    /** 改提醒开关：分类 key → 是否提醒。账号安全类不能关闭。 */
+    @Throws(IOException::class)
+    fun updateNotificationPreferences(categories: Map<String, Boolean>): JsonElement =
+        client.call("PUT", "/notifications/preferences", mapOf("categories" to categories), requireAuth = true)
 
     // ── 工单 ──
 

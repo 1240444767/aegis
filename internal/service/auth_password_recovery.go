@@ -13,6 +13,7 @@ import (
 
 	authdomain "aegis/internal/domain/auth"
 	captchadomain "aegis/internal/domain/captcha"
+	notificationdomain "aegis/internal/domain/notification"
 	securitydomain "aegis/internal/domain/security"
 	userdomain "aegis/internal/domain/user"
 	"aegis/internal/event"
@@ -849,10 +850,16 @@ func (s *AuthService) notifyPasswordReset(user *userdomain.User, flow *redisrepo
 		if signedOut > 0 {
 			content = fmt.Sprintf("登录密码已通过找回流程重新设置，%d 个登录中的设备已退出。", signedOut)
 		}
-		if err := s.pg.CreateUserNotification(ctx, appID, userID, "security", "密码已重置",
-			content+"如非本人操作，请立即再次找回密码。", "warning",
-			map[string]any{"module": "security", "event": "password_reset", "ip": input.IP}); err != nil {
-			s.log.Warn("password reset notification failed", zap.Int64("userId", userID), zap.Error(err))
+		if s.notifications != nil {
+			if _, err := s.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+				AppID: appID, UserID: userID, Type: "security", Title: "密码已重置",
+				Content:  content + "如非本人操作，请立即再次找回密码。",
+				Level:    "warning",
+				Metadata: map[string]any{"module": "security", "event": "password_reset", "ip": input.IP},
+				Action:   notificationdomain.RouteAction(notificationdomain.RouteSecurity, "查看账号安全"),
+			}); err != nil {
+				s.log.Warn("password reset notification failed", zap.Int64("userId", userID), zap.Error(err))
+			}
 		}
 		if email == "" {
 			// 冷静期里的邮箱没进流程，但它同样是这个账号的；告知信照发

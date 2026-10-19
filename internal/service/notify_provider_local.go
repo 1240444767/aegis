@@ -291,9 +291,12 @@ func (p *inAppNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 			// 用户侧只带 UserLink，绝不下发控制台路径
 			metadata := inAppMetadata(event, strings.TrimSpace(event.UserLink))
 			title, body := userFacingText(msg)
+			action := inAppAction(event, notificationType)
 			for _, userID := range userIDs {
-				if err := hub.notifications.NotifyUser(ctx, appID, userID, notificationType,
-					title, body, notifyLevelToNotificationLevel(event.Level), metadata); err != nil {
+				if _, err := hub.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+					AppID: appID, UserID: userID, Type: notificationType, Title: title, Content: body,
+					Level: notifyLevelToNotificationLevel(event.Level), Metadata: metadata, Action: action,
+				}); err != nil {
 					lastErr = err
 					continue
 				}
@@ -362,6 +365,15 @@ func inAppMetadata(event *notifydomain.Event, link string) map[string]any {
 		metadata["link"] = link
 	}
 	return metadata
+}
+
+// inAppAction 用户站内信的跳转动作：工单与反馈类事件指向 App 的工单页，其它事件不带动作。
+func inAppAction(event *notifydomain.Event, notificationType string) *notificationdomain.Action {
+	if notificationdomain.CategoryOf(notificationType) == notificationdomain.CategoryTicket ||
+		event.Resource == "ticket" || event.Resource == "feedback" {
+		return notificationdomain.RouteAction(notificationdomain.RouteTickets, "查看工单")
+	}
+	return nil
 }
 
 // userFacingText 取面向提单人的文案；未单独提供时回落到通用文案。

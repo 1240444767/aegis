@@ -183,7 +183,7 @@ func (h *Handler) LegacyAutoSignTestNotification(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
 		return
 	}
-	if err := h.notifications.SendUserNotification(c.Request.Context(), session, "system", "自动签到测试通知", "自动签到通知链路正常，当前配置已可用。", "info", map[string]any{
+	if err := h.notifications.SendUserNotification(c.Request.Context(), session, "auto_sign", "自动签到测试通知", "自动签到通知链路正常，当前配置已可用。", "info", map[string]any{
 		"scene": "auto_sign_test",
 	}); err != nil {
 		h.writeError(c, err)

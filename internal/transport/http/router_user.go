@@ -201,10 +201,16 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 	notifications.Use(middleware.Auth(authService))
 	{
 		notifications.GET("", h.Notifications)
+		notifications.GET("/summary", h.NotificationSummary)
 		notifications.GET("/unread-count", h.NotificationUnreadCount)
+		notifications.GET("/preferences", h.NotificationPreferences)
+		notifications.PUT("/preferences", h.UpdateNotificationPreferences)
+		notifications.GET("/:notificationId", h.NotificationDetail)
 		notifications.POST("/read", h.ReadNotification)
+		notifications.POST("/unread", h.UnreadNotification)
 		notifications.POST("/read-batch", h.ReadNotificationsBatch)
 		notifications.POST("/read-all", h.ReadAllNotifications)
+		notifications.POST("/delete-batch", h.DeleteNotificationsBatch)
 		notifications.DELETE("/:notificationId", h.DeleteNotification)
 		notifications.POST("/clear", h.ClearNotifications)
 	}

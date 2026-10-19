@@ -10,6 +10,7 @@ import (
 
 	"aegis/internal/config"
 	authdomain "aegis/internal/domain/auth"
+	notificationdomain "aegis/internal/domain/notification"
 	securitydomain "aegis/internal/domain/security"
 	userdomain "aegis/internal/domain/user"
 	pgrepo "aegis/internal/repository/postgres"
@@ -36,6 +37,13 @@ type SecurityService struct {
 	encryptionKey []byte
 	reloadVersion uint64
 	reloadedAt    time.Time
+	// notifications 站内信出口（两步验证、Passkey 变更提醒），见 SetNotificationService
+	notifications notificationDeliverer
+}
+
+// SetNotificationService 接上站内信：安全事件经 NotificationService.Deliver 投递并实时推送。
+func (s *SecurityService) SetNotificationService(notifications notificationDeliverer) {
+	s.notifications = notifications
 }
 
 type webAuthnUser struct {
@@ -1057,10 +1065,14 @@ func cloneSecurityConfig(cfg config.SecurityConfig) config.SecurityConfig {
 }
 
 func (s *SecurityService) notifySecurityEvent(ctx context.Context, appID int64, userID int64, notificationType string, title string, content string, level string) {
-	if s.pg == nil {
+	if s.notifications == nil {
 		return
 	}
-	if err := s.pg.CreateUserNotification(ctx, appID, userID, notificationType, title, content, level, map[string]any{"module": "security"}); err != nil {
+	if _, err := s.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+		AppID: appID, UserID: userID, Type: notificationType, Title: title, Content: content, Level: level,
+		Metadata: map[string]any{"module": "security"},
+		Action:   notificationdomain.RouteAction(notificationdomain.RouteSecurity, "查看账号安全"),
+	}); err != nil {
 		s.log.Warn("create security notification failed", zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
 	}
 }

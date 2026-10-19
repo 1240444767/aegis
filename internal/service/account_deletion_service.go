@@ -18,6 +18,7 @@ import (
 	"aegis/internal/domain/accountdeletion"
 	authdomain "aegis/internal/domain/auth"
 	captchadomain "aegis/internal/domain/captcha"
+	notificationdomain "aegis/internal/domain/notification"
 	userdomain "aegis/internal/domain/user"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
@@ -92,7 +93,7 @@ type AccountDeletionService struct {
 	captcha    *CaptchaService
 	apps       *AppService
 	cloud      *CloudStorageService
-	notifier   pointsStoreNotifier
+	notifier   notificationDeliverer
 	userEvents UserEventPublisher
 	pepper     []byte
 
@@ -129,7 +130,7 @@ func (s *AccountDeletionService) SetVerificationChannels(email *EmailService, ca
 func (s *AccountDeletionService) SetCloudStorage(cloud *CloudStorageService) { s.cloud = cloud }
 
 // SetNotifier 接上站内信。
-func (s *AccountDeletionService) SetNotifier(notifier pointsStoreNotifier) { s.notifier = notifier }
+func (s *AccountDeletionService) SetNotifier(notifier notificationDeliverer) { s.notifier = notifier }
 
 // SetEventPublisher 接上实时推送：状态变化与「账号已注销」推给在线设备。
 func (s *AccountDeletionService) SetEventPublisher(publisher UserEventPublisher) {
@@ -928,8 +929,12 @@ func (s *AccountDeletionService) announce(req *accountdeletion.Request, cfg acco
 		}
 		title, content, level := deletionNotificationText(req, kind, note)
 		if s.notifier != nil && title != "" {
-			if err := s.notifier.NotifyUser(ctx, appID, userID, "security", title, content, level,
-				map[string]any{"module": "account_deletion", "event": kind, "requestId": req.ID}); err != nil {
+			if _, err := s.notifier.Deliver(ctx, notificationdomain.DeliverInput{
+				AppID: appID, UserID: userID, Type: "account_deletion",
+				Title: title, Content: content, Level: level,
+				Metadata: map[string]any{"module": "account_deletion", "event": kind, "requestId": req.ID},
+				Action:   notificationdomain.RouteAction(notificationdomain.RouteSecurity, "查看注销进度"),
+			}); err != nil {
 				s.log.Warn("deletion notification failed", zap.Int64("userId", userID), zap.Error(err))
 			}
 		}

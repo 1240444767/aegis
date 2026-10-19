@@ -11,6 +11,7 @@ import (
 
 	"go.uber.org/zap"
 
+	notificationdomain "aegis/internal/domain/notification"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
@@ -42,12 +43,6 @@ const (
 	featureUnlockRevokeReasonLength = 256
 )
 
-// pointsStoreNotifier 站内信投递（人工发放的处理结果要告诉用户）。
-type pointsStoreNotifier interface {
-	NotifyUser(ctx context.Context, appID int64, userID int64,
-		notificationType string, title string, content string, level string, metadata map[string]any) error
-}
-
 // PointsStoreService 积分商城：商品、兑换、人工发放的处理，以及功能解锁的管理。
 //
 // 可兑换判定只有一处（pointstore.Evaluate）：列表上每件商品的 availability 与兑换时的拒绝原因
@@ -55,7 +50,7 @@ type pointsStoreNotifier interface {
 type PointsStoreService struct {
 	log        *zap.Logger
 	pg         *pgrepo.Repository
-	notifier   pointsStoreNotifier
+	notifier   notificationDeliverer
 	userEvents UserEventPublisher
 }
 
@@ -67,7 +62,7 @@ func NewPointsStoreService(log *zap.Logger, pg *pgrepo.Repository) *PointsStoreS
 }
 
 // SetNotifier 接上站内信。为空时人工发放的处理结果只是不通知。
-func (s *PointsStoreService) SetNotifier(notifier pointsStoreNotifier) { s.notifier = notifier }
+func (s *PointsStoreService) SetNotifier(notifier notificationDeliverer) { s.notifier = notifier }
 
 // SetEventPublisher 接上实时推送：兑换成功后通知这个用户的其它在线设备刷新积分与权益。
 func (s *PointsStoreService) SetEventPublisher(user UserEventPublisher) { s.userEvents = user }
@@ -461,8 +456,12 @@ func (s *PointsStoreService) notify(redemption *pointstore.Redemption, title, co
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := s.notifier.NotifyUser(ctx, redemption.AppID, redemption.UserID, "points_store", title, content, level,
-			map[string]any{"redemptionNo": redemption.RedemptionNo, "status": redemption.Status}); err != nil {
+		if _, err := s.notifier.Deliver(ctx, notificationdomain.DeliverInput{
+			AppID: redemption.AppID, UserID: redemption.UserID, Type: "points_store",
+			Title: title, Content: content, Level: level,
+			Metadata: map[string]any{"redemptionNo": redemption.RedemptionNo, "status": redemption.Status},
+			Action:   notificationdomain.RouteAction(notificationdomain.RoutePointsStore, "查看兑换记录"),
+		}); err != nil {
 			s.log.Warn("points store: notify user failed", zap.Int64("appid", redemption.AppID),
 				zap.Int64("userId", redemption.UserID), zap.Error(err))
 		}

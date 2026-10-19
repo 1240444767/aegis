@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"aegis/internal/domain/invite"
+	notificationdomain "aegis/internal/domain/notification"
 	"aegis/internal/domain/pointstore"
 	securitydomain "aegis/internal/domain/security"
 	pgrepo "aegis/internal/repository/postgres"
@@ -57,7 +58,7 @@ type inviteAppNames interface {
 type InviteService struct {
 	log        *zap.Logger
 	pg         *pgrepo.Repository
-	notifier   pointsStoreNotifier
+	notifier   notificationDeliverer
 	userEvents UserEventPublisher
 	risk       *RiskService
 	apps       inviteAppNames
@@ -71,7 +72,7 @@ func NewInviteService(log *zap.Logger, pg *pgrepo.Repository) *InviteService {
 }
 
 // SetNotifier 接上站内信：邀请人拿到奖励时通知他。
-func (s *InviteService) SetNotifier(notifier pointsStoreNotifier) { s.notifier = notifier }
+func (s *InviteService) SetNotifier(notifier notificationDeliverer) { s.notifier = notifier }
 
 // SetEventPublisher 接上实时推送：奖励到账后通知双方的在线设备刷新积分与权益。
 func (s *InviteService) SetEventPublisher(user UserEventPublisher) { s.userEvents = user }
@@ -815,7 +816,10 @@ func (s *InviteService) afterSettle(settings invite.Settings, result *invite.Set
 }
 
 func (s *InviteService) notifyUser(ctx context.Context, appID, userID int64, title, content, level string, meta map[string]any) {
-	if err := s.notifier.NotifyUser(ctx, appID, userID, "invite", title, content, level, meta); err != nil {
+	if _, err := s.notifier.Deliver(ctx, notificationdomain.DeliverInput{
+		AppID: appID, UserID: userID, Type: "invite", Title: title, Content: content, Level: level, Metadata: meta,
+		Action: notificationdomain.RouteAction(notificationdomain.RouteInvite, "查看邀请"),
+	}); err != nil {
 		s.log.Warn("invite: notify user failed", zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
 	}
 }

@@ -489,6 +489,9 @@ GET	/api/lottery/activities/:id/prizes	UserLotteryActivityPrizes
 GET	/api/lottery/activities/:id/verify	UserLotteryVerify
 GET	/api/lottery/draws	UserLotteryDrawHistory
 GET	/api/notifications	Notifications
+GET	/api/notifications/:notificationId	NotificationDetail
+GET	/api/notifications/preferences	NotificationPreferences
+GET	/api/notifications/summary	NotificationSummary
 GET	/api/notifications/unread-count	NotificationUnreadCount
 GET	/api/pay/bills/:billId/download	DownloadPaymentBill
 GET	/api/pay/epay/query/:orderNo	QueryEpayOrder
@@ -592,6 +595,9 @@ GET	/api/v1/apps/:appkey/me/sessions	UserSessions
 GET	/api/v1/apps/:appkey/me/settings	Settings
 GET	/api/v1/apps/:appkey/notices	AppNotices
 GET	/api/v1/apps/:appkey/notifications	Notifications
+GET	/api/v1/apps/:appkey/notifications/:notificationId	NotificationDetail
+GET	/api/v1/apps/:appkey/notifications/preferences	NotificationPreferences
+GET	/api/v1/apps/:appkey/notifications/summary	NotificationSummary
 GET	/api/v1/apps/:appkey/notifications/unread-count	NotificationUnreadCount
 GET	/api/v1/apps/:appkey/pay/methods	UserPaymentMethods
 GET	/api/v1/apps/:appkey/pay/orders	PaymentOrders
@@ -1068,9 +1074,11 @@ POST	/api/email/webhook/zeabur/:scope/:config	ZeaburEmailWebhook
 POST	/api/lottery/draw	UserLotteryDraw
 POST	/api/lottery/join	UserLotteryJoin
 POST	/api/notifications/clear	ClearNotifications
+POST	/api/notifications/delete-batch	DeleteNotificationsBatch
 POST	/api/notifications/read	ReadNotification
 POST	/api/notifications/read-all	ReadAllNotifications
 POST	/api/notifications/read-batch	ReadNotificationsBatch
+POST	/api/notifications/unread	UnreadNotification
 POST	/api/oauth2/hooks/token	OAuth2TokenHook
 POST	/api/pay/orders/:orderNo/bill	ExportPaymentBill
 POST	/api/pay/orders/:orderNo/receipt/email	EmailPaymentReceipt
@@ -1180,9 +1188,11 @@ POST	/api/v1/apps/:appkey/me/password/recovery	AppMyPasswordRecoveryStart
 POST	/api/v1/apps/:appkey/me/profile/changes/confirm	ConfirmProfileChange
 POST	/api/v1/apps/:appkey/me/sessions/revoke-all	RevokeAllUserSessions
 POST	/api/v1/apps/:appkey/notifications/clear	ClearNotifications
+POST	/api/v1/apps/:appkey/notifications/delete-batch	DeleteNotificationsBatch
 POST	/api/v1/apps/:appkey/notifications/read	ReadNotification
 POST	/api/v1/apps/:appkey/notifications/read-all	ReadAllNotifications
 POST	/api/v1/apps/:appkey/notifications/read-batch	ReadNotificationsBatch
+POST	/api/v1/apps/:appkey/notifications/unread	UnreadNotification
 POST	/api/v1/apps/:appkey/pay/orders	CreatePaymentOrder
 POST	/api/v1/apps/:appkey/points/store/redeem	AppRedeemPointsStoreItem
 POST	/api/v1/apps/:appkey/releases/channels/:code/join	AppReleaseChannelJoin
@@ -1304,6 +1314,7 @@ PUT	/api/admin/tickets/groups/:id	AdminSaveTicketGroup
 PUT	/api/admin/tickets/groups/:id/members	AdminSetTicketGroupMembers
 PUT	/api/admin/tickets/quick-replies/:id	AdminSaveTicketQuickReply
 PUT	/api/admin/tickets/sla-policies/:id	AdminSaveTicketSLAPolicy
+PUT	/api/notifications/preferences	UpdateNotificationPreferences
 PUT	/api/user/profile	UpdateProfile
 PUT	/api/user/role/applications/:applicationId/cancel	CancelRoleApplication
 PUT	/api/user/settings	UpdateSettings
@@ -1314,3 +1325,4 @@ PUT	/api/v1/apps/:appkey/leaderboard/preference	AppUpdateLeaderboardPreference
 PUT	/api/v1/apps/:appkey/me/auto-sign	AppUpdateAutoSign
 PUT	/api/v1/apps/:appkey/me/profile	UpdateProfile
 PUT	/api/v1/apps/:appkey/me/settings	UpdateSettings
+PUT	/api/v1/apps/:appkey/notifications/preferences	UpdateNotificationPreferences

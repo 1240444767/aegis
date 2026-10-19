@@ -123,10 +123,14 @@ func gatewayRequestModels() map[string]any {
 		"leaderboardPreferenceUpdate": LeaderboardPreferenceRequest{},
 
 		// 站内信
-		"notifications":         NotificationQuery{},
-		"notificationRead":      NotificationReadRequest{},
-		"notificationReadBatch": NotificationReadBatchRequest{},
-		"notificationClear":     NotificationClearRequest{},
+		"notifications":                 NotificationQuery{},
+		"notificationRead":              NotificationReadRequest{},
+		"notificationUnread":            NotificationReadRequest{},
+		"notificationReadBatch":         NotificationReadBatchRequest{},
+		"notificationReadAll":           NotificationReadAllRequest{},
+		"notificationDeleteBatch":       NotificationDeleteBatchRequest{},
+		"notificationClear":             NotificationClearRequest{},
+		"notificationPreferencesUpdate": NotificationPreferencesRequest{},
 
 		// 激励广告
 		"rewardedAdClaim":   RewardedAdClaimRequest{},

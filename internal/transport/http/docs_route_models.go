@@ -542,8 +542,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/lottery/join"):                                                             LotteryJoinRequest{},                     // UserLotteryJoin
 		routeKey("GET", "/api/notifications"):                                                             NotificationQuery{},                      // Notifications
 		routeKey("POST", "/api/notifications/clear"):                                                      NotificationClearRequest{},               // ClearNotifications
+		routeKey("POST", "/api/notifications/delete-batch"):                                               NotificationDeleteBatchRequest{},         // DeleteNotificationsBatch
+		routeKey("PUT", "/api/notifications/preferences"):                                                 NotificationPreferencesRequest{},         // UpdateNotificationPreferences
 		routeKey("POST", "/api/notifications/read"):                                                       NotificationReadRequest{},                // ReadNotification
+		routeKey("POST", "/api/notifications/read-all"):                                                   NotificationReadAllRequest{},             // ReadAllNotifications
 		routeKey("POST", "/api/notifications/read-batch"):                                                 NotificationReadBatchRequest{},           // ReadNotificationsBatch
+		routeKey("POST", "/api/notifications/unread"):                                                     NotificationReadRequest{},                // UnreadNotification
 		routeKey("POST", "/api/oauth2/hooks/token"):                                                       service.OAuth2TokenHookRequest{},         // OAuth2TokenHook
 		routeKey("GET", "/api/pay/methods"):                                                               PaymentMethodsQuery{},                    // UserPaymentMethods
 		routeKey("GET", "/api/pay/orders"):                                                                UserPaymentOrdersQuery{},                 // PaymentOrders
@@ -670,8 +674,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/settings"):                                              UpdateSettingsRequest{},                  // UpdateSettings
 		routeKey("GET", "/api/v1/apps/{appkey}/notifications"):                                            NotificationQuery{},                      // Notifications
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/clear"):                                     NotificationClearRequest{},               // ClearNotifications
+		routeKey("POST", "/api/v1/apps/{appkey}/notifications/delete-batch"):                              NotificationDeleteBatchRequest{},         // DeleteNotificationsBatch
+		routeKey("PUT", "/api/v1/apps/{appkey}/notifications/preferences"):                                NotificationPreferencesRequest{},         // UpdateNotificationPreferences
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/read"):                                      NotificationReadRequest{},                // ReadNotification
+		routeKey("POST", "/api/v1/apps/{appkey}/notifications/read-all"):                                  NotificationReadAllRequest{},             // ReadAllNotifications
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/read-batch"):                                NotificationReadBatchRequest{},           // ReadNotificationsBatch
+		routeKey("POST", "/api/v1/apps/{appkey}/notifications/unread"):                                    NotificationReadRequest{},                // UnreadNotification
 		routeKey("GET", "/api/v1/apps/{appkey}/pay/methods"):                                              PaymentMethodsQuery{},                    // UserPaymentMethods
 		routeKey("GET", "/api/v1/apps/{appkey}/pay/orders"):                                               UserPaymentOrdersQuery{},                 // PaymentOrders
 		routeKey("POST", "/api/v1/apps/{appkey}/pay/orders"):                                              CreatePaymentOrderRequest{},              // CreatePaymentOrder

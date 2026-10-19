@@ -17,6 +17,7 @@ import (
 
 	"aegis/internal/domain/invite"
 	"aegis/internal/domain/leaderboard"
+	notificationdomain "aegis/internal/domain/notification"
 	"aegis/internal/domain/pointstore"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
@@ -56,7 +57,7 @@ type LeaderboardService struct {
 	log      *zap.Logger
 	pg       *pgrepo.Repository
 	cache    *redisrepo.SessionRepository
-	notifier pointsStoreNotifier
+	notifier notificationDeliverer
 	flight   singleflight.Group
 	now      func() time.Time
 	loc      func() *time.Location
@@ -77,7 +78,7 @@ func NewLeaderboardService(log *zap.Logger, pg *pgrepo.Repository, cache *redisr
 }
 
 // SetNotifier 接上站内信：奖励到账时通知用户。
-func (s *LeaderboardService) SetNotifier(notifier pointsStoreNotifier) { s.notifier = notifier }
+func (s *LeaderboardService) SetNotifier(notifier notificationDeliverer) { s.notifier = notifier }
 
 // SetClockForTest 测试用：固定「现在」。
 func (s *LeaderboardService) SetClockForTest(now func() time.Time) { s.now = now }
@@ -949,8 +950,11 @@ func (s *LeaderboardService) notifyGranted(ctx context.Context, outcome *pgrepo.
 		"periodKey": outcome.Snapshot.PeriodKey, "rank": outcome.Entry.Rank}
 	notifyCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	if err := s.notifier.NotifyUser(notifyCtx, outcome.Snapshot.AppID, outcome.Entry.UserID, "leaderboard",
-		"排行榜奖励已到账", content, "success", meta); err != nil {
+	if _, err := s.notifier.Deliver(notifyCtx, notificationdomain.DeliverInput{
+		AppID: outcome.Snapshot.AppID, UserID: outcome.Entry.UserID, Type: "leaderboard",
+		Title: "排行榜奖励已到账", Content: content, Level: "success", Metadata: meta,
+		Action: notificationdomain.RouteAction(notificationdomain.RouteLeaderboard, "查看排行榜"),
+	}); err != nil {
 		s.log.Warn("leaderboard: notify user failed", zap.Int64("appid", outcome.Snapshot.AppID),
 			zap.Int64("userId", outcome.Entry.UserID), zap.Error(err))
 	}

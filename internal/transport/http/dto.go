@@ -2,6 +2,7 @@ package httptransport
 
 import (
 	appdomain "aegis/internal/domain/app"
+	notificationdomain "aegis/internal/domain/notification"
 	userdomain "aegis/internal/domain/user"
 	auditmiddleware "aegis/internal/middleware"
 	apperrors "aegis/pkg/errors"
@@ -177,11 +178,14 @@ type LegacyRankingRequest struct {
 }
 
 type NotificationQuery struct {
+	// Status all | unread | read
 	Status string `form:"status"`
-	Type   string `form:"type"`
-	Level  string `form:"level"`
-	Page   int    `form:"page"`
-	Limit  int    `form:"limit"`
+	// Category 分类 key（docs/notification-center.md），空即全部
+	Category string `form:"category"`
+	Type     string `form:"type"`
+	Level    string `form:"level"`
+	Page     int    `form:"page"`
+	Limit    int    `form:"limit"`
 }
 
 type NotificationReadRequest struct {
@@ -192,10 +196,27 @@ type NotificationReadBatchRequest struct {
 	IDs []int64 `json:"ids" binding:"required"`
 }
 
+// NotificationReadAllRequest 全部标为已读；给了 category 只处理这一类。
+type NotificationReadAllRequest struct {
+	Category string `json:"category" form:"category"`
+}
+
+// NotificationDeleteBatchRequest 批量删除（≤ 200 条）。
+type NotificationDeleteBatchRequest struct {
+	IDs []int64 `json:"ids" binding:"required"`
+}
+
 type NotificationClearRequest struct {
-	Status string `json:"status" form:"status"`
-	Type   string `json:"type" form:"type"`
-	Level  string `json:"level" form:"level"`
+	// Status all | read（空即 all）
+	Status   string `json:"status" form:"status"`
+	Category string `json:"category" form:"category"`
+	Type     string `json:"type" form:"type"`
+	Level    string `json:"level" form:"level"`
+}
+
+// NotificationPreferencesRequest 分类 key → 是否提醒；只改传了的分类。
+type NotificationPreferencesRequest struct {
+	Categories map[string]bool `json:"categories" binding:"required"`
 }
 
 type AppIDQuery struct {
@@ -433,15 +454,24 @@ type AdminBulkNotificationRequest struct {
 	Content  string         `json:"content" binding:"required"`
 	Level    string         `json:"level"`
 	Metadata map[string]any `json:"metadata"`
+	// Category 分类 key，空即 announcement（公告活动）
+	Category string `json:"category"`
+	// Action 跳转动作：{type: route, target: 路由键} 或 {type: url, target: https 地址}
+	Action *notificationdomain.Action `json:"action"`
+	// Image 配图地址（https）
+	Image string `json:"image"`
+	// ExpiresAt 过期时间（RFC 3339），过期后不出现在用户的列表里
+	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
 type AdminNotificationListQuery struct {
-	AppID   int64  `json:"appid" form:"appid"`
-	Keyword string `form:"keyword"`
-	Type    string `form:"type"`
-	Level   string `form:"level"`
-	Page    int    `form:"page"`
-	Limit   int    `form:"limit"`
+	AppID    int64  `json:"appid" form:"appid"`
+	Keyword  string `form:"keyword"`
+	Category string `form:"category"`
+	Type     string `form:"type"`
+	Level    string `form:"level"`
+	Page     int    `form:"page"`
+	Limit    int    `form:"limit"`
 }
 
 type LegacyAppNotificationCreateRequest struct {
@@ -462,10 +492,11 @@ type AdminNotificationDeleteRequest struct {
 }
 
 type AdminNotificationDeleteFilterRequest struct {
-	Keyword string `json:"keyword"`
-	Type    string `json:"type"`
-	Level   string `json:"level"`
-	Limit   int    `json:"limit"`
+	Keyword  string `json:"keyword"`
+	Category string `json:"category"`
+	Type     string `json:"type"`
+	Level    string `json:"level"`
+	Limit    int    `json:"limit"`
 }
 
 type AdminSettingsStatsQuery struct {

@@ -204,11 +204,18 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.PUT("/leaderboard/preference", leaderboardLimit, h.AppUpdateLeaderboardPreference)
 
 		// 站内信
+		// 消息中心（docs/notification-center.md）；与 /api/notifications 同一组 handler
 		appGatewayAuthed.GET("/notifications", h.Notifications)
+		appGatewayAuthed.GET("/notifications/summary", h.NotificationSummary)
 		appGatewayAuthed.GET("/notifications/unread-count", h.NotificationUnreadCount)
+		appGatewayAuthed.GET("/notifications/preferences", h.NotificationPreferences)
+		appGatewayAuthed.PUT("/notifications/preferences", h.UpdateNotificationPreferences)
+		appGatewayAuthed.GET("/notifications/:notificationId", h.NotificationDetail)
 		appGatewayAuthed.POST("/notifications/read", h.ReadNotification)
+		appGatewayAuthed.POST("/notifications/unread", h.UnreadNotification)
 		appGatewayAuthed.POST("/notifications/read-batch", h.ReadNotificationsBatch)
 		appGatewayAuthed.POST("/notifications/read-all", h.ReadAllNotifications)
+		appGatewayAuthed.POST("/notifications/delete-batch", h.DeleteNotificationsBatch)
 		appGatewayAuthed.POST("/notifications/clear", h.ClearNotifications)
 		appGatewayAuthed.DELETE("/notifications/:notificationId", h.DeleteNotification)
 

@@ -76,6 +76,13 @@ type AuthService struct {
 	// 防止通过响应时间差枚举有效账号
 	timingDummyHash []byte
 	deletion        *AccountDeletionService
+	// notifications 站内信出口（密码已重置等），见 SetNotificationService
+	notifications notificationDeliverer
+}
+
+// SetNotificationService 接上站内信：安全类提醒经 NotificationService.Deliver 投递并实时推送。
+func (s *AuthService) SetNotificationService(notifications notificationDeliverer) {
+	s.notifications = notifications
 }
 
 type PasswordRegisterInput struct {

@@ -1557,6 +1557,8 @@ func (s *ScriptSDK) bindNotifyNamespace(vm *goja.Runtime, object *goja.Object) e
 			Title:   title,
 			Content: content,
 			Level:   level,
+			// 远程函数发的是单人消息，分类跟随类型（不套用管理员群发的「公告活动」默认值）
+			Category: notificationdomain.CategoryOf(notificationType),
 			Metadata: map[string]any{
 				"source":   "app-function",
 				"function": s.functionName,

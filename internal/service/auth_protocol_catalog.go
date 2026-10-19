@@ -215,14 +215,25 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "leaderboardPreferenceUpdate", Method: "PUT", Path: "/leaderboard/preference", Auth: true,
 		Summary: "开关匿名上榜：名次与奖励照旧，别人看到的是「匿名用户」"},
 
-	// ── 站内信 ──
-	{Key: "notifications", Method: "GET", Path: "/notifications", Auth: true, Summary: "站内信列表"},
-	{Key: "notificationsUnread", Method: "GET", Path: "/notifications/unread-count", Auth: true, Summary: "未读数"},
+	// ── 站内信（消息中心，docs/notification-center.md）──
+	// 写操作都带回 unread 与 categoryUnread；新消息、已读、删除另经 /api/ws 实时推送
+	// （notification.created / notification.read / notification.deleted）。
+	{Key: "notifications", Method: "GET", Path: "/notifications", Auth: true,
+		Summary: "站内信列表（status=all|unread|read、category 筛选，已过期的不出现）"},
+	{Key: "notificationSummary", Method: "GET", Path: "/notifications/summary", Auth: true,
+		Summary: "消息中心首页：总未读与每个分类的未读、总数、最新一条"},
+	{Key: "notificationsUnread", Method: "GET", Path: "/notifications/unread-count", Auth: true, Summary: "未读数（含按分类的 categories）"},
+	{Key: "notificationDetail", Method: "GET", Path: "/notifications/{notificationId}", Auth: true, Summary: "单条消息详情"},
 	{Key: "notificationRead", Method: "POST", Path: "/notifications/read", Auth: true, Summary: "标记已读"},
-	{Key: "notificationReadBatch", Method: "POST", Path: "/notifications/read-batch", Auth: true, Summary: "批量标记已读"},
-	{Key: "notificationReadAll", Method: "POST", Path: "/notifications/read-all", Auth: true, Summary: "全部标记已读"},
-	{Key: "notificationClear", Method: "POST", Path: "/notifications/clear", Auth: true, Summary: "清空站内信"},
+	{Key: "notificationUnread", Method: "POST", Path: "/notifications/unread", Auth: true, Summary: "标为未读"},
+	{Key: "notificationReadBatch", Method: "POST", Path: "/notifications/read-batch", Auth: true, Summary: "批量标记已读（≤ 200 条）"},
+	{Key: "notificationReadAll", Method: "POST", Path: "/notifications/read-all", Auth: true, Summary: "全部标记已读（可按分类）"},
+	{Key: "notificationDeleteBatch", Method: "POST", Path: "/notifications/delete-batch", Auth: true, Summary: "批量删除（≤ 200 条）"},
+	{Key: "notificationClear", Method: "POST", Path: "/notifications/clear", Auth: true, Summary: "清空站内信（可按状态与分类）"},
 	{Key: "notificationDelete", Method: "DELETE", Path: "/notifications/{notificationId}", Auth: true, Summary: "删除一条站内信"},
+	{Key: "notificationPreferences", Method: "GET", Path: "/notifications/preferences", Auth: true, Summary: "各分类的提醒开关"},
+	{Key: "notificationPreferencesUpdate", Method: "PUT", Path: "/notifications/preferences", Auth: true,
+		Summary: "改提醒开关：关闭只影响提醒（实时事件 silent=true），消息照常入库、计未读；账号安全类不能关"},
 
 	// ── 钱包 / 会员 / 支付 ──
 	{Key: "wallet", Method: "GET", Path: "/wallet", Auth: true, Summary: "我的余额"},
@@ -465,6 +476,15 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: errCodeInviteNotEligible, Name: "INVITE_NOT_ELIGIBLE", Message: "暂不满足邀请条件",
 		Recovery: authprotocol.RecoveryNone, Hint: "/invite 的 canInvite 为 false，inviteMessage 说明还差什么"},
 	{Code: errCodeInviteCodeTaken, Name: "INVITE_CODE_TAKEN", Message: "邀请码已被占用", Recovery: authprotocol.RecoveryNone},
+	// ── 消息中心 ──
+	{Code: errCodeNotificationNotFound, Name: "NOTIFICATION_NOT_FOUND", Message: "消息不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "不存在、不属于当前用户或已过期；客户端从本地列表移除这一条"},
+	{Code: errCodeNotificationPushLocked, Name: "NOTIFICATION_PUSH_LOCKED", Message: "该类消息不能关闭提醒",
+		Recovery: authprotocol.RecoveryNone, Hint: "/notifications/preferences 里 mutable=false 的分类不要展示关闭开关"},
+	{Code: errCodeNotificationActionInvalid, Name: "NOTIFICATION_ACTION_INVALID", Message: "动作不合法",
+		Recovery: authprotocol.RecoveryNone, Hint: "action.type 只能是 route（target 取路由键）或 url（https 地址）"},
+	{Code: errCodeNotificationCategoryInvalid, Name: "NOTIFICATION_CATEGORY_INVALID", Message: "分类不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "分类以 /notifications/summary 返回的 key 为准"},
 	// ── 积分排行榜 ──
 	{Code: errCodeLeaderboardDisabled, Name: "LEADERBOARD_DISABLED", Message: "排行榜暂未开放",
 		Recovery: authprotocol.RecoveryNone, Hint: "/leaderboard/boards 的 enabled 为 false 时入口应当整个隐藏"},
