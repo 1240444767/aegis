@@ -57,7 +57,9 @@ const UNLOCK_TERMS: Array<SegmentOption<UnlockTerm>> = [
 
 const SOURCE_LABEL: Record<string, string> = {
   points_store: "积分兑换",
-  admin_grant: "管理员授予"
+  admin_grant: "管理员授予",
+  invite: "邀请奖励",
+  leaderboard: "排行榜奖励"
 };
 
 /** 一条解锁记录此刻的状态：收回 > 已结束 > 生效中 */

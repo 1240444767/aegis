@@ -711,9 +711,11 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
 | `components/apps/invite/` | 邀请区块：概览 / 配置 / 邀请码 / 邀请记录（见下节） |
 | `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
+| `components/apps/leaderboard/` | 排行榜区块：概览 / 设置 / 奖励 / 实时榜 / 移出名单 / 结算记录（见下节） |
+| `lib/api/leaderboard.ts` / `lib/leaderboard-hooks.ts` | 排行榜域 API 与 React Query hooks |
 | `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
 | `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
-| `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品与邀请奖励共用 |
+| `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品、邀请奖励与排行榜奖励共用 |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
 | `lib/api/vip.ts` / `lib/vip-hooks.ts` | 会员域 API 与 React Query hooks |
@@ -1046,6 +1048,31 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 4. **示例码在渲染期不调用随机数**：由种子确定性地取字符，「换一个」只换种子；字符集与后端 `invite/code.go` 保持一致。
 
 能否填写、奖励发放与结算全部在后端，规则见 [docs/invite.md](../docs/invite.md)。
+
+## 排行榜区块（/apps/{appKey}?tab=leaderboard）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/leaderboard/app-leaderboard-panel.tsx` | 骨架 + 六个视图的切换，概览可带榜单跳到实时榜、带失败提示跳到结算记录 |
+| `components/apps/leaderboard/leaderboard-overview-panel.tsx` | 开关状态、待发 / 失败奖励提示、四个数字、各榜本期参与人数与前 3 名（真实账号、匿名 / 移出标记）、上次结算时间 |
+| `components/apps/leaderboard/leaderboard-settings-panel.tsx` | 总开关、榜单启用与标签顺序（上移 / 下移）、展示名次、上榜门槛、展示身份、允许匿名、积分口径（分类表随「计入管理员调整」变化） |
+| `components/apps/leaderboard/leaderboard-rewards-panel.tsx` | 每个周期榜一组名次档位（RewardListEditor），前端按后端同一说法提示范围不合法、超出展示名次、重叠与空档 |
+| `components/apps/leaderboard/leaderboard-board-panel.tsx` | 实时榜：选榜单与期号（本期 / 已结算往期 / 指定期号），完整名次表，行操作移出与恢复 |
+| `components/apps/leaderboard/leaderboard-exclusions-panel.tsx` | 移出名单：搜索、分页、批量移出、恢复 |
+| `components/apps/leaderboard/leaderboard-exclude-dialog.tsx` | 移出弹窗：单人（实时榜行操作）或按用户 ID 批量，原因与人数上限来自 limits |
+| `components/apps/leaderboard/leaderboard-snapshots-panel.tsx` | 结算记录列表、条目明细（按奖励状态筛选）、整期重试失败、手动结算弹窗 |
+| `components/apps/leaderboard/leaderboard-shared.tsx` | 枚举文案、奖励状态徽标、用户单元格、期号格式与上一期期号、共用保存条与载荷 |
+
+三条硬约束：
+
+1. **设置与奖励共用一个 `PUT settings`**：两个视图各自只改自己那一半，另一半按服务端已保存的值带上（`savedPayload`）。
+   已保存的权益要先按草稿往返一次（`normalizeBoardRewards`）再回传，后端出网的权益带着 `money: "0"` 这类零值。
+2. **目录驱动**：榜单、权益、展示身份、奖励状态、积分分类与上下界全部来自 `GET settings`，不另抄一份；
+   档位的前端提示只是提示，校验以后端（40000）为准，原因原样 toast。
+3. **手动结算的默认期号按浏览器时区算**，周期边界以后端应用默认时区为准，跨期那几个小时可能差一期；
+   周期没结束时后端回 40922，弹窗里原样显示。
+
+名次、口径、结算与发放全部在后端，规则见 [docs/leaderboard.md](../docs/leaderboard.md)。
 
 ## 账号注销区块（/apps/{appKey}?tab=account-deletion）
 

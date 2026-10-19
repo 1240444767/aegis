@@ -19,6 +19,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Ticket,
+  Trophy,
   UserPlus,
   UserX,
   type LucideIcon
@@ -98,6 +99,7 @@ export const appSectionGroups: AppSectionGroup[] = [
       { key: "signin-reward", title: "签到奖励", summary: "连签规则与奖励发放", icon: Gift },
       { key: "points-store", title: "积分商城", summary: "积分兑换会员、功能与福利", icon: ShoppingBag },
       { key: "invite", title: "邀请", summary: "邀请码、双方奖励与邀请记录", icon: UserPlus },
+      { key: "leaderboard", title: "排行榜", summary: "积分榜单、周期结算与名次奖励", icon: Trophy },
       { key: "account-deletion", title: "账号注销", summary: "注销方式、审核与重新注册限制", icon: UserX },
       { key: "lottery", title: "抽奖", summary: "奖池、概率与限次", icon: Dices },
       { key: "rewarded-ad", title: "激励广告", summary: "看广告领奖励、回调验签与限次", icon: MonitorPlay },

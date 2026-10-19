@@ -42,7 +42,9 @@ export const walletTypeLabels: Record<string, string> = {
   vip_purchase: "会员开通",
   order_pay: "订单支付",
   card_key: "卡密入账",
-  points_exchange: "积分兑换"
+  points_exchange: "积分兑换",
+  invite: "邀请奖励",
+  leaderboard: "排行榜奖励"
 };
 
 export function walletTypeLabel(type: string) {
@@ -64,7 +66,7 @@ export function WalletTypeBadge({ type }: { type: string }) {
     case "consume":
       return <Badge variant="outline">余额消费</Badge>;
     default:
-      return <Badge variant="outline">{type}</Badge>;
+      return <Badge variant="outline">{walletTypeLabel(type)}</Badge>;
   }
 }
 

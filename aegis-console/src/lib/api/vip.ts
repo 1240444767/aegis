@@ -91,6 +91,8 @@ export type VipSource =
   | "card_key"
   | "ad_reward"
   | "points_store"
+  | "invite"
+  | "leaderboard"
   | "admin_revoke"
   | "legacy_import"
   | "unknown";

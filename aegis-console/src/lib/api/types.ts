@@ -1298,7 +1298,7 @@ export type VipEntitlement = {
   /** 永久会员另有一段仍在期内的限时会员时，那段的到期时间 */
   timedExpireAt?: string | null;
   isTrial: boolean;
-  /** none / unknown / trial / wallet / payment_order / admin_grant / card_key / ad_reward / points_store */
+  /** none / unknown / trial / wallet / payment_order / admin_grant / card_key / ad_reward / points_store / invite / leaderboard */
   source: string;
   planName?: string;
   expireAt?: string | null;

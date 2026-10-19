@@ -181,7 +181,7 @@ export type PointsStoreStats = {
 export type FeatureUnlock = {
   id: number;
   tag: string;
-  source: "points_store" | "admin_grant" | string;
+  source: "points_store" | "admin_grant" | "invite" | "leaderboard" | string;
   sourceRef?: string;
   /** 0 为永久 */
   durationDays: number;
