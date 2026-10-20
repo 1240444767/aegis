@@ -381,3 +381,14 @@ func TestFillCardKeyTrendCoversEveryDay(t *testing.T) {
 		t.Fatalf("补齐结果不对：%+v", got)
 	}
 }
+
+func TestCardKeyStatsLocationNeverReturnsLocal(t *testing.T) {
+	for _, input := range []string{"", "Local", "Not/AZone", "Europe/Berlin"} {
+		if name := cardKeyStatsLocation(input).String(); name == "Local" {
+			t.Errorf("cardKeyStatsLocation(%q) 回落成了 Local，Postgres 不认识这个名字", input)
+		}
+	}
+	if got := cardKeyStatsLocation("Europe/Berlin").String(); got != "Europe/Berlin" {
+		t.Errorf("合法时区应原样使用，得到 %s", got)
+	}
+}

@@ -815,10 +815,7 @@ func (s *CardKeyService) Stats(ctx context.Context, appID int64, days int, timez
 	if days <= 0 || days > 180 {
 		days = 30
 	}
-	loc, err := time.LoadLocation(strings.TrimSpace(timezone))
-	if err != nil || timezone == "" {
-		loc = time.Local
-	}
+	loc := cardKeyStatsLocation(timezone)
 	now := time.Now().In(loc)
 	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	since := dayStart.AddDate(0, 0, -(days - 1))
@@ -828,6 +825,22 @@ func (s *CardKeyService) Stats(ctx context.Context, appID int64, days int, timez
 	}
 	stats.Trend = fillCardKeyTrend(stats.Trend, since, days)
 	return stats, nil
+}
+
+// cardKeyStatsLocation 分日用的时区。
+//
+// 不能回落到 time.Local：它的名字是 "Local"，原样交给 Postgres 的 AT TIME ZONE 会报「不认识的时区」。
+// 没传或传错时用 Asia/Shanghai（与 PG 会话的默认时区一致），连它也加载不了才用 UTC。
+func cardKeyStatsLocation(timezone string) *time.Location {
+	if name := strings.TrimSpace(timezone); name != "" && name != "Local" {
+		if loc, err := time.LoadLocation(name); err == nil {
+			return loc
+		}
+	}
+	if loc, err := time.LoadLocation("Asia/Shanghai"); err == nil {
+		return loc
+	}
+	return time.UTC
 }
 
 // fillCardKeyTrend 补齐没有核销的日子：趋势图上缺一天和那天是 0 是两回事。
