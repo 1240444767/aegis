@@ -44,7 +44,8 @@ export const walletTypeLabels: Record<string, string> = {
   card_key: "卡密入账",
   points_exchange: "积分兑换",
   invite: "邀请奖励",
-  leaderboard: "排行榜奖励"
+  leaderboard: "排行榜奖励",
+  ai_refund: "AI 调用退款"
 };
 
 export function walletTypeLabel(type: string) {

@@ -12,6 +12,7 @@ import {
   MonitorPlay,
   Network,
   PlugZap,
+  Route,
   ScrollText,
   ShieldCheck,
   ShieldHalf,
@@ -85,6 +86,7 @@ export const appSectionGroups: AppSectionGroup[] = [
     sections: [
       { key: "email", title: "邮件", summary: "发信出口与模板", icon: Mail },
       { key: "ai", title: "AI 服务", summary: "模型通道、技能与 MCP", icon: Sparkles },
+      { key: "ai-gateway", title: "AI 中转", summary: "用户按量调用、模型价格与密钥", icon: Route },
       { key: "payment", title: "支付", summary: "收款渠道、订单与交易设置", icon: CreditCard },
       { key: "cloud-storage", title: "云存储", summary: "用户数据云端备份与配额", icon: Cloud },
       { key: "settings", title: "用户设置", summary: "资料字段与默认值", icon: SlidersHorizontal }

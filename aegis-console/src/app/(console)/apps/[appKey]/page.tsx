@@ -20,6 +20,7 @@ import { AppLotteryPanel } from "@/components/apps/lottery/app-lottery-panel";
 import { AppRewardedAdPanel } from "@/components/apps/rewarded-ad/app-rewarded-ad-panel";
 import { AppAdPolicyPanel } from "@/components/apps/ad-policy/app-ad-policy-panel";
 import { AppCloudStoragePanel } from "@/components/apps/cloud-storage/app-cloud-storage-panel";
+import { AppAIGatewayPanel } from "@/components/apps/ai-gateway/app-ai-gateway-panel";
 import { AppOAuthPanel } from "@/components/apps/app-oauth-panel";
 import { AppOAuth2ServerPanel } from "@/components/apps/app-oauth2-server-panel";
 import { AppPasswordPanel } from "@/components/apps/app-password-panel";
@@ -171,6 +172,8 @@ function AppSectionPanel({ section, app }: { section: string; app: AppSummary })
       return <EmailWorkspace scope={{ kind: "app", appId: app.id }} />;
     case "ai":
       return <AIChannelPanel scope={{ kind: "app", appKey: app.appKey }} />;
+    case "ai-gateway":
+      return <AppAIGatewayPanel appKey={app.appKey} />;
     case "payment":
       return <AppPaymentPanel appId={app.id} appKey={app.appKey} />;
     case "cloud-storage":
