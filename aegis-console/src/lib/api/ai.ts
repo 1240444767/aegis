@@ -125,7 +125,8 @@ export type AIModelListResult = {
 export type AIConfigDraftPayload = {
   configId?: number;
   provider: string;
-  settings: Record<string, string>;
+  /** 不传时沿用已存配置的字段（只对 configId 非 0 有意义）。 */
+  settings?: Record<string, string>;
   secrets: Record<string, string>;
   model?: string;
 };

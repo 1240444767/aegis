@@ -1116,6 +1116,7 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/ai/ai-channel-editor-sheet.tsx` | 编辑 Sheet：供应商侧栏、分块表单、草稿测试、删除确认 |
 | `components/ai/ai-model-manager.tsx` | 型号管理器：芯片列表、星标设默认、粘贴多行拆分、一键拉取后搜索勾选（加入 / 只保留选中） |
 | `components/ai/ai-provider-fields.tsx` | 目录驱动的动态字段；`exclude` 让型号管理器接管 `models` / `defaultModel` |
+| `components/ai/ai-sheet-parts.tsx` | 大号 Sheet 的版面零件 `SheetBlock` / `ToggleTile`，与 AI 中转的模型 Sheet 共用 |
 
 三条硬约束：
 
@@ -1131,7 +1132,8 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 |---|---|
 | `components/apps/ai-gateway/app-ai-gateway-panel.tsx` | 骨架 + 六个视图的切换；从概览 / 密钥 / 额度跳到调用记录时带上筛选 |
 | `components/apps/ai-gateway/ai-gateway-overview-panel.tsx` | Base URL（可复制）、扣费顺序、调用与扣费趋势、按来源与模型汇总、未收与进行中 |
-| `components/apps/ai-gateway/ai-gateway-models-panel.tsx` | 模型列表与编辑弹窗：对外名 / 上游名 / 种类 / 钉通道、按种类目录渲染价格项、图片分档 |
+| `components/apps/ai-gateway/ai-gateway-models-panel.tsx` | 模型列表（点行即编辑）与删除确认 |
+| `components/apps/ai-gateway/ai-gateway-model-sheet.tsx` | 添加 / 编辑模型的大号 Sheet：左栏上游通道（当前链路，含平台共享），右栏从通道型号里挑上游模型（应用自有通道可一键拉取，新建可多选批量添加）、对外信息、种类、价格（含典型用量估价）、选项 |
 | `components/apps/ai-gateway/ai-gateway-requests-panel.tsx` | 调用记录：用户 / 模型 / 状态 / 接口筛选；明细弹窗含暂扣、价格、实扣、扣费来源与整笔退款 |
 | `components/apps/ai-gateway/ai-gateway-keys-panel.tsx` | 用户密钥：启用 / 停用（管理端不新建，明文只给用户本人看一次） |
 | `components/apps/ai-gateway/ai-gateway-credits-panel.tsx` | 某个用户的 AI 账户（与用户端总览同一份）与赠送额度调整、流水 |
@@ -1140,8 +1142,11 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 五条硬约束：
 
-1. **上游通道不在这里配**：通道在「AI 服务」区块，这里只决定谁能用、怎么收钱。模型钉通道时，
-   对话以外的种类只列 OpenAI 协议的通道（后端对这些接口原样转发，Anthropic / Gemini 原生协议没有它们）。
+1. **上游通道不在这里配**：通道在「AI 服务」区块，这里只决定谁能用、怎么收钱。模型 Sheet 的左栏读的是
+   通道链路（`/ai/channel`），型号清单与「一键拉取」复用通道的 `/ai/draft/models`（以已存配置为底、不传密钥）；
+   借用的平台共享通道在应用作用域拉不到，只列它登记的型号。对话以外的种类只能选 OpenAI 协议的通道
+   （后端对这些接口原样转发），其余通道置灰；换种类时已钉的不兼容通道回到「按链路」。
+   批量添加是逐个 POST，失败的留在选择里、成功的去掉。版面零件（分块、开关块）与通道编辑共用 `components/ai/ai-sheet-parts.tsx`。
 2. **价格项由后端目录驱动**（`/ai-gateway/catalog` 的 `kinds[].prices`）：换种类只显示该种类会用到的价格项，
    保存时其余项一律置 0。单位是「点」，token 类按每百万 token，界面上标在输入框后。
 3. **点数、倍率、单价按字符串往返**（后端 shopspring/decimal），`formatPoints` 只做展示；调用记录里的

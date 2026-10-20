@@ -41,11 +41,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
-import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { AIBrandBadge } from "./ai-brand-icon";
 import { AIModelManager, parseModels } from "./ai-model-manager";
+import { SheetBlock, ToggleTile } from "./ai-sheet-parts";
 import { AI_CAPABILITY_LABELS, AIProviderFields, buildDefaultAISettings } from "./ai-provider-fields";
 
 /** 型号管理器接管的两个字段（键与后端目录 KeyModels / KeyDefaultModel 一致）。 */
@@ -273,7 +273,7 @@ function EditorBody({
         <ProviderRail providers={providers} value={draft.provider} onChange={switchProvider} />
 
         <div className="min-h-0 space-y-4 overflow-y-auto bg-muted/20 px-6 py-5">
-          <Block icon={<Type className="size-4" />} title="基本信息">
+          <SheetBlock icon={<Type className="size-4" />} title="基本信息">
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label className="text-xs">
@@ -298,9 +298,9 @@ function EditorBody({
                 />
               </div>
             </div>
-          </Block>
+          </SheetBlock>
 
-          <Block
+          <SheetBlock
             icon={<KeyRound className="size-4" />}
             title="连接"
             aside={
@@ -333,10 +333,10 @@ function EditorBody({
                 ))}
               </ul>
             ) : null}
-          </Block>
+          </SheetBlock>
 
           {modelsField ? (
-            <Block icon={<Layers className="size-4" />} title="型号">
+            <SheetBlock icon={<Layers className="size-4" />} title="型号">
               <AIModelManager
                 label={modelsField.label}
                 models={models}
@@ -354,10 +354,10 @@ function EditorBody({
                   }))
                 }
               />
-            </Block>
+            </SheetBlock>
           ) : null}
 
-          <Block icon={<ToggleRight className="size-4" />} title="选项">
+          <SheetBlock icon={<ToggleRight className="size-4" />} title="选项">
             <div className="grid gap-3 sm:grid-cols-2">
               <ToggleTile label="启用" checked={draft.enabled} onChange={(value) => patch({ enabled: value })} />
               <ToggleTile label="设为默认" checked={draft.isDefault} onChange={(value) => patch({ isDefault: value })} />
@@ -370,9 +370,9 @@ function EditorBody({
                 />
               ) : null}
             </div>
-          </Block>
+          </SheetBlock>
 
-          <Block icon={<Zap className="size-4" />} title="连通性测试">
+          <SheetBlock icon={<Zap className="size-4" />} title="连通性测试">
             <div className="flex flex-wrap items-center gap-2">
               <Select value={testModel} onValueChange={setTestModel}>
                 <SelectTrigger className="h-9 w-72 font-mono text-xs">
@@ -393,7 +393,7 @@ function EditorBody({
               </Button>
             </div>
             {testResult ? <TestResultCard result={testResult} /> : null}
-          </Block>
+          </SheetBlock>
         </div>
       </div>
 
@@ -432,56 +432,6 @@ function EditorBody({
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
-}
-
-function Block({
-  icon,
-  title,
-  aside,
-  children
-}: {
-  icon: React.ReactNode;
-  title: string;
-  aside?: React.ReactNode;
-  children: React.ReactNode;
-}) {
-  return (
-    <section className="rounded-2xl border bg-card p-5">
-      <div className="mb-4 flex items-center gap-2">
-        <span className="flex size-7 items-center justify-center rounded-lg bg-primary/10 text-primary">{icon}</span>
-        <h3 className="text-sm font-semibold">{title}</h3>
-        {aside ? <div className="ml-auto">{aside}</div> : null}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function ToggleTile({
-  label,
-  hint,
-  checked,
-  onChange
-}: {
-  label: string;
-  hint?: string;
-  checked: boolean;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-center justify-between gap-3 rounded-xl border px-4 py-3 transition-colors",
-        checked ? "border-primary/40 bg-primary/5" : "hover:bg-muted/40"
-      )}
-    >
-      <span className="min-w-0">
-        <span className="block text-sm">{label}</span>
-        {hint ? <span className="block text-[11px] text-muted-foreground">{hint}</span> : null}
-      </span>
-      <Switch checked={checked} onCheckedChange={onChange} className="shrink-0" />
-    </label>
   );
 }
 
