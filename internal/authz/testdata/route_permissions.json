@@ -7023,6 +7023,18 @@
     "appScoped": false
   },
   {
+    "method": "POST",
+    "path": "/api/admin/system/ai/draft/models",
+    "permission": "ai:write",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/ai/draft/test",
+    "permission": "ai:write",
+    "appScoped": false
+  },
+  {
     "method": "GET",
     "path": "/api/admin/system/ai/channel",
     "permission": "ai:read",
@@ -7115,6 +7127,18 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/ai/configs/:configId/test",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai/draft/models",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai/draft/test",
     "permission": "app:write",
     "appScoped": true
   },

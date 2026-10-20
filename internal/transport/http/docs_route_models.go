@@ -120,6 +120,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/configs"):                                           adminAIConfigSaveRequest{},               // AdminAppAIConfigCreate
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai/configs/{configId}"):                                 adminAIConfigSaveRequest{},               // AdminAppAIConfigUpdate
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/configs/{configId}/test"):                           adminAIConfigTestRequest{},               // AdminAppAIConfigTest
+		routeKey("POST", "/api/admin/apps/{appkey}/ai/draft/models"):                                      adminAIDraftRequest{},                    // AdminAppAIDraftModels
+		routeKey("POST", "/api/admin/apps/{appkey}/ai/draft/test"):                                        adminAIDraftRequest{},                    // AdminAppAIDraftTest
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/mcp-servers"):                                       adminAIMCPServerSaveRequest{},            // AdminAppAIMCPCreate
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai/mcp-servers/{serverId}"):                             adminAIMCPServerSaveRequest{},            // AdminAppAIMCPUpdate
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/skills"):                                            adminAISkillSaveRequest{},                // AdminAppAISkillCreate
@@ -328,6 +330,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/system/ai/configs"):                                                  adminAIConfigSaveRequest{},               // AdminPlatformAIConfigCreate
 		routeKey("PUT", "/api/admin/system/ai/configs/{configId}"):                                        adminAIConfigSaveRequest{},               // AdminPlatformAIConfigUpdate
 		routeKey("POST", "/api/admin/system/ai/configs/{configId}/test"):                                  adminAIConfigTestRequest{},               // AdminPlatformAIConfigTest
+		routeKey("POST", "/api/admin/system/ai/draft/models"):                                             adminAIDraftRequest{},                    // AdminPlatformAIDraftModels
+		routeKey("POST", "/api/admin/system/ai/draft/test"):                                               adminAIDraftRequest{},                    // AdminPlatformAIDraftTest
 		routeKey("POST", "/api/admin/system/ai/mcp-servers"):                                              adminAIMCPServerSaveRequest{},            // AdminPlatformAIMCPCreate
 		routeKey("PUT", "/api/admin/system/ai/mcp-servers/{serverId}"):                                    adminAIMCPServerSaveRequest{},            // AdminPlatformAIMCPUpdate
 		routeKey("POST", "/api/admin/system/ai/skills"):                                                   adminAISkillSaveRequest{},                // AdminPlatformAISkillCreate

@@ -365,3 +365,26 @@ type StreamEvent struct {
 	ToolID    string `json:"toolId,omitempty"`
 	ToolName  string `json:"toolName,omitempty"`
 }
+
+// ModelInfo 从供应商「列出模型」接口拉到的一个型号。
+type ModelInfo struct {
+	ID          string `json:"id"`
+	Name        string `json:"name,omitempty"`
+	OwnedBy     string `json:"ownedBy,omitempty"`
+	Created     int64  `json:"created,omitempty"`
+	Description string `json:"description,omitempty"`
+	// ContextWindow 上下文长度（供应商报了才有）。
+	ContextWindow int64 `json:"contextWindow,omitempty"`
+}
+
+// ConfigDraft 一份还没保存（或正在编辑）的通道配置，用于拉型号与连通性测试。
+//
+// ConfigID 非 0 时以已存配置为底：Settings 整体替换，Secrets 只覆盖填了的键 ——
+// 与保存时「密钥留空即不修改」同一个约定，编辑态不必重新粘贴密钥就能拉、能测。
+// 换了供应商时已存密钥不再沿用（那是另一家的凭据）。
+type ConfigDraft struct {
+	ConfigID int64             `json:"configId"`
+	Provider string            `json:"provider"`
+	Settings map[string]string `json:"settings"`
+	Secrets  map[string]string `json:"secrets"`
+}

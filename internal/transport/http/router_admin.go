@@ -203,6 +203,8 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.PUT("/apps/:appkey/ai/configs/:configId", h.AdminAppAIConfigUpdate)
 		admin.DELETE("/apps/:appkey/ai/configs/:configId", h.AdminAppAIConfigDelete)
 		admin.POST("/apps/:appkey/ai/configs/:configId/test", h.AdminAppAIConfigTest)
+		admin.POST("/apps/:appkey/ai/draft/models", h.AdminAppAIDraftModels)
+		admin.POST("/apps/:appkey/ai/draft/test", h.AdminAppAIDraftTest)
 		admin.GET("/apps/:appkey/ai/skills", h.AdminAppAISkillList)
 		admin.POST("/apps/:appkey/ai/skills", h.AdminAppAISkillCreate)
 		admin.PUT("/apps/:appkey/ai/skills/:skillId", h.AdminAppAISkillUpdate)

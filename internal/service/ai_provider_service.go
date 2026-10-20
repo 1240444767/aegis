@@ -251,6 +251,84 @@ func (s *AIProviderService) TestConfig(ctx context.Context, appID int64, id int6
 	if err != nil {
 		return nil, err
 	}
+	return s.testConfig(ctx, *config, model)
+}
+
+// TestDraft 对一份草稿做连通性测试（新建时不必先保存）。
+func (s *AIProviderService) TestDraft(ctx context.Context, appID int64, draft aidomain.ConfigDraft, model string) (map[string]any, error) {
+	config, _, err := s.resolveDraft(ctx, appID, draft)
+	if err != nil {
+		return nil, err
+	}
+	return s.testConfig(ctx, *config, model)
+}
+
+// FetchModels 按草稿（或已存配置）向供应商拉型号清单。上游失败不当作接口错误：
+// 与连通性测试同一形状返回 ok=false 与上游的原话，控制台就地展示。
+func (s *AIProviderService) FetchModels(ctx context.Context, appID int64, draft aidomain.ConfigDraft) (map[string]any, error) {
+	config, meta, err := s.resolveDraft(ctx, appID, draft)
+	if err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	models, err := s.client.ListModels(ctx, *config, meta)
+	elapsed := time.Since(started).Milliseconds()
+	if err != nil {
+		var upstream *aiUpstreamError
+		if errors.As(err, &upstream) {
+			message := upstream.Message
+			if config.Provider == aidomain.ProviderAzureOpenAI {
+				message += "（Azure 的型号是部署名，拉取失败时请手动填写）"
+			}
+			return map[string]any{"ok": false, "elapsedMs": elapsed, "error": message, "status": upstream.Status}, nil
+		}
+		return map[string]any{"ok": false, "elapsedMs": elapsed, "error": err.Error()}, nil
+	}
+	return map[string]any{"ok": true, "elapsedMs": elapsed, "models": models, "count": len(models)}, nil
+}
+
+// resolveDraft 草稿 → 可直接调用的配置（密钥已解密）。
+func (s *AIProviderService) resolveDraft(ctx context.Context, appID int64, draft aidomain.ConfigDraft) (*aidomain.Config, aidomain.ProviderMeta, error) {
+	if err := s.ensureScope(ctx, appID); err != nil {
+		return nil, aidomain.ProviderMeta{}, err
+	}
+	provider := strings.TrimSpace(draft.Provider)
+	config := &aidomain.Config{AppID: appID, Provider: provider, Settings: map[string]string{}, Secrets: map[string]string{}}
+	if draft.ConfigID > 0 {
+		stored, err := s.loadConfig(ctx, appID, draft.ConfigID)
+		if err != nil {
+			return nil, aidomain.ProviderMeta{}, err
+		}
+		if provider == "" || provider == stored.Provider {
+			config = stored
+			if config.Secrets == nil {
+				config.Secrets = map[string]string{}
+			}
+		}
+	}
+	if config.Provider == "" {
+		return nil, aidomain.ProviderMeta{}, apperrors.New(40000, http.StatusBadRequest, "缺少供应商")
+	}
+	meta, ok := aidomain.ProviderByKey(config.Provider)
+	if !ok {
+		return nil, aidomain.ProviderMeta{}, apperrors.New(40511, http.StatusBadRequest, "不支持的 AI 供应商："+config.Provider)
+	}
+	if draft.Settings != nil {
+		settings := make(map[string]string, len(draft.Settings))
+		for key, value := range draft.Settings {
+			settings[key] = value
+		}
+		config.Settings = settings
+	}
+	for key, value := range draft.Secrets {
+		if strings.TrimSpace(value) != "" {
+			config.Secrets[key] = strings.TrimSpace(value)
+		}
+	}
+	return config, meta, nil
+}
+
+func (s *AIProviderService) testConfig(ctx context.Context, config aidomain.Config, model string) (map[string]any, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		model = config.DefaultModel()
@@ -262,7 +340,7 @@ func (s *AIProviderService) TestConfig(ctx context.Context, appID int64, id int6
 	defer cancel()
 
 	started := time.Now()
-	response, err := s.client.Chat(testCtx, *config, aidomain.ChatRequest{
+	response, err := s.client.Chat(testCtx, config, aidomain.ChatRequest{
 		Model:     model,
 		Messages:  []aidomain.ChatMessage{aidomain.TextMessage(aidomain.RoleUser, "ping，请只回复 pong")},
 		MaxTokens: 512,

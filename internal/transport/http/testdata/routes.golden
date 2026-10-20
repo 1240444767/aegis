@@ -769,6 +769,8 @@ POST	/api/admin/apps/:appkey/ai-gateway/users/:userId/credits	AdminAdjustAIGatew
 POST	/api/admin/apps/:appkey/ai/agent/stream	AdminAppAIAgentStream
 POST	/api/admin/apps/:appkey/ai/configs	AdminAppAIConfigCreate
 POST	/api/admin/apps/:appkey/ai/configs/:configId/test	AdminAppAIConfigTest
+POST	/api/admin/apps/:appkey/ai/draft/models	AdminAppAIDraftModels
+POST	/api/admin/apps/:appkey/ai/draft/test	AdminAppAIDraftTest
 POST	/api/admin/apps/:appkey/ai/mcp-servers	AdminAppAIMCPCreate
 POST	/api/admin/apps/:appkey/ai/mcp-servers/:serverId/test	AdminAppAIMCPTest
 POST	/api/admin/apps/:appkey/ai/skills	AdminAppAISkillCreate
@@ -922,6 +924,8 @@ POST	/api/admin/system/admins	AdminCreateAccount
 POST	/api/admin/system/admins/:adminId/force-logout	ForceLogoutAdmin
 POST	/api/admin/system/ai/configs	AdminPlatformAIConfigCreate
 POST	/api/admin/system/ai/configs/:configId/test	AdminPlatformAIConfigTest
+POST	/api/admin/system/ai/draft/models	AdminPlatformAIDraftModels
+POST	/api/admin/system/ai/draft/test	AdminPlatformAIDraftTest
 POST	/api/admin/system/ai/mcp-servers	AdminPlatformAIMCPCreate
 POST	/api/admin/system/ai/mcp-servers/:serverId/test	AdminPlatformAIMCPTest
 POST	/api/admin/system/ai/skills	AdminPlatformAISkillCreate
