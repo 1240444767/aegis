@@ -20,7 +20,7 @@ import (
 // 计费口径（docs/ai-gateway.md「什么时候扣费」）：
 //   - 上游成功：按上游报回的用量结算；上游没报用量时按内容估算，记录上标「用量为估算」。
 //   - 上游失败、网关出错、客户端在拿到任何内容之前断开：整笔放回，不扣费。
-//   - 流式输出到一半**客户端**断开：已经生成并交付的内容按估算的输出 token 计费（状态 aborted）。
+//   - 流式输出到一半**客户端**断开：上游已经生成的内容按估算的输出 token 计费（状态 aborted）。
 //     上游中途失败则仍按失败处理、不扣费。区分两者是为了不让「快结束时主动断开」变成白用。
 //
 // 暂扣与结算都用脱离请求上下文的 ctx：客户端断开会取消请求上下文，而放回暂扣恰恰发生在那之后。
@@ -185,17 +185,14 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 	}
 
 	started := time.Now()
-	// 流式：累计已经交付给客户端的内容，客户端中途断开时按它计费。
+	// 流式：累计上游已经生成的内容，客户端中途断开时按它计费。
 	var delivered aidomain.ChatResponse
 	toolArgs := map[string]int{}
 	clientGone := false
 	var wrapped func(aidomain.StreamEvent) error
 	if in.Stream {
 		wrapped = func(event aidomain.StreamEvent) error {
-			if err := onEvent(event); err != nil {
-				clientGone = true
-				return err
-			}
+			// 先累计再写出：这段内容上游已经生成（上游照样计费），写给客户端失败也算在内。
 			switch event.Type {
 			case aidomain.StreamText:
 				delivered.Text += event.Delta
@@ -208,6 +205,10 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 				if index, ok := toolArgs[event.ToolID]; ok {
 					delivered.ToolCalls[index].Arguments = append(delivered.ToolCalls[index].Arguments, event.Delta...)
 				}
+			}
+			if err := onEvent(event); err != nil {
+				clientGone = true
+				return err
 			}
 			return nil
 		}
