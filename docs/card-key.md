@@ -8,7 +8,16 @@
 | 形态 | `kind` | 怎么用 | 终态 |
 |---|---|---|---|
 | 授权卡 | `login` | 卡**就是**登录凭证。首次使用自动建号并绑定，之后凭卡登录 | `active`（授权期内可反复登录） |
-| 兑换卡 | `redeem` | 给已登录用户发权益 | `used`（一次性） |
+| 兑换卡 | `redeem` | 给已登录用户发权益 | `used`（用满即止） |
+
+兑换卡又分两种用法，差别只在 `max_uses`：
+
+| 用法 | `max_uses` | 例子 |
+|---|---|---|
+| 一卡一用 | 1 | 激活码、礼品卡，卖给一个人 |
+| 活动码 | > 1 | 直播口令、群发福利：一个码被很多人**各用一次** |
+
+活动码在用满之前状态一直是 `unused`（`use_count` 记已用人次），用满才变成 `used`。
 
 两种形态共用一张 `card_keys` 表而不是各建一张：生成、导出、作废、查询、
 核销记录这五件事逐字相同，分表意味着这五处逻辑各写两遍，而它们迟早会漂移成两套行为。
@@ -40,9 +49,13 @@ POST /api/v1/apps/{appKey}/auth/login
 
 ### 续期
 
-同一个用户可以绑多张授权卡，因此 `bound_user_id` 上**没有**唯一约束。
-续期的动作是「登录状态下核销一张新的授权卡」，它会绑到当前账号并各自计时。
-两张卡都在授权期内时，任意一张都能登进同一个账号。
+两种做法：
+
+1. **续费卡**（推荐）：一张兑换卡挂「授权时长」权益（`license_days`），登录后兑换，
+   给名下的授权卡顺延 N 天（挑仍在授权期内、到期最晚的那张；都过期了就挑最近过期的，
+   从今天起算）。名下只有永久卡时拒发（40981），没有授权卡时拒发（40346）。
+2. 登录状态下核销一张新的授权卡：它会绑到当前账号并各自计时。同一个用户可以绑多张授权卡，
+   因此 `bound_user_id` 上**没有**唯一约束；两张卡都在授权期内时，任意一张都能登进同一个账号。
 
 ### 设备绑定
 
@@ -56,44 +69,70 @@ POST /api/v1/apps/{appKey}/auth/login
 **缺设备标识时拒绝而不是放行**（40343）。开着的限制因为请求没带标识就放行，
 等于没有这个限制 —— 与试用的设备去重同一取向。
 
-解绑（控制台上单卡的「设备」抽屉）是「用户换电脑了」唯一的出口：
-设备标识会随重装系统变化，没有它，一张一机卡在用户重装之后就永久报废了。
+解绑是「用户换电脑了」的出口：设备标识会随重装系统变化，没有它，一张一机卡在用户重装之后就永久报废了。
+两个入口：
 
-## 兑换卡：一个事务，七档权益
+- **管理员**在控制台单卡抽屉里解绑一台或清空全部设备。
+- **用户自助**：`DELETE /card-keys/mine/{cardId}/devices/{deviceId}`。每 30 天（滚动窗口）能解绑几次由批次的
+  `self_unbind_limit` 决定，0 为不允许。限次在锁住卡行之后数，并发的两次自助解绑不会都通过。
+
+两种解绑都记进 `card_key_device_unbinds`（来源、操作人、设备名），限次与排障都靠它。
+
+## 兑换卡：一个事务，九档权益
 
 ```
-POST /api/v1/apps/{appKey}/card-keys/redeem
-{ "code": "…", "deviceId": "…" }
+POST /api/v1/apps/{appKey}/card-keys/preview   { "code": "…" }
+POST /api/v1/apps/{appKey}/card-keys/redeem    { "code": "…", "deviceId": "…" }
 ```
 
-七档权益由 [`internal/domain/cardkey/catalog.go`](../internal/domain/cardkey/catalog.go)
+**预览**回答「这张卡会发什么、我现在能不能用」：不能用时仍然返回 200，`usable=false` 并带
+`reasonCode` / `reason`（与兑换时的错误码同一套判据，`previewBlocker` 与 `RedeemCardKey` 共用
+`CheckCardKeyUsable`）。卡密不存在照常以 40441 报错并计入输错次数 —— 否则预览就成了一个不计失败的查码器。
+
+九档权益由 [`internal/domain/cardkey/catalog.go`](../internal/domain/cardkey/catalog.go)
 这份**目录**定义，它同时驱动服务端校验、控制台的权益编辑表单与展示文案：
 
 | 权益 | 落到哪 |
 |---|---|
 | `vip_plan` | `extendUserVipTx`，继承套餐的时长与功能标识快照；选永久套餐即发永久会员（套餐可以下架，只用于发卡） |
 | `vip_days` | `extendUserVipTx`，不挂套餐、不带功能标识 |
+| `feature` | `grantFeatureUnlockTx`，来源 `card_key`；天数 0 为永久，同一功能顺延；一张卡可以解锁几个不同的功能；已永久拥有时拒发（40983），卡不会被核销 |
 | `integral` | `applyIntegralChangeTx` |
-| `experience` | `applyExperienceChangeTx`（本次新抽出的事务内助手） |
-| `balance` | `applyWalletChangeTx`，类型 `card_key` |
-| `lottery_draws` | `lottery_draw_grants`（本次新建的余额表） |
+| `experience` | `applyExperienceChangeTx` |
+| `balance` | `applyWalletChangeTx`，类型 `card_key`；幂等键一卡一用时是卡号（与老数据一致），活动码时落到「卡 + 人」 |
+| `lottery_draws` | `lottery_draw_grants` |
+| `license_days` | 续费卡：顺延名下授权卡的 `expires_at` |
 | `device_slots` | 改写该用户授权期最长的那张授权卡的 `max_devices` |
+
+生成与修改批次时就核对引用：套餐不存在、功能不在目录或已停用直接拒绝，
+而不是等第一个用户来兑换时才以「兑换失败」暴露（那时卡已经发出去了）。
 
 新增一档权益只需目录加一行 + `grantCardRewardsTx` 加一个 `case`，控制台零改动即自动出现。
 `TestRewardCatalogHasGrantBranch` 双向钉死「目录 ↔ 发放分支」：
 目录多一条 → 配得上却发不出来；发放多一条 → 控制台配不出来。
 
-### 一码一用有三道保证
+### 每人恰好一次有四道保证
 
 叠在一起，各自防的是不同的失效模式：
 
 1. **行锁**（`SELECT … FOR UPDATE`）—— 同一张卡的并发请求串行化
-2. **条件 UPDATE 抢占**（`WHERE status = 'unused'`）—— 状态机的唯一跃迁，
+2. **条件 UPDATE 抢占**（`WHERE status = 'unused' AND use_count < max_uses`）—— 用量不会超过上限，
    与 `FulfillPaymentOrder` 同构
-3. **`uq_card_key_redemptions_card` 唯一约束** —— 兜住前两道被改坏的情况，
-   而那种 bug 的表现是重复发钱
+3. **同一个人的预查** —— 活动码说清楚「你已经兑换过」（40976），而不是撞约束报 409
+4. **`uq_card_key_redemptions_card_user`（card_key_id, user_id）唯一约束** —— 兜住前几道被改坏的情况，
+   而那种 bug 的表现是重复发奖
 
-任何一步发放失败整体回滚，核销权随之释放，下一次兑换会自动重试。
+任何一步发放失败整体回滚，使用权随之释放，下一次兑换会自动重试。
+
+### 领取规则
+
+只对兑换生效（授权卡首登时还没有账号可判，生成时被归一掉）：
+
+| 规则 | 列 | 判法 |
+|---|---|---|
+| 每人限兑 | `per_user_limit` | 这个人在这一批里已有的核销行数；`pg_advisory_xact_lock` 让同一个人同一批的兑换串行，并发兑两张不会都通过 |
+| 领取对象 | `audience`（all / vip / non_vip） | 兑换那一刻的会员状态（`vipdomain.Evaluate`），在事务之前读 |
+| 生效时间 | `starts_at` | 之前兑换报 40975，message 带具体时刻；授权卡首次激活同样受它约束 |
 
 ### 抽奖次数是新建的概念
 
@@ -125,7 +164,21 @@ POST /api/v1/apps/{appKey}/card-keys/redeem
 
 ## 卡面
 
-`PREFIX-XXXX-XXXX-XXXX-XXXX`，随机段的字符集是 32 个字符，**剔除了 I / O / 0 / 1**：
+`PREFIX-XXXX-XXXX-XXXX-XXXX`。字符集三选一（`charset`）：
+
+| 字符集 | 字符 | 用途 |
+|---|---|---|
+| `safe`（默认） | 32 个，剔除 I / O / 0 / 1 | 要被人抄写的卡 |
+| `digits` | 0–9 | 电话报码、刮刮卡 |
+| `letters` | 24 个字母，剔除 I / O | 口令 |
+
+`safe` 32 个字符整除 256，可以直接对随机字节取模；另两档不整除，用拒绝采样（丢掉落在最大整倍数之外的字节），
+否则 0–5 会比 6–9 多出现约 4%。格式空间按所选字符集的大小算。
+
+**导入**：生成接口带 `codes` 即按导入处理（`source = imported`），卡面经 `NormalizeCode` 归一，
+至少 4 个字母或数字、最长 64；批内重复与库里已有的卡面都会被列出来拒绝。导入的批次没有格式，不能补发。
+
+safe 剔除 I / O / 0 / 1 的原因：
 卡密是要被人抄写的（贴在卡片上、发在群里、手打进客户端），而这四个字符
 在绝大多数字体下两两难辨。32 正好整除 256，因此可以直接对随机字节取模而不引入偏置。
 
@@ -133,7 +186,8 @@ POST /api/v1/apps/{appKey}/card-keys/redeem
 而前缀是运营自己起的可读标签（`VIP` / `GIFT` / `2026`），有上下文消歧。
 照随机段的字符集校验会把 `VIP` 判成非法（`I` 不在集合里）。
 
-同理，`NormalizeCardKeyCode` 保留的是 A–Z0–9 全集并把 `_` / 空格归一成 `-`。
+同理，`NormalizeCode` 保留的是 A–Z0–9 全集，把 `_` / 空格 / 全角连字符归一成 `-`，
+连打的分隔符收成一个、首尾的分隔符去掉。
 按防混淆字符集过滤会把 `VIP-…` 悄悄削成 `VP-…`，表现是「明明抄对了却提示卡密不存在」。
 
 生成时两层去重：批内用集合（1 段 3 位只有 32768 种组合，生日碰撞是真实的），
@@ -153,17 +207,57 @@ POST /api/v1/apps/{appKey}/card-keys/redeem
 | 40343 | `CARD_KEY_DEVICE_LIMIT` | 设备数已满，或请求没带设备标识 |
 | 40344 | `CARD_KEY_BOUND_OTHER` | 已绑定其它账号 |
 | 40345 | `CARD_KEY_KIND_MISMATCH` | 授权卡与兑换卡用错了入口 |
-| 40346 | `CARD_KEY_NO_LOGIN_CARD` | 要加设备位但名下没有授权卡 |
+| 40346 | `CARD_KEY_NO_LOGIN_CARD` | 要加设备位 / 授权时长但名下没有授权卡 |
 | 40441 | `CARD_KEY_NOT_FOUND` | 卡密不存在 |
+| 40458 | `CARD_KEY_DEVICE_NOT_BOUND` | 要解绑的设备不在这张卡上 |
 | 40910 | `CARD_KEY_REDEEMING` | 正在被核销（并发） |
+| 40975 | `CARD_KEY_NOT_STARTED` | 还没到生效时间 |
+| 40976 | `CARD_KEY_ALREADY_REDEEMED` | 你已经兑换过这个码（活动码每人一次） |
+| 40977 | `CARD_KEY_USER_LIMIT` | 这一批的每人限兑已满 |
+| 40978 | `CARD_KEY_AUDIENCE` | 不在领取对象里（仅会员 / 仅非会员） |
+| 40979 | `CARD_KEY_UNBIND_LIMIT` | 30 天内的自助解绑次数已用完 |
+| 40981 | `CARD_KEY_LICENSE_PERMANENT` | 授权卡已是永久，续费卡无需兑换 |
+| 40982 | `CARD_KEY_BATCH_IN_USE`（管理端） | 批次已有卡被用过，不能删除 |
+| 40983 | `CARD_KEY_REWARD_OWNED` | 已永久拥有这张卡要解锁的功能 |
+| 40984 | `CARD_KEY_REWARD_UNAVAILABLE` | 权益引用的套餐被删或功能被停用 |
+| 40985 | `CARD_KEY_CODE_TAKEN`（管理端） | 导入的卡面已经存在 |
+| 40995 | `CARD_KEY_UNBIND_DISABLED` | 这张卡不允许自助解绑 |
+| 42916 | `CARD_KEY_TOO_MANY_ATTEMPTS` | 输错次数过多，锁定中 |
+
+403 段已经用满，新加的判据落在 409 / 404 / 429 的空段。
 
 判据分得细是有原因的：「已作废」「已用过」「已过期」对用户是三件完全不同的事，
 合成一句「卡密无效」的结果是客服无从判断该补发、该解释、还是该退款。
-`checkCardUsable` 的判定顺序即错误优先级 —— 一张被作废的过期卡报「已作废」而不是「已过期」。
+`CheckCardKeyUsable` 的判定顺序即错误优先级 —— 作废 → 已用 → 过期 → 未生效。
+一张被作废的过期卡报「已作废」而不是「已过期」。
+
+### 防爆破
+
+输错卡密（只数「卡密不存在」）按账号与 IP 各自计数：10 分钟内账号 8 次 / IP 24 次即锁 15 分钟（42916），
+锁定期间预览、兑换与卡密登录全部拒绝，真卡也不行。作废、已用、过期不计数：它们说明对方手里确实有一张真卡，
+数它们只会误伤抄错一位又重试的人。计数与锁复用登录防爆破的 Redis 存储（kind 前缀 `ck-`），Redis 故障时放行。
+
+## 运营：补发、提卡、修改
+
+- **补发** `POST …/batches/{id}/append`：按原批次的前缀、段数、字符集再生成 N 张，总数随之增加。
+- **提卡** `POST …/batches/{id}/extract {count, note}`：取出 N 张**未使用、未提取、未过期**的卡，打上
+  `distributed_at` 与备注后随响应返回。取与标记在同一条 `UPDATE … WHERE id IN (SELECT … FOR UPDATE SKIP LOCKED)` 里，
+  两个运营同时提卡各拿各的，不会把同一张卡交给两个渠道。也可以在列表里手动标记 / 取消（`codes/distribute`）。
+- **导出** `GET …/batches/{id}/export?format=csv|txt&status=unused&undistributed=1`：txt 一行一张卡面，直接贴给渠道。
+- **修改批次** `PUT …/batches/{id}`：名称、备注、渠道、面值、权益、每人限兑、领取对象、生效时间、
+  统一到期时间（同步改这一批里还没用过的卡）、自助解绑次数。卡面格式、形态、有效期模式与单卡设备数不能改 ——
+  它们已经落在每一张卡上了。权益改动只影响之后的核销（流水存快照）。
+- **调整单卡** `PUT …/codes/{id}`：备注、可绑设备数、到期时间（延长 N 天 / 设为某时刻 / 改为永久）。
+  延长从「原到期时间与现在两者较晚的那个」起算。
+- **删除**：只能删从没被用过的卡（`codes/delete` 跳过用过的，返回 `skipped`）与从没被用过的批次（否则 40982，改为停用）：
+  级联会带走核销流水，而那是「谁领了什么」唯一的凭据。
+- **代兑** `POST …/card-keys/redeem {code, userId | account}`：客服补发，来源记为 `admin` 并发站内信（路由 `card_keys`）。
+- **统计** `GET …/card-keys/stats?days=30&tz=…`：总量、可用、已提取、有效授权、面值（发出 / 已用）、
+  按浏览器时区分日的核销趋势、来源分布与热门批次。
 
 ## 控制台
 
-`/apps/{appKey}?tab=card-key`，三个视图：批次 / 卡密 / 核销记录。
+`/apps/{appKey}?tab=card-key`，四个视图：概览 / 批次 / 卡密 / 核销记录。
 
 - **导出按 batchId，不按当前筛选**：生成完立刻导出时列表可能还没刷新到那一批，
   按筛选导出会得到一份不完整的卡，而那份文件是要发给渠道的。
@@ -183,12 +277,15 @@ POST /api/v1/apps/{appKey}/card-keys/redeem
 官方 Kotlin SDK：
 
 ```kotlin
-// 授权卡登录（deviceId 必填）
+// 授权卡登录（deviceId 必填）；session.authorization 是这张卡的授权快照
 val session = aegis.auth.loginWithCardKey(cardKey = "VIP-…", deviceId = deviceId)
 
-// 兑换卡
+// 兑换前预览与兑换
+aegis.commerce.previewCardKey(code = "GIFT-…")
 aegis.commerce.redeemCardKey(code = "GIFT-…")
 
-// 我的授权
-aegis.commerce.myCardKeys()
+// 我的授权（current 标出本机）、自助解绑、兑换记录
+aegis.commerce.myCardKeys(deviceId)
+aegis.commerce.unbindMyCardKeyDevice(cardId, deviceId)
+aegis.commerce.cardKeyRedemptions(page = 1)
 ```

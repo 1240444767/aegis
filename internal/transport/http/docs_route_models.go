@@ -131,9 +131,16 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/captcha-config/preview"):                               AdminCaptchaDynamicPreviewRequest{},      // AdminPreviewDynamicCaptcha
 		routeKey("POST", "/api/admin/apps/{appkey}/captcha-config/test-sms"):                              AdminTestSMSRequest{},                    // AdminTestSMS
 		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/batches"):                                    GenerateCardKeysRequest{},                // AdminGenerateCardKeys
+		routeKey("PUT", "/api/admin/apps/{appkey}/card-keys/batches/{batchId}"):                           UpdateCardKeyBatchRequest{},              // AdminUpdateCardKeyBatch
+		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/batches/{batchId}/append"):                   CardKeyCountRequest{},                    // AdminAppendCardKeys
+		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/batches/{batchId}/extract"):                  CardKeyCountRequest{},                    // AdminExtractCardKeys
 		routeKey("PUT", "/api/admin/apps/{appkey}/card-keys/batches/{batchId}/status"):                    CardKeyBatchStatusRequest{},              // AdminSetCardKeyBatchStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/codes/delete"):                               CardKeyIDsRequest{},                      // AdminDeleteCardKeys
 		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/codes/disable"):                              CardKeyIDsRequest{},                      // AdminDisableCardKeys
+		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/codes/distribute"):                           CardKeyDistributeRequest{},               // AdminDistributeCardKeys
 		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/codes/restore"):                              CardKeyIDsRequest{},                      // AdminRestoreCardKeys
+		routeKey("PUT", "/api/admin/apps/{appkey}/card-keys/codes/{cardId}"):                              UpdateCardKeyRequest{},                   // AdminUpdateCardKey
+		routeKey("POST", "/api/admin/apps/{appkey}/card-keys/redeem"):                                     AdminRedeemCardKeyRequest{},              // AdminRedeemCardKey
 		routeKey("POST", "/api/admin/apps/{appkey}/channels"):                                             AdminVersionChannelBody{},                // AdminCreateVersionChannel
 		routeKey("PUT", "/api/admin/apps/{appkey}/channels/{cid}"):                                        AdminVersionChannelBody{},                // AdminUpdateVersionChannel
 		routeKey("DELETE", "/api/admin/apps/{appkey}/channels/{cid}/users"):                               VersionChannelUsersRequest{},             // AdminRemoveVersionChannelUsers
@@ -632,6 +639,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/qr/scan"):                                            AppQRLoginTicketRequest{},                // AppQRLoginScan
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/register"):                                           authprotocol.RegisterInput{},             // AppRegister
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/sms/code"):                                           authprotocol.SMSCodeInput{},              // AppSMSCode
+		routeKey("POST", "/api/v1/apps/{appkey}/card-keys/preview"):                                       CardKeyCodeRequest{},                     // AppPreviewCardKey
 		routeKey("POST", "/api/v1/apps/{appkey}/card-keys/redeem"):                                        RedeemCardKeyRequest{},                   // AppRedeemCardKey
 		routeKey("POST", "/api/v1/apps/{appkey}/client-control/check"):                                    service.ClientControlSealedRequest{},     // AppClientControlCheck
 		routeKey("GET", "/api/v1/apps/{appkey}/cloud/items"):                                              CloudItemListQuery{},                     // AppCloudItems

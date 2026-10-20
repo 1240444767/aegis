@@ -108,8 +108,11 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 
 		// 卡密：兑换与「我的授权」。授权卡登录本身不在这里 ——
 		// 它是 /auth/login 的一档 method，加登录方式不加路由。
+		appGatewayAuthed.POST("/card-keys/preview", h.AppPreviewCardKey)
 		appGatewayAuthed.POST("/card-keys/redeem", h.AppRedeemCardKey)
 		appGatewayAuthed.GET("/card-keys/mine", h.AppMyCardKeys)
+		appGatewayAuthed.DELETE("/card-keys/mine/:cardId/devices/:deviceId", h.AppUnbindMyCardKeyDevice)
+		appGatewayAuthed.GET("/card-keys/redemptions", h.AppMyCardKeyRedemptions)
 
 		// 激励广告：状态（含传给 SDK 的用户标识）、看完上报、我的记录。
 		// 平台的服务端回调不在这里 —— 它没有用户令牌可带，走 /api/apps/:appkey/ads/*。

@@ -68,7 +68,7 @@ func (s *AuthService) CardKeyLogin(ctx context.Context, input CardKeyLoginInput)
 		app = loaded
 	}
 
-	card, err := s.cardKey.PrepareLogin(ctx, input.AppID, input.Code)
+	card, err := s.cardKey.PrepareLogin(ctx, input.AppID, input.Code, input.IP)
 	if err != nil {
 		return nil, err
 	}

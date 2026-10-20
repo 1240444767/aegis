@@ -1341,16 +1341,30 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     /**
+     * 兑换前预览：这张卡会发什么、现在能不能用。
+     *
+     * 不能用时仍然返回成功，`usable = false` 并带上 `reasonCode` / `reason`（与兑换时的错误码一致），
+     * 让界面在用户按下「兑换」之前就能说清楚为什么不行。卡密不存在照常以 40441 报错，
+     * 并和兑换一样计入输错次数（连续输错会被 42916 锁定 15 分钟）。
+     */
+    fun previewCardKey(code: String): JsonElement = client.call(
+        "POST", "/card-keys/preview", mapOf("code" to code), requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /**
      * 兑换卡密。
      *
      * 卡面大小写与分隔符由服务端归一化（抄卡密的人会用小写、把 `-` 打成空格），
      * 客户端原样上送即可，不要自己"清洗"一遍 —— 两边各洗一次反而会洗出分歧。
      *
-     * 失败一律是 4xx 且业务码区分得很细：40340 已作废 / 40341 已使用 /
-     * 40342 已过期 / 40343 设备数已满 / 40344 已绑定他人 / 40345 类型不符 /
-     * 40441 卡密不存在。把它们合并成一句"兑换失败"会让用户无从判断下一步该做什么。
+     * 失败一律是 4xx 且业务码区分得很细：40340 已作废 / 40341 已使用 / 40342 已过期 /
+     * 40343 设备数已满 / 40344 已绑定他人 / 40345 类型不符 / 40346 名下没有授权卡 /
+     * 40441 卡密不存在 / 40975 未到生效时间 / 40976 已兑换过（活动码每人一次）/
+     * 40977 每人限兑已满 / 40978 不在领取对象里 / 40981 授权卡已是永久 / 40983 已永久拥有该功能 /
+     * 40984 权益已下架 / 42916 输错次数过多。把它们合并成一句"兑换失败"会让用户无从判断下一步该做什么。
      *
-     * [deviceId] 只在兑换「设备位」类权益时有意义，其余情况可以不传。
+     * 成功时返回 `results`：每一项权益实际发成了什么（如「30 天」「1000 分（余额 2300）」）。
      */
     @JvmOverloads
     fun redeemCardKey(code: String, deviceId: String? = null): JsonElement = client.call(
@@ -1360,12 +1374,34 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     /**
-     * 我名下的授权卡：授权到期时间与已绑定设备数。
+     * 我名下的授权卡：授权到期时间、已绑定的设备（`current` 标出本机）与剩余的自助解绑次数。
      *
-     * 用卡密登录（`login(method = "cardkey")`）时，这两项已经随登录结果一起下发了；
-     * 这个接口是给「登录之后过了一段时间再看一眼」用的。
+     * 用卡密登录（`login(method = "cardkey")`）时，到期时间与设备数已经随登录结果一起下发了；
+     * 这个接口是给「登录之后过了一段时间再看一眼」与设备管理用的。
      */
-    fun myCardKeys(): JsonElement = client.call("GET", "/card-keys/mine", requireAuth = true)
+    @JvmOverloads
+    fun myCardKeys(deviceId: String? = null): JsonElement = client.call(
+        "GET", "/card-keys/mine",
+        query = if (deviceId.isNullOrBlank()) emptyMap() else mapOf("deviceId" to deviceId),
+        requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /**
+     * 自助解绑授权卡上的一台设备，把名额还回来（换手机、重装系统之后用）。
+     *
+     * 每 30 天能解绑几次由批次决定（`selfUnbindLimit`）：次数用完返回 40979，
+     * 不允许自助解绑返回 40995，设备不在这张卡上返回 40458。
+     */
+    fun unbindMyCardKeyDevice(cardId: Long, deviceId: String): JsonElement = client.call(
+        "DELETE", "/card-keys/mine/$cardId/devices/${encodePathSegment(deviceId)}", requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /** 我的卡密兑换记录（新的在前）。 */
+    @JvmOverloads
+    fun cardKeyRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/card-keys/redemptions", query = pageQuery(page, limit), requireAuth = true)
 
     @Throws(IOException::class)
     /**

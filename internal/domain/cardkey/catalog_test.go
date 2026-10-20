@@ -28,6 +28,10 @@ func TestRewardCatalogIsSelfConsistent(t *testing.T) {
 			if spec.Unit == "" {
 				t.Errorf("%s：整数量档位必须有单位，否则控制台上是一个没有量纲的数字", spec.Type)
 			}
+		case ValueFeature:
+			if spec.Min != 0 || spec.Max <= 0 || spec.Unit == "" {
+				t.Errorf("%s：功能档位需要 0（永久）起的天数范围与单位，当前 %d–%d %q", spec.Type, spec.Min, spec.Max, spec.Unit)
+			}
 		case ValueMoney, ValueRef:
 		default:
 			t.Errorf("%s：未知的取值形态 %q", spec.Type, spec.Value)
@@ -88,6 +92,30 @@ func TestValidateRewards(t *testing.T) {
 			wantErr: "没有选择具体对象",
 		},
 		{
+			name:    "功能解锁没选功能",
+			rewards: []Reward{{Type: RewardFeature, Amount: 7}},
+			wantErr: "没有选择功能",
+		},
+		{
+			name:    "功能标识形状不对",
+			rewards: []Reward{{Type: RewardFeature, Feature: "Music!", Amount: 7}},
+			wantErr: "无效",
+		},
+		{
+			name:    "同一功能配两次",
+			rewards: []Reward{{Type: RewardFeature, Feature: "music", Amount: 7}, {Type: RewardFeature, Feature: "music"}},
+			wantErr: "配置了两次",
+		},
+		{
+			name:    "金额超过两位小数",
+			rewards: []Reward{{Type: RewardBalance, Money: decimal.RequireFromString("1.005")}},
+			wantErr: "两位小数",
+		},
+		{
+			name:    "一张卡解锁两个不同的功能",
+			rewards: []Reward{{Type: RewardFeature, Feature: "music", Amount: 0}, {Type: RewardFeature, Feature: "video", Amount: 30}},
+		},
+		{
 			name: "组合权益",
 			rewards: []Reward{
 				{Type: RewardVipPlan, RefID: 3},
@@ -125,9 +153,12 @@ func TestValidateRewardsRejectsTooMany(t *testing.T) {
 		{Type: RewardBalance, Money: decimal.NewFromInt(1)},
 		{Type: RewardLotteryDraws, Amount: 1},
 		{Type: RewardDeviceSlots, Amount: 1},
+		{Type: RewardLicenseDays, Amount: 1},
+		{Type: RewardFeature, Feature: "music", Amount: 0},
+		{Type: RewardFeature, Feature: "video", Amount: 7},
 	}
 	if err := ValidateRewards(rewards); err == nil {
-		t.Fatalf("七档权益应当超出 MaxRewardsPerCard=%d", MaxRewardsPerCard)
+		t.Fatalf("十档权益应当超出 MaxRewardsPerCard=%d", MaxRewardsPerCard)
 	}
 }
 
@@ -164,6 +195,38 @@ func TestDescribeRewardCoversEveryValueKind(t *testing.T) {
 	for want, reward := range cases {
 		if got := DescribeReward(reward); got != want {
 			t.Errorf("DescribeReward(%s) = %q，期望 %q", reward.Type, got, want)
+		}
+	}
+}
+
+// 功能解锁可以重复出现（不同功能），归一时不能只留第一条。
+func TestNormalizeRewardsKeepsRepeatableFeatures(t *testing.T) {
+	got := NormalizeRewards([]Reward{
+		{Type: RewardIntegral, Amount: 5},
+		{Type: RewardFeature, Feature: " Music ", Amount: 0, RefID: 3},
+		{Type: RewardFeature, Feature: "video", Amount: 7},
+	})
+	if len(got) != 3 {
+		t.Fatalf("期望 3 项，实际 %d：%+v", len(got), got)
+	}
+	if got[0].Type != RewardFeature || got[0].Feature != "music" || got[0].RefID != 0 {
+		t.Fatalf("功能解锁应排在积分之前、标识归一成小写并抹掉 refId：%+v", got[0])
+	}
+	if got[1].Feature != "video" || got[1].Amount != 7 {
+		t.Fatalf("第二个功能丢了：%+v", got[1])
+	}
+}
+
+func TestNormalizeCode(t *testing.T) {
+	cases := map[string]string{
+		"vip a3k9":     "VIP-A3K9",
+		"--VIP__A3K9-": "VIP-A3K9",
+		"VIP-A3K9":     "VIP-A3K9",
+		"12345678":     "12345678",
+	}
+	for input, want := range cases {
+		if got := NormalizeCode(input); got != want {
+			t.Errorf("NormalizeCode(%q) = %q，期望 %q", input, got, want)
 		}
 	}
 }

@@ -428,6 +428,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 卡密即登录凭证：注入后 loginMethods 里的 cardkey 一档才真正可用，
 	// 未注入时该方式直接报「未启用」而不是空指针。
 	authService.SetCardKeyService(cardKeyService)
+	// 输错卡密的计数与锁定和登录防爆破共用同一套 Redis 键空间（kind 前缀 ck-）
+	cardKeyService.SetGuard(loginGuardRepo)
+	cardKeyService.SetNotifier(notificationService)
 	rewardedAdService := service.NewRewardedAdService(log, pg, cfg)
 	// 抽奖：视频抽奖读激励广告场景的剩余次数，看完发的抽奖次数进应用级余额
 	lotteryService := service.NewLotteryService(log, pg, rewardedAdService)

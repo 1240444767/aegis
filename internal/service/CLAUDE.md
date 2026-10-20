@@ -24,7 +24,7 @@
 | `auth_service.go` | `AuthService` | 用户 JWT 认证、Token 刷新、OAuth2 |
 | `auth_sms.go` | — | 短信验证码登录/自动建号 + `MobileOAuthLoginScoped`（叠加应用级开关） |
 | `auth_cardkey.go` | — | 卡密登录：卡即凭证，首次使用按卡面派生账号自动建号并绑卡绑设备 |
-| `cardkey_service.go` | `CardKeyService` | **卡密**：批次生成 / 作废 / 导出 / 兑换 / 设备解绑（见下节） |
+| `cardkey_service.go` | `CardKeyService` | **卡密**：批次生成 / 导入 / 补发 / 提卡 / 修改 / 作废 / 导出 / 统计，预览 / 兑换 / 代兑，设备解绑（含自助），防爆破（见下节） |
 | `auth_protocol_service.go` | `AuthProtocolService` | 接入协议：策略、安全等级、应用密钥签名、Transport v2 |
 | `auth_protocol_selftest.go` | — | 接入自检；同时是三档协议的**参考客户端实现** |
 | `auto_sign_service.go` | `AutoSignService` | 自动签到调度（Redis Sorted Set） |
@@ -933,13 +933,17 @@ vip_transactions.features  开通那一刻的功能留档（套餐被删 / 非�
 - **账号名由卡面派生**（`CardKeyAccount`）。这让首次建号成为**确定性**操作：
   用随机账号名的话，同一张卡的两次并发首登会造出两个账号，其中一个成为孤儿；
   用卡面则第二次撞 `uq_users_appid_account`，服务层据此回读同一个用户。
-- **一码一用有三道保证**，各自防不同的失效模式：行锁（并发串行化）→
-  条件 UPDATE 抢占（`WHERE status='unused'`，与 `FulfillPaymentOrder` 同构）→
-  `uq_card_key_redemptions_card` 唯一约束（兜住前两道被改坏，那种 bug 的表现是重复发钱）。
-- **七档权益在同一个事务里发放**。四档复用既有的事务内助手（`extendUserVipTx` /
-  `applyIntegralChangeTx` / `applyWalletChangeTx`），经验值这次新抽出
-  `applyExperienceChangeTx` —— 它此前**只有**一个自开事务的管理端入口，
-  接不进「要么全发、要么全不发」。
+- **每人恰好一次有四道保证**，各自防不同的失效模式：行锁（并发串行化）→
+  条件 UPDATE 抢占（`WHERE status='unused' AND use_count < max_uses`，与 `FulfillPaymentOrder` 同构）→
+  同一个人的预查（活动码报 40976）→ `uq_card_key_redemptions_card_user` 唯一约束（兜住前几道被改坏，
+  那种 bug 的表现是重复发奖）。活动码（`max_uses > 1`）与一卡一用共用这一条路径。
+- **九档权益在同一个事务里发放**（`grantCardRewardsTx`），复用既有的事务内助手
+  （`extendUserVipTx` / `grantFeatureUnlockTx` / `applyIntegralChangeTx` / `applyExperienceChangeTx` /
+  `applyWalletChangeTx`）。功能已永久拥有、套餐被删等发不出去的情况整笔回滚，卡不会被核销。
+- **预览与兑换同一套判据**：`previewBlocker` 与 `RedeemCardKey` 都走 `pgrepo.CheckCardKeyUsable`，
+  再加已兑换 / 每人限兑 / 领取对象三项；不能用时预览返回 `usable=false` 与同一个错误码。
+- **防爆破只数「卡密不存在」**，按账号与 IP（`ck-user` / `ck-ip`，复用 `LoginGuardRepository`）；
+  卡密登录前没有账号，只按 IP。Redis 故障时放行。
 - **权益目录是单一事实源**（`internal/domain/cardkey/catalog.go`），
   `TestRewardCatalogHasGrantBranch` 双向钉死「目录 ↔ 发放分支」。
 - **缺设备标识时拒绝而不是放行**（40343）：开着的限制因为请求没带标识就放行，

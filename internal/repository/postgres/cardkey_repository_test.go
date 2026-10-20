@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -28,6 +29,8 @@ func TestRewardCatalogHasGrantBranch(t *testing.T) {
 	constNames := map[string]string{
 		cardkeydomain.RewardVipPlan:      "RewardVipPlan",
 		cardkeydomain.RewardVipDays:      "RewardVipDays",
+		cardkeydomain.RewardFeature:      "RewardFeature",
+		cardkeydomain.RewardLicenseDays:  "RewardLicenseDays",
 		cardkeydomain.RewardIntegral:     "RewardIntegral",
 		cardkeydomain.RewardExperience:   "RewardExperience",
 		cardkeydomain.RewardBalance:      "RewardBalance",
@@ -121,11 +124,12 @@ func TestResolveCardExpiryOnlyComputesForFirstUseMode(t *testing.T) {
 	}
 }
 
-// checkCardUsable 的顺序即错误优先级：一张被作废的过期卡应当报「已作废」，
+// CheckCardKeyUsable 的顺序即错误优先级：一张被作废的过期卡应当报「已作废」，
 // 报「已过期」会让客服给出错误的解释（引导续费，而实际上是被主动作废的）。
 func TestCheckCardUsableErrorPriority(t *testing.T) {
 	now := time.Date(2026, 3, 21, 12, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)
+	future := now.Add(time.Hour)
 	activeBatch := &cardkeydomain.Batch{Status: cardkeydomain.BatchActive}
 
 	cases := []struct {
@@ -142,7 +146,7 @@ func TestCheckCardUsableErrorPriority(t *testing.T) {
 		},
 		{
 			name:  "批次停用等同作废",
-			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused},
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 1},
 			batch: &cardkeydomain.Batch{Status: cardkeydomain.BatchDisabled},
 			want:  ErrCardKeyDisabled,
 		},
@@ -154,13 +158,38 @@ func TestCheckCardUsableErrorPriority(t *testing.T) {
 		},
 		{
 			name:  "过期",
-			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, ExpiresAt: &past},
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 1, ExpiresAt: &past},
 			batch: activeBatch,
 			want:  ErrCardKeyExpired,
 		},
 		{
+			name:  "过期优先于未生效",
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 1, ExpiresAt: &past},
+			batch: &cardkeydomain.Batch{Status: cardkeydomain.BatchActive, StartsAt: &future},
+			want:  ErrCardKeyExpired,
+		},
+		{
+			name:  "未到生效时间",
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 1},
+			batch: &cardkeydomain.Batch{Status: cardkeydomain.BatchActive, StartsAt: &future},
+			want:  ErrCardKeyNotStarted,
+		},
+		{
+			// 活动码用满时状态已是 used；就算状态因为别的原因没翻过去，计数也要拦住。
+			name:  "活动码用满",
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 3, UseCount: 3},
+			batch: activeBatch,
+			want:  ErrCardKeyUsed,
+		},
+		{
+			name:  "活动码用了一部分仍可用",
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 3, UseCount: 2},
+			batch: activeBatch,
+			want:  nil,
+		},
+		{
 			name:  "可用",
-			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused},
+			card:  &cardkeydomain.Card{Status: cardkeydomain.StatusUnused, MaxUses: 1},
 			batch: activeBatch,
 			want:  nil,
 		},
@@ -168,8 +197,9 @@ func TestCheckCardUsableErrorPriority(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := checkCardUsable(tc.card, tc.batch, now); got != tc.want {
-				t.Fatalf("checkCardUsable = %v，期望 %v", got, tc.want)
+			got := CheckCardKeyUsable(tc.card, tc.batch, now)
+			if (tc.want == nil) != (got == nil) || (tc.want != nil && !errors.Is(got, tc.want)) {
+				t.Fatalf("CheckCardKeyUsable = %v，期望 %v", got, tc.want)
 			}
 		})
 	}

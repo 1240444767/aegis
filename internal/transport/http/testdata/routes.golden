@@ -8,6 +8,7 @@ DELETE	/api/admin/apps/:appkey/auth-protocol/transport/keys/:keyId	AdminRevokeAp
 DELETE	/api/admin/apps/:appkey/banners	DeleteAdminBanners
 DELETE	/api/admin/apps/:appkey/banners/:bannerId	DeleteAdminBanner
 DELETE	/api/admin/apps/:appkey/card-keys/batches/:batchId	AdminDeleteCardKeyBatch
+DELETE	/api/admin/apps/:appkey/card-keys/codes/:cardId/devices	AdminResetCardKeyDevices
 DELETE	/api/admin/apps/:appkey/card-keys/codes/:cardId/devices/:deviceId	AdminUnbindCardKeyDevice
 DELETE	/api/admin/apps/:appkey/channels/:cid	AdminDeleteVersionChannel
 DELETE	/api/admin/apps/:appkey/channels/:cid/users	AdminRemoveVersionChannelUsers
@@ -103,6 +104,7 @@ DELETE	/api/user/passkey/:credentialId	DeletePasskey
 DELETE	/api/user/profile/avatar	RemoveUserAvatar
 DELETE	/api/user/sessions/:tokenHash	RevokeUserSession
 DELETE	/api/v1/apps/:appkey/auth/oauth/bindings/:provider	UnbindMyOAuthProvider
+DELETE	/api/v1/apps/:appkey/card-keys/mine/:cardId/devices/:deviceId	AppUnbindMyCardKeyDevice
 DELETE	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppDeleteCloudItem
 DELETE	/api/v1/apps/:appkey/me/avatar	RemoveUserAvatar
 DELETE	/api/v1/apps/:appkey/me/oauth2/grants/:clientId	AppRevokeMyOAuth2Grant
@@ -144,11 +146,14 @@ GET	/api/admin/apps/:appkey/banners	AdminBanners
 GET	/api/admin/apps/:appkey/banners/export	ExportAdminBanners
 GET	/api/admin/apps/:appkey/captcha-config	AdminGetCaptchaConfig
 GET	/api/admin/apps/:appkey/card-keys/batches	AdminListCardKeyBatches
+GET	/api/admin/apps/:appkey/card-keys/batches/:batchId	AdminGetCardKeyBatch
 GET	/api/admin/apps/:appkey/card-keys/batches/:batchId/export	AdminExportCardKeyBatch
 GET	/api/admin/apps/:appkey/card-keys/catalog	AdminCardKeyCatalog
 GET	/api/admin/apps/:appkey/card-keys/codes	AdminListCardKeys
+GET	/api/admin/apps/:appkey/card-keys/codes/:cardId	AdminGetCardKey
 GET	/api/admin/apps/:appkey/card-keys/codes/:cardId/devices	AdminListCardKeyDevices
 GET	/api/admin/apps/:appkey/card-keys/redemptions	AdminListCardKeyRedemptions
+GET	/api/admin/apps/:appkey/card-keys/stats	AdminCardKeyStats
 GET	/api/admin/apps/:appkey/channels	AdminListVersionChannels
 GET	/api/admin/apps/:appkey/channels/:cid	AdminGetVersionChannel
 GET	/api/admin/apps/:appkey/channels/:cid/users	AdminListVersionChannelUsers
@@ -561,6 +566,7 @@ GET	/api/v1/apps/:appkey/auth/oauth/bindings	ListMyOAuthBindings
 GET	/api/v1/apps/:appkey/auth/oauth/callback	AppOAuthCallback
 GET	/api/v1/apps/:appkey/banners	AppBanners
 GET	/api/v1/apps/:appkey/card-keys/mine	AppMyCardKeys
+GET	/api/v1/apps/:appkey/card-keys/redemptions	AppMyCardKeyRedemptions
 GET	/api/v1/apps/:appkey/client-control/watch	AppClientControlWatch
 GET	/api/v1/apps/:appkey/cloud	AppCloudStatus
 GET	/api/v1/apps/:appkey/cloud/items	AppCloudItems
@@ -753,8 +759,13 @@ POST	/api/admin/apps/:appkey/banners/image	UploadAdminBannerImage
 POST	/api/admin/apps/:appkey/captcha-config/preview	AdminPreviewDynamicCaptcha
 POST	/api/admin/apps/:appkey/captcha-config/test-sms	AdminTestSMS
 POST	/api/admin/apps/:appkey/card-keys/batches	AdminGenerateCardKeys
+POST	/api/admin/apps/:appkey/card-keys/batches/:batchId/append	AdminAppendCardKeys
+POST	/api/admin/apps/:appkey/card-keys/batches/:batchId/extract	AdminExtractCardKeys
+POST	/api/admin/apps/:appkey/card-keys/codes/delete	AdminDeleteCardKeys
 POST	/api/admin/apps/:appkey/card-keys/codes/disable	AdminDisableCardKeys
+POST	/api/admin/apps/:appkey/card-keys/codes/distribute	AdminDistributeCardKeys
 POST	/api/admin/apps/:appkey/card-keys/codes/restore	AdminRestoreCardKeys
+POST	/api/admin/apps/:appkey/card-keys/redeem	AdminRedeemCardKey
 POST	/api/admin/apps/:appkey/channels	AdminCreateVersionChannel
 POST	/api/admin/apps/:appkey/channels/:cid/users	AdminAddVersionChannelUsers
 POST	/api/admin/apps/:appkey/client-control/keys/:kind/rotate	AdminRotateClientControlKey
@@ -1167,6 +1178,7 @@ POST	/api/v1/apps/:appkey/auth/register	AppRegister
 POST	/api/v1/apps/:appkey/auth/sms/code	AppSMSCode
 POST	/api/v1/apps/:appkey/banners/:bannerId/click	AppBannerClick
 POST	/api/v1/apps/:appkey/captcha	AppCaptcha
+POST	/api/v1/apps/:appkey/card-keys/preview	AppPreviewCardKey
 POST	/api/v1/apps/:appkey/card-keys/redeem	AppRedeemCardKey
 POST	/api/v1/apps/:appkey/client-control/check	AppClientControlCheck
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/link	AppCloudItemLink
@@ -1241,7 +1253,9 @@ PUT	/api/admin/apps/:appkey/auto-sign	UpdateAdminAppAutoSign
 PUT	/api/admin/apps/:appkey/banners/:bannerId	UpdateAdminBanner
 PUT	/api/admin/apps/:appkey/banners/order	ReorderAdminBanners
 PUT	/api/admin/apps/:appkey/captcha-config	AdminUpdateCaptchaConfig
+PUT	/api/admin/apps/:appkey/card-keys/batches/:batchId	AdminUpdateCardKeyBatch
 PUT	/api/admin/apps/:appkey/card-keys/batches/:batchId/status	AdminSetCardKeyBatchStatus
+PUT	/api/admin/apps/:appkey/card-keys/codes/:cardId	AdminUpdateCardKey
 PUT	/api/admin/apps/:appkey/channels/:cid	AdminUpdateVersionChannel
 PUT	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminUpdateClientControlRule
 PUT	/api/admin/apps/:appkey/client-control/settings	AdminUpdateClientControlSettings

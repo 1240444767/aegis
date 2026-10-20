@@ -251,10 +251,25 @@ data class AegisSession(
      * `cancelled` 为 true 表示这次登录撤销了冷静期（应用配置为登录即撤销）。
      */
     val accountDeletion: AccountDeletionLoginNotice? = null,
+    /**
+     * 卡密登录（`method = "cardkey"`）才有：这张授权卡的到期时间（永久为空）、可绑设备数、已绑设备数，
+     * 以及这次是不是首次激活（首次才发随卡权益）。
+     */
+    val authorization: CardKeyAuthorization? = null,
 ) {
     /** 拿到可用令牌才算登录完成。 */
     val isAuthenticated: Boolean get() = accessToken.isNotEmpty()
 }
+
+/** 授权卡登录时随会话下发的授权快照。 */
+@Serializable
+data class CardKeyAuthorization(
+    val code: String = "",
+    val expiresAt: String? = null,
+    val maxDevices: Int = 0,
+    val deviceCount: Int = 0,
+    val firstActivation: Boolean = false,
+)
 
 /**
  * 待关联的第三方身份。[ticket] 一次性、10 分钟有效；[nickname] / [avatar] 只用于展示。

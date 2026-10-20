@@ -77,10 +77,16 @@ var gatewayOperations = []authprotocol.Operation{
 	//
 	// 授权卡登录不在这里：它是 /auth/login 的一档 method（cardkey），
 	// 加登录方式不加路由，客户端也就不需要认识第二条登录入口。
+	{Key: "cardKeyPreview", Method: "POST", Path: "/card-keys/preview", Auth: true,
+		Summary: "兑换前预览：这张卡会发什么、现在能不能用（不能用时 usable=false 并给出 reasonCode）"},
 	{Key: "cardKeyRedeem", Method: "POST", Path: "/card-keys/redeem", Auth: true,
-		Summary: "兑换卡密（会员 / 积分 / 经验 / 余额 / 抽奖次数 / 设备位）"},
+		Summary: "兑换卡密（会员 / 功能解锁 / 积分 / 经验 / 余额 / 抽奖次数 / 授权时长 / 设备位）"},
 	{Key: "cardKeyMine", Method: "GET", Path: "/card-keys/mine", Auth: true,
-		Summary: "我名下的授权卡：授权到期时间与已绑定设备数"},
+		Summary: "我名下的授权卡：授权到期时间、已绑定的设备与剩余的自助解绑次数"},
+	{Key: "cardKeyUnbindDevice", Method: "DELETE", Path: "/card-keys/mine/{cardId}/devices/{deviceId}", Auth: true,
+		Summary: "自助解绑授权卡上的一台设备（每 30 天次数由批次决定）"},
+	{Key: "cardKeyRedemptions", Method: "GET", Path: "/card-keys/redemptions", Auth: true,
+		Summary: "我的卡密兑换记录（分页）"},
 
 	// ── 激励广告 ──
 	//
@@ -425,8 +431,30 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: 40345, Name: "CARD_KEY_KIND_MISMATCH", Message: "卡密类型不符",
 		Recovery: authprotocol.RecoveryNone, Hint: "授权卡走 /auth/login 的 cardkey 方式，兑换卡走 /card-keys/redeem"},
-	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可加设备位的授权卡",
+	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可用的授权卡",
+		Recovery: authprotocol.RecoveryNone, Hint: "「设备位」「授权时长」两档权益要加在授权卡上；先用授权卡登录或绑定一张"},
+	{Code: errCodeCardKeyNotStarted, Name: "CARD_KEY_NOT_STARTED", Message: "该卡密还没到生效时间",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次设置了生效时间，message 里带具体时刻"},
+	{Code: errCodeCardKeyAlreadyRedeemed, Name: "CARD_KEY_ALREADY_REDEEMED", Message: "你已经兑换过这个卡密",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动码每人只能用一次"},
+	{Code: errCodeCardKeyUserLimit, Name: "CARD_KEY_USER_LIMIT", Message: "这一批卡的兑换张数已达上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次设置了每人限兑张数"},
+	{Code: errCodeCardKeyAudience, Name: "CARD_KEY_AUDIENCE", Message: "不在这张卡的领取对象里",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次限定了仅会员或仅非会员，message 里说明是哪一种"},
+	{Code: errCodeCardKeyUnbindLimit, Name: "CARD_KEY_UNBIND_LIMIT", Message: "自助解绑次数已用完",
+		Recovery: authprotocol.RecoveryNone, Hint: "按 30 天滚动窗口计；/card-keys/mine 的 selfUnbindRemaining 是剩余次数"},
+	{Code: errCodeCardKeyUnbindDisabled, Name: "CARD_KEY_UNBIND_DISABLED", Message: "这张卡不支持自助解绑",
+		Recovery: authprotocol.RecoveryNone, Hint: "selfUnbindLimit 为 0；引导联系客服在控制台解绑"},
+	{Code: errCodeCardKeyLicensePermanent, Name: "CARD_KEY_LICENSE_PERMANENT", Message: "授权卡已是永久授权",
+		Recovery: authprotocol.RecoveryNone, Hint: "续费卡（授权时长）不必兑换，可以留给别人"},
+	{Code: errCodeCardKeyRewardOwned, Name: "CARD_KEY_REWARD_OWNED", Message: "已永久拥有这张卡要解锁的功能",
 		Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeCardKeyRewardUnavailable, Name: "CARD_KEY_REWARD_UNAVAILABLE", Message: "这张卡的权益已下架",
+		Recovery: authprotocol.RecoveryNone, Hint: "引用的会员套餐被删除或功能被停用，引导联系客服"},
+	{Code: errCodeCardKeyDeviceMissing, Name: "CARD_KEY_DEVICE_NOT_BOUND", Message: "这台设备没有绑定在该卡上",
+		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /card-keys/mine"},
+	{Code: errCodeCardKeyTooManyAttempts, Name: "CARD_KEY_TOO_MANY_ATTEMPTS", Message: "输错卡密的次数过多",
+		Recovery: authprotocol.RecoveryNone, Hint: "只数「卡密不存在」；按账号与 IP 计，锁定 15 分钟，message 里带剩余分钟数"},
 	// ── 自动签到 ──
 	// 与 /me/auto-sign 的 reason 一一对应：状态里说「为什么不能开」，开启时报同一句话。
 	{Code: errCodeAutoSignDisabled, Name: "AUTO_SIGN_DISABLED", Message: "自动签到暂未开放",

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"time"
 
@@ -19,16 +20,41 @@ import (
 // 两条链路共用同一个发放函数与同一张核销流水表：授权卡首次激活时随带的权益，
 // 与兑换卡被兑换时发的权益，在账本上应当长得一模一样。
 
-// RedeemCardKey 核销一张卡（单事务，恰好一次）。
+// ErrCardKeyRewardOwned 这张卡要解锁的功能领取人已经永久拥有。
+var ErrCardKeyRewardOwned = errors.New("card key reward already owned")
+
+// CardKeyRewardOwnedError 带上已拥有的功能名，让用户知道是哪一项。
+type CardKeyRewardOwnedError struct{ Feature string }
+
+func (e *CardKeyRewardOwnedError) Error() string { return "card key reward owned: " + e.Feature }
+func (e *CardKeyRewardOwnedError) Is(target error) bool {
+	return target == ErrCardKeyRewardOwned
+}
+
+// RedeemCardKey 核销一张卡（单事务，每人恰好一次）。
 //
-// 幂等核心与 FulfillPaymentOrder 同构：先锁卡行，再用**条件 UPDATE 抢占**核销权
-// （`status = 'unused'`），抢不到说明已被别人核销或状态不对，直接返回相应错误；
-// 抢到后在同一事务内完成全部发放，任何一步失败整体回滚（核销权也随之释放）。
+// 幂等核心与 FulfillPaymentOrder 同构：先锁卡行，再用**条件 UPDATE 抢占**一次使用权
+// （`status = 'unused' AND use_count < max_uses`），抢不到说明已被用完或状态不对；
+// 抢到后在同一事务内完成全部发放，任何一步失败整体回滚（使用权也随之释放）。
 //
-// 三道保证叠在一起：行锁（并发串行化）、条件 UPDATE（状态机唯一跃迁）、
-// 以及 card_key_redemptions 上的唯一约束（兜住前两道被改坏的情况，
-// 那种 bug 的表现是重复发钱）。
+// 四道保证叠在一起：行锁（并发串行化）、条件 UPDATE（用量不会超过上限）、
+// 同一个人的预查（活动码说清楚「你已经兑换过」），以及 card_key_redemptions 上
+// (card_key_id, user_id) 的唯一约束（兜住前几道被改坏的情况，那种 bug 的表现是重复发奖）。
 func (r *Repository) RedeemCardKey(ctx context.Context, input cardkeydomain.RedeemInput) (*cardkeydomain.RedeemResult, error) {
+	// 领取对象的判定要读会员事实，那一套查询走连接池；放在事务之前读，
+	// 窗口内会员状态恰好翻转的竞态与「兑换那一刻是不是会员」本身的模糊程度相当，不值得为它锁表。
+	preCard, err := r.FindCardKeyByCode(ctx, input.AppID, input.Code)
+	if err != nil {
+		return nil, err
+	}
+	preBatch, err := r.getCardKeyBatchRow(ctx, preCard.BatchID)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.checkCardKeyAudience(ctx, preBatch, input.AppID, input.UserID); err != nil {
+		return nil, err
+	}
+
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, err
@@ -53,27 +79,55 @@ func (r *Repository) RedeemCardKey(ctx context.Context, input cardkeydomain.Rede
 	}
 
 	now := time.Now().UTC()
-	if err := checkCardUsable(card, batch, now); err != nil {
+	if err := CheckCardKeyUsable(card, batch, now); err != nil {
 		return nil, err
 	}
 
+	var already bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM card_key_redemptions WHERE card_key_id = $1 AND user_id = $2)`,
+		card.ID, input.UserID).Scan(&already); err != nil {
+		return nil, err
+	}
+	if already {
+		return nil, ErrCardKeyAlreadyRedeemed
+	}
+
+	if batch.PerUserLimit > 0 {
+		// 同一个人同一批的兑换串行化：不加锁的话，他并发兑两张卡时会双双数到「还差一张」。
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`,
+			"cardkey:"+strconv.FormatInt(batch.ID, 10)+":"+strconv.FormatInt(input.UserID, 10)); err != nil {
+			return nil, err
+		}
+		var count int
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM card_key_redemptions WHERE batch_id = $1 AND user_id = $2`,
+			batch.ID, input.UserID).Scan(&count); err != nil {
+			return nil, err
+		}
+		if count >= batch.PerUserLimit {
+			return nil, &CardKeyUserLimitError{Limit: batch.PerUserLimit}
+		}
+	}
+
 	// 授权卡与兑换卡的终态不同：前者变成「已激活」（在授权期内可反复登录），
-	// 后者变成「已核销」（终态）。放同一条 UPDATE 里是因为抢占必须是一次原子跃迁。
-	nextStatus := cardkeydomain.StatusUsed
+	// 后者在用满之后变成「已核销」。放同一条 UPDATE 里是因为抢占必须是一次原子跃迁。
 	var expiresAt *time.Time
 	if card.Kind == cardkeydomain.KindLogin {
-		nextStatus = cardkeydomain.StatusActive
 		expiresAt = resolveCardExpiry(batch, now)
 	}
 
 	var claimed int64
 	err = tx.QueryRow(ctx, `UPDATE card_keys
-SET status = $3, bound_user_id = $4, activated_at = $5, used_at = $5,
-    expires_at = COALESCE($6, expires_at), updated_at = NOW()
-WHERE id = $1 AND appid = $2 AND status = 'unused'
-RETURNING id`, card.ID, input.AppID, nextStatus, input.UserID, now, expiresAt).Scan(&claimed)
+SET use_count = use_count + 1,
+    status = CASE WHEN kind = 'login' THEN 'active'
+                  WHEN use_count + 1 >= max_uses THEN 'used'
+                  ELSE 'unused' END,
+    bound_user_id = CASE WHEN kind = 'login' OR max_uses = 1 THEN $3 ELSE bound_user_id END,
+    activated_at = COALESCE(activated_at, $4), used_at = $4,
+    expires_at = COALESCE($5, expires_at), updated_at = NOW()
+WHERE id = $1 AND appid = $2 AND status = 'unused' AND use_count < max_uses
+RETURNING id`, card.ID, input.AppID, input.UserID, now, expiresAt).Scan(&claimed)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			// 行锁已经握在手里，走到这里只可能是状态在锁之前就不是 unused。
 			return nil, ErrCardKeyUsed
 		}
@@ -94,17 +148,54 @@ RETURNING id`, card.ID, input.AppID, nextStatus, input.UserID, now, expiresAt).S
 	}
 	tx = nil
 
-	// 重新读一次到期时间：固定到期模式下它在生成时就写死了，上面的 COALESCE 没有覆盖它。
+	// 固定到期模式下到期时间在生成时就写死了，上面的 COALESCE 没有覆盖它。
 	final := expiresAt
 	if final == nil {
 		final = card.ExpiresAt
 	}
+	if card.Kind != cardkeydomain.KindLogin {
+		final = nil
+	}
 	return &cardkeydomain.RedeemResult{
-		Code:      card.Code,
-		Kind:      card.Kind,
-		Results:   results,
-		ExpiresAt: final,
+		Code:       card.Code,
+		Kind:       card.Kind,
+		BatchName:  batch.Name,
+		Results:    results,
+		ExpiresAt:  final,
+		RedeemedAt: now,
 	}, nil
+}
+
+func (r *Repository) getCardKeyBatchRow(ctx context.Context, batchID int64) (*cardkeydomain.Batch, error) {
+	return scanCardKeyBatch(r.pool.QueryRow(ctx,
+		`SELECT `+cardKeyBatchColumns+` FROM card_key_batches WHERE id = $1`, batchID))
+}
+
+// GetCardKeyBatchByID 按批次主键取批次（不校验应用，调用方已经从卡上拿到了 batch_id）。
+func (r *Repository) GetCardKeyBatchByID(ctx context.Context, batchID int64) (*cardkeydomain.Batch, error) {
+	return r.getCardKeyBatchRow(ctx, batchID)
+}
+
+// checkCardKeyAudience 领取对象：仅会员 / 仅非会员。
+func (r *Repository) checkCardKeyAudience(ctx context.Context, batch *cardkeydomain.Batch, appID int64, userID int64) error {
+	if batch.Audience == "" || batch.Audience == cardkeydomain.AudienceAll {
+		return nil
+	}
+	facts, err := r.GetVipEntitlementFacts(ctx, appID, userID)
+	if err != nil {
+		return err
+	}
+	isVip := vipdomain.Evaluate(*facts, time.Now()).IsVIP
+	if (batch.Audience == cardkeydomain.AudienceVip && !isVip) ||
+		(batch.Audience == cardkeydomain.AudienceNonVip && isVip) {
+		return &CardKeyAudienceError{Audience: batch.Audience}
+	}
+	return nil
+}
+
+// CheckCardKeyAudience 预览用：判这个人在不在领取对象里。
+func (r *Repository) CheckCardKeyAudience(ctx context.Context, batch *cardkeydomain.Batch, appID int64, userID int64) error {
+	return r.checkCardKeyAudience(ctx, batch, appID, userID)
 }
 
 // ActivateLoginCard 授权卡登录：首次激活建立绑定并发权益，之后每次登录只续设备。
@@ -148,14 +239,22 @@ func (r *Repository) ActivateLoginCard(ctx context.Context, input cardkeydomain.
 	}
 
 	firstActivation := card.Status == cardkeydomain.StatusUnused
+	if firstActivation && batch.StartsAt != nil && batch.StartsAt.After(now) {
+		return nil, &CardKeyNotStartedError{StartsAt: *batch.StartsAt}
+	}
 	if !firstActivation && card.Expired(now) {
 		return nil, ErrCardKeyExpired
 	}
 
 	if firstActivation {
+		// 固定到期模式的卡在生成时就带着到期时间，这里要在激活之前判一次：
+		// 一张已经过了统一到期日的卡，不该因为「从没被用过」而被激活。
+		if card.Expired(now) {
+			return nil, ErrCardKeyExpired
+		}
 		expiresAt := resolveCardExpiry(batch, now)
 		if _, err := tx.Exec(ctx, `UPDATE card_keys
-SET status = 'active', bound_user_id = $3, activated_at = $4,
+SET status = 'active', bound_user_id = $3, activated_at = $4, used_at = $4, use_count = 1,
     expires_at = COALESCE($5, expires_at), updated_at = NOW()
 WHERE id = $1 AND appid = $2`, card.ID, input.AppID, input.UserID, now, expiresAt); err != nil {
 			return nil, err
@@ -163,11 +262,8 @@ WHERE id = $1 AND appid = $2`, card.ID, input.AppID, input.UserID, now, expiresA
 		if expiresAt != nil {
 			card.ExpiresAt = expiresAt
 		}
-		// 固定到期模式的卡在生成时就带着到期时间，这里要在激活的当下再判一次：
-		// 一张已经过了统一到期日的卡，不该因为「从没被用过」而被激活。
-		if card.Expired(now) {
-			return nil, ErrCardKeyExpired
-		}
+		card.Status = cardkeydomain.StatusActive
+		card.BoundUserID = &input.UserID
 	}
 
 	deviceCount, err := bindCardDeviceTx(ctx, tx, card, input.DeviceID, input.DeviceName)
@@ -208,18 +304,23 @@ WHERE id = $1 AND appid = $2`, card.ID, input.AppID, input.UserID, now, expiresA
 	}, nil
 }
 
-// checkCardUsable 兑换前的可用性判定。顺序即错误优先级：
-// 先说「这张卡被作废了」，再说「已经用过了」，最后才说「过期了」——
+// CheckCardKeyUsable 兑换前的可用性判定。顺序即错误优先级：
+// 先说「这张卡被作废了」，再说「已经用过了」，然后「过期了」，最后「还没到生效时间」——
 // 反过来会让一张被作废的卡报「已过期」，客服据此给出的解释是错的。
-func checkCardUsable(card *cardkeydomain.Card, batch *cardkeydomain.Batch, now time.Time) error {
+//
+// 导出给服务层的预览用：预览与兑换必须给出同一个结论。
+func CheckCardKeyUsable(card *cardkeydomain.Card, batch *cardkeydomain.Batch, now time.Time) error {
 	if card.Status == cardkeydomain.StatusDisabled || batch.Status != cardkeydomain.BatchActive {
 		return ErrCardKeyDisabled
 	}
-	if card.Status != cardkeydomain.StatusUnused {
+	if card.Status != cardkeydomain.StatusUnused || card.UseCount >= card.MaxUses {
 		return ErrCardKeyUsed
 	}
 	if card.Expired(now) {
 		return ErrCardKeyExpired
+	}
+	if batch.StartsAt != nil && batch.StartsAt.After(now) {
+		return &CardKeyNotStartedError{StartsAt: *batch.StartsAt}
 	}
 	return nil
 }
@@ -252,7 +353,7 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (card_key_id, device_id) DO UPDATE
 SET last_seen_at = NOW(), seen_count = card_key_devices.seen_count + 1,
     device_name = COALESCE(NULLIF(EXCLUDED.device_name, ''), card_key_devices.device_name)`,
-		card.ID, card.AppID, deviceID, deviceName); err != nil {
+		card.ID, card.AppID, deviceID, truncateColumn(deviceName, 128)); err != nil {
 		return 0, err
 	}
 
@@ -267,7 +368,7 @@ SET last_seen_at = NOW(), seen_count = card_key_devices.seen_count + 1,
 	return count, nil
 }
 
-// insertCardRedemptionTx 写核销流水。唯一约束在这里兜底「一卡一次」。
+// insertCardRedemptionTx 写核销流水。唯一约束在这里兜底「一码一人一次」。
 func insertCardRedemptionTx(ctx context.Context, tx pgx.Tx, card *cardkeydomain.Card,
 	batch *cardkeydomain.Batch, input cardkeydomain.RedeemInput, results []cardkeydomain.RewardResult) error {
 	rewards, _ := json.Marshal(batch.Rewards)
@@ -296,6 +397,9 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 	rewards []cardkeydomain.Reward, card *cardkeydomain.Card) ([]cardkeydomain.RewardResult, error) {
 	out := make([]cardkeydomain.RewardResult, 0, len(rewards))
 	source := "卡密 " + card.Code
+	meta := map[string]any{"cardKey": card.Code, "cardKeyId": card.ID}
+	// 活动码被很多人用，流水的幂等键与引用要落到「这个人这一次」上，而不是只落到卡上。
+	useRef := "cardkey:" + strconv.FormatInt(appID, 10) + ":" + card.Code + ":" + strconv.FormatInt(userID, 10)
 
 	for _, reward := range cardkeydomain.NormalizeRewards(rewards) {
 		spec, _ := cardkeydomain.FindRewardSpec(reward.Type)
@@ -306,7 +410,13 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 			plan, err := scanVipPlan(tx.QueryRow(ctx,
 				`SELECT `+vipPlanColumns+` FROM vip_plans WHERE appid = $1 AND id = $2`, appID, reward.RefID))
 			if err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil, ErrCardKeyRewardMissing
+				}
 				return nil, err
+			}
+			if plan == nil {
+				return nil, ErrCardKeyRewardMissing
 			}
 			planID := plan.ID
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
@@ -320,7 +430,7 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 				PayChannel:    vipdomain.ChannelCardKey,
 				PayAmount:     decimal.Zero,
 				BonusIntegral: plan.BonusIntegral,
-				Metadata:      map[string]any{"cardKey": card.Code, "cardKeyId": card.ID},
+				Metadata:      meta,
 			})
 			if err != nil {
 				return nil, err
@@ -336,34 +446,67 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 				DurationDays: int(reward.Amount),
 				PayChannel:   vipdomain.ChannelCardKey,
 				PayAmount:    decimal.Zero,
-				Metadata:     map[string]any{"cardKey": card.Code, "cardKeyId": card.ID},
+				Metadata:     meta,
 			})
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward)
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 天"
 			result.TransactionNo = txn.TransactionNo
+
+		case cardkeydomain.RewardFeature:
+			var name string
+			var active bool
+			if err := tx.QueryRow(ctx, `SELECT name, is_active FROM vip_features WHERE appid = $1 AND tag = $2`,
+				appID, reward.Feature).Scan(&name, &active); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return nil, ErrCardKeyRewardMissing
+				}
+				return nil, err
+			}
+			if !active {
+				return nil, ErrCardKeyRewardMissing
+			}
+			unlock, err := grantFeatureUnlockTx(ctx, tx, FeatureUnlockGrant{
+				AppID:     appID,
+				UserID:    userID,
+				Tag:       reward.Feature,
+				Days:      int(reward.Amount),
+				Source:    vipdomain.UnlockSourceCardKey,
+				SourceRef: card.Code,
+			})
+			if errors.Is(err, ErrFeatureUnlockOwned) {
+				return nil, &CardKeyRewardOwnedError{Feature: name}
+			}
+			if err != nil {
+				return nil, err
+			}
+			if reward.Amount == 0 {
+				result.Detail = name + " 永久"
+			} else {
+				result.Detail = name + " " + strconv.FormatInt(reward.Amount, 10) + " 天"
+			}
+			result.ExpireAt = unlock.EndsAt
+			result.TransactionNo = strconv.FormatInt(unlock.ID, 10)
 
 		case cardkeydomain.RewardIntegral:
 			cardID := card.ID
 			_, after, txnNo, err := applyIntegralChangeTx(ctx, tx, userID, appID, reward.Amount,
-				"earn", "card_key", "卡密赠送积分", source, "card_key", &cardID,
-				map[string]any{"cardKey": card.Code})
+				"earn", "card_key", "卡密赠送积分", source, "card_key", &cardID, meta)
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward) + "（余额 " + strconv.FormatInt(after, 10) + "）"
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 分（余额 " + strconv.FormatInt(after, 10) + "）"
 			result.TransactionNo = txnNo
 
 		case cardkeydomain.RewardExperience:
 			cardID := card.ID
 			expResult, err := r.applyExperienceChangeTx(ctx, tx, userID, appID, reward.Amount,
-				"card_key", "卡密赠送经验", source, "card_key", &cardID,
-				map[string]any{"cardKey": card.Code})
+				"card_key", "卡密赠送经验", source, "card_key", &cardID, meta)
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward)
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 点"
 			if expResult.LevelChanged {
 				result.Detail += "（升至 Lv." + strconv.Itoa(expResult.NewLevel) + "）"
 			}
@@ -377,14 +520,14 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 				Amount:   reward.Money,
 				Title:    "卡密充值",
 				Remark:   source,
-				Metadata: map[string]any{"cardKey": card.Code, "cardKeyId": card.ID},
-				// 幂等键用卡号：一张卡天生只该入账一次，这是最贴切的幂等键。
-				IdempotencyKey: "cardkey:" + strconv.FormatInt(appID, 10) + ":" + card.Code,
+				Metadata: meta,
+				// 幂等键落到「这个人用这张卡」：一卡一用时等同于卡号，活动码时每个人各入账一次。
+				IdempotencyKey: walletCardKeyIdempotency(appID, card, userID, useRef),
 			})
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward)
+			result.Detail = reward.Money.StringFixed(2)
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case cardkeydomain.RewardLotteryDraws:
@@ -392,14 +535,23 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward) + "（剩余 " + strconv.FormatInt(balance, 10) + " 次）"
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 次（剩余 " + strconv.FormatInt(balance, 10) + " 次）"
+
+		case cardkeydomain.RewardLicenseDays:
+			expiresAt, err := extendLoginLicenseTx(ctx, tx, appID, userID, int(reward.Amount))
+			if err != nil {
+				return nil, err
+			}
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 天（授权至 " +
+				expiresAt.In(time.Local).Format("2006-01-02") + "）"
+			result.ExpireAt = &expiresAt
 
 		case cardkeydomain.RewardDeviceSlots:
 			total, err := addDeviceSlotsTx(ctx, tx, appID, userID, int(reward.Amount))
 			if err != nil {
 				return nil, err
 			}
-			result.Detail = cardkeydomain.DescribeReward(reward) + "（上限 " + strconv.Itoa(total) + " 台）"
+			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 台（上限 " + strconv.Itoa(total) + " 台）"
 
 		default:
 			// 目录里有、这里没有 —— 由测试挡在合并之前，运行期走到这里说明测试被绕过了。
@@ -409,6 +561,56 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 		out = append(out, result)
 	}
 	return out, nil
+}
+
+// walletCardKeyIdempotency 钱包入账的幂等键。
+//
+// 一卡一用的卡沿用旧键（`cardkey:{app}:{code}`）：老数据里已经用这个键入过账，
+// 换键会让「重放一笔老核销」绕过幂等。活动码按人区分。
+func walletCardKeyIdempotency(appID int64, card *cardkeydomain.Card, userID int64, useRef string) string {
+	if card.MaxUses <= 1 {
+		return "cardkey:" + strconv.FormatInt(appID, 10) + ":" + card.Code
+	}
+	return useRef
+}
+
+// extendLoginLicenseTx 续费卡：给用户名下的授权卡延长授权期。
+//
+// 挑哪一张：仍在授权期内、到期最晚的限时卡；没有的话挑最近过期的那张（续费卡的常见用法
+// 就是「过期了再买一张续上」）。新的到期时间从「原到期时间与现在两者较晚的那个」起算。
+// 名下只有永久卡时拒发：给永久授权「加 30 天」没有意义，静默成功会让用户以为买到了东西。
+func extendLoginLicenseTx(ctx context.Context, tx pgx.Tx, appID int64, userID int64, days int) (time.Time, error) {
+	var cardID int64
+	var expiresAt *time.Time
+	err := tx.QueryRow(ctx, `SELECT id, expires_at FROM card_keys
+WHERE appid = $1 AND bound_user_id = $2 AND kind = 'login' AND status = 'active' AND expires_at IS NOT NULL
+ORDER BY (expires_at > NOW()) DESC, expires_at DESC, id DESC
+LIMIT 1 FOR UPDATE`, appID, userID).Scan(&cardID, &expiresAt)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, err
+		}
+		var permanent bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM card_keys
+WHERE appid = $1 AND bound_user_id = $2 AND kind = 'login' AND status = 'active' AND expires_at IS NULL)`,
+			appID, userID).Scan(&permanent); err != nil {
+			return time.Time{}, err
+		}
+		if permanent {
+			return time.Time{}, ErrCardKeyLicensePermanent
+		}
+		return time.Time{}, ErrCardKeyNoLoginCard
+	}
+	base := time.Now().UTC()
+	if expiresAt != nil && expiresAt.After(base) {
+		base = expiresAt.UTC()
+	}
+	next := base.AddDate(0, 0, days)
+	if _, err := tx.Exec(ctx, `UPDATE card_keys SET expires_at = $2, updated_at = NOW() WHERE id = $1`,
+		cardID, next); err != nil {
+		return time.Time{}, err
+	}
+	return next, nil
 }
 
 // addDeviceSlotsTx 给用户名下**授权期最长**的那张授权卡加设备位。
@@ -424,7 +626,7 @@ WHERE appid = $1 AND bound_user_id = $2 AND kind = 'login' AND status = 'active'
 ORDER BY (expires_at IS NULL) DESC, expires_at DESC, id DESC
 LIMIT 1 FOR UPDATE`, appID, userID).Scan(&cardID)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return 0, ErrCardKeyNoLoginCard
 		}
 		return 0, err
@@ -432,7 +634,7 @@ LIMIT 1 FOR UPDATE`, appID, userID).Scan(&cardID)
 
 	var total int
 	// 上限 64 与建表时的 CHECK 一致：撞上 CHECK 会让整个核销事务回滚，
-	// 而用户看到的是「兑换失败」，卡却已经作废。夹取比报错合适。
+	// 而用户看到的是「兑换失败」，卡却没有任何变化。夹取比报错合适。
 	if err := tx.QueryRow(ctx, `UPDATE card_keys
 SET max_devices = LEAST(max_devices + $2, 64), updated_at = NOW()
 WHERE id = $1 RETURNING max_devices`, cardID, slots).Scan(&total); err != nil {

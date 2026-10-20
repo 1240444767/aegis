@@ -26,6 +26,7 @@ const (
 	UnlockSourceInvite      = "invite"       // 邀请奖励
 	UnlockSourceLeaderboard = "leaderboard"  // 排行榜奖励
 	UnlockSourceLottery     = "lottery"      // 抽奖奖品
+	UnlockSourceCardKey     = "card_key"     // 卡密兑换
 )
 
 // FeatureUnlock 一条功能解锁记录（账本行）。

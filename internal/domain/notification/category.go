@@ -53,6 +53,7 @@ const (
 	TypeInvite          = "invite"
 	TypeLeaderboard     = "leaderboard"
 	TypeLottery         = "lottery"
+	TypeCardKey         = "cardkey"
 	TypeTicket          = "ticket"
 )
 
@@ -226,6 +227,7 @@ const (
 	RoutePointsStore = "points_store"
 	RouteLeaderboard = "leaderboard"
 	RouteLottery     = "lottery"
+	RouteCardKeys    = "card_keys"
 	RouteSignIn      = "signin"
 	RouteMembership  = "membership"
 	RouteWallet      = "wallet"
@@ -240,6 +242,7 @@ var routes = []RouteSpec{
 	{Key: RoutePointsStore, Label: "积分商城"},
 	{Key: RouteLeaderboard, Label: "排行榜"},
 	{Key: RouteLottery, Label: "幸运抽奖"},
+	{Key: RouteCardKeys, Label: "卡密兑换"},
 	{Key: RouteSignIn, Label: "签到"},
 	{Key: RouteMembership, Label: "会员"},
 	{Key: RouteWallet, Label: "钱包"},
