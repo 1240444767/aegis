@@ -70,9 +70,12 @@ var MaxSpendLimit = decimal.NewFromInt(1_000_000_000)
 // NormalizeKeyInput 校验密钥入参。creating 为真时状态只能是 active。
 func NormalizeKeyInput(in KeyInput, creating bool, now time.Time) (KeyInput, error) {
 	out := in
-	out.Name = strings.TrimSpace(out.Name)
-	if !utf8.ValidString(out.Name) || utf8.RuneCountInString(out.Name) > 64 {
-		return out, invalid("密钥名称不能超过 64 个字")
+	if out.Name != nil {
+		name := strings.TrimSpace(*out.Name)
+		if !utf8.ValidString(name) || utf8.RuneCountInString(name) > 64 {
+			return out, invalid("密钥名称不能超过 64 个字")
+		}
+		out.Name = &name
 	}
 	out.Status = strings.TrimSpace(out.Status)
 	if creating {
@@ -80,24 +83,26 @@ func NormalizeKeyInput(in KeyInput, creating bool, now time.Time) (KeyInput, err
 	} else if out.Status != "" && out.Status != KeyActive && out.Status != KeyDisabled {
 		return out, invalid("密钥状态只能是 active 或 disabled")
 	}
-	if len(out.Models) > 100 {
-		return out, invalid("可用模型最多 100 个")
-	}
-	seen := map[string]bool{}
-	models := make([]string, 0, len(out.Models))
-	for _, raw := range out.Models {
-		model := strings.TrimSpace(raw)
-		if model == "" || seen[model] {
-			continue
+	if out.Models != nil {
+		if len(*out.Models) > 100 {
+			return out, invalid("可用模型最多 100 个")
 		}
-		if !ValidModelName(model) {
-			return out, invalid("模型名「%s」不合法", raw)
+		seen := map[string]bool{}
+		models := make([]string, 0, len(*out.Models))
+		for _, raw := range *out.Models {
+			model := strings.TrimSpace(raw)
+			if model == "" || seen[model] {
+				continue
+			}
+			if !ValidModelName(model) {
+				return out, invalid("模型名「%s」不合法", raw)
+			}
+			seen[model] = true
+			models = append(models, model)
 		}
-		seen[model] = true
-		models = append(models, model)
+		out.Models = &models
 	}
-	out.Models = models
-	if out.SpendLimit.Sign() < 0 || out.SpendLimit.GreaterThan(MaxSpendLimit) {
+	if out.SpendLimit != nil && (out.SpendLimit.Sign() < 0 || out.SpendLimit.GreaterThan(MaxSpendLimit)) {
 		return out, invalid("消费上限应在 0-%s 点之间（0 不限）", MaxSpendLimit.String())
 	}
 	if out.ExpiresAt != nil && !out.ExpiresAt.After(now) {

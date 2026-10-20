@@ -97,6 +97,7 @@ type Handler struct {
 	// aiProvider AI 供应商通道（系统级 + 应用级）；aiAgent Agent 会话与 SSE 流。
 	aiProvider *service.AIProviderService
 	aiAgent    *service.AIAgentService
+	aiGateway  *service.AIGatewayService
 	oauth2     *service.OAuth2ServerService
 	// aiAgentWSOrigin Agent WebSocket 通道的 Origin 闸门（复用 CORS 白名单，
 	// 与 /api/ws 同一套判定；见 service.WebSocketOriginChecker）。

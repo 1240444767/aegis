@@ -426,13 +426,13 @@ func (k Key) AllowsModel(model string) bool {
 	return false
 }
 
-// KeyInput 新建 / 修改密钥。
+// KeyInput 新建 / 修改密钥。修改时只改传了的字段：指针为 nil、Status 为空串表示不改。
 type KeyInput struct {
-	Name       string          `json:"name"`
-	Status     string          `json:"status"`
-	Models     []string        `json:"models"`
-	SpendLimit decimal.Decimal `json:"spendLimit"`
-	ExpiresAt  *time.Time      `json:"expiresAt"`
+	Name       *string          `json:"name"`
+	Status     string           `json:"status"`
+	Models     *[]string        `json:"models"`
+	SpendLimit *decimal.Decimal `json:"spendLimit"`
+	ExpiresAt  *time.Time       `json:"expiresAt"`
 	// ClearExpiry 修改时清掉到期时间（ExpiresAt 为空本身表示「不改」）。
 	ClearExpiry bool `json:"clearExpiry"`
 }

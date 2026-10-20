@@ -1,5 +1,6 @@
 DELETE	/api/admin/apps/:appkey	AdminDeleteApp
 DELETE	/api/admin/apps/:appkey/account-deletion/tombstones/:tombstoneId	AdminReleaseAccountDeletionTombstone
+DELETE	/api/admin/apps/:appkey/ai-gateway/models/:modelId	AdminDeleteAIGatewayModel
 DELETE	/api/admin/apps/:appkey/ai/configs/:configId	AdminAppAIConfigDelete
 DELETE	/api/admin/apps/:appkey/ai/conversations/:conversationId	AdminAppAIConversationDelete
 DELETE	/api/admin/apps/:appkey/ai/mcp-servers/:serverId	AdminAppAIMCPDelete
@@ -103,6 +104,7 @@ DELETE	/api/user/delete-site	DeleteSite
 DELETE	/api/user/passkey/:credentialId	DeletePasskey
 DELETE	/api/user/profile/avatar	RemoveUserAvatar
 DELETE	/api/user/sessions/:tokenHash	RevokeUserSession
+DELETE	/api/v1/apps/:appkey/ai/keys/:keyId	AppDeleteAIKey
 DELETE	/api/v1/apps/:appkey/auth/oauth/bindings/:provider	UnbindMyOAuthProvider
 DELETE	/api/v1/apps/:appkey/card-keys/mine/:cardId/devices/:deviceId	AppUnbindMyCardKeyDevice
 DELETE	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppDeleteCloudItem
@@ -127,6 +129,15 @@ GET	/api/admin/apps/:appkey/ad-policy/consent-logs	AdminListAdConsentLogs
 GET	/api/admin/apps/:appkey/ad-policy/consents	AdminListAdConsents
 GET	/api/admin/apps/:appkey/ad-policy/splash-events	AdminListSplashAdEvents
 GET	/api/admin/apps/:appkey/ad-policy/stats	AdminAdPolicyStats
+GET	/api/admin/apps/:appkey/ai-gateway/catalog	AdminAIGatewayCatalog
+GET	/api/admin/apps/:appkey/ai-gateway/keys	AdminAIGatewayKeys
+GET	/api/admin/apps/:appkey/ai-gateway/models	AdminAIGatewayModels
+GET	/api/admin/apps/:appkey/ai-gateway/requests	AdminAIGatewayRequests
+GET	/api/admin/apps/:appkey/ai-gateway/requests/:requestNo	AdminAIGatewayRequest
+GET	/api/admin/apps/:appkey/ai-gateway/settings	AdminAIGatewaySettings
+GET	/api/admin/apps/:appkey/ai-gateway/stats	AdminAIGatewayStats
+GET	/api/admin/apps/:appkey/ai-gateway/users/:userId/account	AdminAIGatewayUserAccount
+GET	/api/admin/apps/:appkey/ai-gateway/users/:userId/credits	AdminAIGatewayUserCredits
 GET	/api/admin/apps/:appkey/ai/agent/ws	AdminAppAIAgentWS
 GET	/api/admin/apps/:appkey/ai/channel	AdminAppAIChannel
 GET	/api/admin/apps/:appkey/ai/configs	AdminAppAIConfigList
@@ -477,6 +488,7 @@ GET	/api/admin/tickets/workbench	AdminTicketWorkbench
 GET	/api/admin/user-settings/check-integrity	AdminCheckUserSettingsIntegrity
 GET	/api/admin/user-settings/stats	AdminUserSettingsStats
 GET	/api/admin/user-settings/user	AdminUserSettings
+GET	/api/ai/v1/models	AIRelayModels
 GET	/api/app/password-policy/templates	PasswordPolicyTemplates
 GET	/api/app/public	AppPublic
 GET	/api/apps/:appkey/ads/apex/callback	RewardedAdCallback
@@ -562,6 +574,12 @@ GET	/api/user/two-factor/recovery-codes	ListRecoveryCodes
 GET	/api/v1/apps/:appkey/ads/policy	AppAdPolicy
 GET	/api/v1/apps/:appkey/ads/rewarded	AppRewardedAdStatus
 GET	/api/v1/apps/:appkey/ads/rewarded/records	AppRewardedAdRecords
+GET	/api/v1/apps/:appkey/ai/credits	AppAICredits
+GET	/api/v1/apps/:appkey/ai/keys	AppAIKeys
+GET	/api/v1/apps/:appkey/ai/models	AppAIModels
+GET	/api/v1/apps/:appkey/ai/overview	AppAIOverview
+GET	/api/v1/apps/:appkey/ai/requests	AppAIRequests
+GET	/api/v1/apps/:appkey/ai/requests/:requestNo	AppAIRequest
 GET	/api/v1/apps/:appkey/auth/oauth/bindings	ListMyOAuthBindings
 GET	/api/v1/apps/:appkey/auth/oauth/callback	AppOAuthCallback
 GET	/api/v1/apps/:appkey/banners	AppBanners
@@ -745,6 +763,9 @@ POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel	AdminCa
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/execute	AdminExecuteAccountDeletion
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reject	AdminRejectAccountDeletion
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule	AdminRescheduleAccountDeletion
+POST	/api/admin/apps/:appkey/ai-gateway/models	AdminCreateAIGatewayModel
+POST	/api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund	AdminRefundAIGatewayRequest
+POST	/api/admin/apps/:appkey/ai-gateway/users/:userId/credits	AdminAdjustAIGatewayCredit
 POST	/api/admin/apps/:appkey/ai/agent/stream	AdminAppAIAgentStream
 POST	/api/admin/apps/:appkey/ai/configs	AdminAppAIConfigCreate
 POST	/api/admin/apps/:appkey/ai/configs/:configId/test	AdminAppAIConfigTest
@@ -1009,6 +1030,15 @@ POST	/api/admin/tickets/quick-replies	AdminSaveTicketQuickReply
 POST	/api/admin/tickets/sla-policies	AdminSaveTicketSLAPolicy
 POST	/api/admin/user-settings/batch-initialize	AdminBatchInitializeUserSettings
 POST	/api/admin/user-settings/initialize-user	AdminInitializeUserSettings
+POST	/api/ai/v1/audio/speech	AIRelaySpeech
+POST	/api/ai/v1/audio/transcriptions	AIRelayTranscriptions
+POST	/api/ai/v1/audio/translations	AIRelayTranslations
+POST	/api/ai/v1/chat/completions	AIRelayChatCompletions
+POST	/api/ai/v1/embeddings	AIRelayEmbeddings
+POST	/api/ai/v1/images/edits	AIRelayImageEdits
+POST	/api/ai/v1/images/generations	AIRelayImageGenerations
+POST	/api/ai/v1/messages	AIRelayMessages
+POST	/api/ai/v1/rerank	AIRelayRerank
 POST	/api/app/password-policy/get	GetAppPasswordPolicy
 POST	/api/app/password-policy/reset	ResetAppPasswordPolicy
 POST	/api/app/password-policy/set	SetAppPasswordPolicy
@@ -1146,6 +1176,7 @@ POST	/api/user/two-factor/recovery-codes/regenerate	RegenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/ads/consent	AppSaveAdConsent
 POST	/api/v1/apps/:appkey/ads/rewarded/claim	AppClaimRewardedAd
 POST	/api/v1/apps/:appkey/ads/splash/events	AppReportSplashAd
+POST	/api/v1/apps/:appkey/ai/keys	AppCreateAIKey
 POST	/api/v1/apps/:appkey/auth/2fa/verify	AppSecondFactor
 POST	/api/v1/apps/:appkey/auth/email/code	AppEmailCode
 POST	/api/v1/apps/:appkey/auth/email/verify	AppEmailVerify
@@ -1245,6 +1276,9 @@ POST	/oauth2/logout	OAuth2LogoutSubmit
 PUT	/api/admin/apps/:appkey	UpdateAdminApp
 PUT	/api/admin/apps/:appkey/account-deletion/settings	AdminSaveAccountDeletionSettings
 PUT	/api/admin/apps/:appkey/ad-policy/config	AdminSaveAdPolicy
+PUT	/api/admin/apps/:appkey/ai-gateway/keys/:keyId/status	AdminSetAIGatewayKeyStatus
+PUT	/api/admin/apps/:appkey/ai-gateway/models/:modelId	AdminUpdateAIGatewayModel
+PUT	/api/admin/apps/:appkey/ai-gateway/settings	AdminSaveAIGatewaySettings
 PUT	/api/admin/apps/:appkey/ai/configs/:configId	AdminAppAIConfigUpdate
 PUT	/api/admin/apps/:appkey/ai/mcp-servers/:serverId	AdminAppAIMCPUpdate
 PUT	/api/admin/apps/:appkey/ai/skills/:skillId	AdminAppAISkillUpdate
@@ -1346,6 +1380,7 @@ PUT	/api/user/profile	UpdateProfile
 PUT	/api/user/role/applications/:applicationId/cancel	CancelRoleApplication
 PUT	/api/user/settings	UpdateSettings
 PUT	/api/user/update-site	UpdateSite
+PUT	/api/v1/apps/:appkey/ai/keys/:keyId	AppUpdateAIKey
 PUT	/api/v1/apps/:appkey/cloud/items/:namespace/:key	AppPutCloudItem
 PUT	/api/v1/apps/:appkey/invite/code	AppUpdateInviteCode
 PUT	/api/v1/apps/:appkey/leaderboard/preference	AppUpdateLeaderboardPreference

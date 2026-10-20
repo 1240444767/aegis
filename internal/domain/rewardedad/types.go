@@ -65,6 +65,15 @@ const RewardFeatureMinutes = "feature_minutes"
 // MaxFeatureMinutes 一次观看最多给多少分钟（一天）。
 const MaxFeatureMinutes = 1440
 
+// RewardAICredit AI 额度：激励广告独有的另一档，给 AI 中转网关的赠送额度加点数
+// （1 点按 1 积分定价，见 internal/domain/aigateway）。不过期，调用时按应用的扣费顺序使用。
+//
+// 只放在广告这里，理由与「功能时长」相同：它是「反复看、少量给」的那一类权益。
+const RewardAICredit = "ai_credit"
+
+// MaxAICreditPoints 一次观看最多给多少点。
+const MaxAICreditPoints = 100_000
+
 // 激励广告可发的权益。复用卡密的权益目录与数据形态（同一套账本、同一套控制台表单），
 // 但只开放适合「看一次广告」的几档：余额是真钱、设备位挂在授权卡上，都不该由广告发。
 // 末尾的「功能时长」是广告独有的，自述见 featureMinutesSpec。
@@ -75,6 +84,7 @@ var allowedRewardTypes = []string{
 	cardkeydomain.RewardExperience,
 	cardkeydomain.RewardLotteryDraws,
 	RewardFeatureMinutes,
+	RewardAICredit,
 }
 
 // Reward 一项权益，与卡密同构。

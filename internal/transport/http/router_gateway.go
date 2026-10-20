@@ -245,6 +245,18 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/pay/orders", h.CreatePaymentOrder)
 		appGatewayAuthed.GET("/pay/orders/:orderNo", h.PaymentOrderDetail)
 
+		// AI 中转网关（docs/ai-gateway.md）：总览、可用模型与单价、API 密钥、调用记录、赠送额度流水。
+		// 调用面本身在 /api/ai/v1（OpenAI SDK 直连，不经网关包装）。
+		appGatewayAuthed.GET("/ai/overview", h.AppAIOverview)
+		appGatewayAuthed.GET("/ai/models", h.AppAIModels)
+		appGatewayAuthed.GET("/ai/keys", h.AppAIKeys)
+		appGatewayAuthed.POST("/ai/keys", h.AppCreateAIKey)
+		appGatewayAuthed.PUT("/ai/keys/:keyId", h.AppUpdateAIKey)
+		appGatewayAuthed.DELETE("/ai/keys/:keyId", h.AppDeleteAIKey)
+		appGatewayAuthed.GET("/ai/requests", h.AppAIRequests)
+		appGatewayAuthed.GET("/ai/requests/:requestNo", h.AppAIRequest)
+		appGatewayAuthed.GET("/ai/credits", h.AppAICredits)
+
 		// 存储
 		appGatewayAuthed.POST("/storage/upload", h.StorageUpload)
 		appGatewayAuthed.POST("/storage/object-link", h.StorageObjectLink)

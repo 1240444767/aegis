@@ -1820,6 +1820,122 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
         client.call("POST", "/releases/channels/$code/leave", requireAuth = true)
 }
 
+/**
+ * AI 中转网关的账户侧（docs/ai-gateway.md）。
+ *
+ * 调用面本身不在这里：把任意 OpenAI / Anthropic SDK 的 baseURL 指到 `{站点}/api/ai/v1`
+ * （[overview] 返回的 `baseUrl`），api key 填 [createKey] 返回的 `secret`；应用允许时
+ * （`allowSessionToken = true`）也可以直接填当前登录会话的访问令牌。
+ *
+ * 费用按模型单价 × 本人倍率计算，按 `sources` 的顺序从免费额度、会员额度、赠送额度、积分、余额里扣。
+ * 调用失败不扣费；每次调用的响应头 `X-Aegis-Request-No` 对得上 [request] 的明细。
+ *
+ * 金额（点、元）一律是十进制字符串，与钱包同一惯例：用 Double 会丢精度。
+ */
+class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
+
+    /** 总览：是否开放、能不能用、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址。 */
+    @Throws(IOException::class)
+    fun overview(): JsonElement = client.call("GET", "/ai/overview", requireAuth = true)
+
+    /** 可调用的模型与有效单价（已乘上本人的倍率）。会员专享而本人不是会员的，`available = false`。 */
+    @Throws(IOException::class)
+    fun models(): JsonElement = client.call("GET", "/ai/models", requireAuth = true)
+
+    /** 我的 API 密钥（只有 `hint`，没有明文）。 */
+    @Throws(IOException::class)
+    fun keys(): JsonElement = client.call("GET", "/ai/keys", requireAuth = true)
+
+    /**
+     * 新建 API 密钥。响应里的 `secret` **只出现这一次**，丢了只能删掉重建。
+     *
+     * [models] 为空表示不限模型；[spendLimit] 是这把密钥累计最多花多少点（"0" 或 null 不限）；
+     * [expiresAt] 为 RFC 3339 时间。数量超过应用上限时返回 40215。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun createKey(
+        name: String? = null,
+        models: List<String>? = null,
+        spendLimit: String? = null,
+        expiresAt: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/ai/keys",
+        buildBody("name" to name, "models" to models, "spendLimit" to spendLimit, "expiresAt" to expiresAt),
+        requireAuth = true,
+    )
+
+    /**
+     * 修改 API 密钥：只改传了的字段（null 表示不改）。[status] 取 `active` / `disabled`；
+     * [clearExpiry] 为 true 时清掉到期时间。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun updateKey(
+        keyId: Long,
+        name: String? = null,
+        status: String? = null,
+        models: List<String>? = null,
+        spendLimit: String? = null,
+        expiresAt: String? = null,
+        clearExpiry: Boolean = false,
+    ): JsonElement = client.call(
+        "PUT", "/ai/keys/$keyId",
+        buildBody(
+            "name" to name,
+            "status" to status,
+            "models" to models,
+            "spendLimit" to spendLimit,
+            "expiresAt" to expiresAt,
+            "clearExpiry" to if (clearExpiry) true else null,
+        ),
+        requireAuth = true,
+    )
+
+    /** 删除 API 密钥，立即失效；正在进行的调用照常结算。 */
+    @Throws(IOException::class)
+    fun deleteKey(keyId: Long): JsonElement = client.call("DELETE", "/ai/keys/$keyId", requireAuth = true)
+
+    /**
+     * 我的调用记录（新的在前）。[status]：`succeeded` / `aborted`（流式中途断开，按已生成的内容计费）/
+     * `failed` / `expired`（这两种不扣费）/ `refunded` / `reserved`（进行中）。[start] / [end] 为 RFC 3339。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun requests(
+        model: String? = null,
+        status: String? = null,
+        keyId: Long? = null,
+        start: String? = null,
+        end: String? = null,
+        page: Int = 1,
+        limit: Int = 20,
+    ): JsonElement = client.call(
+        "GET", "/ai/requests",
+        query = buildQuery(
+            "model" to model,
+            "status" to status,
+            "keyId" to keyId?.toString(),
+            "start" to start,
+            "end" to end,
+            "page" to page.toString(),
+            "limit" to limit.toString(),
+        ),
+        requireAuth = true,
+    )
+
+    /** 一次调用的明细：用量、价格、从哪些来源各扣了多少。[requestNo] 即响应头 `X-Aegis-Request-No`。 */
+    @Throws(IOException::class)
+    fun request(requestNo: String): JsonElement =
+        client.call("GET", "/ai/requests/${encodePathSegment(requestNo)}", requireAuth = true)
+
+    /** 赠送额度流水：看广告与管理员发放、调用消费、退款。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun credits(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/ai/credits", query = pageQuery(page, limit), requireAuth = true)
+}
+
 @kotlinx.serialization.Serializable
 internal data class OAuthUrl(val url: String = "")
 

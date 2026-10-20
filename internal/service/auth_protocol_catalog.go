@@ -251,6 +251,28 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "notificationPreferencesUpdate", Method: "PUT", Path: "/notifications/preferences", Auth: true,
 		Summary: "改提醒开关：关闭只影响提醒（实时事件 silent=true），消息照常入库、计未读；账号安全类不能关"},
 
+	// ── AI 中转网关 ──
+	//
+	// 调用面在 /api/ai/v1（OpenAI / Anthropic SDK 直连，baseURL 见 aiOverview.baseUrl），这里是它的账户侧：
+	// 能用多少、扣费顺序、可用模型与单价、API 密钥、调用记录。规格见 docs/ai-gateway.md。
+	{Key: "aiOverview", Method: "GET", Path: "/ai/overview", Auth: true,
+		Summary: "AI 中转总览：是否开放、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址"},
+	{Key: "aiModels", Method: "GET", Path: "/ai/models", Auth: true,
+		Summary: "可调用的模型与有效单价（已乘上本人的会员与等级倍率），会员专享模型标 available=false"},
+	{Key: "aiKeys", Method: "GET", Path: "/ai/keys", Auth: true, Summary: "我的 API 密钥（只含提示，不含明文）"},
+	{Key: "aiKeyCreate", Method: "POST", Path: "/ai/keys", Auth: true,
+		Summary: "新建 API 密钥（名称、可用模型、消费上限、到期时间）；明文 secret 只在这次返回"},
+	{Key: "aiKeyUpdate", Method: "PUT", Path: "/ai/keys/{keyId}", Auth: true,
+		Summary: "修改 API 密钥：名称、启用 / 停用、可用模型、消费上限、到期时间（clearExpiry 清除）"},
+	{Key: "aiKeyDelete", Method: "DELETE", Path: "/ai/keys/{keyId}", Auth: true,
+		Summary: "删除 API 密钥，立即失效；进行中的调用照常结算"},
+	{Key: "aiRequests", Method: "GET", Path: "/ai/requests", Auth: true,
+		Summary: "我的调用记录：用量、价格、从哪些来源扣了多少；失败的调用不扣费也会列出"},
+	{Key: "aiRequest", Method: "GET", Path: "/ai/requests/{requestNo}", Auth: true,
+		Summary: "一次调用的明细（requestNo 即调用响应头 X-Aegis-Request-No）"},
+	{Key: "aiCredits", Method: "GET", Path: "/ai/credits", Auth: true,
+		Summary: "赠送额度流水：看广告与管理员发放、调用消费、退款"},
+
 	// ── 钱包 / 会员 / 支付 ──
 	{Key: "wallet", Method: "GET", Path: "/wallet", Auth: true, Summary: "我的余额"},
 	{Key: "walletTransactions", Method: "GET", Path: "/wallet/transactions", Auth: true, Summary: "余额流水"},

@@ -431,6 +431,24 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.DELETE("/user-settings/cleanup", h.AdminCleanupUserSettings)
 
 		// 抽奖系统管理路由
+		// AI 中转网关（docs/ai-gateway.md）：设置、模型与价格、调用记录与退款、用户密钥、统计、赠送额度
+		admin.GET("/apps/:appkey/ai-gateway/catalog", h.AdminAIGatewayCatalog)
+		admin.GET("/apps/:appkey/ai-gateway/settings", h.AdminAIGatewaySettings)
+		admin.PUT("/apps/:appkey/ai-gateway/settings", h.AdminSaveAIGatewaySettings)
+		admin.GET("/apps/:appkey/ai-gateway/models", h.AdminAIGatewayModels)
+		admin.POST("/apps/:appkey/ai-gateway/models", h.AdminCreateAIGatewayModel)
+		admin.PUT("/apps/:appkey/ai-gateway/models/:modelId", h.AdminUpdateAIGatewayModel)
+		admin.DELETE("/apps/:appkey/ai-gateway/models/:modelId", h.AdminDeleteAIGatewayModel)
+		admin.GET("/apps/:appkey/ai-gateway/requests", h.AdminAIGatewayRequests)
+		admin.GET("/apps/:appkey/ai-gateway/requests/:requestNo", h.AdminAIGatewayRequest)
+		admin.POST("/apps/:appkey/ai-gateway/requests/:requestNo/refund", h.AdminRefundAIGatewayRequest)
+		admin.GET("/apps/:appkey/ai-gateway/keys", h.AdminAIGatewayKeys)
+		admin.PUT("/apps/:appkey/ai-gateway/keys/:keyId/status", h.AdminSetAIGatewayKeyStatus)
+		admin.GET("/apps/:appkey/ai-gateway/stats", h.AdminAIGatewayStats)
+		admin.GET("/apps/:appkey/ai-gateway/users/:userId/account", h.AdminAIGatewayUserAccount)
+		admin.GET("/apps/:appkey/ai-gateway/users/:userId/credits", h.AdminAIGatewayUserCredits)
+		admin.POST("/apps/:appkey/ai-gateway/users/:userId/credits", h.AdminAdjustAIGatewayCredit)
+
 		admin.GET("/apps/:appkey/lottery/catalog", h.AdminLotteryCatalog)
 		admin.GET("/apps/:appkey/lottery/activities", h.AdminListLotteryActivities)
 		admin.POST("/apps/:appkey/lottery/activities", h.AdminCreateLotteryActivity)

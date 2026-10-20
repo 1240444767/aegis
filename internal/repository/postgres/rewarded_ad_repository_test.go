@@ -18,7 +18,7 @@ func TestRewardedAdCatalogHasGrantBranch(t *testing.T) {
 	}
 	text := string(source)
 
-	// 「功能时长」是激励广告独有的一档，常量在 rewardedad 包里，所以这里写全限定名。
+	// 「功能时长」与「AI 额度」是激励广告独有的档位，常量在 rewardedad 包里，所以这里写全限定名。
 	constNames := map[string]string{
 		cardkeydomain.RewardVipPlan:      "cardkeydomain.RewardVipPlan",
 		cardkeydomain.RewardVipDays:      "cardkeydomain.RewardVipDays",
@@ -28,6 +28,7 @@ func TestRewardedAdCatalogHasGrantBranch(t *testing.T) {
 		cardkeydomain.RewardBalance:      "cardkeydomain.RewardBalance",
 		cardkeydomain.RewardDeviceSlots:  "cardkeydomain.RewardDeviceSlots",
 		rewardedad.RewardFeatureMinutes:  "rewardedad.RewardFeatureMinutes",
+		rewardedad.RewardAICredit:        "rewardedad.RewardAICredit",
 	}
 	offered := map[string]bool{}
 	for _, spec := range rewardedad.RewardCatalog() {

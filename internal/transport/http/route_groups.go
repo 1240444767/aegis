@@ -134,6 +134,9 @@ var routeGroups = []routeGroup{
 		Prefix: "/api/app/", Fallback: true},
 
 	// ── 用户端 ────────────────────────────────────────────────────────
+	// 用户 AI 中转：凭据是用户的 sk-ag- 密钥或访问令牌，由处理器自己认（docs/ai-gateway.md）
+	{Realm: realmUser, Title: "AI 中转", Tag: tagAPI, Auth: authBearer,
+		Prefix: "/api/ai/"},
 	// 旧明文认证命名空间，由每个应用的 allowLegacy 开关控制
 	{Realm: realmUser, Title: "旧明文认证", Tag: "Auth", Auth: authLegacyAuth,
 		Prefix: "/api/auth/"},

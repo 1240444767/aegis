@@ -287,3 +287,12 @@ func (s *AIGatewayService) RelayPassthrough(ctx context.Context, principal *AIGa
 	return &AIGatewayPassthroughResult{ContentType: response.ContentType, Body: response.Body,
 		RequestNo: reserved.RequestNo, Record: record}, nil
 }
+
+// AIUpstreamStatus 错误若来自上游供应商，返回上游的 HTTP 状态（传输层据此决定回给调用方的状态码）。
+func AIUpstreamStatus(err error) (int, bool) {
+	var upstream *aiUpstreamError
+	if errors.As(err, &upstream) {
+		return upstream.Status, true
+	}
+	return 0, false
+}

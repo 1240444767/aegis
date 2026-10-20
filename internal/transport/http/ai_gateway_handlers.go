@@ -82,6 +82,15 @@ func writeAIGatewayError(c *gin.Context, protocol string, err error) {
 	})
 }
 
+// aiGatewayErrorText 错误的对外文案：业务错误取 Message，其余原样。
+func aiGatewayErrorText(err error) string {
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) {
+		return appErr.Message
+	}
+	return err.Error()
+}
+
 // ═══════════════════════ OpenAI Chat Completions 入站 ═══════════════════════
 
 type openAIGatewayMessage struct {
@@ -326,6 +335,17 @@ func openAIGatewayResponse(result *aidomain.ChatResponse) gin.H {
 
 // streamOpenAIGateway 把统一流事件翻回 Chat Completions 的 SSE chunk。
 func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidomain.ChatRequest) {
+	streamOpenAIChat(c, request.Model, func(onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+		return h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request, onEvent)
+	}, func(err error) { writeAIGatewayError(c, aidomain.ProtocolOpenAI, err) })
+}
+
+// aiStreamRunner 发起一次流式调用：增量经 onEvent 交回，返回聚合好的结论。
+type aiStreamRunner func(onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error)
+
+// streamOpenAIChat Chat Completions 的 SSE 写出：应用函数网关与用户中转共用。
+// writeErr 只在流还没开始时调用（此时还能回一个正常的错误响应）。
+func streamOpenAIChat(c *gin.Context, model string, run aiStreamRunner, writeErr func(error)) {
 	header := c.Writer.Header()
 	header.Set("Content-Type", "text/event-stream; charset=utf-8")
 	// no-transform：拦住链路上任何压缩/改写中间层的响应缓冲（详见 ai_agent_handlers.go）。
@@ -350,7 +370,7 @@ func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidom
 	chunk := func(delta gin.H, finish any) gin.H {
 		return gin.H{
 			"id": id, "object": "chat.completion.chunk", "created": created,
-			"model": request.Model,
+			"model": model,
 			"choices": []gin.H{{"index": 0, "delta": delta, "finish_reason": finish}},
 		}
 	}
@@ -359,7 +379,7 @@ func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidom
 	// 来自上游，不一定从 0 连续，这里重新编号。
 	toolIndexes := map[string]int{}
 	sentRole := false
-	result, err := h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request,
+	result, err := run(
 		func(event aidomain.StreamEvent) error {
 			if !sentRole {
 				sentRole = true
@@ -393,19 +413,24 @@ func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidom
 		})
 	if err != nil {
 		if !wrote {
-			writeAIGatewayError(c, aidomain.ProtocolOpenAI, err)
+			writeErr(err)
 			return
 		}
 		// 流已经开了只能以数据块收尾，HTTP 状态改不了。
-		_ = writeChunk(gin.H{"error": gin.H{"message": err.Error(), "type": "api_error"}})
+		_ = writeChunk(gin.H{"error": gin.H{"message": aiGatewayErrorText(err), "type": "api_error"}})
 		_, _ = c.Writer.WriteString("data: [DONE]\n\n")
 		c.Writer.Flush()
 		return
 	}
 	_ = writeChunk(chunk(gin.H{}, openAIGatewayFinish(result.FinishReason)))
+	// 请求没指定型号时（走通道默认型号）用量块报上游实际用的型号。
+	finalModel := model
+	if finalModel == "" {
+		finalModel = result.Model
+	}
 	_ = writeChunk(gin.H{
 		"id": id, "object": "chat.completion.chunk", "created": created,
-		"model": result.Model, "choices": []gin.H{},
+		"model": finalModel, "choices": []gin.H{},
 		"usage": gin.H{
 			"prompt_tokens":     result.Usage.InputTokens,
 			"completion_tokens": result.Usage.OutputTokens,
@@ -653,6 +678,13 @@ func anthropicGatewayResponse(result *aidomain.ChatResponse) gin.H {
 
 // streamAnthropicGateway 把统一流事件翻回 Messages 的 SSE 事件序列。
 func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request aidomain.ChatRequest) {
+	streamAnthropicChat(c, request.Model, func(onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+		return h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request, onEvent)
+	}, func(err error) { writeAIGatewayError(c, aidomain.ProtocolAnthropic, err) })
+}
+
+// streamAnthropicChat Messages 的 SSE 写出：应用函数网关与用户中转共用。
+func streamAnthropicChat(c *gin.Context, model string, run aiStreamRunner, writeErr func(error)) {
 	header := c.Writer.Header()
 	header.Set("Content-Type", "text/event-stream; charset=utf-8")
 	// no-transform：拦住链路上任何压缩/改写中间层的响应缓冲（详见 ai_agent_handlers.go）。
@@ -707,14 +739,14 @@ func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request ai
 		return writeEvent("message_start", gin.H{
 			"type": "message_start",
 			"message": gin.H{
-				"id": id, "type": "message", "role": "assistant", "model": request.Model,
+				"id": id, "type": "message", "role": "assistant", "model": model,
 				"content": []gin.H{}, "stop_reason": nil, "stop_sequence": nil,
 				"usage": gin.H{"input_tokens": 0, "output_tokens": 0},
 			},
 		})
 	}
 
-	result, err := h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request,
+	result, err := run(
 		func(event aidomain.StreamEvent) error {
 			if err := ensureStart(); err != nil {
 				return err
@@ -753,12 +785,12 @@ func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request ai
 		})
 	if err != nil {
 		if !wrote {
-			writeAIGatewayError(c, aidomain.ProtocolAnthropic, err)
+			writeErr(err)
 			return
 		}
 		_ = writeEvent("error", gin.H{
 			"type":  "error",
-			"error": gin.H{"type": "api_error", "message": err.Error()},
+			"error": gin.H{"type": "api_error", "message": aiGatewayErrorText(err)},
 		})
 		return
 	}

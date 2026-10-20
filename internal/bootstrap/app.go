@@ -72,6 +72,8 @@ type APIApp struct {
 	AccountDeletion *service.AccountDeletionService
 	// Leaderboard 积分排行榜：后台循环结算到期的周期榜并发放奖励，退出时必须 Stop
 	Leaderboard *service.LeaderboardService
+	// AIGateway AI 中转网关：后台循环放回超时未结算的暂扣，退出时必须 Stop
+	AIGateway *service.AIGatewayService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
 	AuthProviderHealth *service.AuthProviderHealthService
 	// Egress 出海代理网关管理面；EgressGateway 是进程级单例，
@@ -474,6 +476,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// AI 供应商通道（系统级 + 应用级，密钥加密落库）与 Agent 编排。
 	aiProviderService := service.NewAIProviderService(log, pg, cfg.Security.MasterKey)
 	aiAgentService := service.NewAIAgentService(log, pg, aiProviderService, appFunctionService)
+	// 面向应用终端用户的计费中转：通道复用上面的链路，计费落积分 / 余额 / 额度（docs/ai-gateway.md）。
+	aiGatewayService := service.NewAIGatewayService(log, pg, authService, aiProviderService)
 	// script 运行时的 SDK 依赖：脚本通过它们读写平台数据。
 	// 未装配的那一项对应的能力会在绑定时被拒绝并点名，
 	// 而不是绑上去等脚本调用时空指针（wasm/http 不受影响）。
@@ -669,6 +673,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Template:         templateService,
 		Egress:           egressService,
 		AIProvider:       aiProviderService,
+		AIGateway:        aiGatewayService,
 		AIAgent:          aiAgentService,
 
 		Organization:    orgService,
@@ -776,6 +781,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Storage:            storageService,
 		AccountDeletion:    accountDeletionService,
 		Leaderboard:        leaderboardService,
+		AIGateway:          aiGatewayService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
 		EgressGateway:      egressGateway,
@@ -816,6 +822,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.Leaderboard != nil {
 		a.Leaderboard.Start(ctx)
 	}
+	if a.AIGateway != nil {
+		a.AIGateway.Start(ctx)
+	}
 	if a.OwnsEgress && a.EgressGateway != nil {
 		a.EgressGateway.Start(ctx)
 	}
@@ -853,6 +862,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Leaderboard != nil {
 		a.Leaderboard.Stop()
+	}
+	if a.AIGateway != nil {
+		a.AIGateway.Stop()
 	}
 	if a.Database != nil {
 		a.Database.Stop()

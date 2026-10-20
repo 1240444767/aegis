@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	cardkeydomain "aegis/internal/domain/cardkey"
+	"aegis/internal/domain/aigateway"
 	"aegis/internal/domain/featuretime"
 	rewardedad "aegis/internal/domain/rewardedad"
 	vipdomain "aegis/internal/domain/vip"
@@ -347,6 +348,15 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 			}
 			result.Detail = rewardedad.DescribeFeatureMinutes(reward, name) +
 				"（余额 " + strconv.FormatInt(featuretime.FormatMinutes(balance), 10) + " 分钟）"
+
+		case rewardedad.RewardAICredit:
+			// AI 中转的赠送额度：用户行已在上面锁住，这里只锁网关账户行（锁序 users → ai_gateway_accounts）。
+			balance, err := grantAIGatewayCreditTx(ctx, tx, view.AppID, view.UserID, reward.Amount*aigateway.MicroPerPoint,
+				"rewarded_ad", strconv.FormatInt(view.ID, 10), source)
+			if err != nil {
+				return nil, err
+			}
+			result.Detail = rewardedad.DescribeAICredit(reward) + "（余额 " + aigateway.MicroToPoints(balance).Round(2).String() + " 点）"
 
 		default:
 			// 目录里有、这里没有 —— 由测试挡在合并之前；运行期走到这里说明配置绕过了校验。

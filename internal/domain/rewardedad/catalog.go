@@ -34,6 +34,17 @@ var featureMinutesSpec = cardkeydomain.RewardSpec{
 	Max:   MaxFeatureMinutes,
 }
 
+// aiCreditSpec 「AI 额度」的自述。取值形态是点数（Reward.Amount）。
+var aiCreditSpec = cardkeydomain.RewardSpec{
+	Type:  RewardAICredit,
+	Label: "AI 额度",
+	Hint:  "给 AI 中转加赠送额度，1 点按 1 积分定价、不过期；调用时按应用设置的扣费顺序使用",
+	Value: cardkeydomain.ValueAmount,
+	Unit:  "点",
+	Min:   1,
+	Max:   MaxAICreditPoints,
+}
+
 // RewardCatalog 激励广告可配的权益档位：卡密目录的子集（顺序沿用卡密目录），末尾加上广告独有的「功能时长」。
 //
 // 「会员天数」的说明与卡密不同：卡密赠送的天数不带功能，激励广告的按场景的会员权益带。
@@ -51,6 +62,9 @@ func RewardCatalog() []cardkeydomain.RewardSpec {
 func FindRewardSpec(rewardType string) (cardkeydomain.RewardSpec, bool) {
 	if rewardType == RewardFeatureMinutes {
 		return featureMinutesSpec, true
+	}
+	if rewardType == RewardAICredit {
+		return aiCreditSpec, true
 	}
 	if !slices.Contains(allowedRewardTypes, rewardType) {
 		return cardkeydomain.RewardSpec{}, false
@@ -97,12 +111,23 @@ func ValidateRewards(rewards []Reward) error {
 	}
 	shared := make([]Reward, 0, len(rewards))
 	featureMinutes := 0
+	aiCredits := 0
 	for _, reward := range rewards {
 		if !slices.Contains(allowedRewardTypes, reward.Type) {
 			if spec, ok := cardkeydomain.FindRewardSpec(reward.Type); ok {
 				return fmt.Errorf("激励广告不能发放「%s」", spec.Label)
 			}
 			return fmt.Errorf("未登记的权益类型：%s", reward.Type)
+		}
+		if reward.Type == RewardAICredit {
+			aiCredits++
+			if aiCredits > 1 {
+				return fmt.Errorf("「%s」重复配置了两次", aiCreditSpec.Label)
+			}
+			if reward.Amount < aiCreditSpec.Min || reward.Amount > aiCreditSpec.Max {
+				return fmt.Errorf("「%s」需要在 %d–%d %s之间", aiCreditSpec.Label, aiCreditSpec.Min, aiCreditSpec.Max, aiCreditSpec.Unit)
+			}
+			continue
 		}
 		if reward.Type != RewardFeatureMinutes {
 			shared = append(shared, reward)
@@ -149,6 +174,12 @@ func NormalizeRewards(rewards []Reward) []Reward {
 			Feature: strings.ToLower(strings.TrimSpace(reward.Feature)),
 		})
 		break
+	}
+	for _, reward := range rewards {
+		if reward.Type == RewardAICredit {
+			out = append(out, Reward{Type: RewardAICredit, Amount: reward.Amount})
+			break
+		}
 	}
 	return out
 }
@@ -307,6 +338,9 @@ func DescribeRewards(rewards []Reward, planNames map[int64]string, featureNames 
 		case RewardFeatureMinutes:
 			parts = append(parts, DescribeFeatureMinutes(reward, featureNames[reward.Feature]))
 			continue
+		case RewardAICredit:
+			parts = append(parts, DescribeAICredit(reward))
+			continue
 		}
 		parts = append(parts, cardkeydomain.DescribeReward(reward))
 	}
@@ -319,6 +353,11 @@ func DescribeFeatureMinutes(reward Reward, name string) string {
 		name = reward.Feature
 	}
 	return fmt.Sprintf("%s %d %s", name, reward.Amount, featureMinutesSpec.Unit)
+}
+
+// DescribeAICredit 「AI 额度」一项的说法：「AI 额度 50 点」。
+func DescribeAICredit(reward Reward) string {
+	return fmt.Sprintf("%s %d %s", aiCreditSpec.Label, reward.Amount, aiCreditSpec.Unit)
 }
 
 // ReasonMessage 拒发原因的用户可读文案。

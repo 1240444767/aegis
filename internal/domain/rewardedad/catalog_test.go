@@ -44,7 +44,7 @@ func TestRewardCatalogOnlyOffersAllowedTypes(t *testing.T) {
 	}
 	// 除了广告独有的「功能时长」，每一档都必须是卡密目录里真实存在的，否则控制台配得出、发放处认不得。
 	for _, kind := range allowedRewardTypes {
-		if kind == RewardFeatureMinutes {
+		if kind == RewardFeatureMinutes || kind == RewardAICredit {
 			continue
 		}
 		if _, ok := cardkeydomain.FindRewardSpec(kind); !ok {
@@ -60,8 +60,9 @@ func TestRewardCatalogOnlyOffersAllowedTypes(t *testing.T) {
 		spec.Value != cardkeydomain.ValueFeature {
 		t.Fatalf("功能时长的自述不对：%+v", spec)
 	}
-	if catalog[len(catalog)-1].Type != RewardFeatureMinutes {
-		t.Fatal("功能时长应排在激励广告目录的末尾")
+	// 广告独有的两档排在卡密子集之后：功能时长，然后是 AI 额度。
+	if catalog[len(catalog)-2].Type != RewardFeatureMinutes || catalog[len(catalog)-1].Type != RewardAICredit {
+		t.Fatal("广告独有的功能时长与 AI 额度应依次排在激励广告目录的末尾")
 	}
 }
 
@@ -244,5 +245,38 @@ func TestDescribeSceneMentionsMembershipTerms(t *testing.T) {
 	points := Scene{Rewards: []Reward{{Type: cardkeydomain.RewardIntegral, Amount: 10}}}
 	if strings.Contains(DescribeScene(points, nil, nil), "免广告") {
 		t.Fatal("scenes without membership say nothing about it")
+	}
+}
+
+// 「AI 额度」与「功能时长」同为广告独有：卡密目录里不能有它，校验管数量与重复，规整后排在最后。
+func TestAICreditReward(t *testing.T) {
+	if _, ok := cardkeydomain.FindRewardSpec(RewardAICredit); ok {
+		t.Fatal("AI 额度不应出现在卡密的权益目录里")
+	}
+	spec, ok := FindRewardSpec(RewardAICredit)
+	if !ok || spec.Unit != "点" || spec.Min != 1 || spec.Max != MaxAICreditPoints || spec.Value != cardkeydomain.ValueAmount {
+		t.Fatalf("AI 额度的自述不对：%+v", spec)
+	}
+	if err := ValidateRewards([]Reward{{Type: RewardAICredit, Amount: 50}}); err != nil {
+		t.Fatalf("合法的 AI 额度被拒：%v", err)
+	}
+	for name, rewards := range map[string][]Reward{
+		"为 0":  {{Type: RewardAICredit, Amount: 0}},
+		"超上限":  {{Type: RewardAICredit, Amount: MaxAICreditPoints + 1}},
+		"重复两次": {{Type: RewardAICredit, Amount: 1}, {Type: RewardAICredit, Amount: 2}},
+	} {
+		if err := ValidateRewards(rewards); err == nil {
+			t.Errorf("%s：应被拒绝", name)
+		}
+	}
+	normalized := NormalizeRewards([]Reward{
+		{Type: RewardAICredit, Amount: 30, Feature: "junk"},
+		{Type: cardkeydomain.RewardIntegral, Amount: 5},
+	})
+	if len(normalized) != 2 || normalized[1].Type != RewardAICredit || normalized[1].Amount != 30 || normalized[1].Feature != "" {
+		t.Fatalf("规整结果不对：%+v", normalized)
+	}
+	if got := DescribeRewards(normalized, nil, nil); !strings.Contains(got, "AI 额度 30 点") {
+		t.Fatalf("描述里应有 AI 额度：%s", got)
 	}
 }

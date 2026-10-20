@@ -499,12 +499,21 @@ func (s *AIGatewayService) CreateKey(ctx context.Context, session *authdomain.Se
 	if err != nil {
 		return nil, err
 	}
-	if normalized.Name == "" {
-		normalized.Name = "API 密钥"
+	name := "API 密钥"
+	if normalized.Name != nil && *normalized.Name != "" {
+		name = *normalized.Name
+	}
+	models := []string{}
+	if normalized.Models != nil {
+		models = *normalized.Models
+	}
+	var spendLimit int64
+	if normalized.SpendLimit != nil {
+		spendLimit = aigateway.PointsToMicroFloor(*normalized.SpendLimit)
 	}
 	key, err := s.pg.CreateAIGatewayKey(ctx, aigateway.Key{
-		AppID: session.AppID, UserID: session.UserID, Name: normalized.Name, Hint: hint, Models: normalized.Models,
-		SpendLimitMicro: aigateway.PointsToMicroFloor(normalized.SpendLimit), ExpiresAt: normalized.ExpiresAt,
+		AppID: session.AppID, UserID: session.UserID, Name: name, Hint: hint, Models: models,
+		SpendLimitMicro: spendLimit, ExpiresAt: normalized.ExpiresAt,
 	}, hash, settings.MaxKeysPerUser)
 	if err != nil {
 		return nil, mapAIGatewayError(err)

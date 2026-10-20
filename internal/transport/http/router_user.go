@@ -80,6 +80,24 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appServer.POST("/ai/v1/messages", h.AppAIMessages)
 	}
 
+	// 用户 AI 中转（docs/ai-gateway.md）：应用的**终端用户**调用的 OpenAI / Anthropic 兼容面。
+	// 凭据是用户自己的 sk-ag- 密钥或登录会话的访问令牌（由处理器自己认，不挂 Auth 中间件：
+	// SDK 只会把凭据放进 Authorization / x-api-key，而密钥不是会话令牌），按用量扣用户的额度。
+	// 不在 /api/v1/apps 下：那里按应用的安全等级包装请求，OpenAI SDK 做不到。
+	relay := router.Group("/api/ai/v1")
+	{
+		relay.GET("/models", h.AIRelayModels)
+		relay.POST("/chat/completions", h.AIRelayChatCompletions)
+		relay.POST("/messages", h.AIRelayMessages)
+		relay.POST("/embeddings", h.AIRelayEmbeddings)
+		relay.POST("/images/generations", h.AIRelayImageGenerations)
+		relay.POST("/images/edits", h.AIRelayImageEdits)
+		relay.POST("/audio/speech", h.AIRelaySpeech)
+		relay.POST("/audio/transcriptions", h.AIRelayTranscriptions)
+		relay.POST("/audio/translations", h.AIRelayTranslations)
+		relay.POST("/rerank", h.AIRelayRerank)
+	}
+
 	userPublic := router.Group("/api/user")
 	{
 		userPublic.GET("/banner", h.UserBanner)

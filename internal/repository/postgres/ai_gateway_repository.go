@@ -356,11 +356,21 @@ func (r *Repository) FindAIGatewayKeyByHash(ctx context.Context, hash string) (*
 WHERE k.key_hash = $1 AND k.status <> 'revoked'`, hash))
 }
 
-// UpdateAIGatewayKey 修改密钥的名称、状态、白名单、上限与到期时间（已校验）。userID 为 0 时不校验持有人。
+// UpdateAIGatewayKey 修改密钥（已校验）：只改传了的字段。userID 为 0 时不校验持有人。
 func (r *Repository) UpdateAIGatewayKey(ctx context.Context, appID, userID, keyID int64, in aigateway.KeyInput) (*aigateway.Key, error) {
 	current, err := r.GetAIGatewayKey(ctx, appID, userID, keyID)
 	if err != nil {
 		return nil, err
+	}
+	name, models, spendLimit := current.Name, current.Models, current.SpendLimitMicro
+	if in.Name != nil && *in.Name != "" {
+		name = *in.Name
+	}
+	if in.Models != nil {
+		models = *in.Models
+	}
+	if in.SpendLimit != nil {
+		spendLimit = aigateway.PointsToMicroFloor(*in.SpendLimit)
 	}
 	status := current.Status
 	if in.Status != "" {
@@ -376,7 +386,7 @@ func (r *Repository) UpdateAIGatewayKey(ctx context.Context, appID, userID, keyI
 SET name = $3, status = $4, models = $5, spend_limit = $6, expires_at = $7, updated_at = NOW()
 WHERE k.appid = $1 AND k.id = $2 AND k.status <> 'revoked'
 RETURNING `+aiGatewayKeyColumns,
-		appID, keyID, in.Name, status, in.Models, aigateway.PointsToMicroFloor(in.SpendLimit), expiresAt))
+		appID, keyID, name, status, models, spendLimit, expiresAt))
 }
 
 // SetAIGatewayKeyStatus 管理端改状态（启用 / 停用）。

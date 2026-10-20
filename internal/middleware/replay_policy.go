@@ -113,6 +113,12 @@ var replayRules = []replayRule{
 	{segs: split("/api/auth/logout"), policy: PolicyOff, reason: "登出天然幂等"},
 	{segs: split("/api/admin/auth/logout"), policy: PolicyOff, reason: "同上"},
 
+	// ── AI 中转 ──
+	// 网关按调用记录自己处理 Idempotency-Key（同键进行中或已成功的返回 409，绝不重复扣费）。
+	// 这里的幂等重放要把整个响应存进 Redis 再回放：SSE 流会被缓冲到结束才吐出来，
+	// 上百 MB 的 base64 图片也不该进缓存。
+	{segs: split("/api/ai/v1/*"), policy: PolicyOff, reason: "AI 中转自带防重复计费，流式与大响应不能进重放缓存"},
+
 	// ── 资金与不可撤销的发放：这里才需要兜底 ──
 	{methods: []string{"POST"}, segs: split("/api/pay/*"), policy: PolicyGuarded, reason: "支付下单"},
 	{methods: []string{"POST"}, segs: split("/api/admin/payments/:id/refund"), policy: PolicyGuarded, reason: "退款不可撤销"},
@@ -121,6 +127,8 @@ var replayRules = []replayRule{
 	{methods: []string{"POST"}, segs: split("/api/admin/apps/:appkey/vip/grant"), policy: PolicyGuarded, reason: "会员发放"},
 	{methods: []string{"POST"}, segs: split("/api/admin/apps/:appkey/vip/revoke"), policy: PolicyGuarded, reason: "会员收回"},
 	{methods: []string{"POST"}, segs: split("/api/admin/apps/:appkey/points/grant"), policy: PolicyGuarded, reason: "积分发放"},
+	{methods: []string{"POST"}, segs: split("/api/admin/apps/:appkey/ai-gateway/requests/:no/refund"), policy: PolicyGuarded, reason: "AI 调用退款不可撤销"},
+	{methods: []string{"POST"}, segs: split("/api/admin/apps/:appkey/ai-gateway/users/:userid/credits"), policy: PolicyGuarded, reason: "赠送额度调整"},
 }
 
 // ResolveReplayPolicy 返回某条请求的处置。未登记的路由回落到 PolicyIdempotent。

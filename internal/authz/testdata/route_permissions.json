@@ -7210,6 +7210,102 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/catalog",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/settings",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/settings",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/:modelId",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/:modelId",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/:requestNo",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/keys",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/keys/:keyId/status",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/stats",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/account",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/credits",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/credits",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/releases",
     "permission": "version:read",
     "appScoped": true,

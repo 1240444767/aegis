@@ -21,6 +21,7 @@ package httptransport
 // 手工登记的 manualRouteDocs 与网关的 gatewayRouteDocs 会覆盖本表同名条目。
 
 import (
+	"aegis/internal/domain/aigateway"
 	"aegis/internal/domain/app"
 	"aegis/internal/domain/authprotocol"
 	"aegis/internal/domain/storage"
@@ -109,6 +110,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/reschedule"):     AccountDeletionRescheduleRequest{},       // AdminRescheduleAccountDeletion
 		routeKey("PUT", "/api/admin/apps/{appkey}/account-deletion/settings"):                             AccountDeletionSettingsRequest{},         // AdminSaveAccountDeletionSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/ad-policy/config"):                                      SaveAdPolicyRequest{},                    // AdminSaveAdPolicy
+		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/keys/{keyId}/status"):                        AIGatewayKeyStatusRequest{},              // AdminSetAIGatewayKeyStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/models"):                                    aigateway.ModelInput{},                   // AdminCreateAIGatewayModel
+		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/models/{modelId}"):                           aigateway.ModelInput{},                   // AdminUpdateAIGatewayModel
+		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/requests/{requestNo}/refund"):               AIGatewayRefundRequest{},                 // AdminRefundAIGatewayRequest
+		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/settings"):                                   aigateway.Settings{},                     // AdminSaveAIGatewaySettings
+		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/users/{userId}/credits"):                    AIGatewayCreditAdjustRequest{},           // AdminAdjustAIGatewayCredit
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/agent/stream"):                                      adminAIAgentStreamRequest{},              // AdminAppAIAgentStream
 		routeKey("POST", "/api/admin/apps/{appkey}/ai/configs"):                                           adminAIConfigSaveRequest{},               // AdminAppAIConfigCreate
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai/configs/{configId}"):                                 adminAIConfigSaveRequest{},               // AdminAppAIConfigUpdate
@@ -618,6 +625,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/ads/rewarded/claim"):                                      RewardedAdClaimRequest{},                 // AppClaimRewardedAd
 		routeKey("GET", "/api/v1/apps/{appkey}/ads/rewarded/records"):                                     PaginationQuery{},                        // AppRewardedAdRecords
 		routeKey("POST", "/api/v1/apps/{appkey}/ads/splash/events"):                                       AdSplashReportRequest{},                  // AppReportSplashAd
+		routeKey("POST", "/api/v1/apps/{appkey}/ai/keys"):                                                 AIGatewayKeyRequest{},                    // AppCreateAIKey
+		routeKey("PUT", "/api/v1/apps/{appkey}/ai/keys/{keyId}"):                                          AIGatewayKeyRequest{},                    // AppUpdateAIKey
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/2fa/verify"):                                         SecondFactorVerifyRequest{},              // AppSecondFactor
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/login"):                                              authprotocol.LoginInput{},                // AppLogin
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/token"):                                   OAuthBindTokenRequest{},                  // OAuthBindToken

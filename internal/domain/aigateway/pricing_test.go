@@ -271,9 +271,15 @@ func TestKeys(t *testing.T) {
 	if _, err := NormalizeKeyInput(KeyInput{ExpiresAt: &past}, true, now); err == nil {
 		t.Fatal("过去的到期时间应被拒绝")
 	}
-	in, err := NormalizeKeyInput(KeyInput{Status: KeyDisabled, Models: []string{" gpt-4o ", "gpt-4o", ""}}, true, now)
-	if err != nil || in.Status != KeyActive || len(in.Models) != 1 {
+	models := []string{" gpt-4o ", "gpt-4o", ""}
+	in, err := NormalizeKeyInput(KeyInput{Status: KeyDisabled, Models: &models}, true, now)
+	if err != nil || in.Status != KeyActive || in.Models == nil || len(*in.Models) != 1 {
 		t.Fatalf("新建密钥应强制启用并去重白名单：%v %+v", err, in)
+	}
+	// 修改时没传的字段保持 nil（不改）
+	patch, err := NormalizeKeyInput(KeyInput{Status: KeyDisabled}, false, now)
+	if err != nil || patch.Name != nil || patch.Models != nil || patch.SpendLimit != nil || patch.Status != KeyDisabled {
+		t.Fatalf("只改状态时其余字段应保持不改：%v %+v", err, patch)
 	}
 }
 
