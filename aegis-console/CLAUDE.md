@@ -1106,6 +1106,25 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
 
+## AI 通道编辑（/apps/{appKey}?tab=ai 与 /configuration?tab=ai）
+
+平台级与应用级共用 `components/ai/ai-channel-panel.tsx`，只差 scope。新建 / 编辑走右侧大号 Sheet
+（`ai-channel-editor-sheet.tsx`，`sm:max-w-5xl`）：左栏按目录分类、可搜索的供应商，右栏依次是基本信息、连接、型号、选项、连通性测试，⌘S 保存。
+
+| 文件 | 职责 |
+|---|---|
+| `components/ai/ai-channel-editor-sheet.tsx` | 编辑 Sheet：供应商侧栏、分块表单、草稿测试、删除确认 |
+| `components/ai/ai-model-manager.tsx` | 型号管理器：芯片列表、星标设默认、粘贴多行拆分、一键拉取后搜索勾选（加入 / 只保留选中） |
+| `components/ai/ai-provider-fields.tsx` | 目录驱动的动态字段；`exclude` 让型号管理器接管 `models` / `defaultModel` |
+
+三条硬约束：
+
+1. **型号的存储形状不变**：仍是 `settings.models`（换行分隔）+ `settings.defaultModel`。管理器把默认型号排在第一个，
+   与后端「默认型号留空取第一行」一致；不要改成数组，后端与已存配置都按字符串读。
+2. **拉取与测试对草稿生效**（`POST …/ai/draft/models`、`…/ai/draft/test`）：新建不必先保存；编辑时密钥留空沿用已存的，
+   换了供应商则不沿用。上游失败返回 `ok=false` 与上游原话，就地展示，不 toast 成「接口错误」。
+3. **换供应商即重置字段与密钥**：上一家的地址、密钥不能带到下一家去提交。
+
 ## AI 中转区块（/apps/{appKey}?tab=ai-gateway）
 
 | 文件 | 职责 |

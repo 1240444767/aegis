@@ -218,7 +218,8 @@ export function AIProviderFields({
   secrets,
   secretSet,
   onSetting,
-  onSecret
+  onSecret,
+  exclude
 }: {
   meta?: AIProviderMeta | null;
   settings: Record<string, string>;
@@ -226,11 +227,15 @@ export function AIProviderFields({
   secretSet: Record<string, boolean>;
   onSetting: ChangeHandler;
   onSecret: ChangeHandler;
+  /** 由调用方自己渲染的字段（如型号管理器接管的 models / defaultModel）。 */
+  exclude?: string[];
 }) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const excludeKey = (exclude ?? []).join("|");
 
   const { grouped, advancedFields } = useMemo(() => {
-    const all = meta?.fields ?? [];
+    const skipped = new Set(excludeKey ? excludeKey.split("|") : []);
+    const all = (meta?.fields ?? []).filter((field) => !skipped.has(field.key));
     const adv = all.filter((f) => f.advanced);
     const groups = new Map<string, AIConfigField[]>();
     for (const field of all) {
@@ -241,7 +246,7 @@ export function AIProviderFields({
       groups.set(key, list);
     }
     return { grouped: groups, advancedFields: adv };
-  }, [meta]);
+  }, [meta, excludeKey]);
 
   if (!meta) {
     return <p className="text-xs text-muted-foreground">加载中…</p>;

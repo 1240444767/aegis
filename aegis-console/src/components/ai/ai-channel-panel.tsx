@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useState } from "react";
 import {
   AlertTriangle,
   ArrowRight,
@@ -22,13 +22,10 @@ import {
   useAIMCPServersQuery,
   useAIProviderCatalogQuery,
   useAISkillsQuery,
-  useDeleteAIConfigMutation,
   useDeleteAIMCPServerMutation,
   useDeleteAISkillMutation,
-  useSaveAIConfigMutation,
   useSaveAIMCPServerMutation,
   useSaveAISkillMutation,
-  useTestAIConfigMutation,
   useTestAIMCPServerMutation,
   type AIScope
 } from "@/lib/ai-hooks";
@@ -44,7 +41,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { AIBrandBadge } from "./ai-brand-icon";
-import { AI_CAPABILITY_LABELS, AIProviderFields, buildDefaultAISettings } from "./ai-provider-fields";
+import { AIChannelEditorSheet, type ConfigDraft } from "./ai-channel-editor-sheet";
+import { parseModels } from "./ai-model-manager";
+import { AI_CAPABILITY_LABELS, buildDefaultAISettings } from "./ai-provider-fields";
 
 /** 连通性测试的结论。失败原因可能来自上游，防御性截断，别让一段长文撑爆弹窗。 */
 type TestOutcome = { ok: boolean; text: string };
@@ -192,20 +191,6 @@ function ChannelChainBand({
 
 // ═══════════════════════ 通道配置 ═══════════════════════
 
-type ConfigDraft = {
-  configId?: number;
-  provider: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  isDefault: boolean;
-  shared: boolean;
-  settings: Record<string, string>;
-  secrets: Record<string, string>;
-  secretSet: Record<string, boolean>;
-  testModel: string;
-};
-
 function ConfigsSection({
   scope,
   providers,
@@ -215,13 +200,7 @@ function ConfigsSection({
   providers: AIProviderMeta[];
   configs: AIConfig[];
 }) {
-  const saveMutation = useSaveAIConfigMutation(scope);
-  const deleteMutation = useDeleteAIConfigMutation(scope);
-  const testMutation = useTestAIConfigMutation(scope);
-  const isPlatform = scope.kind === "platform";
-
   const [editing, setEditing] = useState<ConfigDraft | null>(null);
-  const [testOutcome, setTestOutcome] = useState<TestOutcome | null>(null);
 
   function openCreate() {
     const first = providers[0];
@@ -234,10 +213,8 @@ function ConfigsSection({
       shared: false,
       settings: buildDefaultAISettings(first),
       secrets: {},
-      secretSet: {},
-      testModel: ""
+      secretSet: {}
     });
-    setTestOutcome(null);
   }
 
   function openEdit(config: AIConfig) {
@@ -251,74 +228,9 @@ function ConfigsSection({
       shared: Boolean(config.shared),
       settings: { ...(config.settings ?? {}) },
       secrets: {},
-      secretSet: { ...(config.secretSet ?? {}) },
-      testModel: ""
+      secretSet: { ...(config.secretSet ?? {}) }
     });
-    setTestOutcome(null);
   }
-
-  async function handleSave(event: FormEvent) {
-    event.preventDefault();
-    if (!editing) return;
-    try {
-      await saveMutation.mutateAsync({
-        configId: editing.configId,
-        payload: {
-          name: editing.name,
-          provider: editing.provider,
-          description: editing.description,
-          enabled: editing.enabled,
-          isDefault: editing.isDefault,
-          ...(isPlatform ? { shared: editing.shared } : {}),
-          settings: editing.settings,
-          // 密钥留空的键在这里就不发出去，后端也会再挡一道 ——
-          // 这条约定一旦失效，代价是用户的凭据被静默清空。
-          secrets: Object.fromEntries(Object.entries(editing.secrets).filter(([, v]) => v.trim() !== "")),
-          replaceSettings: true
-        }
-      });
-      toast.success(editing.configId ? "通道已更新" : "通道已创建");
-      setEditing(null);
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "保存失败");
-    }
-  }
-
-  async function handleDelete() {
-    if (!editing?.configId) return;
-    try {
-      await deleteMutation.mutateAsync(editing.configId);
-      toast.success("已删除");
-      setEditing(null);
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "删除失败");
-    }
-  }
-
-  async function handleTest() {
-    if (!editing?.configId) return;
-    setTestOutcome(null);
-    try {
-      const result = await testMutation.mutateAsync({
-        configId: editing.configId,
-        model: editing.testModel.trim() || undefined
-      });
-      if (result.ok) {
-        setTestOutcome({
-          ok: true,
-          text: `连通正常（${result.elapsedMs}ms · ${result.model}）${result.reply ? `：${result.reply}` : ""}`
-        });
-        toast.success("测试通过");
-      } else {
-        setTestOutcome({ ok: false, text: `测试未通过：${clipText(result.error ?? "未知错误")}` });
-        toast.error("测试未通过");
-      }
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "测试失败");
-    }
-  }
-
-  const activeMeta = providers.find((p) => p.provider === editing?.provider);
 
   return (
     <div className="space-y-4">
@@ -343,148 +255,7 @@ function ConfigsSection({
         </div>
       )}
 
-      <Dialog open={Boolean(editing)} onOpenChange={(open) => !open && setEditing(null)}>
-        <DialogContent className="max-w-2xl p-0! gap-0!">
-          <DialogHeader className="px-6 pt-6 pb-4 border-b">
-            <DialogTitle>{editing?.configId ? "编辑 AI 通道" : "新建 AI 通道"}</DialogTitle>
-          </DialogHeader>
-
-          {editing && (
-            <form onSubmit={handleSave} className="max-h-[70vh] space-y-4 overflow-y-auto px-6 py-5">
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">
-                    通道名称<span className="text-destructive"> *</span>
-                  </Label>
-                  <Input
-                    className="h-8 text-sm"
-                    placeholder="default"
-                    value={editing.name}
-                    onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">供应商</Label>
-                  <ProviderPicker
-                    providers={providers}
-                    value={editing.provider}
-                    onChange={(provider) => {
-                      const meta = providers.find((p) => p.provider === provider);
-                      // 换供应商时把字段重置成新供应商的默认值，避免上一家的残留值提交上去
-                      setEditing({ ...editing, provider, settings: buildDefaultAISettings(meta), secrets: {} });
-                    }}
-                  />
-                </div>
-              </div>
-
-              <Separator />
-
-              <AIProviderFields
-                meta={activeMeta}
-                settings={editing.settings}
-                secrets={editing.secrets}
-                secretSet={editing.secretSet}
-                onSetting={(key, value) => setEditing({ ...editing, settings: { ...editing.settings, [key]: value } })}
-                onSecret={(key, value) => setEditing({ ...editing, secrets: { ...editing.secrets, [key]: value } })}
-              />
-
-              <Separator />
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">说明</Label>
-                <Textarea
-                  className="text-sm"
-                  rows={2}
-                  placeholder="可选备注"
-                  value={editing.description}
-                  onChange={(e) => setEditing({ ...editing, description: e.target.value })}
-                />
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <SwitchRow
-                  label="启用"
-                  checked={editing.enabled}
-                  onCheckedChange={(v) => setEditing({ ...editing, enabled: v })}
-                />
-                <SwitchRow
-                  label="设为默认"
-                  checked={editing.isDefault}
-                  onCheckedChange={(v) => setEditing({ ...editing, isDefault: v })}
-                />
-              </div>
-
-              {isPlatform && (
-                <SwitchRow
-                  label="共享给应用作为兜底"
-                  checked={editing.shared}
-                  onCheckedChange={(v) => setEditing({ ...editing, shared: v })}
-                />
-              )}
-
-              {editing.configId && (
-                <>
-                  <Separator />
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1 space-y-1.5">
-                      <Label className="text-xs">测试型号</Label>
-                      <Input
-                        className="h-8 font-mono text-xs"
-                        placeholder="留空用默认型号"
-                        value={editing.testModel}
-                        onChange={(e) => setEditing({ ...editing, testModel: e.target.value })}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-8"
-                      onClick={() => void handleTest()}
-                      disabled={testMutation.isPending}
-                    >
-                      <Sparkles className="size-3.5" /> {testMutation.isPending ? "测试中…" : "连通性测试"}
-                    </Button>
-                  </div>
-                  {testOutcome ? <TestOutcomeNote outcome={testOutcome} /> : null}
-                </>
-              )}
-            </form>
-          )}
-
-          <DialogFooter className="border-t px-6 py-4">
-            <div className="flex w-full items-center justify-between">
-              <div>
-                {editing?.configId && (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="destructive"
-                    onClick={() => void handleDelete()}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 className="size-3.5" /> 删除
-                  </Button>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <Button type="button" size="sm" variant="outline" onClick={() => setEditing(null)}>
-                  取消
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={(e) => void handleSave(e as unknown as FormEvent)}
-                  disabled={saveMutation.isPending}
-                >
-                  <Save className="size-3.5" /> {saveMutation.isPending ? "保存中…" : "保存"}
-                </Button>
-              </div>
-            </div>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <AIChannelEditorSheet scope={scope} providers={providers} initial={editing} onClose={() => setEditing(null)} />
     </div>
   );
 }
@@ -499,7 +270,8 @@ function ConfigCard({
   onClick: () => void;
 }) {
   const capabilities = AI_CAPABILITY_LABELS.filter((c) => meta?.capabilities?.[c.key]);
-  const defaultModel = config.settings?.defaultModel || config.settings?.models?.split(/[\n,]/)[0]?.trim();
+  const modelCount = parseModels(config.settings?.models).length;
+  const defaultModel = config.settings?.defaultModel || parseModels(config.settings?.models)[0];
   return (
     <button
       type="button"
@@ -529,7 +301,10 @@ function ConfigCard({
       </div>
 
       <span className="text-xs text-muted-foreground">{meta?.name ?? config.provider}</span>
-      <span className="truncate font-mono text-xs text-muted-foreground">{defaultModel || "未填写型号"}</span>
+      <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span className="truncate font-mono">{defaultModel || "未填写型号"}</span>
+        {modelCount > 1 ? <span className="shrink-0">· {modelCount} 个型号</span> : null}
+      </span>
 
       {capabilities.length > 0 && (
         <div className="flex flex-wrap gap-1">
@@ -541,62 +316,6 @@ function ConfigCard({
         </div>
       )}
     </button>
-  );
-}
-
-function ProviderPicker({
-  providers,
-  value,
-  onChange
-}: {
-  providers: AIProviderMeta[];
-  value: string;
-  onChange: (provider: string) => void;
-}) {
-  // 按目录下发的分类分组；后端加一个分类时这里自动多一组。
-  const groups = useMemo(() => {
-    const map = new Map<string, AIProviderMeta[]>();
-    for (const provider of providers) {
-      const key = provider.categoryName || "其他";
-      const list = map.get(key) ?? [];
-      list.push(provider);
-      map.set(key, list);
-    }
-    return [...map.entries()];
-  }, [providers]);
-
-  return (
-    <div className="space-y-2">
-      {groups.map(([category, items]) => (
-        <div key={category} className="space-y-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{category}</span>
-          <div className="flex flex-wrap gap-1.5">
-            {items.map((provider) => (
-              <button
-                key={provider.provider}
-                type="button"
-                onClick={() => onChange(provider.provider)}
-                title={provider.description}
-                className={`inline-flex items-center gap-1.5 rounded-lg border px-2 py-1 text-xs transition-colors ${
-                  value === provider.provider
-                    ? "border-primary bg-primary/10 text-foreground"
-                    : "hover:border-primary/30 hover:bg-muted/40"
-                }`}
-              >
-                <AIBrandBadge
-                  slug={provider.icon}
-                  brandColor={provider.brandColor}
-                  name={provider.name}
-                  size="sm"
-                  className="size-5! rounded-md!"
-                />
-                {provider.name}
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-    </div>
   );
 }
 

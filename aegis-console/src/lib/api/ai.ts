@@ -99,6 +99,37 @@ export type AITestResult = {
   usage?: { inputTokens: number; outputTokens: number; totalTokens: number };
 };
 
+/** 从供应商「列出模型」接口拉到的一个型号。 */
+export type AIModelInfo = {
+  id: string;
+  name?: string;
+  ownedBy?: string;
+  created?: number;
+  description?: string;
+  contextWindow?: number;
+};
+
+export type AIModelListResult = {
+  ok: boolean;
+  elapsedMs: number;
+  models?: AIModelInfo[];
+  count?: number;
+  error?: string;
+  status?: number;
+};
+
+/**
+ * 通道草稿：新建或编辑中的表单。configId 非 0 时以已存配置为底，
+ * secrets 只覆盖填了的键 —— 编辑态不必重新粘贴密钥就能拉型号、能测。
+ */
+export type AIConfigDraftPayload = {
+  configId?: number;
+  provider: string;
+  settings: Record<string, string>;
+  secrets: Record<string, string>;
+  model?: string;
+};
+
 export type AISkill = {
   id: number;
   appid: number;
@@ -248,6 +279,24 @@ export function testAIConfig(token: string, scope: AIScope, configId: number, mo
     method: "POST",
     token,
     body: JSON.stringify({ model: model ?? "" })
+  });
+}
+
+/** 按草稿向供应商拉型号清单。上游失败时 ok=false 带上游原话（HTTP 仍是 200）。 */
+export function fetchAIDraftModels(token: string, scope: AIScope, draft: AIConfigDraftPayload) {
+  return apiRequest<AIModelListResult>(`${aiBase(scope)}/draft/models`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(draft)
+  });
+}
+
+/** 对草稿做连通性测试（真实调用一次，会产生 token 计费）。 */
+export function testAIDraft(token: string, scope: AIScope, draft: AIConfigDraftPayload) {
+  return apiRequest<AITestResult>(`${aiBase(scope)}/draft/test`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(draft)
   });
 }
 
