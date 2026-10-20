@@ -2,7 +2,18 @@
 
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Line, ComposedChart, XAxis, YAxis } from "recharts";
-import { CalendarCheck, Coins, Dices, Hourglass, ShieldCheck, Sparkles, Trophy, Users } from "lucide-react";
+import {
+  ArrowRightLeft,
+  CalendarCheck,
+  Coins,
+  Dices,
+  HandCoins,
+  Hourglass,
+  ShieldCheck,
+  Sparkles,
+  Trophy,
+  Users
+} from "lucide-react";
 import {
   SOURCE_LABEL,
   formatCount,
@@ -137,7 +148,7 @@ export function LotteryStatsPanel({
         </ToggleGroup>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <StatTile label="今日抽奖" icon={CalendarCheck} value={value(summary?.todayDraws)} />
         <StatTile label="今日人数" icon={Users} value={value(summary?.todayUsers)} />
         <StatTile label="今日中奖" icon={Trophy} value={value(summary?.todayWins)} />
@@ -158,6 +169,8 @@ export function LotteryStatsPanel({
           />
         </button>
         <StatTile label="保底触发" icon={ShieldCheck} value={value(summary?.pityHits)} />
+        <StatTile label="已拥有改发" icon={ArrowRightLeft} value={value(summary?.converted ?? 0)} />
+        <StatTile label="折算积分" icon={HandCoins} value={value(summary?.convertedPoints ?? 0)} />
       </div>
 
       <ChartCard title="趋势" loading={statsQuery.isLoading} empty={trendEmpty} height={240}>
@@ -208,6 +221,7 @@ export function LotteryStatsPanel({
                   <TableHead>奖品</TableHead>
                   <TableHead>类型</TableHead>
                   <TableHead className="text-right">{days} 天抽中</TableHead>
+                  <TableHead className="text-right">其中改发</TableHead>
                   <TableHead className="text-right">库存</TableHead>
                 </TableRow>
               </TableHeader>
@@ -220,6 +234,9 @@ export function LotteryStatsPanel({
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{kindLabelOf(prize.kind, kinds)}</TableCell>
                     <TableCell className="text-right text-xs tabular-nums">{formatCount(prize.draws)}</TableCell>
+                    <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+                      {prize.converted ? formatCount(prize.converted) : "—"}
+                    </TableCell>
                     <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
                       {prize.quantity < 0 ? "不限" : `${formatCount(prize.used)}/${formatCount(prize.quantity)}`}
                     </TableCell>

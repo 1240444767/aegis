@@ -5,7 +5,9 @@ import { BarChart3, Dices, Loader2, Pause, Pencil, Play, Plus, ReceiptText, Squa
 import { toast } from "sonner";
 import { SectionCard } from "@/components/apps/app-config-primitives";
 import { LotteryActivityEditor } from "@/components/apps/lottery/lottery-activity-editor";
+import { OWNABLE_KINDS } from "@/components/apps/lottery/lottery-activity-form";
 import {
+  LIFETIME_POLICY_META,
   LotteryStatusBadge,
   UI_MODE_LABEL,
   activityPhase,
@@ -150,6 +152,7 @@ export function LotteryActivitiesPanel({
               const pityPrize = prizes.find((prize) => prize.id === activity.pityPrizeId);
               const scene = scenes.find((item) => item.key === activity.videoScene);
               const phase = activityPhase(activity);
+              const lifetimePolicy = activity.lifetimePolicy || "points";
               const timeWindow = activityWindow(activity.startTime, activity.endTime);
               const ways = [
                 activity.freeDaily > 0 ? `每日免费 ${activity.freeDaily} 次` : null,
@@ -174,6 +177,16 @@ export function LotteryActivitiesPanel({
                         <Badge variant="outline" size="sm" className="font-normal">
                           {UI_MODE_LABEL[activity.uiMode] ?? activity.uiMode}
                         </Badge>
+                        {prizes.some((prize) => OWNABLE_KINDS.includes(prize.kind)) ? (
+                          <Badge
+                            variant="outline"
+                            size="sm"
+                            className="font-normal"
+                            title={LIFETIME_POLICY_META[lifetimePolicy]?.hint}
+                          >
+                            已拥有：{LIFETIME_POLICY_META[lifetimePolicy]?.short ?? lifetimePolicy}
+                          </Badge>
+                        ) : null}
                       </div>
                       {activity.description ? (
                         <p className="text-xs text-muted-foreground">{activity.description}</p>

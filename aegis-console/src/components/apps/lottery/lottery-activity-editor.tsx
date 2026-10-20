@@ -1,15 +1,17 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, Grid3x3, Loader2, Save, Disc3 } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, Coins, Disc3, Gift, Grid3x3, Loader2, Save, Ticket } from "lucide-react";
 import { toast } from "sonner";
-import { FieldGroup, NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
+import { FieldGroup, ModeCard, NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import {
   LIMITS,
+  OWNABLE_KINDS,
   blankPrize,
   nextPrizeKey,
   rewardOf,
   seedForm,
+  swapPreview,
   toPayload,
   validateForm,
   weightedOf,
@@ -17,6 +19,8 @@ import {
 } from "@/components/apps/lottery/lottery-activity-form";
 import { LotteryPrizeBoard } from "@/components/apps/lottery/lottery-prize-board";
 import {
+  LIFETIME_POLICIES,
+  LIFETIME_POLICY_META,
   LOTTERY_STATUSES,
   UI_MODE_LABEL,
   defaultPrizeName,
@@ -25,6 +29,7 @@ import {
 } from "@/components/apps/lottery/lottery-shared";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RadioGroup } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -43,11 +48,18 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { ApiError } from "@/lib/api/client";
-import type { LotteryAdminActivity, LotteryStatus, LotteryUIMode } from "@/lib/api/lottery";
+import type { LotteryAdminActivity, LotteryLifetimePolicy, LotteryStatus, LotteryUIMode } from "@/lib/api/lottery";
 import { useLotteryCatalogQuery, useSaveLotteryActivityMutation } from "@/lib/lottery-hooks";
 
 /** Select 不接受空串作为选项值：「不开放视频抽奖」用这个占位 */
 const NO_SCENE = "__none";
+
+const POLICY_ICON: Record<LotteryLifetimePolicy, React.ReactNode> = {
+  points: <Coins className="size-3.5" />,
+  draws: <Ticket className="size-3.5" />,
+  exclude: <Ban className="size-3.5" />,
+  grant: <Gift className="size-3.5" />
+};
 
 /**
  * 新建 / 编辑一个活动（连同全部奖品，一次保存）。
@@ -75,7 +87,7 @@ export function LotteryActivityEditor({
   const [draft, setDraft] = useState<{ id: number; value: ActivityForm } | null>(null);
   const [selectedKey, setSelectedKey] = useState<number | null>(null);
   const scope = activity?.id ?? 0;
-  const form = draft?.id === scope ? draft.value : seedForm(activity);
+  const form = draft?.id === scope ? draft.value : seedForm(activity, catalog);
   const update = (next: Partial<ActivityForm>) => setDraft({ id: scope, value: { ...form, ...next } });
   const patch = <K extends keyof ActivityForm>(key: K, value: ActivityForm[K]) => update({ [key]: value } as Partial<ActivityForm>);
 
@@ -119,6 +131,13 @@ export function LotteryActivityEditor({
     if (!prize) return "";
     return prize.name.trim() || defaultPrizeName(rewardOf(prize, kinds), kinds, plans, features);
   };
+
+  const policies = catalog?.lifetimePolicies?.length
+    ? catalog.lifetimePolicies
+    : LIFETIME_POLICIES.map((key) => ({ key, ...LIFETIME_POLICY_META[key] }));
+  /** 奖盘里会被「已拥有」的格子，配一行「抽中 X → 改发 Y」的实时示例 */
+  const ownablePrizes = form.prizes.filter((prize) => OWNABLE_KINDS.includes(prize.type));
+  const showPoints = form.lifetimePolicy === "points" || form.lifetimePolicy === "exclude";
 
   const currentScene = scenes.find((scene) => scene.key === form.videoScene);
   const sceneHint = !catalog
@@ -301,6 +320,7 @@ export function LotteryActivityEditor({
                 selectedKey={selectedKey}
                 pityKey={form.pity ? form.pityKey : null}
                 catalog={catalog}
+                swapPreview={(prize) => swapPreview(form, prize, catalog)}
                 onSelect={setSelectedKey}
                 onChange={(prizes) =>
                   update({
@@ -350,6 +370,78 @@ export function LotteryActivityEditor({
                       {pityPrize.unlimited ? "" : "，保底奖抽完后不再保底"}
                     </p>
                   ) : null}
+                </div>
+              ) : null}
+            </FieldGroup>
+
+            <FieldGroup label="已拥有的奖品">
+              <p className="text-xs text-muted-foreground">
+                永久会员抽中会员天数或已包含的套餐、功能，或用户已永久解锁某个功能时，这一格对他不再有新的权益。抽奖时由服务端按下面的方式处理。
+              </p>
+              <RadioGroup
+                value={form.lifetimePolicy}
+                onValueChange={(value) => patch("lifetimePolicy", value as LotteryLifetimePolicy)}
+                className="grid gap-2 sm:grid-cols-2"
+              >
+                {policies.map((policy) => (
+                  <ModeCard
+                    key={policy.key}
+                    value={policy.key}
+                    active={form.lifetimePolicy === policy.key}
+                    title={policy.label}
+                    description={policy.hint}
+                    icon={POLICY_ICON[policy.key] ?? <Gift className="size-3.5" />}
+                  />
+                ))}
+              </RadioGroup>
+              {showPoints ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <NumberField
+                    label="每天折算积分"
+                    value={form.lifetimePointsPerDay}
+                    min={0}
+                    max={LIMITS.lifetimePointsPerDay}
+                    unit="积分/天"
+                    onChange={(value) => patch("lifetimePointsPerDay", value)}
+                  />
+                  <NumberField
+                    label="永久奖品折算积分"
+                    value={form.lifetimePointsLifetime}
+                    min={0}
+                    max={LIMITS.lifetimePointsLifetime}
+                    unit="永久套餐与永久功能"
+                    onChange={(value) => patch("lifetimePointsLifetime", value)}
+                  />
+                </div>
+              ) : null}
+              {form.lifetimePolicy === "draws" ? (
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <NumberField
+                    label="改发次数"
+                    value={form.lifetimeDraws}
+                    min={1}
+                    max={LIMITS.lifetimeDraws}
+                    unit="次"
+                    onChange={(value) => patch("lifetimeDraws", value)}
+                  />
+                </div>
+              ) : null}
+              {form.lifetimePolicy !== "grant" && ownablePrizes.length > 0 ? (
+                <div className="space-y-1 rounded-lg border border-dashed border-border px-3 py-2">
+                  <span className="text-[11px] font-medium text-muted-foreground">本活动的会员与功能奖品</span>
+                  {ownablePrizes.map((prize) => {
+                    const target = swapPreview(form, prize, catalog);
+                    return (
+                      <div key={prize.key} className="flex items-center gap-1.5 text-xs">
+                        <span className="truncate">{prizeName(prize.key)}</span>
+                        <ArrowRight className="size-3 shrink-0 text-muted-foreground" />
+                        <span className="shrink-0 font-medium tabular-nums">{target ?? "照常发放"}</span>
+                        {form.lifetimePolicy === "exclude" && Number(prize.weight) > 0 ? (
+                          <span className="shrink-0 text-muted-foreground">（仅保底时）</span>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
             </FieldGroup>

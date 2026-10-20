@@ -13,6 +13,8 @@ export type LotteryUIMode = "grid" | "wheel";
 export type LotteryStatus = "draft" | "active" | "paused" | "ended";
 export type LotterySource = "free" | "bonus" | "points";
 export type LotteryDrawStatus = "granted" | "pending" | "fulfilled";
+/** 抽中已拥有的奖品怎么办：折算积分 / 改发抽奖次数 / 不参与抽取 / 照常发放 */
+export type LotteryLifetimePolicy = "points" | "draws" | "exclude" | "grant";
 /** 奖品取值形态：空为不需要取值（谢谢参与） */
 export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "text";
 
@@ -66,6 +68,16 @@ export type LotteryCatalog = {
   videoScenes: LotteryVideoScene[];
   /** 激励广告总开关 */
   rewardedAds: boolean;
+  /** 已拥有奖品的处理方式（文案由后端下发） */
+  lifetimePolicies?: Array<{ key: LotteryLifetimePolicy; label: string; hint: string }>;
+  /** 「已拥有时改发」可选的奖品类型 */
+  swapKinds?: string[];
+  lifetimeDefaults?: {
+    policy: LotteryLifetimePolicy;
+    pointsPerDay: number;
+    pointsLifetime: number;
+    draws: number;
+  };
 };
 
 export type LotteryReward = {
@@ -103,6 +115,8 @@ export type LotteryPrize = {
   /** 在奖盘上的位置；九宫格为外圈顺时针 0–7，从左上角起 */
   position: number;
   fallback: boolean;
+  /** 抽中的人已拥有这个奖品时改发什么；空为按活动的处理方式 */
+  lifetimeReward?: LotteryReward | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -126,6 +140,13 @@ export type LotteryActivity = {
   /** 0 为关闭 */
   pityThreshold: number;
   pityPrizeId?: number;
+  lifetimePolicy?: LotteryLifetimePolicy;
+  /** 折算积分时每天会员 / 功能折多少积分 */
+  lifetimePointsPerDay?: number;
+  /** 永久套餐 / 永久功能折多少积分 */
+  lifetimePointsLifetime?: number;
+  /** 改发抽奖次数时发几次 */
+  lifetimeDraws?: number;
   sortOrder: number;
   createdBy?: string;
   createdAt: string;
@@ -151,6 +172,8 @@ export type LotteryPrizePayload = {
   weight: number;
   position: number;
   fallback: boolean;
+  /** 未设置时为 null */
+  lifetimeReward: LotteryReward | null;
 };
 
 export type LotteryActivityPayload = {
@@ -168,6 +191,10 @@ export type LotteryActivityPayload = {
   pityThreshold: number;
   /** 保底奖在 prizes 里的 position；关闭保底时为 null */
   pityPosition: number | null;
+  lifetimePolicy: LotteryLifetimePolicy;
+  lifetimePointsPerDay: number;
+  lifetimePointsLifetime: number;
+  lifetimeDraws: number;
   sortOrder: number;
   prizes: LotteryPrizePayload[];
 };
@@ -191,6 +218,8 @@ export type LotteryDraw = {
   pity?: boolean;
   status: LotteryDrawStatus;
   results: LotteryRewardResult[];
+  /** 抽中的奖品对这个人是已拥有的、改发了别的东西（prizeName / reward 仍是抽中的那一格） */
+  conversion?: LotteryConversion;
   note?: string;
   handledBy?: string;
   handledAt?: string;
@@ -198,6 +227,14 @@ export type LotteryDraw = {
   deviceId?: string;
   clientIp?: string;
   createdAt: string;
+};
+
+export type LotteryConversion = {
+  /** lifetime 永久会员已包含 / feature 已永久解锁该功能 */
+  reason: "lifetime" | "feature";
+  reward: LotteryReward;
+  label: string;
+  message: string;
 };
 
 export type LotteryDrawParams = {
@@ -234,10 +271,14 @@ export type LotteryStats = {
     pointsSpent: number;
     pending: number;
     pityHits: number;
+    /** 抽中已拥有的奖品、改发的次数 */
+    converted?: number;
+    /** 其中折算出去的积分 */
+    convertedPoints?: number;
   };
   trend: Array<{ date: string; draws: number; wins: number; users: number }>;
   sources: Array<{ source: LotterySource; draws: number }>;
-  prizes: Array<{ prizeId?: number; name: string; kind: string; draws: number; quantity: number; used: number }>;
+  prizes: Array<{ prizeId?: number; name: string; kind: string; draws: number; quantity: number; used: number; converted?: number }>;
 };
 
 const base = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}/lottery`;

@@ -3,6 +3,8 @@
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import {
+  OWNABLE_KINDS,
+  SWAP_KINDS,
   blankPrize,
   nextPrizeKey,
   rewardOf,
@@ -28,6 +30,9 @@ import {
 import type { LotteryCatalog, LotteryUIMode } from "@/lib/api/lottery";
 import { cn } from "@/lib/utils";
 
+/** Select 不接受空串：「按活动的处理方式」用这个占位 */
+const SWAP_POLICY = "__policy";
+
 /**
  * 奖盘编辑：左边选格子，右边改这一格。
  *
@@ -42,6 +47,7 @@ export function LotteryPrizeBoard({
   selectedKey,
   pityKey,
   catalog,
+  swapPreview,
   onSelect,
   onChange
 }: {
@@ -51,6 +57,8 @@ export function LotteryPrizeBoard({
   selectedKey: number | null;
   pityKey: number | null;
   catalog?: LotteryCatalog | null;
+  /** 这一格被已拥有的人抽中时改发什么（一句话），不改发时为 null */
+  swapPreview?: (prize: PrizeDraft) => string | null;
   onSelect: (key: number) => void;
   onChange: (prizes: PrizeDraft[]) => void;
 }) {
@@ -451,6 +459,57 @@ export function LotteryPrizeBoard({
               onChange={(value) => setFallback(selected.key, value)}
             />
           </div>
+
+          {OWNABLE_KINDS.includes(selected.type) ? (
+            <div className="space-y-2 rounded-lg border border-dashed border-border p-3">
+              <div className="flex items-baseline justify-between gap-2">
+                <span className="text-[11px] font-medium">已拥有时改发</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {(() => {
+                    const preview = swapPreview?.(selected);
+                    return preview ? `抽中后改发 ${preview}` : "照常发放";
+                  })()}
+                </span>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Select
+                  value={selected.swapType || SWAP_POLICY}
+                  onValueChange={(value) => {
+                    const swapType = value === SWAP_POLICY ? "" : value;
+                    const swapSpec = kinds.find((item) => item.type === swapType);
+                    patch(selected.key, {
+                      swapType,
+                      swapAmount: swapType ? selected.swapAmount || String(Math.max(swapSpec?.min ?? 1, 1)) : ""
+                    });
+                  }}
+                >
+                  <SelectTrigger className="h-9 w-full">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={SWAP_POLICY}>按活动的处理方式</SelectItem>
+                    {(catalog?.swapKinds?.length ? catalog.swapKinds : SWAP_KINDS).map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {kinds.find((item) => item.type === type)?.label ?? type}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {selected.swapType ? (
+                  <Input
+                    type="number"
+                    inputMode="numeric"
+                    min={kinds.find((item) => item.type === selected.swapType)?.min}
+                    max={kinds.find((item) => item.type === selected.swapType)?.max}
+                    value={selected.swapAmount}
+                    aria-label="改发数量"
+                    onChange={(event) => patch(selected.key, { swapAmount: event.target.value })}
+                  />
+                ) : null}
+              </div>
+              <p className="text-[11px] text-muted-foreground">永久会员已包含或已永久解锁时生效；活动选择照常发放时不生效。</p>
+            </div>
+          ) : null}
 
           <div className="space-y-1.5">
             <span className="text-[11px] font-medium">图片</span>

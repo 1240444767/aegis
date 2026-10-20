@@ -3,6 +3,7 @@ import type {
   LotteryActivityPayload,
   LotteryAdminActivity,
   LotteryCatalog,
+  LotteryLifetimePolicy,
   LotteryReward,
   LotteryRewardSpec,
   LotteryStatus,
@@ -27,8 +28,24 @@ export const LIMITS = {
   weight: 1_000_000,
   quantity: 100_000_000,
   pity: 1000,
-  note: 500
+  note: 500,
+  lifetimePointsPerDay: 100_000,
+  lifetimePointsLifetime: 10_000_000,
+  lifetimeDraws: 100
 } as const;
+
+/** 已拥有奖品处理的默认值（与后端 `lottery/lifetime.go` 一致；目录下发时以目录为准） */
+export const LIFETIME_DEFAULTS = {
+  policy: "points" as LotteryLifetimePolicy,
+  pointsPerDay: 10,
+  pointsLifetime: 3650,
+  draws: 1
+};
+
+/** 可能「已拥有」的奖品类型：只有它们能设置改发 */
+export const OWNABLE_KINDS = ["vip_days", "vip_plan", "feature"];
+/** 改发可选的类型（目录未下发时的回落） */
+export const SWAP_KINDS = ["points", "experience", "lottery_draws"];
 
 /** 一个奖品的草稿。数字一律按字符串存：存 number 的输入框清不空。 */
 export type PrizeDraft = {
@@ -49,6 +66,9 @@ export type PrizeDraft = {
   used: number;
   weight: string;
   fallback: boolean;
+  /** 已拥有时改发的类型；空为按活动的处理方式 */
+  swapType: string;
+  swapAmount: string;
 };
 
 export type ActivityForm = {
@@ -67,6 +87,10 @@ export type ActivityForm = {
   pityThreshold: string;
   /** 保底奖的行键：按行键记，奖品挪位置时保底跟着奖品走 */
   pityKey: number | null;
+  lifetimePolicy: LotteryLifetimePolicy;
+  lifetimePointsPerDay: string;
+  lifetimePointsLifetime: string;
+  lifetimeDraws: string;
   sortOrder: string;
   /** 下标即位置：九宫格为外圈顺时针 0–7，转盘为从顶部起顺时针 */
   prizes: PrizeDraft[];
@@ -91,7 +115,9 @@ export function blankPrize(key: number, type: string, amount: number, weight: nu
     quantity: "100",
     used: 0,
     weight: String(weight),
-    fallback: false
+    fallback: false,
+    swapType: "",
+    swapAmount: ""
   };
 }
 
@@ -113,7 +139,8 @@ function defaultPrizes(): PrizeDraft[] {
   }));
 }
 
-export function seedForm(activity?: LotteryAdminActivity | null): ActivityForm {
+export function seedForm(activity?: LotteryAdminActivity | null, catalog?: LotteryCatalog | null): ActivityForm {
+  const defaults = catalog?.lifetimeDefaults ?? LIFETIME_DEFAULTS;
   if (!activity) {
     return {
       name: "",
@@ -130,6 +157,10 @@ export function seedForm(activity?: LotteryAdminActivity | null): ActivityForm {
       pity: false,
       pityThreshold: "10",
       pityKey: null,
+      lifetimePolicy: defaults.policy,
+      lifetimePointsPerDay: String(defaults.pointsPerDay),
+      lifetimePointsLifetime: String(defaults.pointsLifetime),
+      lifetimeDraws: String(defaults.draws),
       sortOrder: "0",
       prizes: defaultPrizes()
     };
@@ -150,7 +181,9 @@ export function seedForm(activity?: LotteryAdminActivity | null): ActivityForm {
       quantity: String(prize.quantity < 0 ? Math.max(prize.used, 100) : prize.quantity),
       used: prize.used,
       weight: String(prize.weight),
-      fallback: prize.fallback
+      fallback: prize.fallback,
+      swapType: prize.lifetimeReward?.type ?? "",
+      swapAmount: prize.lifetimeReward?.type ? String(prize.lifetimeReward.amount ?? 0) : ""
     }));
   const pityPrize = activity.prizes.find((prize) => prize.id === activity.pityPrizeId);
   const pityKey = pityPrize ? prizes.find((draft) => draft.id === pityPrize.id)?.key ?? null : null;
@@ -169,6 +202,11 @@ export function seedForm(activity?: LotteryAdminActivity | null): ActivityForm {
     pity: activity.pityThreshold > 0,
     pityThreshold: String(activity.pityThreshold > 0 ? activity.pityThreshold : 10),
     pityKey,
+    // 迁移前的老数据没有这几项：回落默认
+    lifetimePolicy: activity.lifetimePolicy || defaults.policy,
+    lifetimePointsPerDay: String(activity.lifetimePointsPerDay ?? defaults.pointsPerDay),
+    lifetimePointsLifetime: String(activity.lifetimePointsLifetime ?? defaults.pointsLifetime),
+    lifetimeDraws: String(activity.lifetimeDraws || defaults.draws),
     sortOrder: String(activity.sortOrder),
     prizes
   };
@@ -196,6 +234,38 @@ export function rewardOf(prize: PrizeDraft, kinds: LotteryRewardSpec[]): Lottery
   }
 }
 
+/** 草稿 → 已拥有时改发什么；非会员 / 功能奖品或未设置时为 null */
+export function swapRewardOf(prize: PrizeDraft): LotteryReward | null {
+  if (!OWNABLE_KINDS.includes(prize.type) || !prize.swapType) return null;
+  return { type: prize.swapType, amount: toInt(prize.swapAmount) };
+}
+
+/** 奖品的时长：天数，或是否永久（与后端 `rewardTerm` 同口径） */
+function prizeTerm(prize: PrizeDraft, catalog?: LotteryCatalog | null): { days: number; lifetime: boolean } {
+  if (prize.type === "vip_plan") {
+    const plan = catalog?.plans.find((item) => item.id === prize.refId);
+    return { days: plan?.durationDays ?? 0, lifetime: plan?.lifetime ?? false };
+  }
+  const days = toInt(prize.amount);
+  return { days, lifetime: prize.type === "feature" && days === 0 };
+}
+
+const SWAP_UNIT: Record<string, string> = { points: "积分", experience: "经验", lottery_draws: "次抽奖" };
+
+/** 这一格被已拥有的人抽中时改发什么（一句话）；不改发时为 null */
+export function swapPreview(form: ActivityForm, prize: PrizeDraft, catalog?: LotteryCatalog | null): string | null {
+  if (!OWNABLE_KINDS.includes(prize.type)) return null;
+  const own = swapRewardOf(prize);
+  if (form.lifetimePolicy === "grant") return null;
+  if (own) return `${own.amount ?? 0} ${SWAP_UNIT[own.type] ?? ""}`.trim();
+  if (form.lifetimePolicy === "draws") return `${toInt(form.lifetimeDraws)} 次抽奖`;
+  const term = prizeTerm(prize, catalog);
+  const points = term.lifetime
+    ? toInt(form.lifetimePointsLifetime)
+    : term.days * toInt(form.lifetimePointsPerDay);
+  return points > 0 ? `${Math.min(points, 100_000_000)} 积分` : null;
+}
+
 /** 概率与库存口径的数值形态（与列表上的奖品同形），供公示概率计算 */
 export function weightedOf(prize: PrizeDraft) {
   return {
@@ -221,6 +291,10 @@ export function toPayload(form: ActivityForm, kinds: LotteryRewardSpec[]): Lotte
     videoScene: form.videoScene,
     pityThreshold: form.pity ? toInt(form.pityThreshold) : 0,
     pityPosition: pityIndex >= 0 ? pityIndex : null,
+    lifetimePolicy: form.lifetimePolicy,
+    lifetimePointsPerDay: toInt(form.lifetimePointsPerDay),
+    lifetimePointsLifetime: toInt(form.lifetimePointsLifetime),
+    lifetimeDraws: toInt(form.lifetimeDraws),
     sortOrder: toInt(form.sortOrder),
     prizes: form.prizes.map((prize, index) => {
       const weighted = weightedOf(prize);
@@ -232,7 +306,8 @@ export function toPayload(form: ActivityForm, kinds: LotteryRewardSpec[]): Lotte
         quantity: weighted.quantity,
         weight: weighted.weight,
         position: index,
-        fallback: prize.fallback
+        fallback: prize.fallback,
+        lifetimeReward: swapRewardOf(prize)
       };
     })
   };
@@ -314,6 +389,28 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
   if (fallbacks > 1) prizes("最多设置一个兜底奖");
   if (count > 0 && totalWeight <= 0) prizes("奖品的权重合计必须大于 0");
   if (count > 0 && !unlimited) prizes("至少需要一个不限库存的奖品（通常是「谢谢参与」）");
+
+  const perDay = toInt(form.lifetimePointsPerDay);
+  const lifetimePoints = toInt(form.lifetimePointsLifetime);
+  const lifetimeDraws = toInt(form.lifetimeDraws);
+  if (perDay < 0 || perDay > LIMITS.lifetimePointsPerDay) basic(`每天折算积分需要在 0–${LIMITS.lifetimePointsPerDay} 之间`);
+  if (lifetimePoints < 0 || lifetimePoints > LIMITS.lifetimePointsLifetime) {
+    basic(`永久奖品折算积分需要在 0–${LIMITS.lifetimePointsLifetime} 之间`);
+  }
+  if (lifetimeDraws < 0 || lifetimeDraws > LIMITS.lifetimeDraws) basic(`改发抽奖次数需要在 0–${LIMITS.lifetimeDraws} 之间`);
+  if (form.lifetimePolicy === "draws" && lifetimeDraws === 0) basic("改发抽奖次数时次数至少为 1");
+  if ((form.lifetimePolicy === "points" || form.lifetimePolicy === "exclude") && perDay === 0 && lifetimePoints === 0) {
+    basic("折算积分时每天积分与永久奖品积分不能都为 0");
+  }
+  form.prizes.forEach((prize, index) => {
+    const swap = swapRewardOf(prize);
+    if (!swap) return;
+    const spec = kinds.find((item) => item.type === swap.type);
+    const amount = swap.amount ?? 0;
+    if (spec && ((spec.min !== undefined && amount < spec.min) || (spec.max !== undefined && amount > spec.max))) {
+      prizes(`第 ${index + 1} 个奖品的改发：${spec.label}需要在 ${spec.min ?? 0}–${spec.max ?? amount} 之间`);
+    }
+  });
 
   if (form.pity) {
     const threshold = toInt(form.pityThreshold);

@@ -8,6 +8,7 @@ import { SectionCard } from "@/components/apps/app-config-primitives";
 import { AdPolicyPager } from "@/components/apps/ad-policy/ad-policy-pager";
 import { LIMITS } from "@/components/apps/lottery/lottery-activity-form";
 import {
+  ConversionBadge,
   DRAW_STATUSES,
   DrawStatusBadge,
   SOURCE_LABEL,
@@ -269,6 +270,7 @@ export function LotteryDrawsPanel({
                           保底
                         </Badge>
                       ) : null}
+                      {draw.conversion ? <ConversionBadge /> : null}
                     </div>
                     <p className="mt-0.5 text-[11px] text-muted-foreground">{kindLabelOf(draw.prizeKind, kinds)}</p>
                     <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{draw.drawNo}</p>
@@ -317,6 +319,11 @@ export function LotteryDrawsPanel({
                     ) : (
                       <span className="text-xs text-muted-foreground">—</span>
                     )}
+                    {draw.conversion ? (
+                      <p className="mt-1 text-[11px] text-muted-foreground" title={draw.conversion.message}>
+                        {draw.conversion.reason === "feature" ? "已永久拥有该功能" : "永久会员已包含"}，改发 {draw.conversion.label}
+                      </p>
+                    ) : null}
                     {draw.note ? <p className="mt-1 text-[11px] text-muted-foreground">{draw.note}</p> : null}
                   </TableCell>
                   <TableCell>

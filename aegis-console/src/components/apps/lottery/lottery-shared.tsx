@@ -7,6 +7,7 @@ import type {
   LotteryAdminActivity,
   LotteryDrawStatus,
   LotteryFeatureRef,
+  LotteryLifetimePolicy,
   LotteryPlanRef,
   LotteryReward,
   LotteryRewardSpec,
@@ -52,6 +53,25 @@ export const SOURCE_LABEL: Record<LotterySource, string> = {
   bonus: "次数",
   points: "积分"
 };
+
+/** 已拥有奖品的处理方式：目录未下发时的回落文案；short 用在活动列表上 */
+export const LIFETIME_POLICY_META: Record<LotteryLifetimePolicy, { label: string; short: string; hint: string }> = {
+  points: { label: "折算为积分", short: "折算积分", hint: "会员天数按每天积分折算，永久套餐与永久功能给固定积分" },
+  draws: { label: "改发抽奖次数", short: "改发次数", hint: "抽中已拥有的奖品时改发若干次抽奖" },
+  exclude: { label: "不参与抽取", short: "不参与抽取", hint: "对已拥有的用户剔除这些奖品，概率按剩余奖品重算；保底奖仍按积分折算" },
+  grant: { label: "照常发放", short: "照常发放", hint: "仍记一段会员或功能（永久会员实际拿不到新东西）" }
+};
+
+export const LIFETIME_POLICIES: LotteryLifetimePolicy[] = ["points", "draws", "exclude", "grant"];
+
+/** 抽奖记录上「已折算」的标记 */
+export function ConversionBadge() {
+  return (
+    <Badge variant="info" size="sm">
+      已折算
+    </Badge>
+  );
+}
 
 const DRAW_STATUS_META: Record<LotteryDrawStatus, { label: string; variant: "success" | "warning" | "info" }> = {
   granted: { label: "已到账", variant: "success" },
