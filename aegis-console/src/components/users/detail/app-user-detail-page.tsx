@@ -383,6 +383,7 @@ function IdentityCard({
             </div>
 
             <div className="-ml-1.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs text-muted-foreground">
+              {user.publicId ? <CopyChip label="对外 ID" value={String(user.publicId)} /> : null}
               <CopyChip label="ID" value={String(user.id)} />
               {account && account !== name ? <CopyChip label="账号" value={account} /> : null}
               {account && account === name ? <CopyChip label="账号" value={account} hideValue /> : null}
@@ -411,6 +412,12 @@ function IdentityCard({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
+              {user.publicId ? (
+                <DropdownMenuItem onSelect={() => void copyText(String(user.publicId), "对外 ID")}>
+                  <Copy />
+                  复制对外 ID
+                </DropdownMenuItem>
+              ) : null}
               <DropdownMenuItem onSelect={() => void copyText(String(user.id), "用户 ID")}>
                 <Copy />
                 复制用户 ID

@@ -402,6 +402,15 @@ export function AppUsersTable({
                   查看详情
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
+                {item.publicId ? (
+                  <DropdownMenuItem
+                    className="text-xs"
+                    onSelect={() => void copyText(String(item.publicId), "对外 ID")}
+                  >
+                    <Copy className="size-3.5" />
+                    复制对外 ID
+                  </DropdownMenuItem>
+                ) : null}
                 <DropdownMenuItem
                   className="text-xs"
                   onSelect={() => void copyText(String(item.id), "用户 ID")}

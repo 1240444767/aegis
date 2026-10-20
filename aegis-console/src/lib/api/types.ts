@@ -3127,6 +3127,8 @@ export type NotificationItem = {
 
 export type AdminAppUserItem = {
   id: number;
+  /** 对外用户 ID：用户在 App 里看到、报给客服的 16 位号（主键 id 只在后台用） */
+  publicId?: number;
   appid?: number;
   account?: string;
   nickname?: string;
