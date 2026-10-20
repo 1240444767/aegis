@@ -156,6 +156,24 @@ func init() {
 		View("GET /api/admin/apps/:appkey/lottery/draws", "查看抽奖记录", ""),
 		Write("POST /api/admin/apps/:appkey/lottery/draws/:drawId/fulfill", "标记抽奖奖品已发放", "抽奖记录", SeverityMedium),
 
+		// AI 中转网关（docs/ai-gateway.md）：退款与赠送额度调整直接动用户的钱，按高风险记
+		View("GET /api/admin/apps/:appkey/ai-gateway/catalog", "查看 AI 中转目录", ""),
+		View("GET /api/admin/apps/:appkey/ai-gateway/settings", "查看 AI 中转设置", ""),
+		Write("PUT /api/admin/apps/:appkey/ai-gateway/settings", "修改 AI 中转设置", "", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/ai-gateway/models", "查看 AI 中转模型与价格", ""),
+		Write("POST /api/admin/apps/:appkey/ai-gateway/models", "新建 AI 中转模型", "AI 模型", SeverityMedium),
+		Write("PUT /api/admin/apps/:appkey/ai-gateway/models/:modelId", "修改 AI 中转模型与价格", "AI 模型", SeverityMedium),
+		Write("DELETE /api/admin/apps/:appkey/ai-gateway/models/:modelId", "删除 AI 中转模型", "AI 模型", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/ai-gateway/requests", "查看 AI 调用记录", ""),
+		View("GET /api/admin/apps/:appkey/ai-gateway/requests/:requestNo", "查看 AI 调用详情", "AI 调用"),
+		Write("POST /api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund", "AI 调用整笔退款", "AI 调用", SeverityHigh),
+		View("GET /api/admin/apps/:appkey/ai-gateway/keys", "查看用户 AI 密钥", ""),
+		Write("PUT /api/admin/apps/:appkey/ai-gateway/keys/:keyId/status", "启用或停用用户 AI 密钥", "AI 密钥", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/ai-gateway/stats", "查看 AI 中转统计", ""),
+		View("GET /api/admin/apps/:appkey/ai-gateway/users/:userId/account", "查看用户 AI 账户", "用户"),
+		View("GET /api/admin/apps/:appkey/ai-gateway/users/:userId/credits", "查看用户赠送额度流水", "用户"),
+		Write("POST /api/admin/apps/:appkey/ai-gateway/users/:userId/credits", "调整用户 AI 赠送额度", "用户", SeverityHigh),
+
 		// 支付配置与订单（兼容接口）
 		View("POST /api/admin/app/payment-config/list", "查看支付配置列表（兼容接口）", ""),
 		View("POST /api/admin/app/payment-config/detail", "查看支付配置详情（兼容接口）", "支付配置"),
