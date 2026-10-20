@@ -194,6 +194,7 @@ func NormalizeInput(input ActivityInput) ActivityInput {
 	}
 	slices.SortStableFunc(prizes, func(a, b PrizeInput) int { return a.Position - b.Position })
 	input.Prizes = prizes
+	NormalizeLifetime(&input)
 	return input
 }
 
@@ -294,6 +295,9 @@ func validatePrizes(input ActivityInput) error {
 	}
 	if totalWeight <= 0 {
 		return fmt.Errorf("奖品的权重合计必须大于 0")
+	}
+	if err := validateLifetime(input); err != nil {
+		return err
 	}
 	// 至少一个不限库存的奖品：否则奖池总有被抽空的一天，那之后每一次抽奖都只能报错，
 	// 而用户的免费次数、积分与看过的广告已经花出去了。

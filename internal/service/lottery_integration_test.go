@@ -372,6 +372,9 @@ ON CONFLICT (appid, user_id) DO UPDATE SET balance = lottery_draw_grants.balance
 		t.Fatalf("重复标记应报 40926，得到 %v", err)
 	}
 
+	// ── 已拥有的奖品：永久会员抽中会员 / 已含功能，已永久解锁的人抽中同一功能 ──
+	testLotteryOwnedPrizes(t, ctx, pool, vip, lottery, appID, grid, mustCreate, mustDraw, integral, vipActivity, featureActivity)
+
 	// ── 我的记录、删除、统计 ──
 	mine, err := lottery.MyDraws(ctx, appID, alice, activity.ID, 1, 20)
 	if err != nil || mine.Total != 2 || mine.Items[0].Account != "" {
@@ -393,6 +396,187 @@ ON CONFLICT (appid, user_id) DO UPDATE SET balance = lottery_draw_grants.balance
 	}
 
 	testLotteryLegacyMigration(t, ctx, pool, appID, alice)
+}
+
+// testLotteryOwnedPrizes 已拥有的奖品按活动的处理方式改发：折算积分（默认）、改发抽奖次数、不参与抽取（保底仍折算）、
+// 照常发放、单个奖品的改发；以及保存时的校验、活动页的提示与统计。
+func testLotteryOwnedPrizes(t *testing.T, ctx context.Context, pool *pgxpool.Pool, vip *VipService, lottery *LotteryService,
+	appID int64, grid func(string, lotterydomain.PrizeInput) lotterydomain.ActivityInput,
+	mustCreate func(lotterydomain.ActivityInput) *lotterydomain.AdminActivity,
+	mustDraw func(int64, int64, string, string) *lotterydomain.DrawResult, integral func(int64) int64,
+	vipActivity, featureActivity *lotterydomain.AdminActivity) {
+	t.Helper()
+	lifetimePlan := mustSavePlan(t, vip, vipdomain.PlanMutation{AppID: appID, Name: ptrTo("永久版"),
+		Kind: ptrTo(vipdomain.KindPaid), Lifetime: ptrTo(true), Features: &[]string{"online_music"},
+		Price: ptrTo(decimal.NewFromInt(99))})
+	frank := insertTestUser(t, ctx, pool, appID, "lottery-frank", "0")
+	if _, err := vip.AdminGrantVip(ctx, AdminVipGrantInput{UserID: frank, AppID: appID, PlanID: lifetimePlan.ID, Operator: "admin"}); err != nil {
+		t.Fatal(err)
+	}
+	timedLotterySegments := func(userID int64) int {
+		var count int
+		if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM vip_transactions WHERE user_id = $1 AND pay_channel = 'lottery'`,
+			userID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		return count
+	}
+	bonus := func(userID int64) int64 {
+		var value int64
+		_ = pool.QueryRow(ctx, `SELECT balance FROM lottery_draw_grants WHERE user_id = $1`, userID).Scan(&value)
+		return value
+	}
+
+	// 活动页：会员奖品标出「转为 70 积分」，顶部提示
+	state, err := lottery.State(ctx, appID, frank, vipActivity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	swap := state.Activity.Prizes[1].Swap
+	if swap == nil || swap.Action != lotterydomain.SwapActionConvert || swap.Reward == nil || swap.Reward.Amount != 70 ||
+		state.Lifetime == nil || !state.Lifetime.Lifetime || state.Lifetime.Policy != lotterydomain.LifetimePoints {
+		t.Fatalf("永久会员看会员奖品应提示折算 70 积分，得到 %+v %+v", swap, state.Lifetime)
+	}
+	if state.Activity.Prizes[0].Swap != nil {
+		t.Fatalf("谢谢参与不算已拥有，得到 %+v", state.Activity.Prizes[0].Swap)
+	}
+
+	// 折算积分（默认：每天 10 积分）：会员 7 天 → 70 积分，不记会员段
+	before := integral(frank)
+	won := mustDraw(frank, vipActivity.ID, "", "")
+	c := won.Draw.Conversion
+	if won.Draw.PrizeKind != lotterydomain.KindVipDays || c == nil || c.Reason != lotterydomain.OwnedLifetime ||
+		c.Reward.Type != lotterydomain.KindPoints || c.Reward.Amount != 70 || c.Message == "" {
+		t.Fatalf("永久会员抽中会员 7 天应折算 70 积分，得到 %+v %+v", won.Draw, c)
+	}
+	if integral(frank)-before != 70 || timedLotterySegments(frank) != 0 {
+		t.Fatalf("应到账 70 积分且不记会员段，得到 +%d 段 %d", integral(frank)-before, timedLotterySegments(frank))
+	}
+	if len(won.Draw.Results) != 1 || won.Draw.Results[0].Type != lotterydomain.KindPoints || won.Draw.Results[0].TransactionNo == "" {
+		t.Fatalf("发放结果应是积分流水，得到 %+v", won.Draw.Results)
+	}
+	// 记录里也带着改发说明
+	mine, err := lottery.MyDraws(ctx, appID, frank, vipActivity.ID, 1, 20)
+	if err != nil || mine.Total != 1 || mine.Items[0].Conversion == nil || mine.Items[0].Conversion.Reward.Amount != 70 {
+		t.Fatalf("记录应带改发说明，得到 %+v %v", mine, err)
+	}
+
+	// 永久会员已含 online_music：功能 3 天 → 30 积分
+	before = integral(frank)
+	unlock := mustDraw(frank, featureActivity.ID, "", "")
+	if unlock.Draw.Conversion == nil || unlock.Draw.Conversion.Reward.Amount != 30 || integral(frank)-before != 30 {
+		t.Fatalf("永久会员已含该功能，3 天应折算 30 积分，得到 %+v", unlock.Draw.Conversion)
+	}
+
+	// 改发抽奖次数
+	drawsInput := grid("次数活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 30},
+		Weight: 1_000_000, Quantity: -1})
+	drawsInput.LifetimePolicy, drawsInput.LifetimeDraws = lotterydomain.LifetimeDraws, 2
+	drawsActivity := mustCreate(drawsInput)
+	bonusBefore := bonus(frank)
+	asDraws := mustDraw(frank, drawsActivity.ID, "free", "")
+	if asDraws.Draw.Conversion == nil || asDraws.Draw.Conversion.Reward.Type != lotterydomain.KindLotteryDraws ||
+		bonus(frank)-bonusBefore != 2 || asDraws.Chances.Bonus != bonus(frank) {
+		t.Fatalf("应改发 2 次抽奖，得到 %+v bonus +%d", asDraws.Draw.Conversion, bonus(frank)-bonusBefore)
+	}
+
+	// 不参与抽取：权重再大也抽不到，概率为 0；保底（第 2 次）仍给保底奖并按积分折算
+	excludeInput := grid("剔除活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 3},
+		Weight: 1_000_000, Quantity: -1})
+	excludeInput.LifetimePolicy, excludeInput.FreeDaily = lotterydomain.LifetimeExclude, 5
+	excludeInput.PityThreshold, excludeInput.PityPosition = 3, 1
+	excludeActivity := mustCreate(excludeInput)
+	state, err = lottery.State(ctx, appID, frank, excludeActivity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Activity.Prizes[1].Probability != 0 || state.Activity.Prizes[1].Swap == nil ||
+		state.Activity.Prizes[1].Swap.Action != lotterydomain.SwapActionExcluded || state.Activity.Prizes[0].Probability <= 0 {
+		t.Fatalf("剔除的奖品概率为 0 并标出，得到 %+v", state.Activity.Prizes)
+	}
+	for i := 0; i < 2; i++ {
+		miss := mustDraw(frank, excludeActivity.ID, "free", "")
+		if miss.Draw.PrizeKind != lotterydomain.KindNone {
+			t.Fatalf("第 %d 次不应抽到被剔除的会员奖品，得到 %+v", i+1, miss.Draw)
+		}
+	}
+	pity := mustDraw(frank, excludeActivity.ID, "free", "")
+	if !pity.Draw.Pity || pity.Draw.Conversion == nil || pity.Draw.Conversion.Reward.Amount != 30 {
+		t.Fatalf("保底应给会员 3 天并折算 30 积分，得到 %+v %+v", pity.Draw, pity.Draw.Conversion)
+	}
+	// 非永久会员看同一活动：概率照常
+	gina := insertTestUser(t, ctx, pool, appID, "lottery-gina", "0")
+	state, err = lottery.State(ctx, appID, gina, excludeActivity.ID)
+	if err != nil || state.Activity.Prizes[1].Probability < 99 || state.Activity.Prizes[1].Swap != nil || state.Lifetime != nil {
+		t.Fatalf("非永久会员概率照常、没有提示，得到 %+v %v", state, err)
+	}
+
+	// 照常发放
+	grantInput := grid("照发活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 7},
+		Weight: 1_000_000, Quantity: -1})
+	grantInput.LifetimePolicy = lotterydomain.LifetimeGrant
+	grantActivity := mustCreate(grantInput)
+	granted := mustDraw(frank, grantActivity.ID, "", "")
+	if granted.Draw.Conversion != nil || timedLotterySegments(frank) != 1 {
+		t.Fatalf("照常发放应记会员段，得到 %+v 段 %d", granted.Draw.Conversion, timedLotterySegments(frank))
+	}
+
+	// 单个奖品的改发：经验 50
+	overrideInput := grid("改发活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipPlan, RefID: lifetimePlan.ID},
+		LifetimeReward: &lotterydomain.Reward{Type: lotterydomain.KindExperience, Amount: 50}, Weight: 1_000_000, Quantity: -1})
+	overrideActivity := mustCreate(overrideInput)
+	if overrideActivity.Prizes[1].LifetimeReward == nil || overrideActivity.Prizes[1].LifetimeReward.Amount != 50 {
+		t.Fatalf("改发应落库，得到 %+v", overrideActivity.Prizes[1])
+	}
+	override := mustDraw(frank, overrideActivity.ID, "", "")
+	if override.Draw.Conversion == nil || override.Draw.Conversion.Reward.Type != lotterydomain.KindExperience ||
+		override.Draw.Conversion.Reward.Amount != 50 {
+		t.Fatalf("已含的永久套餐应改发经验 50，得到 %+v", override.Draw.Conversion)
+	}
+
+	// 非永久会员：永久功能第一次照发，第二次已永久拥有 → 永久奖品积分 3650
+	permanentActivity := mustCreate(grid("永久功能活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindFeature, Tag: "online_music"},
+		Weight: 1_000_000, Quantity: -1}))
+	first := mustDraw(gina, permanentActivity.ID, "", "")
+	if first.Draw.Conversion != nil {
+		t.Fatalf("第一次抽中永久功能应照发，得到 %+v", first.Draw.Conversion)
+	}
+	giveDraws := func(userID int64, count int) {
+		if _, err := pool.Exec(ctx, `INSERT INTO lottery_draw_grants (appid, user_id, balance, total_granted) VALUES ($1, $2, $3::bigint, $3::bigint)
+ON CONFLICT (appid, user_id) DO UPDATE SET balance = lottery_draw_grants.balance + EXCLUDED.balance`, appID, userID, count); err != nil {
+			t.Fatal(err)
+		}
+	}
+	giveDraws(gina, 1)
+	before = integral(gina)
+	second := mustDraw(gina, permanentActivity.ID, "bonus", "")
+	if second.Draw.Conversion == nil || second.Draw.Conversion.Reason != lotterydomain.OwnedFeature ||
+		integral(gina)-before != lotterydomain.DefaultLifetimePointsLifetime {
+		t.Fatalf("已永久拥有该功能应折算 %d 积分，得到 %+v", lotterydomain.DefaultLifetimePointsLifetime, second.Draw.Conversion)
+	}
+
+	// 保存时的校验
+	bad := grid("坏活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindPoints, Amount: 2},
+		LifetimeReward: &lotterydomain.Reward{Type: lotterydomain.KindPoints, Amount: 1}, Weight: 1, Quantity: -1})
+	if _, err := lottery.CreateActivity(ctx, bad); errCode(err) != 40000 {
+		t.Fatalf("积分奖品不能设改发，得到 %v", err)
+	}
+	bad = grid("坏活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 2},
+		LifetimeReward: &lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 1}, Weight: 1, Quantity: -1})
+	if _, err := lottery.CreateActivity(ctx, bad); errCode(err) != 40000 {
+		t.Fatalf("改发不能是会员，得到 %v", err)
+	}
+	bad = grid("坏活动", lotterydomain.PrizeInput{Reward: lotterydomain.Reward{Type: lotterydomain.KindVipDays, Amount: 2}, Weight: 1, Quantity: -1})
+	bad.LifetimePolicy = "refund"
+	if _, err := lottery.CreateActivity(ctx, bad); errCode(err) != 40000 {
+		t.Fatalf("未知的处理方式应被拒，得到 %v", err)
+	}
+
+	// 统计
+	stats, err := lottery.Stats(ctx, appID, vipActivity.ID, 7)
+	if err != nil || stats.Summary.Converted != 1 || stats.Summary.ConvertedPoints != 70 || stats.Prizes[1].Converted != 1 {
+		t.Fatalf("会员活动改发 1 次、折算 70 积分，得到 %+v %v", stats, err)
+	}
 }
 
 // testLotteryLegacyMigration 旧表形状（000024 + 旧代码写入的数据）经 000110 搬成新形状，且可重复执行。
@@ -435,6 +619,10 @@ VALUES ($1, $2, $3, '{"name":"5积分"}', 'awarded'), ($1, $2, $4, '{"name":"马
 	for round := 0; round < 2; round++ {
 		if _, err := pool.Exec(ctx, read("000110_lottery_rework.up.sql")); err != nil {
 			t.Fatalf("round %d 000110: %v", round+1, err)
+		}
+		// 之后的抽奖迁移也要在搬迁后的形状上可重复执行
+		if _, err := pool.Exec(ctx, read("000114_lottery_lifetime_swap.up.sql")); err != nil {
+			t.Fatalf("round %d 000114: %v", round+1, err)
 		}
 	}
 	pg := pgrepo.New(pool)

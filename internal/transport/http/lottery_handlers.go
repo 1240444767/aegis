@@ -40,6 +40,9 @@ type LotteryPrizeRequest struct {
 	Weight   int   `json:"weight"`
 	Position int   `json:"position"`
 	Fallback bool  `json:"fallback"`
+	// LifetimeReward 抽中的人已拥有这个奖品（永久会员抽中会员等）时改发什么：积分 / 经验 / 抽奖次数；
+	// 不传或 type 为空时按活动的 lifetimePolicy 折算
+	LifetimeReward *LotteryRewardRequest `json:"lifetimeReward"`
 }
 
 // LotteryActivityRequest 新建 / 整体更新一个活动（连同全部奖品）。
@@ -56,8 +59,16 @@ type LotteryActivityRequest struct {
 	PointsDaily int        `json:"pointsDaily"`
 	VideoScene  string     `json:"videoScene"`
 	// PityThreshold 连续这么多次未中时必中保底奖，0 为关闭；保底奖按位置指定（PityPosition）
-	PityThreshold int                   `json:"pityThreshold"`
-	PityPosition  *int                  `json:"pityPosition"`
+	PityThreshold int  `json:"pityThreshold"`
+	PityPosition  *int `json:"pityPosition"`
+	// LifetimePolicy 抽中已拥有的奖品怎么办：points（折算积分，默认）/ draws（改发抽奖次数）/
+	// exclude（不参与抽取）/ grant（照常发放）
+	LifetimePolicy string `json:"lifetimePolicy"`
+	// LifetimePointsPerDay 每天会员 / 功能折多少积分；LifetimePointsLifetime 永久套餐 / 永久功能折多少积分
+	LifetimePointsPerDay   int64 `json:"lifetimePointsPerDay"`
+	LifetimePointsLifetime int64 `json:"lifetimePointsLifetime"`
+	// LifetimeDraws 改发抽奖次数时发几次
+	LifetimeDraws int64                 `json:"lifetimeDraws"`
 	SortOrder     int                   `json:"sortOrder"`
 	Prizes        []LotteryPrizeRequest `json:"prizes"`
 }
@@ -89,31 +100,43 @@ type LotteryDrawsQuery struct {
 
 func (req LotteryActivityRequest) toInput(appID int64, operator string) lotterydomain.ActivityInput {
 	input := lotterydomain.ActivityInput{
-		AppID:         appID,
-		Name:          req.Name,
-		Description:   req.Description,
-		Rules:         req.Rules,
-		UIMode:        req.UIMode,
-		Status:        req.Status,
-		StartTime:     req.StartTime,
-		EndTime:       req.EndTime,
-		FreeDaily:     req.FreeDaily,
-		PointsCost:    req.PointsCost,
-		PointsDaily:   req.PointsDaily,
-		VideoScene:    req.VideoScene,
-		PityThreshold: req.PityThreshold,
-		PityPosition:  -1,
-		SortOrder:     req.SortOrder,
-		Operator:      operator,
-		Prizes:        make([]lotterydomain.PrizeInput, 0, len(req.Prizes)),
+		AppID:                  appID,
+		Name:                   req.Name,
+		Description:            req.Description,
+		Rules:                  req.Rules,
+		UIMode:                 req.UIMode,
+		Status:                 req.Status,
+		StartTime:              req.StartTime,
+		EndTime:                req.EndTime,
+		FreeDaily:              req.FreeDaily,
+		PointsCost:             req.PointsCost,
+		PointsDaily:            req.PointsDaily,
+		VideoScene:             req.VideoScene,
+		PityThreshold:          req.PityThreshold,
+		PityPosition:           -1,
+		SortOrder:              req.SortOrder,
+		LifetimePolicy:         strings.TrimSpace(req.LifetimePolicy),
+		LifetimePointsPerDay:   req.LifetimePointsPerDay,
+		LifetimePointsLifetime: req.LifetimePointsLifetime,
+		LifetimeDraws:          req.LifetimeDraws,
+		Operator:               operator,
+		Prizes:                 make([]lotterydomain.PrizeInput, 0, len(req.Prizes)),
 	}
 	if req.PityPosition != nil {
 		input.PityPosition = *req.PityPosition
 	}
 	for _, prize := range req.Prizes {
+		var swap *lotterydomain.Reward
+		if prize.LifetimeReward != nil && strings.TrimSpace(prize.LifetimeReward.Type) != "" {
+			swap = &lotterydomain.Reward{
+				Type: prize.LifetimeReward.Type, Amount: prize.LifetimeReward.Amount, RefID: prize.LifetimeReward.RefID,
+				Tag: prize.LifetimeReward.Tag, Text: prize.LifetimeReward.Text,
+			}
+		}
 		input.Prizes = append(input.Prizes, lotterydomain.PrizeInput{
-			ID:   prize.ID,
-			Name: prize.Name,
+			LifetimeReward: swap,
+			ID:             prize.ID,
+			Name:           prize.Name,
 			Reward: lotterydomain.Reward{
 				Type: prize.Reward.Type, Amount: prize.Reward.Amount, RefID: prize.Reward.RefID,
 				Tag: prize.Reward.Tag, Text: prize.Reward.Text,

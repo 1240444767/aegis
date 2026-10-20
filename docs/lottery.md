@@ -75,6 +75,40 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 
 用户端每个奖品带 `probability`：常规抽取下的公示概率（百分比，两位小数），不含保底与库存的影响。
 
+## 已拥有的奖品（永久会员抽中会员）
+
+永久会员抽中「会员 7 天」，照常记一段限时会员什么也没给他（功能取两条线的并集，永久那条已经全包）。
+同类的还有：永久会员抽中他已含功能的套餐 / 功能、已永久解锁某功能的人再抽中这个功能。判据（`MemberCoverage.Owned`）：
+
+| 奖品 | 何时算已拥有 |
+|---|---|
+| `vip_days` | 永久会员 |
+| `vip_plan` | `vip.LifetimeIncludes`：套餐的每个功能都已在永久开通里（与购买入口同一判据；永久基础版抽中限时高级版不算） |
+| `feature` | 已永久解锁这个功能，或永久会员的功能里有它 |
+
+积分、经验、抽奖次数、人工发放、谢谢参与从来不算。活动的 `lifetimePolicy` 决定怎么办（迁移 `000114`，已有活动默认 `points`）：
+
+| `lifetimePolicy` | 行为 |
+|---|---|
+| `points`（默认） | 折算积分：天数 × `lifetimePointsPerDay`（默认 10）；永久套餐 / 永久功能给 `lifetimePointsLifetime`（默认 3650）；单次封顶 1 亿 |
+| `draws` | 改发 `lifetimeDraws` 次抽奖（默认 1） |
+| `exclude` | 这个人的常规抽取里剔除这些奖品（权重按 0 算，公示概率随之重算）；保底 / 兜底恰好是这类奖品时按积分折算 —— 保底承诺的是「必中」 |
+| `grant` | 照常发放（旧行为） |
+
+奖品可单独设 `lifetimeReward`（积分 / 经验 / 抽奖次数），设了就不按公式折算（`grant` 时不生效）。
+判定与发放都在抽奖事务里、锁用户行之后：抽奖与购买 / 兑换会员串行，不会出现「刚开通永久就抽到会员却没折算」。
+
+记录上 `prizeKind` / `reward` 仍是抽中的那一格（统计按格子算），实际发的写在 `conversion`：
+
+```json
+"conversion": {"reason": "lifetime", "reward": {"type": "points", "amount": 70}, "label": "70 积分",
+               "message": "你已是永久会员，「会员 7 天」已转为70 积分"}
+```
+
+`results` 是实际到账的流水（积分流水标题「抽奖奖品折算」，metadata 带 `converted`、`originalKind`）。
+活动页的奖品带 `swap`（`convert` + 改发的东西，或 `excluded`），页顶带 `lifetime` 提示（只在这个人有已拥有的奖品时出现）。
+统计概览多 `converted`、`convertedPoints`，奖品分布多 `converted`。
+
 ## 接口
 
 ### 客户端（App Protocol v1，需登录）
@@ -112,9 +146,12 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
   "startTime": null, "endTime": null,
   "freeDaily": 1, "pointsCost": 0, "pointsDaily": 0, "videoScene": "lottery",
   "pityThreshold": 6, "pityPosition": 1, "sortOrder": 0,
+  "lifetimePolicy": "points", "lifetimePointsPerDay": 10, "lifetimePointsLifetime": 3650, "lifetimeDraws": 1,
   "prizes": [
     {"id": 0, "name": "", "reward": {"type": "none"}, "imageUrl": "", "quantity": -1, "weight": 40, "position": 0, "fallback": true},
-    {"id": 0, "name": "2 积分", "reward": {"type": "points", "amount": 2}, "quantity": -1, "weight": 30, "position": 1}
+    {"id": 0, "name": "2 积分", "reward": {"type": "points", "amount": 2}, "quantity": -1, "weight": 30, "position": 1},
+    {"id": 0, "name": "会员 7 天", "reward": {"type": "vip_days", "amount": 7}, "quantity": 100, "weight": 2, "position": 2,
+     "lifetimeReward": {"type": "points", "amount": 100}}
   ]
 }
 ```
@@ -132,8 +169,9 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 ## 验证
 
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
-积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、删除与统计，
-最后在旧表形状上跑 000110 两遍核对搬迁。
+积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、
+已拥有的奖品（四种处理方式、单奖品改发、剔除后的概率与保底、已永久解锁的功能、统计）、删除与统计，
+最后在旧表形状上跑 000110 + 000114 两遍核对搬迁。
 
 ```
 AEGIS_TEST_PG_DSN=postgres://... go test ./internal/service -run TestLotteryIntegration

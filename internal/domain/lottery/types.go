@@ -97,8 +97,15 @@ type Activity struct {
 	// PityThreshold 连续这么多次没抽中（谢谢参与）时，这一次必中 PityPrizeID；0 为关闭
 	PityThreshold int    `json:"pityThreshold"`
 	PityPrizeID   *int64 `json:"pityPrizeId,omitempty"`
-	SortOrder     int    `json:"sortOrder"`
-	CreatedBy     string `json:"createdBy,omitempty"`
+	// LifetimePolicy 抽中已拥有的奖品（永久会员抽中会员等）怎么办，见 lifetime.go
+	LifetimePolicy string `json:"lifetimePolicy"`
+	// LifetimePointsPerDay 折算积分时每天会员 / 功能折多少积分；LifetimePointsLifetime 永久套餐 / 永久功能折多少
+	LifetimePointsPerDay   int64 `json:"lifetimePointsPerDay"`
+	LifetimePointsLifetime int64 `json:"lifetimePointsLifetime"`
+	// LifetimeDraws 改发抽奖次数时发几次
+	LifetimeDraws int64     `json:"lifetimeDraws"`
+	SortOrder     int       `json:"sortOrder"`
+	CreatedBy     string    `json:"createdBy,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }
@@ -120,9 +127,11 @@ type Prize struct {
 	// Position 在奖盘上的位置（九宫格为外圈顺时针 0–7）
 	Position int `json:"position"`
 	// Fallback 抽中的奖品恰好被抢光时改发它（必须不限库存）
-	Fallback  bool      `json:"fallback"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	Fallback bool `json:"fallback"`
+	// LifetimeReward 抽中的人已拥有这个奖品时改发什么（积分 / 经验 / 抽奖次数）；空为按活动的处理方式折算
+	LifetimeReward *Reward   `json:"lifetimeReward,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // InStock 还有没有库存。
@@ -155,10 +164,14 @@ type ActivityInput struct {
 	VideoScene    string
 	PityThreshold int
 	// PityPosition 保底奖在 Prizes 里的 Position（奖品是新建时还没有 ID）；-1 为不设
-	PityPosition int
-	SortOrder    int
-	Prizes       []PrizeInput
-	Operator     string
+	PityPosition           int
+	LifetimePolicy         string
+	LifetimePointsPerDay   int64
+	LifetimePointsLifetime int64
+	LifetimeDraws          int64
+	SortOrder              int
+	Prizes                 []PrizeInput
+	Operator               string
 }
 
 // PrizeInput 一个奖品的输入；ID 为 0 表示新建，非 0 表示更新已有奖品（保留已抽中计数）。
@@ -171,6 +184,8 @@ type PrizeInput struct {
 	Weight   int    `json:"weight"`
 	Position int    `json:"position"`
 	Fallback bool   `json:"fallback"`
+	// LifetimeReward 已拥有时改发什么；nil 为按活动的处理方式
+	LifetimeReward *Reward `json:"lifetimeReward,omitempty"`
 }
 
 // AdminActivity 管理端列表上的一行：活动 + 奖品 + 汇总。
@@ -203,13 +218,15 @@ type Draw struct {
 	Pity         bool           `json:"pity,omitempty"`
 	Status       string         `json:"status"`
 	Results      []RewardResult `json:"results"`
-	Note         string         `json:"note,omitempty"`
-	HandledBy    string         `json:"handledBy,omitempty"`
-	HandledAt    *time.Time     `json:"handledAt,omitempty"`
-	RequestID    string         `json:"requestId,omitempty"`
-	DeviceID     string         `json:"deviceId,omitempty"`
-	ClientIP     string         `json:"clientIp,omitempty"`
-	CreatedAt    time.Time      `json:"createdAt"`
+	// Conversion 抽中的奖品对这个人是已拥有的、改发了别的东西时的说明（Reward 仍是抽中的那一格）
+	Conversion *Conversion `json:"conversion,omitempty"`
+	Note       string      `json:"note,omitempty"`
+	HandledBy  string      `json:"handledBy,omitempty"`
+	HandledAt  *time.Time  `json:"handledAt,omitempty"`
+	RequestID  string      `json:"requestId,omitempty"`
+	DeviceID   string      `json:"deviceId,omitempty"`
+	ClientIP   string      `json:"clientIp,omitempty"`
+	CreatedAt  time.Time   `json:"createdAt"`
 }
 
 // DrawQuery 抽奖记录筛选。
@@ -352,14 +369,18 @@ type ClientPrize struct {
 	// Probability 常规抽取下抽中它的概率（百分比，保留到 0.01），不含保底与库存的影响
 	Probability float64 `json:"probability"`
 	SoldOut     bool    `json:"soldOut,omitempty"`
+	// Swap 对当前用户来说这一格会怎样（已拥有时改发什么 / 不会抽到）；照常发放时没有
+	Swap *PrizeSwap `json:"swap,omitempty"`
 }
 
 // ClientState 用户端的一个活动页：活动、我的次数、保底进度。
 type ClientState struct {
-	Activity   ClientActivity `json:"activity"`
-	Chances    Chances        `json:"chances"`
-	Pity       *Pity          `json:"pity,omitempty"`
-	ServerTime time.Time      `json:"serverTime"`
+	Activity ClientActivity `json:"activity"`
+	Chances  Chances        `json:"chances"`
+	Pity     *Pity          `json:"pity,omitempty"`
+	// Lifetime 当前用户有已拥有的奖品时的提示（永久会员抽中会员奖品会怎样）
+	Lifetime   *LifetimeNotice `json:"lifetime,omitempty"`
+	ServerTime time.Time       `json:"serverTime"`
 }
 
 // ClientList 用户端的活动列表。
@@ -408,6 +429,8 @@ type StatsPrize struct {
 	Draws    int64  `json:"draws"`
 	Quantity int64  `json:"quantity"`
 	Used     int64  `json:"used"`
+	// Converted 其中抽中的人已拥有、改发了别的东西的次数
+	Converted int64 `json:"converted"`
 }
 
 // StatsSummary 概览数字。
@@ -420,6 +443,9 @@ type StatsSummary struct {
 	PointsSpent int64 `json:"pointsSpent"`
 	Pending     int64 `json:"pending"`
 	PityHits    int64 `json:"pityHits"`
+	// Converted 抽中已拥有的奖品、改发了别的东西的次数；ConvertedPoints 其中折算出去的积分
+	Converted       int64 `json:"converted"`
+	ConvertedPoints int64 `json:"convertedPoints"`
 }
 
 // Stats 一个活动的概览。

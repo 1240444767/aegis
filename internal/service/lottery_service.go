@@ -135,6 +135,15 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 		"features":       featureList,
 		"videoScenes":    scenes,
 		"rewardedAds":    adsEnabled,
+		// 抽中已拥有的奖品（永久会员抽中会员等）的处理方式与默认折算
+		"lifetimePolicies": lotterydomain.LifetimePolicyCatalog(),
+		"swapKinds":        lotterydomain.SwapKinds(),
+		"lifetimeDefaults": map[string]any{
+			"policy":         lotterydomain.LifetimePoints,
+			"pointsPerDay":   lotterydomain.DefaultLifetimePointsPerDay,
+			"pointsLifetime": lotterydomain.DefaultLifetimePointsLifetime,
+			"draws":          lotterydomain.DefaultLifetimeDraws,
+		},
 	}, nil
 }
 
@@ -221,11 +230,13 @@ func activityInputOf(item *lotterydomain.AdminActivity) lotterydomain.ActivityIn
 		Status: item.Status, StartTime: item.StartTime, EndTime: item.EndTime, FreeDaily: item.FreeDaily,
 		PointsCost: item.PointsCost, PointsDaily: item.PointsDaily, VideoScene: item.VideoScene,
 		PityThreshold: item.PityThreshold, PityPosition: -1, SortOrder: item.SortOrder,
+		LifetimePolicy: item.LifetimePolicy, LifetimePointsPerDay: item.LifetimePointsPerDay,
+		LifetimePointsLifetime: item.LifetimePointsLifetime, LifetimeDraws: item.LifetimeDraws,
 	}
 	for _, prize := range item.Prizes {
 		input.Prizes = append(input.Prizes, lotterydomain.PrizeInput{
 			ID: prize.ID, Name: prize.Name, Reward: prize.Reward, ImageURL: prize.ImageURL, Quantity: prize.Quantity,
-			Weight: prize.Weight, Position: prize.Position, Fallback: prize.Fallback,
+			Weight: prize.Weight, Position: prize.Position, Fallback: prize.Fallback, LifetimeReward: prize.LifetimeReward,
 		})
 		if item.PityPrizeID != nil && *item.PityPrizeID == prize.ID {
 			input.PityPosition = prize.Position
@@ -388,24 +399,43 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	if err != nil {
 		return nil, s.translate(err)
 	}
+	coverage, err := s.pg.LotteryMemberCoverage(ctx, appID, userID)
+	if err != nil {
+		return nil, s.translate(err)
+	}
+	plans, features := s.catalogRefs(ctx, appID, prizes)
+	rule := lotterydomain.RuleOf(*activity)
 	return &lotterydomain.ClientState{
-		Activity:   s.clientActivity(ctx, *activity, prizes),
+		Activity:   s.clientActivity(*activity, prizes, coverage, plans, features),
 		Chances:    lotterydomain.EvaluateChances(*activity, facts, s.videoChances(ctx, *activity, appID, userID)),
 		Pity:       lotterydomain.PityProgress(*activity, prizes, facts.MissStreak),
+		Lifetime:   lotterydomain.NoticeOf(rule, coverage, prizes, plans),
 		ServerTime: now.UTC(),
 	}, nil
 }
 
-func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize) lotterydomain.ClientActivity {
-	var plans map[int64]pointstore.PlanRef
-	var features map[string]pointstore.FeatureRef
+// catalogRefs 奖盘里有会员套餐或功能奖品时取目录（判定已拥有、描述奖品用）；取不到时按空目录处理。
+func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []lotterydomain.Prize) (
+	map[int64]pointstore.PlanRef, map[string]pointstore.FeatureRef) {
 	for _, prize := range prizes {
 		if prize.Kind == lotterydomain.KindVipPlan || prize.Kind == lotterydomain.KindFeature {
-			plans, features, _ = s.pg.PointsStoreCatalogRefs(ctx, activity.AppID)
-			break
+			plans, features, err := s.pg.PointsStoreCatalogRefs(ctx, appID)
+			if err != nil {
+				s.log.Warn("lottery: load catalog refs failed", zap.Int64("appid", appID), zap.Error(err))
+			}
+			return plans, features
 		}
 	}
-	probabilities := lotterydomain.Probabilities(prizes)
+	return nil, nil
+}
+
+// clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0），
+// 已拥有的奖品带上「对你来说会怎样」。
+func (s *LotteryService) clientActivity(activity lotterydomain.Activity, prizes []lotterydomain.Prize,
+	coverage lotterydomain.MemberCoverage, plans map[int64]pointstore.PlanRef,
+	features map[string]pointstore.FeatureRef) lotterydomain.ClientActivity {
+	rule := lotterydomain.RuleOf(activity)
+	probabilities := lotterydomain.Probabilities(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
 	out := lotterydomain.ClientActivity{
 		ID: activity.ID, Name: activity.Name, Description: activity.Description, Rules: activity.Rules,
 		UIMode: activity.UIMode, StartTime: activity.StartTime, EndTime: activity.EndTime,
@@ -417,6 +447,7 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 			Detail:   lotterydomain.DescribeReward(prize.Reward, plans, features).Detail,
 			ImageURL: prize.ImageURL, Position: prize.Position, Probability: probabilities[index],
 			SoldOut: !prize.InStock(),
+			Swap:    lotterydomain.DescribeSwap(rule, coverage, prize, plans),
 		})
 	}
 	return out
@@ -543,7 +574,12 @@ func userLotteryDraw(draw lotterydomain.Draw) lotterydomain.Draw {
 // afterDraw 抽完之后：积分有变动时推送刷新，人工发放的奖品发一条站内信。
 func (s *LotteryService) afterDraw(draw lotterydomain.Draw) {
 	data := map[string]any{"drawNo": draw.DrawNo, "activityId": draw.ActivityID, "prizeKind": draw.PrizeKind}
-	if draw.PointsCost > 0 || draw.PrizeKind == lotterydomain.KindPoints || draw.PrizeKind == lotterydomain.KindExperience {
+	grantedKind := draw.PrizeKind
+	if draw.Conversion != nil {
+		grantedKind = draw.Conversion.Reward.Type
+		data["converted"] = true
+	}
+	if draw.PointsCost > 0 || grantedKind == lotterydomain.KindPoints || grantedKind == lotterydomain.KindExperience {
 		s.publishUser(draw.AppID, draw.UserID, "points.changed", data)
 	}
 	if draw.PrizeKind == lotterydomain.KindManual {
