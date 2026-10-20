@@ -107,6 +107,9 @@ var integralCategories = []CategoryRule{
 	{Category: "points_store_refund", Label: "积分兑换取消退回", Rule: CategoryExcluded},
 	{Category: "refund", Label: "订单退款回收（扣减）", Rule: CategoryExcluded},
 	{Category: IntegralCategory, Label: "排行榜奖励", Rule: CategoryExcluded},
+	// AI 中转网关：调用扣积分是扣减；管理员退款是把扣掉的还回去，不是「获得」
+	{Category: "ai_gateway", Label: "AI 调用（扣减）", Rule: CategoryExcluded},
+	{Category: "ai_gateway_refund", Label: "AI 调用退款", Rule: CategoryExcluded},
 }
 
 // IntegralCategories 全部已登记的分类与处理方式。

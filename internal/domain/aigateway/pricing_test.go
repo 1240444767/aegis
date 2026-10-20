@@ -304,3 +304,35 @@ func TestEstimateChatInput(t *testing.T) {
 		t.Fatalf("估算不对：%d", got)
 	}
 }
+
+// 计价、扣款、退款任意交错：已扣单位 × per + 零头恒等于仍有效的计价之和。
+func TestRefundWithCarryKeepsLedgerBalanced(t *testing.T) {
+	rng := rand.New(rand.NewSource(23))
+	type charge struct{ micro int64 }
+	var carry, paid, live int64
+	var charged []charge
+	for i := 0; i < 20000; i++ {
+		if len(charged) > 0 && rng.Intn(3) == 0 {
+			idx := rng.Intn(len(charged))
+			item := charged[idx]
+			charged = append(charged[:idx], charged[idx+1:]...)
+			units, next := RefundWithCarry(carry, item.micro, MicroPerPoint)
+			if next < 0 || next >= MicroPerPoint || units < 0 {
+				t.Fatalf("退款后零头越界：units=%d carry=%d", units, next)
+			}
+			paid -= units
+			carry = next
+			live -= item.micro
+		} else {
+			micro := rng.Int63n(3 * MicroPerPoint)
+			units, next := ChargeWithCarry(carry, micro, MicroPerPoint)
+			paid += units
+			carry = next
+			live += micro
+			charged = append(charged, charge{micro})
+		}
+		if paid*MicroPerPoint+carry != live {
+			t.Fatalf("第 %d 步账不平：已扣 %d 单位、零头 %d，有效计价 %d", i, paid, carry, live)
+		}
+	}
+}

@@ -491,6 +491,28 @@ type Charge struct {
 	TxnNo  string `json:"txnNo,omitempty"`
 }
 
+// BillingSnapshot 暂扣那一刻的计费口径。结算、放回与退款都按它来，
+// 调用进行中管理员改了扣费顺序、折算比例或额度，不影响这一笔。
+type BillingSnapshot struct {
+	Sources    []string        `json:"sources"`
+	WalletRate decimal.Decimal `json:"walletRate"`
+	Timezone   string          `json:"timezone"`
+	// Quotas 各周期额度的上限（微点）。
+	Quotas map[string]int64 `json:"quotas,omitempty"`
+	// SpendLimit 每日消费上限（微点）与暂扣时所在的那一天。
+	SpendLimit  int64   `json:"spendLimit,omitempty"`
+	SpendPeriod string  `json:"spendPeriod,omitempty"`
+	Profile     Profile `json:"profile"`
+}
+
+// Location 快照里的时区。
+func (b BillingSnapshot) Location() *time.Location {
+	if loc, err := time.LoadLocation(b.Timezone); err == nil {
+		return loc
+	}
+	return time.UTC
+}
+
 // Request 一次调用的记录。
 type Request struct {
 	ID             int64           `json:"id"`
@@ -513,6 +535,7 @@ type Request struct {
 	Estimate       decimal.Decimal `json:"estimate"`
 	Reserved       decimal.Decimal `json:"reserved"`
 	Holds          []Hold          `json:"holds"`
+	Billing        BillingSnapshot `json:"billing"`
 	ClampMaxTokens int             `json:"clampMaxTokens,omitempty"`
 	Meters
 	UsageEstimated bool            `json:"usageEstimated"`

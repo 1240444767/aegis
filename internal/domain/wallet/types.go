@@ -24,6 +24,9 @@ const (
 	TxnTypeInvite = "invite"
 	// TxnTypeLeaderboard 排行榜奖励入账。同理不计入累计充值。
 	TxnTypeLeaderboard = "leaderboard"
+	// TxnTypeAIRefund AI 中转网关的调用退款（管理员整笔退回）。把消费退回来，不是充值，
+	// 因此同样不计入累计充值。
+	TxnTypeAIRefund = "ai_refund"
 )
 
 // Wallet 用户钱包

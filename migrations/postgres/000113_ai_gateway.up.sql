@@ -167,6 +167,8 @@ CREATE TABLE IF NOT EXISTS ai_gateway_requests (
     estimate         BIGINT        NOT NULL DEFAULT 0,
     reserved         BIGINT        NOT NULL DEFAULT 0,
     holds            JSONB         NOT NULL DEFAULT '[]'::jsonb,
+    -- 暂扣那一刻的计费口径（扣费顺序、余额折算、时区、额度上限、会员与等级）。
+    billing          JSONB         NOT NULL DEFAULT '{}'::jsonb,
     clamp_max_tokens INT           NOT NULL DEFAULT 0,
     input_tokens     BIGINT        NOT NULL DEFAULT 0,
     output_tokens    BIGINT        NOT NULL DEFAULT 0,

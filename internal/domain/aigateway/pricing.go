@@ -161,6 +161,20 @@ func ChargeWithCarry(carry, micro, per int64) (units int64, newCarry int64) {
 	return total / per, total % per
 }
 
+// RefundWithCarry 退回一笔 micro：先抵掉零头里欠着的部分，不够再退整数单位。
+//
+// 零头的含义是「已经计价、还没扣成整数单位」的欠款，所以账户上恒有
+// 已扣单位 × per + 零头 = 全部计价之和。退款要让这个等式对「去掉这一笔之后」仍成立：
+// 退的整数单位可能比当初这一笔扣的少一个（当初那个单位里有之前的零头），也可能是 0
+// （这一笔还整个躺在零头里没扣），但账永远是平的。
+func RefundWithCarry(carry, micro, per int64) (units int64, newCarry int64) {
+	if micro <= carry {
+		return 0, carry - micro
+	}
+	units = CeilUnits(micro-carry, per)
+	return units, carry - micro + units*per
+}
+
 // WalletMicroCents 点（微点）→ 金额（微分），向下取整。rate 是每点多少元。
 func WalletMicroCents(micro int64, rate decimal.Decimal) int64 {
 	if micro <= 0 || rate.Sign() <= 0 {
