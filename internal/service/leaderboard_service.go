@@ -54,13 +54,15 @@ type leaderboardCached struct {
 // LeaderboardService 积分排行榜：实时榜（缓存 + singleflight）、我的名次、偏好、往期与奖励记录、
 // 管理端，以及周期结算的后台循环。规则见 docs/leaderboard.md。
 type LeaderboardService struct {
-	log      *zap.Logger
-	pg       *pgrepo.Repository
-	cache    *redisrepo.SessionRepository
-	notifier notificationDeliverer
-	flight   singleflight.Group
-	now      func() time.Time
-	loc      func() *time.Location
+	// publicIDs 榜上别人的 userId 换成对外 ID（docs/user-public-id.md）
+	publicIDs *UserPublicIDs
+	log       *zap.Logger
+	pg        *pgrepo.Repository
+	cache     *redisrepo.SessionRepository
+	notifier  notificationDeliverer
+	flight    singleflight.Group
+	now       func() time.Time
+	loc       func() *time.Location
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -73,7 +75,7 @@ func NewLeaderboardService(log *zap.Logger, pg *pgrepo.Repository, cache *redisr
 	}
 	return &LeaderboardService{
 		log: log, pg: pg, cache: cache, now: timeutil.Now, loc: timeutil.DefaultLocation,
-		stop: make(chan struct{}), kick: make(chan struct{}, 1),
+		stop: make(chan struct{}), kick: make(chan struct{}, 1), publicIDs: newUserPublicIDsFor(pg),
 	}
 }
 
@@ -296,6 +298,8 @@ func (s *LeaderboardService) Board(ctx context.Context, appID, userID int64, key
 			entry.LevelName, settings.AllowAnonymous && entry.Anonymous, userID))
 	}
 
+	s.publicizeRows(ctx, out.Items)
+
 	standing, err := s.pg.LeaderboardStanding(ctx, s.query(settings, spec, period, false), userID)
 	if err != nil {
 		return nil, s.translate(err)
@@ -395,6 +399,7 @@ func (s *LeaderboardService) Period(ctx context.Context, appID, userID int64, ke
 		out.Items = append(out.Items, leaderboard.PresentRow(entry.Rank, entry.UserID, entry.DisplayName, entry.RawAvatar,
 			entry.Value, entry.LevelName, entry.Anonymous, userID))
 	}
+	s.publicizeRows(ctx, out.Items)
 	mine, err := s.pg.LeaderboardEntryOf(ctx, snapshot.ID, userID)
 	if err != nil {
 		return nil, err
@@ -404,6 +409,35 @@ func (s *LeaderboardService) Period(ctx context.Context, appID, userID int64, ke
 		out.Period.My = out.Me
 	}
 	return out, nil
+}
+
+// SetPublicIDs 接上全进程共用的对外 ID 换算。
+func (s *LeaderboardService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
+}
+
+// publicizeRows 榜上每一行的 userId 换成对外 ID；换不到的（刚注销）干脆不给，按匿名那样省略。
+func (s *LeaderboardService) publicizeRows(ctx context.Context, rows []leaderboard.ClientRow) {
+	ids := make([]int64, 0, len(rows))
+	for _, row := range rows {
+		if row.UserID != nil {
+			ids = append(ids, *row.UserID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	public := s.publicIDs.Map(ctx, ids)
+	for i := range rows {
+		if rows[i].UserID == nil {
+			continue
+		}
+		if id, ok := public[*rows[i].UserID]; ok {
+			rows[i].UserID = &id
+		} else {
+			rows[i].UserID = nil
+		}
+	}
 }
 
 // MyRewards 我的榜单奖励记录（落在档位里的每一期），新的在前。不看排行榜是否仍开启：这是历史。

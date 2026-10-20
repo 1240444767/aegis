@@ -469,8 +469,9 @@ func (r *SessionRepository) noticeKey(appID int64) string {
 	return fmt.Sprintf("%s:app:notice:v2:%d", r.keyPrefix, appID)
 }
 
+// myKey 带版本号：v2 起视图里的 id 是对外 ID，换键让上线前缓存的旧视图（id 为主键）自然作废。
 func (r *SessionRepository) myKey(appID int64, userID int64) string {
-	return fmt.Sprintf("%s:user:my:%d:%d", r.keyPrefix, appID, userID)
+	return fmt.Sprintf("%s:user:my:v2:%d:%d", r.keyPrefix, appID, userID)
 }
 
 func (r *SessionRepository) profileKey(appID int64, userID int64) string {

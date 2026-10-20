@@ -154,8 +154,11 @@ func (s *VipService) verifyMembership(ctx context.Context, appID int64, query vi
 		return nil, err
 	}
 	// 把账号补上：调用方多半要把它写进自己的日志，而令牌里只有 userId
+	// userId 回给接入方的后端，它对得上的是客户端从 /me 拿到的对外 ID（docs/user-public-id.md）
+	var publicID int64
 	if user, err := s.pg.GetUserByID(ctx, userID); err == nil && user != nil {
 		account = user.Account
+		publicID = user.PublicID
 	}
 
 	// 未指定功能标识 ⇒ 通用档，结论就是"是不是会员"；
@@ -169,7 +172,7 @@ func (s *VipService) verifyMembership(ctx context.Context, appID int64, query vi
 	return &vipdomain.Verification{
 		Granted:    granted,
 		Matched:    true,
-		UserID:     userID,
+		UserID:     publicID,
 		Account:    account,
 		Membership: entitlement.View(),
 		Feature:    verdict,

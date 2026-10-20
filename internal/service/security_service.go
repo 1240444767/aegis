@@ -648,6 +648,7 @@ func (s *SecurityService) MaybeCreateSecondFactorChallenge(ctx context.Context, 
 	}
 	return &authdomain.LoginResult{
 		UserID:               user.ID,
+		PublicUserID:         user.PublicID,
 		Account:              user.Account,
 		Provider:             provider,
 		RequiresSecondFactor: true,

@@ -238,12 +238,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 管理员重置密码需按应用密码策略写过期时间与历史留存
 	userService.SetAppService(appService)
 	authService.SetAdminUserSearchService(adminUserSearch)
+	authService.SetPublicIDs(userService.PublicIDs())
 	adminUserSearch.StartWarmup(ctx)
 	signInService := service.NewSignInService(log, pg, sessions, publisher)
 	autoSignService := service.NewAutoSignService(cfg.AutoSign, log, pg, schedules, signInService)
 	// 开启自动签到前按应用的开放策略校验资格
 	userService.SetAutoSignGuard(autoSignService)
 	pointsService := service.NewPointsService(log, pg, sessions)
+	pointsService.SetPublicIDs(userService.PublicIDs())
 	realtimeService, err := service.NewRealtimeService(log, authService, realtimeRepo, natsConn, cfg.CORS.AllowOrigins)
 	if err != nil {
 		closeTemporal()
@@ -432,6 +434,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	cardKeyService.SetGuard(loginGuardRepo)
 	cardKeyService.SetNotifier(notificationService)
 	rewardedAdService := service.NewRewardedAdService(log, pg, cfg)
+	rewardedAdService.SetPublicIDs(userService.PublicIDs())
 	// 抽奖：视频抽奖读激励广告场景的剩余次数，看完发的抽奖次数进应用级余额
 	lotteryService := service.NewLotteryService(log, pg, rewardedAdService)
 	lotteryService.SetNotifier(notificationService)
@@ -454,6 +457,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	signInService.SetAfterSignIn(inviteService.OnSignIn)
 	// 积分排行榜：实时榜走 Redis 缓存；周期榜到期由 API 进程的后台循环结算、发奖，奖励到账走站内信。
 	leaderboardService := service.NewLeaderboardService(log, pg, sessions)
+	leaderboardService.SetPublicIDs(userService.PublicIDs())
 	leaderboardService.SetNotifier(notificationService)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。

@@ -102,7 +102,30 @@ func (h *Handler) SiteDetail(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	if item != nil {
+		items := h.publicSites(c, []appdomain.Site{*item})
+		item = &items[0]
+	}
 	response.Success(c, 200, "获取成功", item)
+}
+
+// publicSites 站点列表是给所有人看的：站长的 userId 换成对外 ID（docs/user-public-id.md）。
+// 返回副本，列表可能来自缓存。
+func (h *Handler) publicSites(c *gin.Context, list []appdomain.Site) []appdomain.Site {
+	if len(list) == 0 {
+		return list
+	}
+	ids := make([]int64, 0, len(list))
+	for _, item := range list {
+		ids = append(ids, item.UserID)
+	}
+	public := h.user.PublicIDs().Map(c.Request.Context(), ids)
+	out := make([]appdomain.Site, len(list))
+	for i, item := range list {
+		item.UserID = public[item.UserID]
+		out[i] = item
+	}
+	return out
 }
 
 func (h *Handler) SiteList(c *gin.Context) {
@@ -129,7 +152,7 @@ func (h *Handler) SiteList(c *gin.Context) {
 		return
 	}
 	response.Success(c, 200, "获取成功", gin.H{
-		"data": result.List,
+		"data": h.publicSites(c, result.List),
 		"pagination": gin.H{
 			"currentPage": result.Page,
 			"pageSize":    result.Limit,
@@ -158,7 +181,7 @@ func (h *Handler) SearchSites(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "获取成功", gin.H{"data": result.List, "pagination": gin.H{"currentPage": result.Page, "pageSize": result.Limit, "totalCount": result.Total, "totalPages": result.TotalPages}})
+	response.Success(c, 200, "获取成功", gin.H{"data": h.publicSites(c, result.List), "pagination": gin.H{"currentPage": result.Page, "pageSize": result.Limit, "totalCount": result.Total, "totalPages": result.TotalPages}})
 }
 
 func (h *Handler) MySites(c *gin.Context) {

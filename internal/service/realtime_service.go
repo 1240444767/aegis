@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
 	apperrors "aegis/pkg/errors"
+	"aegis/pkg/response"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
@@ -79,6 +81,9 @@ type realtimeClient struct {
 	// presence 建连时组装好的在线记录（含设备与地区），上下线事件也从它取字段
 	presence  realtimedomain.PresenceConnection
 	closeOnce sync.Once
+	// internalID / publicID 下发前把帧里的主键换成对外 ID（docs/user-public-id.md）；publicID 为空时原样发
+	internalID string
+	publicID   string
 }
 
 // 实时连接被服务端主动断开时的关闭码（4000-4999 为应用自定义区间）。
@@ -475,6 +480,10 @@ func (s *RealtimeService) Upgrade(w http.ResponseWriter, req *http.Request, sess
 		conn:         conn,
 		send:         make(chan []byte, s.sendBuffer),
 	}
+	if publicID := s.auth.PublicIDs().Of(req.Context(), session.UserID); publicID > 0 {
+		client.internalID = strconv.FormatInt(session.UserID, 10)
+		client.publicID = strconv.FormatInt(publicID, 10)
+	}
 	client.presence = s.buildPresence(client, now)
 	if err := s.touchPresence(req.Context(), client, now); err != nil {
 		_ = conn.Close()
@@ -712,6 +721,10 @@ func (c *realtimeClient) enqueue(event realtimedomain.Event) {
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return
+	}
+	if c.publicID != "" {
+		// 信封与 data 里所有「用户 ID 字段且值是自己主键」的地方，与 HTTP 响应同一套规则
+		payload = response.RewriteUserID(payload, c.internalID, c.publicID)
 	}
 	select {
 	case c.send <- payload:

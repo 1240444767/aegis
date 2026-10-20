@@ -32,7 +32,7 @@ import (
 //	Hydra 签发与刷新令牌时 → Aegis 令牌钩子           再判一次账号与应用状态
 //
 // 多租户的落点是「客户端属于某个应用」：Hydra 客户端的 owner 写成 aegis-app:<id>、
-// metadata 写 aegisAppId，登录页据此只在该应用的用户库里认人。主体（sub）是用户 ID，
+// metadata 写 aegisAppId，登录页据此只在该应用的用户库里认人。主体（sub）是对外用户 ID，
 // 用户本身只属于一个应用，因此跨应用的主体天然不会撞。详见 docs/oauth2-provider.md。
 type OAuth2ServerService struct {
 	cfg     config.OAuth2ServerConfig
@@ -190,10 +190,11 @@ func (s *OAuth2ServerService) BeginLogin(ctx context.Context, challenge string) 
 		return nil, redirect, rerr
 	}
 	if req.Skip {
-		user, err := s.auth.ResolveOAuth2Subject(ctx, app.ID, req.Subject, false)
+		_, err := s.auth.ResolveOAuth2Subject(ctx, app.ID, req.Subject, false)
 		if err == nil {
 			redirect, aerr := s.hydra.AcceptLoginRequest(ctx, challenge, hydra.AcceptLogin{
-				Subject:               OAuth2Subject(user.ID),
+				// Hydra 要求记住的登录态原样沿用 subject；切换前的旧会话因此仍是主键，过期后自然换成对外 ID
+				Subject:               strings.TrimSpace(req.Subject),
 				ExtendSessionLifespan: true,
 			})
 			return nil, redirect, s.hydraError("login.accept_skip", aerr)
@@ -291,7 +292,7 @@ func (s *OAuth2ServerService) LoginWithSecondFactor(ctx context.Context, lc *OAu
 
 func (s *OAuth2ServerService) acceptLogin(ctx context.Context, challenge string, result *OAuth2Authentication, remember bool) (*OAuth2LoginStep, error) {
 	body := hydra.AcceptLogin{
-		Subject:  OAuth2Subject(result.User.ID),
+		Subject:  OAuth2Subject(result.User),
 		Remember: remember,
 		AMR:      result.AMR,
 	}
@@ -683,7 +684,7 @@ func (s *OAuth2ServerService) Overview(ctx context.Context, appID int64) (*OAuth
 		Enabled:      s.Enabled(),
 		Scopes:       describeScopes([]string{"openid", "offline_access", "profile", "email", "phone"}),
 		GrantTypes:   slices.Clone(oauth2AllowedGrantTypes),
-		SubjectClaim: "sub 为用户 ID（与 Aegis 接口中的 userId 相同）",
+		SubjectClaim: "sub 为对外用户 ID（16 位随机数字，与 App 接口 /me 的 id 相同，终生不变）",
 	}
 	if !out.Enabled {
 		return out, nil
@@ -1149,9 +1150,16 @@ func (s *OAuth2ServerService) ListUserGrants(ctx context.Context, appID, userID 
 	if err := s.ensureEnabled(); err != nil {
 		return nil, err
 	}
-	sessions, err := s.hydra.ListConsentSessions(ctx, OAuth2Subject(userID))
+	sessions, err := s.hydra.ListConsentSessions(ctx, LegacyOAuth2Subject(userID))
 	if err != nil {
 		return nil, s.hydraError("grants.list", err)
+	}
+	if subject, ok := s.publicSubject(ctx, userID); ok {
+		current, err := s.hydra.ListConsentSessions(ctx, subject)
+		if err != nil {
+			return nil, s.hydraError("grants.list", err)
+		}
+		sessions = append(sessions, current...)
 	}
 	byClient := map[string]*OAuth2GrantView{}
 	for _, item := range sessions {
@@ -1186,18 +1194,41 @@ func (s *OAuth2ServerService) RevokeUserGrants(ctx context.Context, appID, userI
 	if err := s.ensureEnabled(); err != nil {
 		return err
 	}
-	subject := OAuth2Subject(userID)
+	// 切换到对外 ID 之前的授权挂在主键 subject 上，两份都要撤
+	subjects := []string{LegacyOAuth2Subject(userID)}
+	if subject, ok := s.publicSubject(ctx, userID); ok {
+		subjects = append(subjects, subject)
+	}
 	clientID = strings.TrimSpace(clientID)
 	if clientID != "" {
 		if _, err := s.ownedClient(ctx, appID, clientID); err != nil {
 			return err
 		}
-		return s.hydraError("grants.revoke", s.hydra.RevokeConsentSessions(ctx, subject, clientID))
+		for _, subject := range subjects {
+			if err := s.hydra.RevokeConsentSessions(ctx, subject, clientID); err != nil {
+				return s.hydraError("grants.revoke", err)
+			}
+		}
+		return nil
 	}
-	if err := s.hydra.RevokeConsentSessions(ctx, subject, ""); err != nil {
-		return s.hydraError("grants.revoke_all", err)
+	for _, subject := range subjects {
+		if err := s.hydra.RevokeConsentSessions(ctx, subject, ""); err != nil {
+			return s.hydraError("grants.revoke_all", err)
+		}
+		if err := s.hydra.RevokeLoginSessions(ctx, subject); err != nil {
+			return s.hydraError("sessions.revoke", err)
+		}
 	}
-	return s.hydraError("sessions.revoke", s.hydra.RevokeLoginSessions(ctx, subject))
+	return nil
+}
+
+// publicSubject 用户当前的 subject（对外 ID）。用户已被删除时取不到，只剩旧 subject 可撤。
+func (s *OAuth2ServerService) publicSubject(ctx context.Context, userID int64) (string, bool) {
+	user, err := s.pg.GetUserByID(ctx, userID)
+	if err != nil || user == nil || user.PublicID <= 0 {
+		return "", false
+	}
+	return OAuth2Subject(user), true
 }
 
 // RevokeUserEverywhere 账号被封禁、删除、重置密码或被踢下线时调用：撤销全部授权与登录态。

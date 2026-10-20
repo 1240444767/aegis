@@ -35,7 +35,8 @@
 
 ## 用户标识
 
-`/ads/rewarded` 下发的 `userId` 形如 `42.1a2b3c4d5e6f7a8b`：用户 ID + HMAC 签名（密钥派生自 `SECURITY_MASTER_KEY`）。
+`/ads/rewarded` 下发的 `userId` 形如 `4829173056482917.1a2b3c4d5e6f7a8b`：对外用户 ID（与 `/me` 的 `id` 相同，见 [user-public-id.md](user-public-id.md)）+ HMAC 签名（密钥派生自 `SECURITY_MASTER_KEY`）。
+切换到对外 ID 之前发出的主键形态（`42.…`）回调时照样认得。
 客户端必须把它**原样**传给 SDK 的 `ApexAdxRewardRequest(placementId, userId, options)`。
 
 平台的回调签名只覆盖 `transId`、不覆盖 `userId`。不带签名的话，能伪造一次回调的人就能把奖励记到任意账号头上；

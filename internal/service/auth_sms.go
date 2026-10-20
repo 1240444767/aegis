@@ -100,7 +100,7 @@ func (s *AuthService) SMSLogin(ctx context.Context, input SMSLoginInput) (*authd
 	s.syncAdminUserSearch(input.AppID, user.ID)
 
 	if registered && input.SuppressSession {
-		return &authdomain.LoginResult{UserID: user.ID, Account: user.Account}, nil
+		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account}, nil
 	}
 	return s.completeLogin(ctx, app, user, "sms", "sms",
 		input.DeviceID, input.Device, input.IP, input.UserAgent)

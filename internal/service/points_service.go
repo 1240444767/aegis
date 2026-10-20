@@ -20,16 +20,18 @@ import (
 )
 
 type PointsService struct {
-	log      *zap.Logger
-	pg       *pgrepo.Repository
-	sessions *redisrepo.SessionRepository
-	location *time.Location
+	// publicIDs 排行榜上的 userId 换成对外 ID
+	publicIDs *UserPublicIDs
+	log       *zap.Logger
+	pg        *pgrepo.Repository
+	sessions  *redisrepo.SessionRepository
+	location  *time.Location
 	// 排行榜并发合并：多个用户同时请求同一榜单页时只打一次 DB
 	rankingFlight singleflight.Group
 }
 
 func NewPointsService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository) *PointsService {
-	return &PointsService{log: log, pg: pg, sessions: sessions, location: timeutil.DefaultLocation()}
+	return &PointsService{log: log, pg: pg, sessions: sessions, location: timeutil.DefaultLocation(), publicIDs: newUserPublicIDsFor(pg)}
 }
 
 func (s *PointsService) GetOverview(ctx context.Context, session *authdomain.Session) (*pointdomain.Overview, error) {
@@ -73,7 +75,14 @@ func (s *PointsService) GetRankings(ctx context.Context, session *authdomain.Ses
 	if err != nil || resp == nil {
 		return resp, err
 	}
-	return maskRankingAccounts(resp), nil
+	out := maskRankingAccounts(resp)
+	publicizeRankingUsers(ctx, s.publicIDs, out)
+	return out, nil
+}
+
+// SetPublicIDs 接上全进程共用的对外 ID 换算。
+func (s *PointsService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
 }
 
 // maskRankingAccounts 返回一份账号已脱敏的副本：singleflight 的结果在并发请求之间共享，不能原地改。
@@ -90,6 +99,25 @@ func maskRankingAccounts(resp *pointdomain.RankingResponse) *pointdomain.Ranking
 		out.MyRank = &my
 	}
 	return &out
+}
+
+// publicizeRankingUsers 在 maskRankingAccounts 的副本上把 userId 换成对外 ID（docs/user-public-id.md）。
+// 换不到的（刚注销）写 0，不把主键留在榜上。
+func publicizeRankingUsers(ctx context.Context, publicIDs *UserPublicIDs, resp *pointdomain.RankingResponse) {
+	ids := make([]int64, 0, len(resp.Items)+1)
+	for _, item := range resp.Items {
+		ids = append(ids, item.UserID)
+	}
+	if resp.MyRank != nil {
+		ids = append(ids, resp.MyRank.UserID)
+	}
+	public := publicIDs.Map(ctx, ids)
+	for i := range resp.Items {
+		resp.Items[i].UserID = public[resp.Items[i].UserID]
+	}
+	if resp.MyRank != nil {
+		resp.MyRank.UserID = public[resp.MyRank.UserID]
+	}
 }
 
 func (s *PointsService) getRankings(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {

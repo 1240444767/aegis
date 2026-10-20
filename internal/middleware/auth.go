@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	authdomain "aegis/internal/domain/auth"
 	"aegis/internal/service"
 	"aegis/pkg/response"
 	"github.com/gin-gonic/gin"
@@ -30,8 +31,18 @@ func Auth(authService *service.AuthService) gin.HandlerFunc {
 		}
 		c.Set("auth.session", session)
 		c.Set("auth.token", token)
+		registerUserIDAlias(c, authService, session)
 		c.Next()
 	}
+}
+
+// registerUserIDAlias 让这次响应里调用者自己的主键一律以对外 ID 出现（docs/user-public-id.md）。
+func registerUserIDAlias(c *gin.Context, authService *service.AuthService, session *authdomain.Session) {
+	if session == nil {
+		return
+	}
+	publicID := authService.PublicIDs().Of(c.Request.Context(), session.UserID)
+	response.SetUserIDAlias(c, session.UserID, publicID)
 }
 
 func OptionalAuth(authService *service.AuthService) gin.HandlerFunc {
@@ -45,6 +56,7 @@ func OptionalAuth(authService *service.AuthService) gin.HandlerFunc {
 		if err == nil && session != nil {
 			c.Set("auth.session", session)
 			c.Set("auth.token", token)
+			registerUserIDAlias(c, authService, session)
 		}
 		c.Next()
 	}

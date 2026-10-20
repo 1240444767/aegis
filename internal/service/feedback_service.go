@@ -670,8 +670,13 @@ func (s *TicketService) feedbackRequesterName(ctx context.Context, session *auth
 	if account := strings.TrimSpace(session.Account); account != "" {
 		return account
 	}
-	if user, err := s.pg.GetUserByID(ctx, session.UserID); err == nil && user != nil && strings.TrimSpace(user.Account) != "" {
+	user, err := s.pg.GetUserByID(ctx, session.UserID)
+	if err == nil && user != nil && strings.TrimSpace(user.Account) != "" {
 		return user.Account
 	}
-	return "用户" + strconv.FormatInt(session.UserID, 10)
+	// 兜底名会显示给别人看，用对外 ID 而不是主键
+	if err == nil && user != nil && user.PublicID > 0 {
+		return "用户" + strconv.FormatInt(user.PublicID, 10)
+	}
+	return "用户"
 }

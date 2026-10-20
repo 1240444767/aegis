@@ -122,6 +122,8 @@ type UserService struct {
 	app       *AppService
 	// autoSign 自动签到设置的清洗与资格校验；为空时 autoSign 分类按普通设置原样存
 	autoSign autoSignSettingsGuard
+	// publicIDs 主键 ↔ 对外用户 ID；全进程共用一份（PublicIDs），各处响应据此把主键换掉
+	publicIDs *UserPublicIDs
 }
 
 // autoSignSettingsGuard 写入自动签到设置前的清洗与资格校验（AutoSignService.PrepareSettings）。
@@ -188,7 +190,15 @@ func (s *UserService) SetAppService(app *AppService) {
 }
 
 func NewUserService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository, publisher *event.Publisher, security *SecurityService) *UserService {
-	return &UserService{log: log, pg: pg, sessions: sessions, publisher: publisher, security: security}
+	return &UserService{log: log, pg: pg, sessions: sessions, publisher: publisher, security: security, publicIDs: newUserPublicIDsFor(pg)}
+}
+
+// PublicIDs 主键 ↔ 对外用户 ID 的换算（docs/user-public-id.md）。nil 接收者返回 nil，换算结果全为 0。
+func (s *UserService) PublicIDs() *UserPublicIDs {
+	if s == nil {
+		return nil
+	}
+	return s.publicIDs
 }
 
 func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*userdomain.MyView, error) {
@@ -207,7 +217,8 @@ func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*
 	s.ensureDefaultSettings(ctx, session, user.ID)
 
 	view := &userdomain.MyView{
-		ID:           user.ID,
+		// 对外只给随机的对外 ID，数据库主键不出服务端（docs/user-public-id.md）
+		ID:           user.PublicID,
 		AppID:        user.AppID,
 		Account:      user.Account,
 		Integral:     user.Integral,
@@ -2410,6 +2421,12 @@ func shouldUseAdminUserSearch(query userdomain.AdminUserQuery) bool {
 	}
 	if strings.HasPrefix(strings.TrimSpace(query.Keyword), "#") {
 		return false
+	}
+	// 16 位纯数字是用户报来的对外 ID，同样是 Postgres 侧直达（索引里没有这一列）
+	if keyword := strings.TrimSpace(query.Keyword); len(keyword) == 16 {
+		if id, err := strconv.ParseInt(keyword, 10, 64); err == nil && id >= userPublicIDMin {
+			return false
+		}
 	}
 	return strings.TrimSpace(query.Keyword) != "" ||
 		strings.TrimSpace(query.Account) != "" ||

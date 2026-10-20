@@ -291,7 +291,10 @@ VALUES ($1, $2, 'permanent', 'login', 'test')`, appID, erin); err != nil {
 		!strings.HasPrefix(exp.Items[0].LevelName, "Lv.") || exp.Me.LevelName == "" {
 		t.Fatalf("经验榜：%+v", exp)
 	}
-	if lvl := board(alice, leaderboard.BoardLevel, 1, 5); len(lvl.Items) == 0 || lvl.Items[0].UserID == nil || *lvl.Items[0].UserID != alice ||
+	// 榜上给的是对外 ID，不是主键（docs/user-public-id.md）
+	alicePublic := svc.publicIDs.Of(ctx, alice)
+	if lvl := board(alice, leaderboard.BoardLevel, 1, 5); len(lvl.Items) == 0 || lvl.Items[0].UserID == nil || alicePublic < userPublicIDMin ||
+		*lvl.Items[0].UserID != alicePublic ||
 		lvl.Items[0].LevelName == "" {
 		t.Fatalf("等级榜：%+v", lvl)
 	}

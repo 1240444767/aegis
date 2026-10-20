@@ -796,9 +796,18 @@ func (s *ScriptSDK) bindUserNamespace(vm *goja.Runtime, object *goja.Object) err
 }
 
 // resolveTargetUser 解析读操作的目标用户：省略参数即当前调用者。
+// 参数可以是主键（存量脚本），也可以是对外用户 ID（客户端能拿到的只有它，docs/user-public-id.md）。
 func (s *ScriptSDK) resolveTargetUser(call goja.FunctionCall) int64 {
 	if len(call.Arguments) > 0 && !goja.IsUndefined(call.Argument(0)) {
-		return call.Argument(0).ToInteger()
+		id := call.Argument(0).ToInteger()
+		if id >= userPublicIDMin && s.deps.PG != nil {
+			userID, err := s.deps.PG.FindUserIDByPublicID(s.ctx, s.appID, id)
+			if err != nil {
+				return 0
+			}
+			return userID
+		}
+		return id
 	}
 	return s.callerUserID()
 }
@@ -828,11 +837,13 @@ func (s *ScriptSDK) loadUserPayload(vm *goja.Runtime, userID int64) map[string]a
 	}
 
 	payload := map[string]any{
-		"id":      user.ID,
-		"account": user.Account,
-		"enabled": user.Enabled,
-		"banned":  banned,
-		"vip":     entitlement.IsVIP,
+		"id": user.ID,
+		// publicId 对外用户 ID：要回给客户端或交给外部服务的，一律用它而不是 id
+		"publicId": user.PublicID,
+		"account":  user.Account,
+		"enabled":  user.Enabled,
+		"banned":   banned,
+		"vip":      entitlement.IsVIP,
 		"vipTrial": entitlement.IsTrial,
 		// 永久会员：此时没有 vipExpireAt
 		"vipLifetime": entitlement.IsLifetime,

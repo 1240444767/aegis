@@ -43,6 +43,8 @@ const (
 )
 
 type AuthService struct {
+	// publicIDs 主键 ↔ 对外用户 ID（与 UserService 共用一份，见 SetPublicIDs）
+	publicIDs      *UserPublicIDs
 	cfg            config.Config
 	log            *zap.Logger
 	pg             *pgrepo.Repository
@@ -81,6 +83,19 @@ type AuthService struct {
 }
 
 // SetNotificationService 接上站内信：安全类提醒经 NotificationService.Deliver 投递并实时推送。
+// SetPublicIDs 接上全进程共用的对外 ID 换算（UserService.PublicIDs）。
+func (s *AuthService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
+}
+
+// PublicIDs 主键 ↔ 对外用户 ID 的换算；未接上时为 nil（换算结果全为 0）。
+func (s *AuthService) PublicIDs() *UserPublicIDs {
+	if s == nil {
+		return nil
+	}
+	return s.publicIDs
+}
+
 func (s *AuthService) SetNotificationService(notifications notificationDeliverer) {
 	s.notifications = notifications
 }
@@ -534,7 +549,7 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 	s.syncAdminUserSearch(input.AppID, user.ID)
 	s.sendWelcomeMail(input.AppID, input.Account, registerEmail, input.Nickname)
 	if input.SuppressSession {
-		return &authdomain.LoginResult{UserID: user.ID, Account: user.Account}, nil
+		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account}, nil
 	}
 	// 新建用户必然未被封禁/禁用，无需 ensureUserLoginState；首次设备已以 register 场景同步写入
 	return s.completeLogin(ctx, app, user, "password", "password", input.DeviceID, input.Device, input.IP, input.UserAgent)
@@ -1231,7 +1246,8 @@ func (s *AuthService) issueSession(ctx context.Context, app *appdomain.App, user
 // signSessionToken 统一构造并签名访问/刷新令牌（消除两段重复的 claims 组装）。
 func (s *AuthService) signSessionToken(tokenType string, user *userdomain.User, tokenID, familyID string, issuedAt, expiresAt time.Time) (string, error) {
 	claims := jwt.MapClaims{
-		"uid":     user.ID,
+		// 令牌是客户端能解开看的，uid 只放对外 ID。服务端校验只认 jti，从不读这一项
+		"uid":     user.PublicID,
 		"appid":   user.AppID,
 		"account": user.Account,
 		"sv":      1,
@@ -1395,6 +1411,7 @@ func (s *AuthService) issueSessionBundle(ctx context.Context, app *appdomain.App
 			RefreshExpiresAt:       refreshExpiresAt,
 			TokenType:              "Bearer",
 			UserID:                 user.ID,
+			PublicUserID:           user.PublicID,
 			Account:                user.Account,
 			Provider:               provider,
 			PasswordChangeRequired: passwordChangeRequired,

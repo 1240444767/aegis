@@ -1102,6 +1102,7 @@ func (r *Repository) ListAdminUsersByAppQuery(ctx context.Context, appID int64, 
 
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1163,7 +1164,7 @@ func (r *Repository) listAdminUsersByAppFast(ctx context.Context, appID int64, e
 	}
 
 	query := `WITH page_users AS (
-    SELECT id, appid, account, integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at
+    SELECT id, public_id, appid, account, integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at
     FROM users
     WHERE appid = $1`
 	args := []any{appID}
@@ -1182,6 +1183,7 @@ func (r *Repository) listAdminUsersByAppFast(ctx context.Context, appID int64, e
 	query += `
 SELECT
     u.id,
+    u.public_id,
     u.appid,
     u.account,
     u.integral,
@@ -1230,6 +1232,7 @@ ORDER BY ` + buildAdminUserOrderBy(sort, order, adminUserFastSortColumns, "u.", 
 func (r *Repository) GetAdminUserByApp(ctx context.Context, appID int64, userID int64) (*userdomain.AdminUserView, error) {
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1275,6 +1278,7 @@ func (r *Repository) ListAdminUsersForExportQuery(ctx context.Context, appID int
 	baseQuery, args := buildAdminUserListBaseQuery(appID, adminQuery)
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1324,6 +1328,7 @@ func (r *Repository) ListAdminUsersByIDs(ctx context.Context, appID int64, userI
 	}
 	rows, err := r.pool.Query(ctx, `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1499,8 +1504,17 @@ func isAdminUserFastPath(adminQuery userdomain.AdminUserQuery) bool {
 }
 
 // parseAdminUserDirectID 识别 `#123` 形态的「按 ID 直达」关键字。
+// userPublicIDMin 对外用户 ID 号段的下界（迁移 000112）；主键不会长到这么大。
+const userPublicIDMin int64 = 1_000_000_000_000_000
+
 func parseAdminUserDirectID(keyword string) (int64, bool) {
 	if !strings.HasPrefix(keyword, "#") {
+		// 不带井号的 16 位纯数字只可能是用户报来的对外 ID
+		if len(keyword) == 16 {
+			if id, err := strconv.ParseInt(keyword, 10, 64); err == nil && id >= userPublicIDMin {
+				return id, true
+			}
+		}
 		return 0, false
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(keyword[1:]), 10, 64)
@@ -1529,7 +1543,12 @@ WHERE u.appid = $1`
 	// `#123` 是「按用户 ID 直达」的显式写法：搜索框里粘一个带井号的 ID，
 	// 意图只可能是找这一个人，不该再去模糊撞昵称里的数字。
 	if directID, ok := parseAdminUserDirectID(keyword); ok {
-		baseQuery += fmt.Sprintf(" AND u.id = $%d", len(args)+1)
+		// 对外 ID 是 16 位、主键远小于它：同一个井号写法两种都认，客服拿到用户报的 ID 直接粘进来即可
+		column := "u.id"
+		if directID >= userPublicIDMin {
+			column = "u.public_id"
+		}
+		baseQuery += fmt.Sprintf(" AND %s = $%d", column, len(args)+1)
 		args = append(args, directID)
 		keyword = ""
 	}
@@ -2477,7 +2496,8 @@ func (r *Repository) GetUserLevelProfile(ctx context.Context, userID int64, appI
 
 	result := &pointdomain.LevelProfile{
 		UserInfo: pointdomain.LevelUserInfo{
-			ID:         user.ID,
+			// 只出现在用户端「我的等级」里：给对外 ID（docs/user-public-id.md）
+			ID:         user.PublicID,
 			Account:    user.Account,
 			Integral:   user.Integral,
 			Experience: user.Experience,
@@ -4253,11 +4273,11 @@ func (r *Repository) InsertSessionAudit(ctx context.Context, appID int64, userID
 // userColumns 是 scanUser 读取的列，顺序与 Scan 的参数一一对应。
 // 凡是交给 scanUser 的查询都必须用它拼 SELECT / RETURNING：手写列清单在加列时会漏改，
 // 漏一处就是运行时的「number of field descriptions must equal number of destinations」。
-const userColumns = `id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
+const userColumns = `id, public_id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
 
 func scanUser(row interface{ Scan(dest ...any) error }) (*userdomain.User, error) {
 	var user userdomain.User
-	if err := row.Scan(&user.ID, &user.AppID, &user.Account, &user.PasswordHash, &user.Integral, &user.Experience, &user.Enabled, &user.DisabledEndTime, &user.VIPExpireAt, &user.VIPLifetimeAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.PublicID, &user.AppID, &user.Account, &user.PasswordHash, &user.Integral, &user.Experience, &user.Enabled, &user.DisabledEndTime, &user.VIPExpireAt, &user.VIPLifetimeAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		return nil, normalizeNotFound(err)
 	}
 	return &user, nil
@@ -4268,6 +4288,7 @@ func scanAdminUser(row interface{ Scan(dest ...any) error }) (*userdomain.AdminU
 	var extraBytes []byte
 	if err := row.Scan(
 		&item.ID,
+		&item.PublicID,
 		&item.AppID,
 		&item.Account,
 		&item.Integral,

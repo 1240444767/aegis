@@ -124,7 +124,7 @@ func (s *AdPolicyService) ClientPolicy(ctx context.Context, appID, userID int64,
 		result.Consent = consent
 		result.Vip, result.AdFree = s.membership(ctx, appID, userID)
 		if s.rewarded != nil {
-			result.AdUserID = s.rewarded.AdUserToken(appID, userID)
+			result.AdUserID = s.rewarded.AdUserToken(ctx, appID, userID)
 		}
 	}
 	verdict := adpolicy.Evaluate(policy, consent, result.AdFree)

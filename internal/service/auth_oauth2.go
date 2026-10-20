@@ -88,16 +88,30 @@ func (s *AuthService) VerifySecondFactorForOAuth2(ctx context.Context, appID int
 	return &OAuth2Authentication{User: user, AMR: []string{"pwd", method}}, nil
 }
 
-// ResolveOAuth2Subject 把 Hydra 的 subject（即用户 ID）解析回用户，并重新判定此刻还能不能登录：
+// ResolveOAuth2Subject 把 Hydra 的 subject 解析回用户，并重新判定此刻还能不能登录：
 // 用户属于该应用、账号未被封禁冻结、应用未被停用或治理冻结。
+//
+// subject 现在是对外用户 ID；切换前签发的会话与刷新令牌里还是主键（LegacyOAuth2Subject），
+// 两种都认，直到旧会话自然过期。
 //
 // Hydra 记住登录态（skip=true）、记住同意、刷新令牌时都不会再来问 Aegis 密码，
 // 这里就是那几条路径上唯一的状态关卡。refresh 决定应用侧判定用哪一档：
 // 新的登录要求应用开放登录，刷新只要求应用未停用、接口能力未被冻结（与 Refresh 一致）。
 func (s *AuthService) ResolveOAuth2Subject(ctx context.Context, appID int64, subject string, refresh bool) (*userdomain.User, error) {
-	userID, err := strconv.ParseInt(strings.TrimSpace(subject), 10, 64)
-	if err != nil || userID <= 0 {
+	number, err := strconv.ParseInt(strings.TrimSpace(subject), 10, 64)
+	if err != nil || number <= 0 {
 		return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
+	}
+	userID := number
+	if number >= userPublicIDMin {
+		// 对外 ID；主键远小于号段下界，两种 subject 不会混淆
+		userID, err = s.pg.FindUserIDByPublicID(ctx, appID, number)
+		if err != nil {
+			return nil, err
+		}
+		if userID == 0 {
+			return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
+		}
 	}
 	user, err := s.pg.GetUserByID(ctx, userID)
 	if err != nil {
@@ -138,9 +152,17 @@ func (s *AuthService) ResolveOAuth2Subject(ctx context.Context, appID int64, sub
 	return user, nil
 }
 
-// OAuth2Subject 用户在授权服务器里的主体标识：十进制用户 ID，与 Aegis 其余接口里的 userId 一致，
-// 接入方据此就能把 ID Token 里的 sub 与 Aegis 服务端接口对上。
-func OAuth2Subject(userID int64) string {
+// userPublicIDMin 对外用户 ID 号段的下界（与迁移 000112 的 CHECK 约束一致）。
+const userPublicIDMin int64 = 1_000_000_000_000_000
+
+// OAuth2Subject 用户在授权服务器里的主体标识：十进制的对外用户 ID，与 App 接口里 /me 的 id 一致，
+// 接入方据此就能把 ID Token 里的 sub 与 Aegis 其余接口对上。数据库主键不出现在 sub 里。
+func OAuth2Subject(user *userdomain.User) string {
+	return strconv.FormatInt(user.PublicID, 10)
+}
+
+// LegacyOAuth2Subject 切换到对外 ID 之前用的 subject（十进制主键）。只用于找回、撤销那批旧会话。
+func LegacyOAuth2Subject(userID int64) string {
 	return strconv.FormatInt(userID, 10)
 }
 

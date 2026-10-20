@@ -245,7 +245,7 @@ func (s *AvatarService) view(ctx context.Context, baseURL string, owner avatardo
 		}
 	}
 
-	token := s.signer.EncodeOwner(owner)
+	token := s.ownerToken(ctx, owner)
 	if token == "" {
 		return avatardomain.View{}
 	}
@@ -447,6 +447,17 @@ type AvatarImage struct {
 	Degraded bool
 }
 
+// ownerToken 头像地址里的主体令牌。应用用户用对外 ID 形态；换不到对外 ID（库抖了）时退回主键形态，
+// 宁可这一次地址里带主键，也不能让头像整个消失。管理员不是对外用户，沿用原形态。
+func (s *AvatarService) ownerToken(ctx context.Context, owner avatardomain.Owner) string {
+	if owner.Type == avatardomain.OwnerUser {
+		if publicID := s.user.PublicIDs().Of(ctx, owner.ID); publicID > 0 {
+			return s.signer.EncodePublicUser(owner.AppID, publicID)
+		}
+	}
+	return s.signer.EncodeOwner(owner)
+}
+
 // OpenAvatar 按主体令牌取图。这是永久地址背后的实现。
 //
 // 它**不认**地址里的 v：那个参数只用来破客户端与 CDN 的缓存，
@@ -456,9 +467,19 @@ type AvatarImage struct {
 // 最高的资源之一，把 200KB 从对象存储拉回来只为了发现"客户端已经有了"，
 // 是这条链路上最容易避免的浪费。
 func (s *AvatarService) OpenAvatar(ctx context.Context, token string, size int, ifNoneMatch string) (*AvatarImage, error) {
-	owner, ok := s.signer.DecodeOwner(token)
+	owner, public, ok := s.signer.DecodeToken(token)
 	if !ok {
 		return nil, apperrors.New(40481, http.StatusNotFound, "头像不存在")
+	}
+	if public {
+		userID, err := s.user.PublicIDs().Resolve(ctx, owner.AppID, owner.ID)
+		if err != nil {
+			return nil, err
+		}
+		if userID <= 0 {
+			return nil, apperrors.New(40481, http.StatusNotFound, "头像不存在")
+		}
+		owner.ID = userID
 	}
 	target, err := s.resolveTarget(ctx, owner)
 	if err != nil {

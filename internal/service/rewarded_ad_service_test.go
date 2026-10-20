@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -19,14 +20,14 @@ func newRewardedAdServiceForTest(masterKey string) *RewardedAdService {
 // 回调里的 userId 只能是我们发出去的那一个：换 ID、换应用、改签名都认不出。
 func TestRewardedAdUserTokenRoundTrip(t *testing.T) {
 	svc := newRewardedAdServiceForTest("master")
-	token := svc.userToken(7, 42)
+	token := svc.userToken(context.Background(), 7, 42)
 	if !strings.HasPrefix(token, "42.") || len(token) != len("42.")+rewardedAdUserTagLen {
 		t.Fatalf("用户标识形态不对：%q", token)
 	}
-	if got := svc.parseUserToken(7, token); got != 42 {
+	if got := svc.parseUserToken(context.Background(), 7, token); got != 42 {
 		t.Fatalf("parseUserToken = %d, want 42", got)
 	}
-	if got := svc.parseUserToken(7, strings.ToUpper(token)); got != 42 {
+	if got := svc.parseUserToken(context.Background(), 7, strings.ToUpper(token)); got != 42 {
 		t.Fatalf("签名部分大小写不敏感，得到 %d", got)
 	}
 
@@ -43,16 +44,37 @@ func TestRewardedAdUserTokenRoundTrip(t *testing.T) {
 		if value == token {
 			continue
 		}
-		if got := svc.parseUserToken(7, value); got != 0 {
+		if got := svc.parseUserToken(context.Background(), 7, value); got != 0 {
 			t.Errorf("%s：应当认不出，得到 %d", name, got)
 		}
 	}
-	if got := svc.parseUserToken(8, token); got != 0 {
+	if got := svc.parseUserToken(context.Background(), 8, token); got != 0 {
 		t.Errorf("别的应用不应认出这个标识，得到 %d", got)
 	}
 	other := newRewardedAdServiceForTest("another-master")
-	if got := other.parseUserToken(7, token); got != 0 {
+	if got := other.parseUserToken(context.Background(), 7, token); got != 0 {
 		t.Errorf("换了主密钥的部署不应认出这个标识，得到 %d", got)
+	}
+}
+
+// 对外 ID 形态：标识里只有对外 ID，回调换回主键；别的应用的对外 ID 换不回来。
+func TestRewardedAdUserTokenUsesPublicID(t *testing.T) {
+	svc := newRewardedAdServiceForTest("master")
+	svc.SetPublicIDs(NewUserPublicIDs(&fakePublicIDStore{ids: map[int64]int64{42: 4829173056482917}}))
+	ctx := context.Background()
+	token := svc.userToken(ctx, 1, 42)
+	if !strings.HasPrefix(token, "4829173056482917.") {
+		t.Fatalf("标识应以对外 ID 开头：%q", token)
+	}
+	if got := svc.parseUserToken(ctx, 1, token); got != 42 {
+		t.Fatalf("parseUserToken = %d, want 42", got)
+	}
+	legacy := signedAdUserToken(svc, 1, 42)
+	if got := svc.parseUserToken(ctx, 1, legacy); got != 42 {
+		t.Fatalf("切换前的主键形态仍要认得，得到 %d", got)
+	}
+	if got := svc.parseUserToken(ctx, 2, signedAdUserToken(svc, 2, 4829173056482917)); got != 0 {
+		t.Fatalf("别的应用的对外 ID 不应换出主键，得到 %d", got)
 	}
 }
 

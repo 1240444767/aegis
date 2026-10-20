@@ -8,6 +8,9 @@ import (
 
 type User struct {
 	ID              int64      `json:"id"`
+	// PublicID 对外用户 ID：随机 16 位数字，建号时由数据库发放、终生不变、注销后不复用。
+	// 用户与第三方能看到的地方一律给它，ID 只在服务端内部与管理端使用（docs/user-public-id.md）。
+	PublicID        int64      `json:"publicId"`
 	AppID           int64      `json:"appid"`
 	Account         string     `json:"account"`
 	PasswordHash    string     `json:"-"`
@@ -492,6 +495,8 @@ type AdminUserBatchStatusResult struct {
 
 type AdminUserView struct {
 	ID               int64          `json:"id"`
+	// PublicID 对外用户 ID（用户在 App 里看到、报给客服的那个号）
+	PublicID         int64          `json:"publicId"`
 	AppID            int64          `json:"appid"`
 	Account          string         `json:"account"`
 	Nickname         string         `json:"nickname,omitempty"`

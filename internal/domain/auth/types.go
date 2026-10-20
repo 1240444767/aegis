@@ -102,12 +102,15 @@ type SecondFactorChallenge struct {
 }
 
 type LoginResult struct {
-	AccessToken          string                 `json:"accessToken,omitempty"`
-	RefreshToken         string                 `json:"refreshToken,omitempty"`
-	ExpiresAt            time.Time              `json:"expiresAt,omitempty"`
-	RefreshExpiresAt     time.Time              `json:"refreshExpiresAt,omitempty"`
-	TokenType            string                 `json:"tokenType,omitempty"`
-	UserID               int64                  `json:"userId"`
+	AccessToken      string    `json:"accessToken,omitempty"`
+	RefreshToken     string    `json:"refreshToken,omitempty"`
+	ExpiresAt        time.Time `json:"expiresAt,omitempty"`
+	RefreshExpiresAt time.Time `json:"refreshExpiresAt,omitempty"`
+	TokenType        string    `json:"tokenType,omitempty"`
+	// UserID 数据库主键，服务端内部用（登录后的邀请绑定、钩子等），不下发
+	UserID int64 `json:"-"`
+	// PublicUserID 对外用户 ID，响应里的 userId 就是它（docs/user-public-id.md）
+	PublicUserID         int64                  `json:"userId"`
 	Account              string                 `json:"account"`
 	Provider             string                 `json:"provider,omitempty"`
 	RequiresSecondFactor bool                   `json:"requiresSecondFactor,omitempty"`

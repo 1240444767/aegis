@@ -224,6 +224,7 @@ func writeJSON(c *gin.Context, httpStatus int, env Envelope) {
 	env.RequestID = requestID(c)
 	env.TraceID = traceID(c)
 	env.Timestamp = time.Now().UnixMilli()
+	env.Data = applyUserIDAlias(c, env.Data)
 	c.JSON(httpStatus, env)
 }
 
