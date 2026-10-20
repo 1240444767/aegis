@@ -701,7 +701,7 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `components/apps/app-detail-header.tsx` | 详情页标识条 + 带区块换应用 + 关联页面入口 |
 | `components/apps/app-section-nav.tsx` | 区块导航（宽屏竖向分组 / 窄屏横向胶囊） |
 | `components/apps/vip/` | 会员区块：套餐 / 功能标识 / 试用 / 会员查询（见下节） |
-| `components/apps/card-key/` | 卡密区块：批次 / 卡密 / 核销记录（权益表单由后端目录驱动） |
+| `components/apps/card-key/` | 卡密区块：概览 / 批次 / 卡密 / 核销记录（见下方「卡密区块」） |
 | `lib/api/card-key.ts` / `lib/card-key-hooks.ts` | 卡密域 API 与 React Query hooks |
 | `components/apps/rewarded-ad/` | 激励广告区块：概览 / 记录 / 配置（见下节） |
 | `lib/api/rewarded-ad.ts` / `lib/rewarded-ad-hooks.ts` | 激励广告域 API 与 React Query hooks |
@@ -1103,6 +1103,34 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
 
 旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
+
+## 卡密区块（/apps/{appKey}?tab=card-key）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/card-key/app-card-key-panel.tsx` | 骨架 + 概览 / 批次 / 卡密 / 核销记录四个视图的切换，批次筛选在卡密与核销记录之间共用 |
+| `components/apps/card-key/card-key-overview-panel.tsx` | 8 个数字（总数、可提取、已提取、有效授权、今日 / 累计核销、人数、面值已用 / 发出）、核销趋势（次数为柱、人数为线，按浏览器时区分日）、来源、热门批次（点击跳到这批的卡） |
+| `components/apps/card-key/card-key-batches-panel.tsx` | 批次卡片：类型、停用、待生效、渠道、面值、权益、规则摘要、进度条；启停、查看卡、提卡，更多菜单里编辑 / 补发 / 以此为模板新建 / 三种导出 / 删除（40982 时解释并给「停用批次」） |
+| `components/apps/card-key/card-key-batch-editor.tsx` | 批次编辑抽屉：新建（随机生成或导入卡面，卡面样例与格式容量提示）、以模板新建、修改（只开放之后才生效的项，其余灰显） |
+| `components/apps/card-key/card-key-batch-form.ts` | 草稿模型：种子、从批次起草、卡面归一化与导入解析（与后端 `NormalizeCode` 同口径）、容量（字符集 ^ 位数 / 4）、与后端同规则同说法的校验、载荷 |
+| `components/apps/card-key/card-key-reward-editor.tsx` | 权益行编辑：目录驱动的添加菜单，数量 / 金额 / 套餐 / 功能 + 天数（0 为永久，可多行），需要授权卡的档位给提示 |
+| `components/apps/card-key/card-key-batch-dialogs.tsx` | 补发对话框；提卡对话框（数量 + 备注 → 当场给出卡面，复制全部或下载 TXT） |
+| `components/apps/card-key/card-key-codes-panel.tsx` | 单卡列表：批次 / 状态（含部分使用、已过期）/ 类型 / 提取 / 关键词筛选；多选后复制、标记 / 取消提取、作废、恢复、删除 |
+| `components/apps/card-key/card-key-detail-sheet.tsx` | 单卡抽屉：信息、批次权益、调整（备注、设备数、到期时间延长 / 设为 / 永久）、设备解绑与清空、核销与解绑流水 |
+| `components/apps/card-key/card-key-redemptions-panel.tsx` | 核销记录：批次 / 来源 / 用户 / 关键词 / 时间筛选，展示实际发放；「代兑」对话框 |
+| `components/apps/card-key/card-key-shared.tsx` | 类型 / 状态 / 字符集 / 对象 / 来源文案、规则摘要、权益与结果摘要、进度条、复制 |
+
+五条硬约束：
+
+1. **权益表单由后端目录驱动**（`/card-keys/catalog`）：档位、单位、上下界、能否重复、是否需要授权卡，
+   以及可选的会员套餐与功能都随目录下发，前端不另抄枚举。
+2. **「已过期」「部分使用」是算出来的**（`resolveCardState`）：后端没有这两档状态，到期时间与 `useCount` 才是依据。
+3. **批量操作按选中的 id**，翻页或改筛选即清空选择；导出与提卡按批次，不按当前筛选。
+4. **修改批次只传之后才生效的项**；统一到期时间不改就不传（后端收到空值保留原值），否则过了到期日的批次连名字都改不了。
+5. **前端校验只是提示**，提交时第一条问题 toast；后端的报错原样 toast。删除批次遇到 40982 不当成失败提示，
+   而是解释原因并给「停用批次」。
+
+接口与语义见 [docs/card-key.md](../docs/card-key.md)。「卡密登录」的开关在「接入」的登录方式里，不在这个区块。
 
 ## 账号注销区块（/apps/{appKey}?tab=account-deletion）
 

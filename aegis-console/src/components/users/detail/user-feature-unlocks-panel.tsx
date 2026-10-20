@@ -60,7 +60,8 @@ const SOURCE_LABEL: Record<string, string> = {
   admin_grant: "管理员授予",
   invite: "邀请奖励",
   leaderboard: "排行榜奖励",
-  lottery: "抽奖"
+  lottery: "抽奖",
+  card_key: "卡密兑换"
 };
 
 /** 一条解锁记录此刻的状态：收回 > 已结束 > 生效中 */

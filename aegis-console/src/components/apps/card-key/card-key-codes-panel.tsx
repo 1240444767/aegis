@@ -1,28 +1,32 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
-import { Ban, Copy, Loader2, MonitorSmartphone, RotateCcw, Ticket, Unplug } from "lucide-react";
+import Link from "next/link";
+import { Ban, Copy, Loader2, PackageCheck, PackageX, RotateCcw, Ticket, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { SectionCard } from "@/components/apps/app-config-primitives";
+import { AdPolicyPager } from "@/components/apps/ad-policy/ad-policy-pager";
+import { CardKeyDetailSheet } from "@/components/apps/card-key/card-key-detail-sheet";
 import {
   CardKindBadge,
   CardStateBadge,
+  CopyButton,
+  EmptyHint,
+  copyText,
   formatCardDate,
   formatRemaining
 } from "@/components/apps/card-key/card-key-shared";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from "@/components/ui/alert-dialog";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -31,13 +35,6 @@ import {
   SelectTrigger,
   SelectValue
 } from "@/components/ui/select";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle
-} from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -48,23 +45,37 @@ import {
   TableRow
 } from "@/components/ui/table";
 import { ApiError } from "@/lib/api/client";
-import type { CardKey } from "@/lib/api/card-key";
+import type { CardKey, CardKeyKind, CardKeyStatusFilter } from "@/lib/api/card-key";
 import {
   useCardKeyBatchesQuery,
-  useCardKeyDevicesQuery,
   useCardKeysQuery,
+  useDeleteCardKeysMutation,
   useDisableCardKeysMutation,
-  useRestoreCardKeysMutation,
-  useUnbindCardKeyDeviceMutation
+  useDistributeCardKeysMutation,
+  useRestoreCardKeysMutation
 } from "@/lib/card-key-hooks";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { cn } from "@/lib/utils";
+
+const LIMIT = 50;
+
+const STATUS_OPTIONS: Array<{ value: CardKeyStatusFilter; label: string }> = [
+  { value: "unused", label: "未使用" },
+  { value: "partial", label: "部分使用" },
+  { value: "active", label: "使用中" },
+  { value: "used", label: "已核销" },
+  { value: "expired", label: "已过期" },
+  { value: "disabled", label: "已作废" }
+];
+
+type BulkAction = "disable" | "distribute" | "delete";
 
 /**
  * 单卡列表。
  *
- * 批量作废按**选中的 id 列表**下发，不做「按当前筛选条件批量」：管理员看到的
- * 列表与实际执行之间存在时间差（翻页期间有人兑换），按条件批量会误伤
- * 没被看过的卡，而作废是发出去之后收不回来的动作。
+ * 批量操作按**选中的 id 列表**下发，不做「按筛选条件批量」：管理员看到的列表与实际执行
+ * 之间存在时间差（翻页期间有人兑换），按条件批量会误伤没被看过的卡。翻页或改筛选即清空选择。
+ * 点一行打开单卡详情：调整到期时间与设备数、解绑设备、看核销与解绑流水。
  */
 export function CardKeyCodesPanel({
   appKey,
@@ -76,395 +87,387 @@ export function CardKeyCodesPanel({
   onBatchIdChange: (batchId?: number) => void;
 }) {
   const [keyword, setKeyword] = useState("");
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<CardKeyStatusFilter | undefined>(undefined);
+  const [kind, setKind] = useState<CardKeyKind | undefined>(undefined);
+  const [distributed, setDistributed] = useState<"yes" | "no" | undefined>(undefined);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const [confirmDisable, setConfirmDisable] = useState(false);
-  const [reason, setReason] = useState("");
-  const [deviceCard, setDeviceCard] = useState<CardKey | null>(null);
+  const [openCardId, setOpenCardId] = useState<number | null>(null);
+  const [action, setAction] = useState<BulkAction | null>(null);
+  const [note, setNote] = useState("");
 
   const debouncedKeyword = useDebouncedValue(keyword, 300);
   const batchesQuery = useCardKeyBatchesQuery(appKey);
-  const disableMutation = useDisableCardKeysMutation(appKey);
-  const restoreMutation = useRestoreCardKeysMutation(appKey);
-
   const listQuery = useCardKeysQuery(appKey, {
     batchId,
-    status: status === "all" ? undefined : status,
+    status,
+    kind,
+    distributed,
     keyword: debouncedKeyword || undefined,
     page,
-    limit: 20
+    limit: LIMIT
   });
+  const disableMutation = useDisableCardKeysMutation(appKey);
+  const restoreMutation = useRestoreCardKeysMutation(appKey);
+  const deleteMutation = useDeleteCardKeysMutation(appKey);
+  const distributeMutation = useDistributeCardKeysMutation(appKey);
 
   const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
   const total = listQuery.data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / 20));
-  const batches = batchesQuery.data ?? [];
+  const totalPages = Math.max(1, Math.ceil(total / LIMIT));
+  const filtered = Boolean(keyword || batchId || status || kind || distributed);
+  const selectedCards = items.filter((card) => selected.has(card.id));
+  const allSelected = items.length > 0 && items.every((card) => selected.has(card.id));
 
-  // 任一筛选变化都回到第 1 页并清空选中：否则会停在新条件下不存在的页码上
-  // （表现为「明明有数据却是空的」），而选中项会指向已经不在列表里的卡。
-  const applyFilter = (apply: () => void) => {
-    apply();
+  const resetSelection = () => setSelected(new Set());
+  const withReset = <T,>(apply: (value: T) => void) => (value: T) => {
+    apply(value);
     setPage(1);
-    setSelected(new Set());
+    resetSelection();
   };
 
-  const toggleOne = (id: number, checked: boolean) => {
+  const toggle = (id: number, checked: boolean) => {
     const next = new Set(selected);
     if (checked) next.add(id);
     else next.delete(id);
     setSelected(next);
   };
 
-  const pageIds = items.map((item) => item.id);
-  const allSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
-  const someSelected = pageIds.some((id) => selected.has(id));
+  const toggleAll = (checked: boolean) => setSelected(checked ? new Set(items.map((card) => card.id)) : new Set());
 
-  const toggleAll = (checked: boolean) => {
-    const next = new Set(selected);
-    for (const id of pageIds) {
-      if (checked) next.add(id);
-      else next.delete(id);
-    }
-    setSelected(next);
-  };
+  const ids = () => Array.from(selected);
 
-  const doDisable = async () => {
+  const run = async (task: () => Promise<string>) => {
     try {
-      const result = await disableMutation.mutateAsync({ ids: [...selected], reason });
-      toast.success(`已作废 ${result.affected} 张`);
-      setSelected(new Set());
-      setConfirmDisable(false);
-      setReason("");
+      toast.success(await task());
+      resetSelection();
+      setAction(null);
+      setNote("");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "作废失败");
+      toast.error(error instanceof ApiError ? error.message : "操作失败");
     }
   };
 
-  const doRestore = async () => {
-    try {
-      const result = await restoreMutation.mutateAsync([...selected]);
-      toast.success(`已恢复 ${result.affected} 张`);
-      setSelected(new Set());
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "恢复失败");
+  const confirmAction = () => {
+    if (action === "disable") {
+      return run(async () => {
+        const result = await disableMutation.mutateAsync({ ids: ids(), reason: note.trim() });
+        return skippedText(`已作废 ${result.affected} 张`, selected.size - result.affected, "已核销或已作废的卡不受影响");
+      });
+    }
+    if (action === "distribute") {
+      return run(async () => {
+        const result = await distributeMutation.mutateAsync({ ids: ids(), distributed: true, note: note.trim() });
+        return `已标记 ${result.affected} 张为已提取`;
+      });
+    }
+    if (action === "delete") {
+      return run(async () => {
+        const result = await deleteMutation.mutateAsync(ids());
+        return skippedText(`已删除 ${result.affected} 张`, result.skipped, "被使用过的卡只能作废");
+      });
     }
   };
 
-  const copyCode = async (code: string) => {
-    try {
-      await navigator.clipboard.writeText(code);
-      toast.success("卡密已复制");
-    } catch {
-      toast.error("复制失败");
-    }
-  };
+  const restore = () =>
+    run(async () => {
+      const result = await restoreMutation.mutateAsync(ids());
+      return skippedText(`已恢复 ${result.affected} 张`, selected.size - result.affected, "只有已作废的卡能恢复");
+    });
+
+  const undistribute = () =>
+    run(async () => {
+      const result = await distributeMutation.mutateAsync({ ids: ids(), distributed: false });
+      return `已取消 ${result.affected} 张的提取标记`;
+    });
+
+  const busy =
+    disableMutation.isPending || restoreMutation.isPending || deleteMutation.isPending || distributeMutation.isPending;
 
   return (
-    <div className="space-y-4">
-      <SectionCard
-        icon={<Ticket className="size-4" />}
-        title="卡密"
-      >
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <Input
-            value={keyword}
-            onChange={(event) => applyFilter(() => setKeyword(event.target.value))}
-            placeholder="搜索卡面或备注"
-            className="h-8 w-56"
-          />
-          <Select
-            value={batchId ? String(batchId) : "all"}
-            onValueChange={(value) =>
-              applyFilter(() => onBatchIdChange(value === "all" ? undefined : Number(value)))
-            }
-          >
-            <SelectTrigger className="h-8 w-48">
-              <SelectValue placeholder="全部批次" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部批次</SelectItem>
-              {batches.map((batch) => (
-                <SelectItem key={batch.id} value={String(batch.id)}>
-                  {batch.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select value={status} onValueChange={(value) => applyFilter(() => setStatus(value))}>
-            <SelectTrigger className="h-8 w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              <SelectItem value="unused">未使用</SelectItem>
-              <SelectItem value="active">使用中</SelectItem>
-              <SelectItem value="used">已核销</SelectItem>
-              <SelectItem value="disabled">已作废</SelectItem>
-              <SelectItem value="expired">已过期</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {listQuery.isLoading ? (
-          <div className="space-y-2">
-            {[0, 1, 2, 3].map((index) => (
-              <Skeleton key={index} className="h-10 w-full" />
+    <SectionCard icon={<Ticket className="size-4" />} title="卡密" description="点击一行查看详情与调整">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Input
+          value={keyword}
+          onChange={(event) => withReset(setKeyword)(event.target.value)}
+          placeholder="搜索卡面、账号或备注"
+          className="h-8 w-56"
+        />
+        <Select
+          value={batchId ? String(batchId) : "all"}
+          onValueChange={withReset((value: string) => onBatchIdChange(value === "all" ? undefined : Number(value)))}
+        >
+          <SelectTrigger className="h-8 w-44">
+            <SelectValue placeholder="全部批次" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部批次</SelectItem>
+            {(batchesQuery.data ?? []).map((batch) => (
+              <SelectItem key={batch.id} value={String(batch.id)}>
+                {batch.name}
+              </SelectItem>
             ))}
-          </div>
-        ) : items.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
-            {keyword || status !== "all" || batchId ? "暂无匹配卡密" : "暂无卡密"}
-          </p>
-        ) : (
+          </SelectContent>
+        </Select>
+        <Select
+          value={status ?? "all"}
+          onValueChange={withReset((value: string) => setStatus(value === "all" ? undefined : (value as CardKeyStatusFilter)))}
+        >
+          <SelectTrigger className="h-8 w-28">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部状态</SelectItem>
+            {STATUS_OPTIONS.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select
+          value={kind ?? "all"}
+          onValueChange={withReset((value: string) => setKind(value === "all" ? undefined : (value as CardKeyKind)))}
+        >
+          <SelectTrigger className="h-8 w-28">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">全部类型</SelectItem>
+            <SelectItem value="redeem">兑换卡</SelectItem>
+            <SelectItem value="login">授权卡</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select
+          value={distributed ?? "all"}
+          onValueChange={withReset((value: string) => setDistributed(value === "all" ? undefined : (value as "yes" | "no")))}
+        >
+          <SelectTrigger className="h-8 w-28">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">提取不限</SelectItem>
+            <SelectItem value="no">未提取</SelectItem>
+            <SelectItem value="yes">已提取</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {selected.size > 0 ? (
+        <div className="mb-3 flex flex-wrap items-center gap-1.5 rounded-xl bg-muted/60 px-3 py-2">
+          <span className="mr-1 text-xs font-medium tabular-nums">已选 {selected.size} 张</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7"
+            onClick={() => void copyText(selectedCards.map((card) => card.code).join("\n"), `已复制 ${selectedCards.length} 张卡面`)}
+          >
+            <Copy className="size-3.5" /> 复制卡面
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={() => setAction("distribute")}>
+            <PackageCheck className="size-3.5" /> 标记已提取
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={undistribute}>
+            <PackageX className="size-3.5" /> 取消提取
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={() => setAction("disable")}>
+            <Ban className="size-3.5" /> 作废
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7" disabled={busy} onClick={restore}>
+            <RotateCcw className="size-3.5" /> 恢复
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 text-destructive hover:text-destructive"
+            disabled={busy}
+            onClick={() => setAction("delete")}
+          >
+            <Trash2 className="size-3.5" /> 删除
+          </Button>
+          <Button size="icon" variant="ghost" className="ml-auto size-7" onClick={resetSelection} aria-label="清空选择">
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      ) : null}
+
+      {listQuery.isLoading ? (
+        <div className="space-y-2">
+          {[0, 1, 2, 3].map((index) => (
+            <Skeleton key={index} className="h-11 w-full" />
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <EmptyHint>{filtered ? "暂无匹配的卡密" : "暂无卡密"}</EmptyHint>
+      ) : (
+        <div className={cn("overflow-x-auto", listQuery.isFetching && "opacity-70 transition-opacity")}>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    checked={allSelected ? true : someSelected ? "indeterminate" : false}
-                    aria-label="全选本页"
-                    onCheckedChange={(checked) => toggleAll(Boolean(checked))}
-                  />
+                <TableHead className="w-8">
+                  <Checkbox checked={allSelected} onCheckedChange={(value) => toggleAll(Boolean(value))} aria-label="全选本页" />
                 </TableHead>
-                <TableHead>卡密</TableHead>
+                <TableHead>卡面</TableHead>
+                <TableHead>批次</TableHead>
                 <TableHead>状态</TableHead>
-                <TableHead>绑定账号</TableHead>
-                <TableHead>授权剩余</TableHead>
-                <TableHead>设备</TableHead>
-                <TableHead className="text-right">生成时间</TableHead>
+                <TableHead>使用</TableHead>
+                <TableHead>到期</TableHead>
+                <TableHead>提取</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((card) => (
-                <TableRow key={card.id}>
-                  <TableCell>
-                    <Checkbox
-                      checked={selected.has(card.id)}
-                      aria-label={`选择 ${card.code}`}
-                      onCheckedChange={(checked) => toggleOne(card.id, Boolean(checked))}
-                    />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center gap-1.5">
-                      <code className="font-mono text-xs">{card.code}</code>
-                      <button
-                        type="button"
-                        onClick={() => copyCode(card.code)}
-                        className="text-muted-foreground transition-colors hover:text-foreground"
-                        aria-label="复制卡密"
-                      >
-                        <Copy className="size-3" />
-                      </button>
-                      <CardKindBadge kind={card.kind} />
-                    </div>
-                    {card.disabledReason ? (
-                      <p className="mt-0.5 text-xs text-muted-foreground">{card.disabledReason}</p>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>
-                    <CardStateBadge card={card} />
-                  </TableCell>
-                  <TableCell className="text-xs">{card.boundAccount || "—"}</TableCell>
-                  <TableCell className="text-xs tabular-nums">
-                    {card.kind === "login" ? formatRemaining(card.expiresAt) : "—"}
-                  </TableCell>
-                  <TableCell>
-                    {card.kind === "login" ? (
-                      <button
-                        type="button"
-                        onClick={() => setDeviceCard(card)}
-                        className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                      >
-                        <MonitorSmartphone className="size-3" />
-                        <span className="tabular-nums">
-                          {card.deviceCount}/{card.maxDevices}
-                        </span>
-                      </button>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right text-xs text-muted-foreground">
-                    {formatCardDate(card.createdAt)}
-                  </TableCell>
-                </TableRow>
+                <CardRow
+                  key={card.id}
+                  appKey={appKey}
+                  card={card}
+                  checked={selected.has(card.id)}
+                  onCheck={(checked) => toggle(card.id, checked)}
+                  onOpen={() => setOpenCardId(card.id)}
+                />
               ))}
             </TableBody>
           </Table>
-        )}
+        </div>
+      )}
 
-        {total > 0 ? (
-          <div className="mt-3 flex items-center justify-between text-xs text-muted-foreground">
-            <span className="tabular-nums">
-              共 {total} 张 · 第 {page}/{totalPages} 页
-            </span>
-            <div className="flex gap-1.5">
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page <= 1}
-                onClick={() => {
-                  setPage((value) => value - 1);
-                  setSelected(new Set());
-                }}
-              >
-                上一页
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={page >= totalPages}
-                onClick={() => {
-                  setPage((value) => value + 1);
-                  setSelected(new Set());
-                }}
-              >
-                下一页
-              </Button>
-            </div>
-          </div>
-        ) : null}
-      </SectionCard>
+      <AdPolicyPager
+        total={total}
+        page={page}
+        totalPages={totalPages}
+        onPage={(next) => {
+          setPage(next);
+          resetSelection();
+        }}
+      />
 
-      {/* 批量操作条：选中数为 0 时整体卸载，与用户批量操作条同一形状 */}
-      <AnimatePresence>
-        {selected.size > 0 ? (
-          <motion.div
-            initial={{ y: 16, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 16, opacity: 0 }}
-            transition={{ duration: 0.16, ease: "easeOut" }}
-            className="sticky bottom-4 z-20 mx-auto flex w-fit max-w-full flex-wrap items-center gap-1.5 rounded-full border bg-popover px-3 py-2 shadow-lg"
-          >
-            <span className="px-1 text-xs tabular-nums text-muted-foreground">
-              已选 <span className="font-semibold text-foreground">{selected.size}</span> 张
-            </span>
-            <Button size="sm" variant="ghost" onClick={() => setConfirmDisable(true)}>
-              <Ban className="size-3.5" /> 作废
+      <CardKeyDetailSheet appKey={appKey} cardId={openCardId} onClose={() => setOpenCardId(null)} />
+
+      <Dialog open={Boolean(action)} onOpenChange={(open) => !open && setAction(null)}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {action === "disable" ? "作废卡密" : action === "distribute" ? "标记为已提取" : "删除卡密"}
+            </DialogTitle>
+            <DialogDescription>
+              {action === "disable"
+                ? `作废选中的 ${selected.size} 张卡。已核销的卡不受影响，作废后可以恢复。`
+                : action === "distribute"
+                  ? `选中的 ${selected.size} 张卡标记为已交给渠道，之后提卡不会再取到它们。`
+                  : `删除选中的 ${selected.size} 张卡，无法恢复。被使用过的卡会被跳过，只能作废。`}
+            </DialogDescription>
+          </DialogHeader>
+          {action !== "delete" ? (
+            <Input
+              value={note}
+              maxLength={action === "disable" ? 256 : 128}
+              onChange={(event) => setNote(event.target.value)}
+              placeholder={action === "disable" ? "作废原因（可选）" : "交给谁（可选）"}
+            />
+          ) : null}
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setAction(null)}>
+              取消
             </Button>
             <Button
               size="sm"
-              variant="ghost"
-              onClick={doRestore}
-              disabled={restoreMutation.isPending}
+              variant={action === "distribute" ? "default" : "destructive"}
+              onClick={confirmAction}
+              disabled={busy}
             >
-              <RotateCcw className="size-3.5" /> 恢复
+              {busy ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              确认
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => setSelected(new Set())}>
-              取消
-            </Button>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-
-      <AlertDialog open={confirmDisable} onOpenChange={setConfirmDisable}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>作废选中的 {selected.size} 张卡密？</AlertDialogTitle>
-            <AlertDialogDescription>
-              作废后立即失效，已核销的卡不受影响。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <div className="px-1">
-            <Input
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="作废原因（选填）"
-            />
-          </div>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction onClick={doDisable} disabled={disableMutation.isPending}>
-              {disableMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-              确认作废
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-
-      <CardDevicesSheet
-        appKey={appKey}
-        card={deviceCard}
-        onOpenChange={(open) => !open && setDeviceCard(null)}
-      />
-    </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </SectionCard>
   );
 }
 
-/**
- * 一张卡绑定的设备。
- *
- * 解绑是「用户换电脑了」唯一的出口 —— 设备标识会随重装系统变化，
- * 没有它，一张一机卡在用户重装之后就永久报废了。
- */
-function CardDevicesSheet({
+function skippedText(done: string, skipped: number, why: string) {
+  return skipped > 0 ? `${done}，跳过 ${skipped} 张（${why}）` : done;
+}
+
+function CardRow({
   appKey,
   card,
-  onOpenChange
+  checked,
+  onCheck,
+  onOpen
 }: {
   appKey: string;
-  card: CardKey | null;
-  onOpenChange: (open: boolean) => void;
+  card: CardKey;
+  checked: boolean;
+  onCheck: (checked: boolean) => void;
+  onOpen: () => void;
 }) {
-  const devicesQuery = useCardKeyDevicesQuery(appKey, card?.id);
-  const unbindMutation = useUnbindCardKeyDeviceMutation(appKey);
-  const devices = devicesQuery.data ?? [];
-
-  const unbind = async (deviceId: string) => {
-    if (!card) return;
-    try {
-      await unbindMutation.mutateAsync({ cardId: card.id, deviceId });
-      toast.success("已解绑");
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "解绑失败");
-    }
-  };
-
+  const multi = card.maxUses > 1;
   return (
-    <Sheet open={Boolean(card)} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-[92vw] max-w-md flex-col gap-0 p-0">
-        <SheetHeader className="shrink-0 border-b px-6 py-4">
-          <SheetTitle>绑定设备</SheetTitle>
-          <SheetDescription>
-            <code className="font-mono text-xs">{card?.code}</code>
-            {card ? ` · 已绑 ${card.deviceCount}/${card.maxDevices} 台` : null}
-          </SheetDescription>
-        </SheetHeader>
-
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto px-6 py-5">
-          {devicesQuery.isLoading ? (
-            <Skeleton className="h-16 w-full" />
-          ) : devices.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-muted-foreground">
-              暂无绑定设备
-            </p>
-          ) : (
-            devices.map((device) => (
-              <div
-                key={device.id}
-                className="flex items-start justify-between gap-3 rounded-lg border border-border p-3"
-              >
-                <div className="min-w-0 space-y-0.5">
-                  <p className="truncate text-xs font-medium">{device.deviceName || "未命名设备"}</p>
-                  <p className="truncate font-mono text-xs text-muted-foreground">{device.deviceId}</p>
-                  <p className="text-xs text-muted-foreground">
-                    最近 {formatCardDate(device.lastSeenAt)} · 共 {device.seenCount} 次
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => unbind(device.deviceId)}
-                  disabled={unbindMutation.isPending}
-                >
-                  <Unplug className="size-3.5" /> 解绑
-                </Button>
-              </div>
-            ))
-          )}
+    <TableRow className="cursor-pointer" data-state={checked ? "selected" : undefined} onClick={onOpen}>
+      <TableCell onClick={(event) => event.stopPropagation()}>
+        <Checkbox checked={checked} onCheckedChange={(value) => onCheck(Boolean(value))} aria-label="选择" />
+      </TableCell>
+      <TableCell className="max-w-72">
+        <div className="flex items-center gap-1">
+          <span className="truncate font-mono text-xs font-medium">{card.code}</span>
+          <CopyButton text={card.code} label="复制卡面" />
         </div>
-      </SheetContent>
-    </Sheet>
+        {card.remark ? <p className="truncate text-[11px] text-muted-foreground">{card.remark}</p> : null}
+      </TableCell>
+      <TableCell className="max-w-44">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-xs">{card.batchName || `#${card.batchId}`}</span>
+          <CardKindBadge kind={card.kind} />
+        </div>
+      </TableCell>
+      <TableCell>
+        <CardStateBadge card={card} />
+        {card.disabledReason ? (
+          <p className="mt-0.5 max-w-40 truncate text-[11px] text-muted-foreground">{card.disabledReason}</p>
+        ) : null}
+      </TableCell>
+      <TableCell className="text-xs">
+        {card.boundUserId ? (
+          <Link
+            href={`/app-users/${encodeURIComponent(appKey)}/${card.boundUserId}`}
+            className="font-medium hover:underline"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {card.boundAccount || `#${card.boundUserId}`}
+          </Link>
+        ) : multi ? (
+          <span className="tabular-nums">
+            {card.useCount}/{card.maxUses} 人次
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+        {card.kind === "login" ? (
+          <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
+            设备 {card.deviceCount}/{card.maxDevices}
+          </p>
+        ) : null}
+      </TableCell>
+      <TableCell className="whitespace-nowrap text-xs">
+        {card.expiresAt ? (
+          <>
+            <span>{formatRemaining(card.expiresAt)}</span>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{formatCardDate(card.expiresAt)}</p>
+          </>
+        ) : (
+          <span className="text-muted-foreground">{card.kind === "login" && card.status === "unused" ? "未激活" : "永久"}</span>
+        )}
+      </TableCell>
+      <TableCell className="text-xs">
+        {card.distributedAt ? (
+          <Badge variant="outline" size="sm" className="font-normal" title={formatCardDate(card.distributedAt)}>
+            {card.distributionNote || "已提取"}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        )}
+      </TableCell>
+    </TableRow>
   );
 }
