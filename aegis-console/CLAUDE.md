@@ -721,6 +721,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
 | `lib/api/vip.ts` / `lib/vip-hooks.ts` | 会员域 API 与 React Query hooks |
+| `components/apps/ai-gateway/` | AI 中转区块：概览 / 模型 / 调用记录 / 密钥 / 额度 / 设置（见下方「AI 中转区块」） |
+| `lib/api/ai-gateway.ts` / `lib/ai-gateway-hooks.ts` | AI 中转网关域 API 与 React Query hooks |
 
 四条硬约束：
 
@@ -1103,6 +1105,34 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
 
 旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
+
+## AI 中转区块（/apps/{appKey}?tab=ai-gateway）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/ai-gateway/app-ai-gateway-panel.tsx` | 骨架 + 六个视图的切换；从概览 / 密钥 / 额度跳到调用记录时带上筛选 |
+| `components/apps/ai-gateway/ai-gateway-overview-panel.tsx` | Base URL（可复制）、扣费顺序、调用与扣费趋势、按来源与模型汇总、未收与进行中 |
+| `components/apps/ai-gateway/ai-gateway-models-panel.tsx` | 模型列表与编辑弹窗：对外名 / 上游名 / 种类 / 钉通道、按种类目录渲染价格项、图片分档 |
+| `components/apps/ai-gateway/ai-gateway-requests-panel.tsx` | 调用记录：用户 / 模型 / 状态 / 接口筛选；明细弹窗含暂扣、价格、实扣、扣费来源与整笔退款 |
+| `components/apps/ai-gateway/ai-gateway-keys-panel.tsx` | 用户密钥：启用 / 停用（管理端不新建，明文只给用户本人看一次） |
+| `components/apps/ai-gateway/ai-gateway-credits-panel.tsx` | 某个用户的 AI 账户（与用户端总览同一份）与赠送额度调整、流水 |
+| `components/apps/ai-gateway/ai-gateway-settings-panel.tsx` | 开关、扣费来源勾选与排序、额度、余额折算、倍率、限制 |
+| `components/apps/ai-gateway/ai-gateway-shared.tsx` | 状态 / 接口 / 来源 / 价格项文案、点数与用量格式化 |
+
+五条硬约束：
+
+1. **上游通道不在这里配**：通道在「AI 服务」区块，这里只决定谁能用、怎么收钱。模型钉通道时，
+   对话以外的种类只列 OpenAI 协议的通道（后端对这些接口原样转发，Anthropic / Gemini 原生协议没有它们）。
+2. **价格项由后端目录驱动**（`/ai-gateway/catalog` 的 `kinds[].prices`）：换种类只显示该种类会用到的价格项，
+   保存时其余项一律置 0。单位是「点」，token 类按每百万 token，界面上标在输入框后。
+3. **点数、倍率、单价按字符串往返**（后端 shopspring/decimal），`formatPoints` 只做展示；调用记录里的
+   `holds` / `charges` 是**微点整数**，展示前除以 `MICRO_PER_POINT`。
+4. **扣费来源存「全部来源的顺序 + 哪些启用」**：取消勾选不丢位置，保存时按顺序筛出启用的发给后端。
+   余额是真钱，未勾选时余额折算输入框禁用。
+5. **赠送额度调整用方向 + 正数**，每次提交带 `crypto.randomUUID()` 作请求编号，成功后换新编号：
+   网络重试命中同一编号时后端只生效一次（回 `replayed`）。
+
+规格见 [docs/ai-gateway.md](../docs/ai-gateway.md)。
 
 ## 卡密区块（/apps/{appKey}?tab=card-key）
 

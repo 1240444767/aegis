@@ -1,0 +1,194 @@
+# AI 中转网关
+
+应用的**终端用户**凭自己的 API 密钥（或登录会话的访问令牌）调用 OpenAI / Anthropic 兼容接口，
+网关把请求转给应用在「AI 服务」里配好的上游通道，按模型价格 × 本人倍率，
+从免费额度、会员额度、赠送额度、积分、余额里依次扣费。**调用失败不扣费。**
+
+| | `/api/apps/{appkey}/ai/v1` | `/api/ai/v1`（本文） |
+|---|---|---|
+| 调用方 | 接入方**服务端** | 应用的**终端用户**（App 内或任意 OpenAI 客户端） |
+| 凭据 | 应用的函数调用密钥 | 用户的 `sk-ag-` 密钥 / 访问令牌 |
+| 谁付钱 | 应用 | 用户自己的额度、积分、余额 |
+| 接口 | chat / messages | chat、messages、embeddings、images、audio、rerank |
+
+代码位置：领域规则 `internal/domain/aigateway`（计价、倍率、分摊、零头、估算、用量解析，全是纯函数），
+事务 `internal/repository/postgres/ai_gateway_billing_repository.go`，编排 `internal/service/ai_gateway_relay.go`，
+调用面 `internal/transport/http/ai_relay_handlers.go`，迁移 `000113_ai_gateway`。
+
+## 接入
+
+```python
+from openai import OpenAI
+client = OpenAI(base_url="https://aegis.example.com/api/ai/v1", api_key="sk-ag-…")
+client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": "你好"}])
+```
+
+- 凭据放在 `Authorization: Bearer`（OpenAI SDK）、`x-api-key`（Anthropic SDK）或 `api-key`（Azure 客户端）。
+  `sk-ag-` 前缀加 43 位 base62 的是用户密钥，其余按访问令牌处理（应用设置 `allowSessionToken` 关闭时拒绝）。
+- 密钥由用户在 App 里自己领（`POST /api/v1/apps/{appKey}/ai/keys`，Kotlin SDK `client.ai.createKey()`），
+  明文只返回一次；库里只有 sha256。可设可用模型白名单、累计消费上限、到期时间。
+- 每个响应带 `X-Aegis-Request-No`，对得上用户的调用记录（`/ai/requests/{requestNo}`）与扣费流水。
+- 密钥路径不经过会话校验，所以鉴权时另外核对：应用 `status`、平台治理 `blockApi`、账号封禁（`enforceAccountBan`）。
+
+### 接口与计量
+
+| 接口 | 模型种类 | 计量（以上游报回为准） |
+|---|---|---|
+| `GET /models` | — | 列出开放的、密钥白名单允许的模型 |
+| `POST /chat/completions` | chat | `usage.prompt_tokens / completion_tokens`；流式自动带 `include_usage` |
+| `POST /messages` | chat | 同上（Anthropic 形状进出，内部走同一条对话链路） |
+| `POST /embeddings` | embedding | `usage.prompt_tokens` |
+| `POST /images/generations`、`/images/edits` | image | **实际返回的张数**（要 3 张给 2 张收 2 张）；gpt-image 系列另报的 token 一并计入 |
+| `POST /audio/speech` | speech | 输入文本的字符数 |
+| `POST /audio/transcriptions`、`/translations` | transcription | `usage.seconds` / `usage` token / `duration` / 字幕最后一个时间戳 |
+| `POST /rerank` | rerank | `usage.total_tokens` / Cohere `meta.billed_units` |
+
+对话走 `AIProviderService` 的统一链路（OpenAI / Anthropic / Gemini 三种协议的通道都能接，可链路回退）；
+其余接口经 **OpenAI 兼容协议的通道原样转发**（含 Azure），只替换模型名与鉴权，响应原样交回，
+响应里的 `model` 换回对外名。图像编辑与转写收 multipart，按原样重组（文件保留原 Content-Type）。
+
+转写的客户端要 `response_format=text` 时，网关向上游要 `json`（带用量），再把 `text` 作为纯文本交回 ——
+text 格式不带任何用量，原样转发就只能估算。上游什么用量都没报时，按上传文件大小以 32 kbps 估算时长并标记「估算」。
+
+## 计价
+
+**单位是「点」，1 点按 1 积分定价**。库里一律存微点整数（1 点 = 10⁶ 微点），不用浮点。
+
+价格挂在模型上（`ai_gateway_models`），**只有登记了的模型能调用**，没定价的模型 404；
+全部价格为 0 的模型必须显式标记 `free`，否则保存时拒绝 —— 不存在「忘了配价格于是白用」。
+
+| 价格项 | 单位 |
+|---|---|
+| `inputPrice` / `outputPrice` | 点 / 百万 token（数值上恰好等于「微点 / token」） |
+| `requestPrice` | 点 / 次 |
+| `imagePrice` + `imagePrices` | 点 / 张；分档键 `1024x1024`、`hd`、`hd:1024x1792`，按「质量:尺寸 > 尺寸 > 质量 > 默认」取 |
+| `charPrice` | 点 / 百万字符 |
+| `minutePrice` | 点 / 分钟音频 |
+
+最终价格 = 计量 × 单价 × **倍率**，向上取整到 1 微点。倍率 = 全局倍率 ×（会员时）会员倍率 × 等级倍率
+（`levelMultipliers` 取用户等级满足的最高一档）。模型的 `upstreamModel` 是发给上游的名字，
+`configId` 非 0 时钉死一条通道、不回退。暂扣时把价格与倍率**快照**进调用记录，调用进行中改价不影响这一笔。
+
+## 扣费来源
+
+| 来源 | 说明 |
+|---|---|
+| `free_daily` | 每日免费额度，所有用户，按应用时区的日历日重置 |
+| `vip_daily` / `vip_monthly` | 会员每日 / 每月额度，有效会员（含永久）才有 |
+| `credit` | 赠送额度：看激励广告（权益 `ai_credit`）、管理员调整、退款进来，不过期 |
+| `integral` | 积分：1 点扣 1 积分 |
+| `wallet` | 余额：按 `walletRate`（元 / 点）折算；是真钱，默认不启用 |
+
+设置里的 `sources` 是**启用的来源及其顺序**，费用按顺序依次承担。
+另有 `dailySpendLimit`（每人每天全部来源合计）、`rpm`、`maxConcurrent`、`maxKeysPerUser` 与密钥自己的 `spendLimit`。
+频率与并发在锁住用户行之后按调用记录数，是准数，不依赖 Redis。
+
+## 什么时候扣费
+
+| 情形 | 结论 | 记录状态 |
+|---|---|---|
+| 上游成功 | 按上游报回的用量结算 | `succeeded` |
+| 上游成功但没报用量 | 按内容估算结算，记录标 `usageEstimated` | `succeeded` |
+| 上游失败、网关出错、客户端在拿到任何内容前断开 | **整笔放回，不扣费** | `failed` |
+| 流式输出到一半**上游**中断 | 不扣费 | `failed` |
+| 流式输出到一半**客户端**断开 | 按上游已生成的内容估算输出 token 计费 | `aborted` |
+| 暂扣超时未结算（进程中断等） | 后台循环放回，不扣费 | `expired` |
+| 超时放回后上游结果才回来 | 照常结算，从实时余额扣 | `succeeded` |
+| 管理员整笔退款 | 原路退回各来源 | `refunded` |
+
+客户端断开要计费，是为了不让「快结束时主动断开」变成白用；上游的钱在那时已经花了。
+
+## 账务：暂扣 → 结算
+
+1. **暂扣**（调用前，单事务）：锁 `users` → `ai_gateway_accounts` → `ai_gateway_keys` → 周期额度行 → `user_wallets`
+   （与全库 users → wallets 的锁序一致）。按估算价格从各来源取：积分从 `users.integral` 移出，
+   余额从 `balance` 移进 `frozen`，额度记 `reserved`，赠送额度移进 `credit_frozen`。**暂扣不写任何流水。**
+   余额不够整笔估算时，对话把 `max_tokens` 压到付得起的数量（至少 16），其余接口直接 402。
+2. **结算**（成功后，单事务）：先把暂扣放回，再按实际价格扣，**积分、余额、赠送额度各至多写一条消费流水**。
+   流水上看到的就是「余额 → 余额 − 价格」，失败的调用在积分与余额流水里什么都不留。
+3. **放回**（失败）：原样放回，不写流水。
+
+**估算宁高勿低**：文本按 UTF-8 字节数 / 3、每张图 1000 token、每条消息 4 token 开销；没带 `max_tokens` 时
+输出按 `defaultMaxTokens` 估。实际用量超出暂扣时，按扣费顺序从实时余额补，补不上的记 `shortfall`
+（只会少收，不会把余额扣成负数）。
+
+**零头**：积分与余额只认整数单位（1 积分、1 分）。暂扣**向上**取整，结算把本次微点加到账户的零头上
+（`integral_carry` / `wallet_carry`）再**向下**取整扣整数部分。于是任意多次调用累计扣掉的整数单位与累计价格之差
+永远小于一个单位，且结算永远不超过暂扣（`TestChargeWithCarryNeverExceedsHold`）。退款按 `RefundWithCarry`
+反向结算，保持「已扣单位 × 单位 + 零头 = 有效计价之和」（`TestRefundWithCarryKeepsLedgerBalanced`）。
+
+**幂等**：带 `Idempotency-Key` 时，同一用户同一个键已有进行中或成功的调用就返回 409（40213），
+失败与超时放回的不占位、可以重试。全局的幂等重放中间件对 `/api/ai/v1/*` 关闭（SSE 与大图不能进 Redis 缓存）。
+
+积分流水分类 `ai_gateway`（扣减）与 `ai_gateway_refund`（退款）都登记为**不计入**排行榜周期榜；
+钱包退款的流水类型是 `ai_refund`，不计入累计充值。
+
+## 退款
+
+管理员对 `succeeded` / `aborted` 的调用整笔退款（`POST …/ai-gateway/requests/{requestNo}/refund`，guarded 防重放）：
+积分写一条 `ai_gateway_refund` 流水、余额写一条 `ai_refund` 流水、赠送额度写一条 `refund` 流水；
+周期额度若还在当期就减回已用，已过期的退为赠送额度（退回一个已结束的周期等于没退）。不能退两次（40218）。
+
+## 接口
+
+用户端（接入网关，需登录，`client.ai` / Kotlin `AegisAIGatewayApi`）：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /ai/overview` | 是否开放、扣费顺序、各额度余量、积分与余额、倍率、今日已用、`baseUrl` |
+| `GET /ai/models` | 可调用模型与**有效单价**（已乘本人倍率），会员专享而非会员时 `available=false` |
+| `GET/POST /ai/keys`、`PUT/DELETE /ai/keys/{keyId}` | 密钥管理；修改只改传了的字段 |
+| `GET /ai/requests`、`/ai/requests/{requestNo}` | 调用记录（用户端不含上游通道与上游模型名） |
+| `GET /ai/credits` | 赠送额度流水 |
+
+管理端 `/api/admin/apps/{appkey}/ai-gateway/*`：`catalog`、`settings`、`models`、`requests`（含 `refund`）、
+`keys`（含 `status`）、`stats`、`users/{userId}/account`、`users/{userId}/credits`（GET 流水 / POST 调整，`requestId` 幂等）。
+权限沿用应用级 `app:read` / `app:write`。
+
+## 错误码（402xx）
+
+| 码 | HTTP | 含义 |
+|---|---|---|
+| 40201 | 402 | 余额不足（提示里带预计需要与当前可用） |
+| 40202 | 403 | 应用未开启 AI 中转 |
+| 40203 | 404 | 模型不存在或未开放 |
+| 40204 | 400 | 模型不支持这个接口 |
+| 40205 | 403 | 仅会员可用（整个网关或这个模型） |
+| 40206 | 401 | 密钥或令牌无效 |
+| 40207 | 401 | 密钥已停用或过期 |
+| 40208 | 403 | 密钥不允许这个模型 |
+| 40209 | 402 | 密钥消费上限已用完 |
+| 40210 | 402 | 今日消费已达上限 |
+| 40211 / 40212 | 429 | 每分钟请求数 / 同时进行的请求数超限 |
+| 40213 | 409 | 幂等键已被进行中或已成功的调用占用 |
+| 40214 | 401 | 应用不接受登录令牌 |
+| 40215 / 40216 | 409 / 404 | 密钥数量上限 / 密钥不存在 |
+| 40217 / 40218 | 404 / 409 | 调用记录不存在 / 不可退款 |
+| 40219 / 40220 / 40221 | 400 / 400 / 409 | 设置或入参不合法 / 钉的通道不可用 / 模型重名 |
+| 40222 | 424 | 没有支持该接口的通道（非对话接口需要 OpenAI 协议通道） |
+| 40223 | 400 | 请求体不合法 |
+| 40224 / 40225 | 409 | 赠送额度不足以扣减 / 调整的请求编号被挪用 |
+
+`/api/ai/v1` 的错误按 OpenAI（`{"error":{"message","type","code","aegis_code"}}`）或
+Anthropic（`{"type":"error","error":{"type","message"}}`）形状回：402 是 `insufficient_quota` / `billing_error`，
+429 是 `rate_limit_error`（SDK 会自动退避重试）。上游的 400 / 413 / 422 原样告诉调用方，
+上游 401 / 403 是通道凭据问题，按 502 报。
+
+## 验证
+
+```bash
+go test ./internal/domain/aigateway/              # 计价、零头、退款恒等式、估算、用量解析
+# 真实 Postgres（测试会 DROP SCHEMA public，切勿指向开发库）
+AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/service -run TestAIGatewayBillingIntegration
+AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/transport/http -run TestAIRelayHTTPIntegration
+```
+
+计费集成测试经真实通道链路调 httptest 假上游，覆盖零头凑整、失败不扣费、余额不足、压低输出上限、免费额度、
+赠送额度幂等、余额冻结、溢出 shortfall、流式断开与上游中断、图像按实际张数、密钥上限与停用、过期回收与迟到结算、
+退款、30 路并发抢余额，最后核对全局不变式（无残留暂扣、冻结归零、零头在界内、积分非负、没有暂扣流水）。
+
+## 未做
+
+- `/v1/responses`、`/v1/completions`（旧版补全）、实时语音（Realtime）、视频生成接口。
+- 调用记录没有自动清理，量大后需要按 `created_at` 归档或分区。
+- 赠送额度不过期；激励广告发的额度与管理员发的额度不分开记余额。
