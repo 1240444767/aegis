@@ -6,7 +6,9 @@ package httptransport
 
 import (
 	"net/http"
+	"strings"
 
+	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
 	"aegis/pkg/response"
 
@@ -55,7 +57,21 @@ func (h *Handler) UserBanner(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	absoluteBannerImages(c.Request, items)
 	response.Success(c, 200, "获取成功", items)
+}
+
+// absoluteBannerImages 把上传头图的代理路径补成绝对地址。
+//
+// 服务层给的是 `/api/storage/proxy/...` 相对路径：控制台与官网同源，直接能用；
+// 但 App 拿到相对路径无从解析，表现就是轮播图永远没有图。展示端在这里补全，
+// 不在服务层做 —— 缓存里存的是与请求主机无关的那份。
+func absoluteBannerImages(r *http.Request, items []appdomain.Banner) {
+	for i := range items {
+		if display := items[i].HeaderDisplayURL; strings.HasPrefix(display, "/") && !strings.HasPrefix(display, "//") {
+			items[i].HeaderDisplayURL = absoluteURLFromRequest(r, display)
+		}
+	}
 }
 
 func (h *Handler) UserNotice(c *gin.Context) {
