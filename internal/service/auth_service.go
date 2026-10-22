@@ -282,13 +282,11 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	g, gctx := errgroup.WithContext(ctx)
 	if s.risk != nil {
 		g.Go(func() error {
-			// 风控内部错误按原逻辑忽略，仅 block/ban 动作拦截
-			riskResult, _ := s.risk.EvaluateRisk(gctx, securitydomain.RiskEvalRequest{
-				Scene: "login", AppID: &appID, IP: ip, DeviceID: deviceID, UserAgent: userAgent,
-				Extra: map[string]any{"account": account},
-			})
-			if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-				riskErr = apperrors.New(40398, http.StatusForbidden, "当前请求被风控拦截，请稍后重试")
+			// 风控内部错误放行（Guard 内部处理）；拦截 / 封禁 → 40398，需要验证码 → 40015
+			if _, err := s.risk.Guard(gctx, securitydomain.RiskEvalRequest{
+				Scene: securitydomain.SceneLogin, AppID: &appID, IP: ip, DeviceID: deviceID, UserAgent: userAgent, Account: account,
+			}, RiskGuardOption{Message: "当前请求被风控拦截，请稍后重试"}); err != nil {
+				riskErr = err
 				return riskErr
 			}
 			return nil
@@ -412,12 +410,11 @@ func (s *AuthService) RegisterWithPassword(ctx context.Context, input PasswordRe
 	g, gctx := errgroup.WithContext(ctx)
 	if s.risk != nil {
 		g.Go(func() error {
-			riskResult, _ := s.risk.EvaluateRisk(gctx, securitydomain.RiskEvalRequest{
-				Scene: "register", AppID: &input.AppID, IP: input.IP, DeviceID: input.DeviceID, UserAgent: input.UserAgent,
-				Extra: map[string]any{"account": input.Account},
-			})
-			if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-				riskErr = apperrors.New(40398, http.StatusForbidden, "注册请求被风控拦截")
+			if _, err := s.risk.Guard(gctx, securitydomain.RiskEvalRequest{
+				Scene: securitydomain.SceneRegister, AppID: &input.AppID, IP: input.IP, DeviceID: input.DeviceID,
+				UserAgent: input.UserAgent, Account: input.Account,
+			}, RiskGuardOption{Message: "注册请求被风控拦截"}); err != nil {
+				riskErr = err
 				return riskErr
 			}
 			return nil

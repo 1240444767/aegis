@@ -212,12 +212,11 @@ func (s *AuthService) StartPasswordRecovery(ctx context.Context, input PasswordR
 	}
 	if s.risk != nil {
 		appID := input.AppID
-		result, _ := s.risk.EvaluateRisk(ctx, securitydomain.RiskEvalRequest{
-			Scene: "password_reset", AppID: &appID, IP: input.IP, DeviceID: input.DeviceID, UserAgent: input.UserAgent,
-			Extra: map[string]any{"account": identifier},
-		})
-		if result != nil && (result.Action == "block" || result.Action == "ban") {
-			return nil, apperrors.New(40398, http.StatusForbidden, "当前请求被风控拦截，请稍后重试")
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
+			Scene: securitydomain.ScenePasswordReset, AppID: &appID, IP: input.IP, DeviceID: input.DeviceID,
+			UserAgent: input.UserAgent, Account: identifier,
+		}, RiskGuardOption{Message: "当前请求被风控拦截，请稍后重试"}); err != nil {
+			return nil, err
 		}
 	}
 

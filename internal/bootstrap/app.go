@@ -538,6 +538,19 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	inviteService.SetRiskService(riskService)
 	lotteryService.SetRiskService(riskService)
 	adminService.SetRiskService(riskService)
+	// 新接入的业务场景：下单、签到、卡密兑换、积分兑换、广告领奖
+	paymentService.SetRiskService(riskService)
+	signInService.SetRiskService(riskService)
+	cardKeyService.SetRiskService(riskService)
+	pointsStoreService.SetRiskService(riskService)
+	rewardedAdService.SetRiskService(riskService)
+	// 处置执行器：ban 与复核驳回真的落到账号封禁与防火墙上
+	riskService.SetAccountBanService(accountBanService)
+	riskService.SetFirewall(ipBanService)
+	riskService.SetCaptchaProbe(func(ctx context.Context, appID int64) bool {
+		cfg, err := appService.GetCaptchaConfig(ctx, appID)
+		return err == nil && service.IsCaptchaRequired(cfg)
+	})
 	// 对外 OAuth2 / OIDC 授权服务器（Ory Hydra 承载协议，Aegis 负责登录与同意页）
 	oauth2ServerService := service.NewOAuth2ServerService(cfg, log, pg, authService, appService, avatarService)
 	accountBanService.SetOAuth2Server(oauth2ServerService)

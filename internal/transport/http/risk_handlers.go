@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	admindomain "aegis/internal/domain/admin"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -57,7 +58,12 @@ func (h *Handler) AdminValidateRiskExpression(c *gin.Context) {
 // AdminListRiskRules 列出风险规则
 // GET /api/admin/system/risk/rules
 func (h *Handler) AdminListRiskRules(c *gin.Context) {
-	rules, err := h.risk.ListRiskRules(c.Request.Context(), c.Query("scene"))
+	var req RiskRuleListRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	rules, err := h.risk.ListRiskRules(c.Request.Context(), req.Scene, req.AppID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -108,6 +114,9 @@ func (h *Handler) AdminCreateRiskRule(c *gin.Context) {
 		Score:         req.Score,
 		Priority:      req.Priority,
 		IsActive:      req.IsActive,
+		AppID:         req.AppID,
+		Mode:          req.Mode,
+		Decision:      req.Decision,
 	}, session.AdminID)
 	if err != nil {
 		// 规则配置错误是使用者的输入问题，不是服务端故障。
@@ -147,6 +156,9 @@ func (h *Handler) AdminUpdateRiskRule(c *gin.Context) {
 		Score:         req.Score,
 		IsActive:      req.IsActive,
 		Priority:      req.Priority,
+		Mode:          req.Mode,
+		Decision:      req.Decision,
+		AppID:         req.AppID,
 		UpdatedBy:     &adminID,
 	}); err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
@@ -188,18 +200,22 @@ func (h *Handler) AdminListRiskAssessments(c *gin.Context) {
 		return
 	}
 	query := securitydomain.AssessmentQuery{
-		Scene:     req.Scene,
-		RiskLevel: req.RiskLevel,
-		Action:    req.Action,
-		IP:        strings.TrimSpace(req.IP),
-		DeviceID:  strings.TrimSpace(req.DeviceID),
-		Account:   strings.TrimSpace(req.Account),
-		Keyword:   strings.TrimSpace(req.Keyword),
-		RuleID:    req.RuleID,
-		MinScore:  req.MinScore,
-		MaxScore:  req.MaxScore,
-		Page:      req.Page,
-		PageSize:  req.PageSize,
+		AppID:      positiveID(req.AppID),
+		UserID:     positiveID(req.UserID),
+		DecisionBy: strings.TrimSpace(req.DecisionBy),
+		Dimension:  strings.TrimSpace(req.Dimension),
+		Scene:      req.Scene,
+		RiskLevel:  req.RiskLevel,
+		Action:     req.Action,
+		IP:         strings.TrimSpace(req.IP),
+		DeviceID:   strings.TrimSpace(req.DeviceID),
+		Account:    strings.TrimSpace(req.Account),
+		Keyword:    strings.TrimSpace(req.Keyword),
+		RuleID:     req.RuleID,
+		MinScore:   req.MinScore,
+		MaxScore:   req.MaxScore,
+		Page:       req.Page,
+		PageSize:   req.PageSize,
 	}
 	if parsed, ok := parseOptionalBool(req.Reviewed); ok {
 		query.Reviewed = &parsed
@@ -263,7 +279,7 @@ func (h *Handler) AdminListPendingReviews(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	items, total, err := h.risk.ListPendingReviews(c.Request.Context(), req.Page, req.PageSize)
+	items, total, err := h.risk.ListPendingReviews(c.Request.Context(), positiveID(req.AppID), req.Page, req.PageSize)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -289,12 +305,15 @@ func (h *Handler) AdminReviewRiskAssessment(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	if err := h.risk.ReviewRiskAssessment(c.Request.Context(), id, session.AdminID, req.Result, req.Comment); err != nil {
+	records, err := h.risk.ReviewRiskAssessment(c.Request.Context(), id, session.AdminID, adminDisplayName(session), securitydomain.ReviewInput{
+		Result: req.Result, Comment: req.Comment, Targets: req.Targets, Duration: req.Duration, RevokeAuto: req.RevokeAuto,
+	})
+	if err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
 		return
 	}
-	h.recordAudit(c, "review", "risk_assessment", strconv.FormatInt(id, 10), fmt.Sprintf("复核结果: %s", req.Result))
-	response.Success(c, 200, "复核成功", nil)
+	h.recordAudit(c, "review", "risk_assessment", strconv.FormatInt(id, 10), fmt.Sprintf("复核结果: %s，处置 %d 项", req.Result, len(records)))
+	response.Success(c, 200, "复核成功", gin.H{"enforcement": records})
 }
 
 // AdminPurgeRiskAssessments 清理历史评估记录
@@ -485,7 +504,12 @@ func (h *Handler) AdminRefreshIPReputation(c *gin.Context) {
 // AdminListRiskActions 列出处置策略
 // GET /api/admin/system/risk/actions
 func (h *Handler) AdminListRiskActions(c *gin.Context) {
-	actions, err := h.risk.ListRiskActions(c.Request.Context(), c.Query("scene"))
+	var req RiskActionListRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	actions, err := h.risk.ListRiskActions(c.Request.Context(), req.Scene, req.AppID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -510,7 +534,10 @@ func (h *Handler) AdminCreateRiskAction(c *gin.Context) {
 		MaxScore:    req.MaxScore,
 		Action:      req.Action,
 		BanDuration: req.BanDuration,
+		BanTargets:  req.BanTargets,
 		Description: req.Description,
+		AppID:       req.AppID,
+		IsActive:    req.IsActive,
 	})
 	if err != nil {
 		response.Error(c, http.StatusBadRequest, 40000, err.Error())
@@ -540,6 +567,7 @@ func (h *Handler) AdminUpdateRiskAction(c *gin.Context) {
 		MinScore:    req.MinScore,
 		Action:      req.Action,
 		BanDuration: req.BanDuration,
+		BanTargets:  req.BanTargets,
 		Description: req.Description,
 		IsActive:    req.IsActive,
 	}
@@ -589,6 +617,7 @@ func (h *Handler) AdminEvaluateRisk(c *gin.Context) {
 		Scene:     req.Scene,
 		AppID:     req.AppID,
 		UserID:    req.UserID,
+		Account:   req.Account,
 		IP:        req.IP,
 		DeviceID:  req.DeviceID,
 		UserAgent: req.UserAgent,
@@ -642,15 +671,17 @@ func (h *Handler) AdminSimulateRiskRule(c *gin.Context) {
 
 func buildSimulateInput(req RiskSimulateRequest) securitydomain.SimulateInput {
 	return securitydomain.SimulateInput{
-		Scene:     req.Scene,
-		IP:        req.IP,
-		DeviceID:  req.DeviceID,
-		UserAgent: req.UserAgent,
-		Account:   req.Account,
-		AppID:     req.AppID,
-		RuleIDs:   req.RuleIDs,
-		Draft:     req.Draft.ToDomain(req.Scene),
-		Overrides: req.Overrides,
+		Scene:         req.Scene,
+		IP:            req.IP,
+		DeviceID:      req.DeviceID,
+		UserAgent:     req.UserAgent,
+		Account:       req.Account,
+		AppID:         req.AppID,
+		UserID:        req.UserID,
+		CaptchaPassed: req.CaptchaPassed,
+		RuleIDs:       req.RuleIDs,
+		Draft:         req.Draft.ToDomain(req.Scene),
+		Overrides:     req.Overrides,
 	}
 }
 
@@ -667,7 +698,7 @@ func (h *Handler) AdminRiskDashboard(c *gin.Context) {
 		return
 	}
 	start, end := resolveRiskRange(req.Start, req.End)
-	dash, err := h.risk.GetRiskDashboard(c.Request.Context(), start, end)
+	dash, err := h.risk.GetRiskDashboard(c.Request.Context(), start, end, positiveID(req.AppID))
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -705,6 +736,7 @@ func bindRiskEntityQuery(c *gin.Context) (securitydomain.EntityQuery, bool) {
 	}
 	onlyRisk, _ := parseOptionalBool(req.OnlyRisk)
 	return securitydomain.EntityQuery{
+		AppID:    positiveID(req.AppID),
 		Keyword:  strings.TrimSpace(req.Keyword),
 		Tag:      strings.TrimSpace(req.Tag),
 		OnlyRisk: onlyRisk,
@@ -725,4 +757,22 @@ func parseOptionalBool(raw string) (bool, bool) {
 		return false, false
 	}
 	return parsed, true
+}
+
+// positiveID 查询参数里的应用 / 用户 ID：没传或非正数都视为不过滤
+func positiveID(id *int64) *int64 {
+	if id == nil || *id <= 0 {
+		return nil
+	}
+	return id
+}
+
+func adminDisplayName(session *admindomain.AccessContext) string {
+	if session == nil {
+		return ""
+	}
+	if strings.TrimSpace(session.DisplayName) != "" {
+		return session.DisplayName
+	}
+	return session.Account
 }

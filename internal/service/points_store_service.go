@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"errors"
 	"net/http"
@@ -48,6 +49,7 @@ const (
 // 可兑换判定只有一处（pointstore.Evaluate）：列表上每件商品的 availability 与兑换时的拒绝原因
 // 出自同一个函数，用户看到的「为什么灰着」与点了之后的报错永远是同一句话。
 type PointsStoreService struct {
+	riskHook
 	log        *zap.Logger
 	pg         *pgrepo.Repository
 	notifier   notificationDeliverer
@@ -405,6 +407,13 @@ func (s *PointsStoreService) Redeem(ctx context.Context, input pointstore.Redeem
 	}
 	if !settings.Enabled {
 		return nil, apperrors.New(errCodePointsStoreDisabled, http.StatusForbidden, "积分商城暂未开放")
+	}
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.ScenePointsRedeem, AppID: &input.AppID, UserID: &input.UserID,
+		IP: input.ClientIP, DeviceID: input.DeviceID, UserAgent: input.UserAgent,
+		Extra: map[string]any{"itemId": input.ItemID},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法兑换"}); err != nil {
+		return nil, err
 	}
 	input.Windows = pointstore.WindowsAt(time.Now(), timeutil.DefaultLocation())
 	result, err := s.pg.RedeemPointsStoreItem(ctx, input)

@@ -81,6 +81,7 @@ DELETE	/api/admin/system/organizations/:orgId/roles/:roleId/grants/:adminId	Revo
 DELETE	/api/admin/system/plugins/:id	AdminDeletePlugin
 DELETE	/api/admin/system/risk/actions/:id	AdminDeleteRiskAction
 DELETE	/api/admin/system/risk/assessments	AdminPurgeRiskAssessments
+DELETE	/api/admin/system/risk/lists/:id	AdminDeleteRiskList
 DELETE	/api/admin/system/risk/rules/:id	AdminDeleteRiskRule
 DELETE	/api/admin/system/roles/:roleKey	AdminDeleteCustomRole
 DELETE	/api/admin/system/storage/cdn/:configId	DeleteCDNConfig
@@ -443,6 +444,8 @@ GET	/api/admin/system/plugins	AdminListPlugins
 GET	/api/admin/system/plugins/:id	AdminGetPlugin
 GET	/api/admin/system/plugins/executions	AdminListHookExecutions
 GET	/api/admin/system/plugins/registry	AdminGetHookRegistry
+GET	/api/admin/system/risk/accounts	AdminListRiskAccounts
+GET	/api/admin/system/risk/accounts/detail	AdminGetRiskAccount
 GET	/api/admin/system/risk/actions	AdminListRiskActions
 GET	/api/admin/system/risk/assessments	AdminListRiskAssessments
 GET	/api/admin/system/risk/assessments/:id	AdminGetRiskAssessment
@@ -452,10 +455,12 @@ GET	/api/admin/system/risk/devices/:deviceId	AdminGetDeviceFingerprint
 GET	/api/admin/system/risk/devices/suspicious	AdminListSuspiciousDevices
 GET	/api/admin/system/risk/ips	AdminListHighRiskIPs
 GET	/api/admin/system/risk/ips/:ip	AdminGetIPRisk
+GET	/api/admin/system/risk/lists	AdminListRiskLists
 GET	/api/admin/system/risk/metadata	AdminRiskMetadata
 GET	/api/admin/system/risk/reviews/pending	AdminListPendingReviews
 GET	/api/admin/system/risk/rules	AdminListRiskRules
 GET	/api/admin/system/risk/rules/:id	AdminGetRiskRule
+GET	/api/admin/system/risk/templates	AdminListRiskTemplates
 GET	/api/admin/system/roles	AdminRoleCatalog
 GET	/api/admin/system/roles/:roleKey/impact	AdminGetRoleImpactPreview
 GET	/api/admin/system/roles/graph	AdminGetRoleGraph
@@ -1011,12 +1016,17 @@ POST	/api/admin/system/plugins/:id/enable	AdminEnablePlugin
 POST	/api/admin/system/risk/actions	AdminCreateRiskAction
 POST	/api/admin/system/risk/assessments/:id/replay	AdminReplayRiskAssessment
 POST	/api/admin/system/risk/assessments/:id/review	AdminReviewRiskAssessment
+POST	/api/admin/system/risk/dispose	AdminDisposeRisk
 POST	/api/admin/system/risk/evaluate	AdminEvaluateRisk
 POST	/api/admin/system/risk/expression/validate	AdminValidateRiskExpression
 POST	/api/admin/system/risk/ips/:ip/refresh	AdminRefreshIPReputation
+POST	/api/admin/system/risk/lists	AdminCreateRiskLists
+POST	/api/admin/system/risk/lists/batch-delete	AdminBatchDeleteRiskLists
+POST	/api/admin/system/risk/lists/check	AdminCheckRiskLists
 POST	/api/admin/system/risk/rules	AdminCreateRiskRule
 POST	/api/admin/system/risk/rules/:id/simulate	AdminSimulateRiskRule
 POST	/api/admin/system/risk/simulate	AdminSimulateRisk
+POST	/api/admin/system/risk/templates/apply	AdminApplyRiskTemplate
 POST	/api/admin/system/roles	AdminCreateCustomRole
 POST	/api/admin/system/saml/test	AdminSAMLTest
 POST	/api/admin/system/sessions/:sessionId/revoke	RevokeSession
@@ -1392,6 +1402,7 @@ PUT	/api/admin/system/plugins/:id	AdminUpdatePlugin
 PUT	/api/admin/system/risk/actions/:id	AdminUpdateRiskAction
 PUT	/api/admin/system/risk/devices/:id/tag	AdminUpdateDeviceRiskTag
 PUT	/api/admin/system/risk/ips/:id/tag	AdminUpdateIPRiskTag
+PUT	/api/admin/system/risk/lists/:id	AdminUpdateRiskList
 PUT	/api/admin/system/risk/rules/:id	AdminUpdateRiskRule
 PUT	/api/admin/system/roles/:roleKey	AdminUpdateCustomRole
 PUT	/api/admin/system/settings	AdminUpdateSystemSettings

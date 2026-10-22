@@ -734,13 +734,12 @@ func (s *InviteService) bind(ctx context.Context, req InviteBindRequest, source 
 	}
 	if s.risk != nil {
 		appID, userID := req.AppID, req.UserID
-		result, _ := s.risk.EvaluateRisk(ctx, securitydomain.RiskEvalRequest{
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
 			Scene: securitydomain.SceneInvite, AppID: &appID, UserID: &userID,
 			IP: req.ClientIP, DeviceID: req.DeviceID, UserAgent: req.UserAgent,
 			Extra: map[string]any{"inviteCode": code, "source": source},
-		})
-		if result != nil && (result.Action == "block" || result.Action == "ban") {
-			return nil, apperrors.New(errCodeInviteLimited, http.StatusForbidden, "当前环境存在风险，暂时无法填写邀请码")
+		}, RiskGuardOption{Code: errCodeInviteLimited, Message: "当前环境存在风险，暂时无法填写邀请码"}); err != nil {
+			return nil, err
 		}
 	}
 	now := time.Now()

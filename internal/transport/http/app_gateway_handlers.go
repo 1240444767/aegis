@@ -329,6 +329,9 @@ func (h *Handler) AppSMSCode(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	if !h.guardVerifyCode(c, app.ID, req.Phone, purpose, req.CaptchaID, req.CaptchaAnswer) {
+		return
+	}
 	result, err := h.captcha.SendSMSCode(c.Request.Context(), captchadomain.SMSSendRequest{
 		AppID: app.ID, Phone: req.Phone, Purpose: purpose, ClientIP: c.ClientIP(),
 		CaptchaID: req.CaptchaID, CaptchaAnswer: req.CaptchaAnswer,
@@ -576,7 +579,7 @@ func (h *Handler) resolveGatewayDevice(c *gin.Context, bodyDeviceID, bodyDevice 
 func (h *Handler) verifyGatewayCaptcha(c *gin.Context, policy *authprotocol.Policy, appID int64, captchaID, answer string, purpose captchadomain.Purpose) bool {
 	required := h.resolveCaptchaRequirement(c, appID, policy)
 	if !required.Required(captchaEntryForPurpose(purpose)) {
-		return true
+		return h.verifyRiskStepUpCaptcha(c, appID, captchaID, answer, purpose)
 	}
 	return h.enforceCaptcha(c, appID, captchaID, answer, purpose)
 }

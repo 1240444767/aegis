@@ -19,7 +19,44 @@ import (
 
 // riskRuleColumns 规则查询列，顺序与 scanRiskRule 一一对应。
 const riskRuleColumns = `id, name, description, scene, condition_type, condition_data, score, is_active, priority,
-       hit_count, last_hit_at, created_by, updated_by, created_at, updated_at`
+       hit_count, last_hit_at, created_by, updated_by, created_at, updated_at, app_id, mode, decision, template_key`
+
+// RiskScopeFilter 规则 / 策略 / 名单的作用域过滤。
+// AppID 为 nil 不过滤；指向 0 只看全平台；指向 N 看该应用的 + 全平台的（评估时实际生效的集合）。
+type RiskScopeFilter struct {
+	Scene string
+	AppID *int64
+}
+
+func (f RiskScopeFilter) where(startIdx int) (string, []any) {
+	where := make([]string, 0, 2)
+	args := make([]any, 0, 2)
+	idx := startIdx
+	if f.Scene != "" {
+		where = append(where, fmt.Sprintf("(scene = $%d OR scene = '*')", idx))
+		args = append(args, f.Scene)
+		idx++
+	}
+	if f.AppID != nil {
+		if *f.AppID <= 0 {
+			where = append(where, "app_id IS NULL")
+		} else {
+			where = append(where, fmt.Sprintf("(app_id IS NULL OR app_id = $%d)", idx))
+			args = append(args, *f.AppID)
+		}
+	}
+	if len(where) == 0 {
+		return "", args
+	}
+	return " WHERE " + strings.Join(where, " AND "), args
+}
+
+func riskAppIDArg(appID *int64) any {
+	if appID == nil || *appID <= 0 {
+		return nil
+	}
+	return *appID
+}
 
 // CreateRiskRule 创建风险规则
 func (r *Repository) CreateRiskRule(ctx context.Context, input securitydomain.CreateRiskRuleInput, createdBy int64) (*securitydomain.RiskRule, error) {
@@ -31,24 +68,25 @@ func (r *Repository) CreateRiskRule(ctx context.Context, input securitydomain.Cr
 	if input.IsActive != nil {
 		isActive = *input.IsActive
 	}
-	query := `INSERT INTO risk_rules (name, description, scene, condition_type, condition_data, score, is_active, priority, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+	mode := input.Mode
+	if mode == "" {
+		mode = securitydomain.RuleModeEnforce
+	}
+	query := `INSERT INTO risk_rules (name, description, scene, condition_type, condition_data, score, is_active, priority, created_by,
+    app_id, mode, decision, template_key, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())
 RETURNING ` + riskRuleColumns
 	return scanRiskRule(r.pool.QueryRow(ctx, query,
 		input.Name, input.Description, input.Scene, input.ConditionType,
 		condJSON, input.Score, isActive, input.Priority, createdBy,
+		riskAppIDArg(input.AppID), mode, input.Decision, input.TemplateKey,
 	))
 }
 
-// ListRiskRules 列出风险规则（可按 scene 过滤）
-func (r *Repository) ListRiskRules(ctx context.Context, scene string) ([]securitydomain.RiskRule, error) {
-	query := `SELECT ` + riskRuleColumns + ` FROM risk_rules`
-	var args []any
-	if scene != "" {
-		query += ` WHERE scene = $1`
-		args = []any{scene}
-	}
-	query += ` ORDER BY scene ASC, priority ASC, id ASC`
+// ListRiskRules 列出风险规则（按场景与作用域过滤；场景过滤包含「全部场景」规则）
+func (r *Repository) ListRiskRules(ctx context.Context, filter RiskScopeFilter) ([]securitydomain.RiskRule, error) {
+	where, args := filter.where(1)
+	query := `SELECT ` + riskRuleColumns + ` FROM risk_rules` + where + ` ORDER BY scene ASC, priority ASC, id ASC`
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -101,6 +139,15 @@ func (r *Repository) UpdateRiskRule(ctx context.Context, id int64, input securit
 	if input.Priority != nil {
 		add("priority", *input.Priority)
 	}
+	if input.Mode != nil {
+		add("mode", *input.Mode)
+	}
+	if input.Decision != nil {
+		add("decision", *input.Decision)
+	}
+	if input.AppID != nil {
+		add("app_id", riskAppIDArg(input.AppID))
+	}
 	if input.UpdatedBy != nil {
 		add("updated_by", *input.UpdatedBy)
 	}
@@ -120,16 +167,36 @@ func (r *Repository) DeleteRiskRule(ctx context.Context, id int64) error {
 	return err
 }
 
-// GetActiveRulesByScene 获取指定场景的活跃规则（按优先级排序）
-func (r *Repository) GetActiveRulesByScene(ctx context.Context, scene string) ([]securitydomain.RiskRule, error) {
+// ListActiveRiskRules 全部启用中的规则（按优先级排序）。评估引擎把它整体装进内存快照，
+// 每次评估不再查库。
+func (r *Repository) ListActiveRiskRules(ctx context.Context) ([]securitydomain.RiskRule, error) {
 	query := `SELECT ` + riskRuleColumns + `
-FROM risk_rules WHERE scene = $1 AND is_active = TRUE ORDER BY priority ASC, id ASC`
-	rows, err := r.pool.Query(ctx, query, scene)
+FROM risk_rules WHERE is_active = TRUE ORDER BY priority ASC, id ASC`
+	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	return collectRiskRules(rows)
+}
+
+// ListRiskRuleTemplateKeys 已安装的模板规则键（按作用域）
+func (r *Repository) ListRiskRuleTemplateKeys(ctx context.Context, appID *int64) (map[string]bool, error) {
+	rows, err := r.pool.Query(ctx, `SELECT template_key FROM risk_rules
+WHERE template_key <> '' AND COALESCE(app_id, 0) = COALESCE($1::bigint, 0)`, riskAppIDArg(appID))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, err
+		}
+		out[key] = true
+	}
+	return out, rows.Err()
 }
 
 // BumpRuleHits 批量累加规则命中计数。
@@ -232,7 +299,8 @@ func normalizeBucket(bucket string) string {
 const riskAssessmentColumns = `a.id, a.scene, a.app_id, a.user_id, a.identity_id, a.account, a.ip, a.device_id,
        a.user_agent, a.country, a.total_score, a.risk_level, a.matched_rules, a.eval_context, a.latency_ms,
        a.action, a.action_detail, a.reviewed, a.reviewer_id, COALESCE(adm.account, ''),
-       COALESCE(a.review_result, ''), a.review_comment, a.reviewed_at, a.created_at`
+       COALESCE(a.review_result, ''), a.review_comment, a.reviewed_at, a.created_at,
+       a.dimension_scores, a.list_hits, a.decision_by, a.enforcement`
 
 const riskAssessmentFrom = `FROM risk_assessments a LEFT JOIN admin_accounts adm ON adm.id = a.reviewer_id`
 
@@ -249,6 +317,15 @@ func normalizeAssessmentShape(a *securitydomain.RiskAssessment) {
 	if a.EvalContext == nil {
 		a.EvalContext = map[string]any{}
 	}
+	if a.DimensionScores == nil {
+		a.DimensionScores = map[string]int{}
+	}
+	if a.ListHits == nil {
+		a.ListHits = []securitydomain.ListHit{}
+	}
+	if a.Enforcement == nil {
+		a.Enforcement = []securitydomain.Enforcement{}
+	}
 }
 
 // CreateRiskAssessment 创建风险评估记录
@@ -262,15 +339,20 @@ func (r *Repository) CreateRiskAssessment(ctx context.Context, a securitydomain.
 	if err != nil {
 		return nil, fmt.Errorf("marshal eval_context: %w", err)
 	}
+	dimJSON, _ := json.Marshal(a.DimensionScores)
+	listJSON, _ := json.Marshal(a.ListHits)
+	enforceJSON, _ := json.Marshal(a.Enforcement)
 	var id int64
 	err = r.pool.QueryRow(ctx, `INSERT INTO risk_assessments
     (scene, app_id, user_id, identity_id, account, ip, device_id, user_agent, country,
-     total_score, risk_level, matched_rules, eval_context, latency_ms, action, action_detail, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
+     total_score, risk_level, matched_rules, eval_context, latency_ms, action, action_detail,
+     dimension_scores, list_hits, decision_by, enforcement, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, NOW())
 RETURNING id`,
 		a.Scene, a.AppID, a.UserID, a.IdentityID, truncateColumn(a.Account, 190),
-		a.IP, a.DeviceID, a.UserAgent, truncateColumn(a.Country, 64),
+		a.IP, truncateColumn(a.DeviceID, 256), a.UserAgent, truncateColumn(a.Country, 64),
 		a.TotalScore, a.RiskLevel, rulesJSON, contextJSON, a.LatencyMS, a.Action, a.ActionDetail,
+		dimJSON, listJSON, a.DecisionBy, enforceJSON,
 	).Scan(&id)
 	if err != nil {
 		return nil, err
@@ -292,6 +374,18 @@ func buildAssessmentFilter(query securitydomain.AssessmentQuery, startIdx int) (
 		idx++
 	}
 
+	if query.AppID != nil {
+		add("a.app_id = $%d", *query.AppID)
+	}
+	if query.UserID != nil {
+		add("a.user_id = $%d", *query.UserID)
+	}
+	if query.DecisionBy != "" {
+		add("a.decision_by = $%d", query.DecisionBy)
+	}
+	if query.Dimension != "" {
+		add("COALESCE((a.dimension_scores ->> $%d)::int, 0) > 0", query.Dimension)
+	}
 	if query.Scene != "" {
 		add("a.scene = $%d", query.Scene)
 	}
@@ -392,6 +486,21 @@ WHERE id = $1 AND NOT reviewed`, id, reviewerID, result, comment)
 	return nil
 }
 
+// AppendAssessmentEnforcement 往一条评估记录追加处置留痕（复核驳回、人工处置）
+func (r *Repository) AppendAssessmentEnforcement(ctx context.Context, id int64, items []securitydomain.Enforcement) error {
+	if len(items) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, `UPDATE risk_assessments
+SET enforcement = CASE WHEN jsonb_typeof(enforcement) = 'array' THEN enforcement ELSE '[]'::jsonb END || $2::jsonb
+WHERE id = $1`, id, raw)
+	return err
+}
+
 // PurgeRiskAssessments 清理指定时刻之前的评估记录，返回删除行数
 func (r *Repository) PurgeRiskAssessments(ctx context.Context, before time.Time) (int64, error) {
 	tag, err := r.pool.Exec(ctx, `DELETE FROM risk_assessments WHERE created_at < $1`, before)
@@ -412,6 +521,8 @@ func (r *Repository) GetEntitySummary(ctx context.Context, kind, value string) (
 		column = "device_id"
 	case "account":
 		column = "account"
+	case "user":
+		column = "user_id::text"
 	default:
 		return securitydomain.RiskEntitySummary{}, fmt.Errorf("未知实体类型：%s", kind)
 	}
@@ -545,6 +656,11 @@ func (r *Repository) ListDeviceFingerprints(ctx context.Context, query securityd
 	where := make([]string, 0, 3)
 	args := make([]any, 0, 3)
 	idx := 1
+	if query.AppID != nil && *query.AppID > 0 {
+		where = append(where, fmt.Sprintf("app_id = $%d", idx))
+		args = append(args, *query.AppID)
+		idx++
+	}
 	if query.OnlyRisk {
 		where = append(where, "risk_tag NOT IN ('normal','trusted')")
 	}
@@ -749,19 +865,41 @@ ON CONFLICT (ip) DO UPDATE SET
 	return err
 }
 
+// ResetIPRiskTagIf 名单撤销后，把仍停留在指定标签上的 IP 档案改回正常
+func (r *Repository) ResetIPRiskTagIf(ctx context.Context, ip string, tags []string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE ip_risk_records SET risk_tag = 'normal' WHERE ip = $1 AND risk_tag = ANY($2)`, ip, tags)
+	return err
+}
+
+// ResetDeviceRiskTagIf 名单撤销后，把仍停留在指定标签上的设备档案改回正常
+func (r *Repository) ResetDeviceRiskTagIf(ctx context.Context, deviceID string, tags []string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE device_fingerprints SET risk_tag = 'normal' WHERE device_id = $1 AND risk_tag = ANY($2)`, deviceID, tags)
+	return err
+}
+
 // ════════════════════════════════════════════════════════════
 //  处置策略
 // ════════════════════════════════════════════════════════════
 
-const riskActionColumns = `id, scene, min_score, max_score, action, ban_duration, description, is_active, created_at`
+const riskActionColumns = `id, scene, min_score, max_score, action, ban_duration, description, is_active, created_at,
+       app_id, ban_targets, updated_at`
 
 // CreateRiskAction 创建自动处置策略
 func (r *Repository) CreateRiskAction(ctx context.Context, input securitydomain.CreateRiskActionInput) (*securitydomain.RiskAction, error) {
-	query := `INSERT INTO risk_actions (scene, min_score, max_score, action, ban_duration, description, is_active, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW())
+	isActive := true
+	if input.IsActive != nil {
+		isActive = *input.IsActive
+	}
+	targets := input.BanTargets
+	if targets == nil {
+		targets = []string{securitydomain.BanTargetAccount, securitydomain.BanTargetDevice}
+	}
+	query := `INSERT INTO risk_actions (scene, min_score, max_score, action, ban_duration, description, is_active, app_id, ban_targets, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
 RETURNING ` + riskActionColumns
 	return scanRiskAction(r.pool.QueryRow(ctx, query,
-		input.Scene, input.MinScore, input.MaxScore, input.Action, input.BanDuration, input.Description))
+		input.Scene, input.MinScore, input.MaxScore, input.Action, input.BanDuration, input.Description,
+		isActive, riskAppIDArg(input.AppID), targets))
 }
 
 // ListRiskActions 查询处置策略（可按 scene 过滤）。
@@ -769,14 +907,9 @@ RETURNING ` + riskActionColumns
 // 注意这里**不再过滤 is_active**：判定侧自己会跳过停用项，
 // 而管理端需要看到停用的策略才能把它重新打开。旧实现在带 scene 时
 // 隐式只返回启用中的，于是控制台上停用一条策略之后它就从列表里消失了。
-func (r *Repository) ListRiskActions(ctx context.Context, scene string) ([]securitydomain.RiskAction, error) {
-	query := `SELECT ` + riskActionColumns + ` FROM risk_actions`
-	var args []any
-	if scene != "" {
-		query += ` WHERE scene = $1`
-		args = []any{scene}
-	}
-	query += ` ORDER BY scene ASC, min_score ASC`
+func (r *Repository) ListRiskActions(ctx context.Context, filter RiskScopeFilter) ([]securitydomain.RiskAction, error) {
+	where, args := filter.where(1)
+	query := `SELECT ` + riskActionColumns + ` FROM risk_actions` + where + ` ORDER BY app_id ASC NULLS FIRST, scene ASC, min_score ASC`
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -818,9 +951,13 @@ func (r *Repository) UpdateRiskAction(ctx context.Context, id int64, input secur
 	if input.IsActive != nil {
 		add("is_active", *input.IsActive)
 	}
+	if input.BanTargets != nil {
+		add("ban_targets", *input.BanTargets)
+	}
 	if len(sets) == 0 {
 		return nil
 	}
+	sets = append(sets, "updated_at = NOW()")
 	args = append(args, id)
 	_, err := r.pool.Exec(ctx, fmt.Sprintf("UPDATE risk_actions SET %s WHERE id = $%d", strings.Join(sets, ", "), idx), args...)
 	return err
@@ -830,360 +967,6 @@ func (r *Repository) UpdateRiskAction(ctx context.Context, id int64, input secur
 func (r *Repository) DeleteRiskAction(ctx context.Context, id int64) error {
 	_, err := r.pool.Exec(ctx, `DELETE FROM risk_actions WHERE id = $1`, id)
 	return err
-}
-
-// ════════════════════════════════════════════════════════════
-//  统计大盘
-// ════════════════════════════════════════════════════════════
-
-// GetRiskDashboard 组装风控统计大盘。
-//
-// 全部聚合走同一个时间窗口，且额外查一次**上一等长周期**做对照 ——
-// 只给绝对数看不出「今天是不是不对劲」，而那正是大盘唯一的用途。
-func (r *Repository) GetRiskDashboard(ctx context.Context, start, end time.Time, bucket string) (*securitydomain.RiskDashboard, error) {
-	dash := &securitydomain.RiskDashboard{
-		Range: securitydomain.DashboardRange{Start: start, End: end, Bucket: normalizeBucket(bucket)},
-	}
-
-	summary, err := r.riskSummary(ctx, start, end)
-	if err != nil {
-		return nil, err
-	}
-	// 上一等长周期
-	span := end.Sub(start)
-	prev, err := r.riskSummary(ctx, start.Add(-span), start)
-	if err != nil {
-		return nil, err
-	}
-	summary.PrevTotalAssessments = prev.TotalAssessments
-	summary.PrevTotalBlocked = prev.TotalBlocked
-	summary.PrevBlockRate = prev.BlockRate
-	summary.PrevAvgScore = prev.AvgScore
-	dash.Summary = summary
-
-	if dash.Series, err = r.riskSeries(ctx, start, end, dash.Range.Bucket); err != nil {
-		return nil, err
-	}
-	if dash.SceneDistribution, err = r.riskSceneDistribution(ctx, start, end); err != nil {
-		return nil, err
-	}
-	if dash.LevelDistribution, err = r.riskLevelDistribution(ctx, start, end); err != nil {
-		return nil, err
-	}
-	if dash.ActionDistribution, err = r.riskActionDistribution(ctx, start, end); err != nil {
-		return nil, err
-	}
-	if dash.ScoreHistogram, err = r.riskScoreHistogram(ctx, start, end); err != nil {
-		return nil, err
-	}
-	if dash.TopRules, err = r.riskTopRules(ctx, start, end, 10); err != nil {
-		return nil, err
-	}
-	if dash.TopIPs, err = r.riskTopIPs(ctx, start, end, 10); err != nil {
-		return nil, err
-	}
-	if dash.TopDevices, err = r.riskTopDevices(ctx, start, end, 10); err != nil {
-		return nil, err
-	}
-	if dash.TopCountries, err = r.riskTopCountries(ctx, start, end, 10); err != nil {
-		return nil, err
-	}
-	return dash, nil
-}
-
-func (r *Repository) riskSummary(ctx context.Context, start, end time.Time) (securitydomain.RiskSummary, error) {
-	var s securitydomain.RiskSummary
-	err := r.pool.QueryRow(ctx, `
-SELECT COUNT(*),
-       COUNT(*) FILTER (WHERE action IN ('block','ban')),
-       COUNT(*) FILTER (WHERE action = 'captcha'),
-       COUNT(*) FILTER (WHERE action = 'review'),
-       COUNT(*) FILTER (WHERE action = 'review' AND NOT reviewed),
-       COUNT(*) FILTER (WHERE action = 'pass'),
-       COUNT(*) FILTER (WHERE risk_level IN ('high','critical')),
-       COALESCE(AVG(total_score), 0),
-       COALESCE(MAX(total_score), 0),
-       COALESCE(AVG(latency_ms), 0),
-       COUNT(DISTINCT ip) FILTER (WHERE ip <> ''),
-       COUNT(DISTINCT device_id) FILTER (WHERE device_id <> ''),
-       COUNT(DISTINCT account) FILTER (WHERE account <> '')
-FROM risk_assessments WHERE created_at BETWEEN $1 AND $2`, start, end).Scan(
-		&s.TotalAssessments, &s.TotalBlocked, &s.TotalChallenged, &s.TotalReviews, &s.PendingReviews,
-		&s.TotalPassed, &s.HighRiskCount, &s.AvgScore, &s.MaxScore, &s.AvgLatencyMS,
-		&s.DistinctIPs, &s.DistinctDevices, &s.DistinctAccounts,
-	)
-	if err != nil {
-		return s, err
-	}
-	if s.TotalAssessments > 0 {
-		s.BlockRate = float64(s.TotalBlocked) / float64(s.TotalAssessments)
-	}
-	return s, nil
-}
-
-// riskSeries 时间序列。用 generate_series 左连接补齐空桶 ——
-// 缺桶的折线图会把「那几个小时没有任何请求」画成一条直连的斜线，
-// 看上去像是流量平滑，实际是数据缺失。
-func (r *Repository) riskSeries(ctx context.Context, start, end time.Time, bucket string) ([]securitydomain.RiskSeriesPoint, error) {
-	unit := normalizeBucket(bucket)
-	rows, err := r.pool.Query(ctx, fmt.Sprintf(`
-SELECT b.slot,
-       COALESCE(d.total, 0), COALESCE(d.normal, 0), COALESCE(d.low, 0), COALESCE(d.medium, 0),
-       COALESCE(d.high, 0), COALESCE(d.critical, 0),
-       COALESCE(d.pass, 0), COALESCE(d.captcha, 0), COALESCE(d.review, 0), COALESCE(d.block, 0), COALESCE(d.ban, 0),
-       COALESCE(d.avg_score, 0)
-FROM generate_series(date_trunc('%[1]s', $1::timestamptz), date_trunc('%[1]s', $2::timestamptz), interval '1 %[1]s') AS b(slot)
-LEFT JOIN (
-    SELECT date_trunc('%[1]s', created_at) AS slot,
-           COUNT(*) AS total,
-           COUNT(*) FILTER (WHERE risk_level = 'normal')   AS normal,
-           COUNT(*) FILTER (WHERE risk_level = 'low')      AS low,
-           COUNT(*) FILTER (WHERE risk_level = 'medium')   AS medium,
-           COUNT(*) FILTER (WHERE risk_level = 'high')     AS high,
-           COUNT(*) FILTER (WHERE risk_level = 'critical') AS critical,
-           COUNT(*) FILTER (WHERE action = 'pass')    AS pass,
-           COUNT(*) FILTER (WHERE action = 'captcha') AS captcha,
-           COUNT(*) FILTER (WHERE action = 'review')  AS review,
-           COUNT(*) FILTER (WHERE action = 'block')   AS block,
-           COUNT(*) FILTER (WHERE action = 'ban')     AS ban,
-           AVG(total_score) AS avg_score
-    FROM risk_assessments WHERE created_at BETWEEN $1 AND $2 GROUP BY 1
-) AS d ON d.slot = b.slot
-ORDER BY b.slot ASC`, unit), start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	points := make([]securitydomain.RiskSeriesPoint, 0, 128)
-	for rows.Next() {
-		var p securitydomain.RiskSeriesPoint
-		if err := rows.Scan(&p.Time, &p.Total, &p.Normal, &p.Low, &p.Medium, &p.High, &p.Critical,
-			&p.Pass, &p.Captcha, &p.Review, &p.Block, &p.Ban, &p.AvgScore); err != nil {
-			return nil, err
-		}
-		if p.Total > 0 {
-			p.BlockRate = float64(p.Block+p.Ban) / float64(p.Total)
-		}
-		points = append(points, p)
-	}
-	return points, rows.Err()
-}
-
-func (r *Repository) riskSceneDistribution(ctx context.Context, start, end time.Time) ([]securitydomain.SceneStat, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT scene, COUNT(*), COUNT(*) FILTER (WHERE action IN ('block','ban')), COALESCE(AVG(total_score), 0)
-FROM risk_assessments WHERE created_at BETWEEN $1 AND $2
-GROUP BY scene ORDER BY COUNT(*) DESC`, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	items := make([]securitydomain.SceneStat, 0, 8)
-	for rows.Next() {
-		var s securitydomain.SceneStat
-		if err := rows.Scan(&s.Scene, &s.Count, &s.Blocked, &s.AvgScore); err != nil {
-			return nil, err
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
-// riskLevelDistribution 等级分布。五个等级恒定输出（没有的补 0）——
-// 饼图缺一块和那一块为零是两回事，前者会让人以为该等级不存在。
-func (r *Repository) riskLevelDistribution(ctx context.Context, start, end time.Time) ([]securitydomain.LevelStat, error) {
-	counts := map[string]int64{}
-	rows, err := r.pool.Query(ctx, `SELECT risk_level, COUNT(*) FROM risk_assessments
-WHERE created_at BETWEEN $1 AND $2 GROUP BY risk_level`, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var level string
-		var count int64
-		if err := rows.Scan(&level, &count); err != nil {
-			return nil, err
-		}
-		counts[level] = count
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	items := make([]securitydomain.LevelStat, 0, len(securitydomain.RiskLevelBands))
-	for _, band := range securitydomain.RiskLevelBands {
-		items = append(items, securitydomain.LevelStat{Level: band.Level, Count: counts[band.Level]})
-	}
-	return items, nil
-}
-
-func (r *Repository) riskActionDistribution(ctx context.Context, start, end time.Time) ([]securitydomain.ActionStat, error) {
-	counts := map[string]int64{}
-	rows, err := r.pool.Query(ctx, `SELECT action, COUNT(*) FROM risk_assessments
-WHERE created_at BETWEEN $1 AND $2 GROUP BY action`, start, end)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var action string
-		var count int64
-		if err := rows.Scan(&action, &count); err != nil {
-			return nil, err
-		}
-		counts[action] = count
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	items := make([]securitydomain.ActionStat, 0, 5)
-	for _, action := range securitydomain.ActionValues() {
-		items = append(items, securitydomain.ActionStat{Action: action, Count: counts[action]})
-	}
-	return items, nil
-}
-
-// riskScoreHistogram 分数直方图，桶边界与等级分档一致。
-// 用独立的分桶宽度会让「直方图上的峰在中危区，可饼图说高危更多」这类矛盾出现。
-func (r *Repository) riskScoreHistogram(ctx context.Context, start, end time.Time) ([]securitydomain.ScoreBucket, error) {
-	buckets := make([]securitydomain.ScoreBucket, 0, len(securitydomain.RiskLevelBands))
-	for _, band := range securitydomain.RiskLevelBands {
-		bucket := securitydomain.ScoreBucket{Min: band.MinScore, Level: band.Level, Max: 1 << 20}
-		if band.MaxScore != nil {
-			bucket.Max = *band.MaxScore
-		}
-		var count int64
-		if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM risk_assessments
-WHERE created_at BETWEEN $1 AND $2 AND total_score >= $3 AND total_score <= $4`,
-			start, end, bucket.Min, bucket.Max).Scan(&count); err != nil {
-			return nil, err
-		}
-		bucket.Count = count
-		buckets = append(buckets, bucket)
-	}
-	return buckets, nil
-}
-
-// riskTopRules 命中最多的规则。
-// 展开 matched_rules 数组做聚合：规则可能已被删除，因此规则名取留痕里的快照，
-// 场景等元信息用 LEFT JOIN 补 —— 删掉一条规则不该让它过去的战绩一起消失。
-func (r *Repository) riskTopRules(ctx context.Context, start, end time.Time, limit int) ([]securitydomain.RuleHitStat, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT (m.rule ->> 'ruleId')::bigint AS rule_id,
-       COALESCE(MAX(m.rule ->> 'ruleName'), '') AS rule_name,
-       COALESCE(MAX(r.scene), '') AS scene,
-       COALESCE(MAX(m.rule ->> 'conditionType'), COALESCE(MAX(r.condition_type), '')) AS condition_type,
-       COALESCE(MAX((m.rule ->> 'score')::int), 0) AS score,
-       COALESCE(bool_or(r.is_active), FALSE) AS is_active,
-       COUNT(*) AS hits,
-       COUNT(*) FILTER (WHERE a.action IN ('block','ban')) AS blocked,
-       COALESCE(SUM((m.rule ->> 'score')::int), 0) AS score_sum,
-       MAX(a.created_at) AS last_hit_at
-FROM risk_assessments a
-CROSS JOIN LATERAL jsonb_array_elements(`+matchedRulesArray+`) AS m(rule)
-LEFT JOIN risk_rules r ON r.id = (m.rule ->> 'ruleId')::bigint
-WHERE a.created_at BETWEEN $1 AND $2
-  -- 元素里没有 ruleId 时 GROUP BY 会得到一个 NULL 分组，Scan 进 int64 直接报错。
-  -- 留痕是历史数据，形状不能假定，只能显式排除。
-  AND (m.rule ->> 'ruleId') IS NOT NULL
-GROUP BY 1 ORDER BY hits DESC LIMIT $3`, start, end, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]securitydomain.RuleHitStat, 0, limit)
-	for rows.Next() {
-		var s securitydomain.RuleHitStat
-		if err := rows.Scan(&s.RuleID, &s.RuleName, &s.Scene, &s.ConditionType, &s.Score,
-			&s.IsActive, &s.Hits, &s.Blocked, &s.ScoreSum, &s.LastHitAt); err != nil {
-			return nil, err
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
-func (r *Repository) riskTopIPs(ctx context.Context, start, end time.Time, limit int) ([]securitydomain.IPHitStat, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT a.ip,
-       COALESCE(MAX(a.country), '') AS country,
-       COUNT(*) AS total,
-       COUNT(*) FILTER (WHERE a.action IN ('block','ban')) AS blocked,
-       COALESCE(MAX(a.total_score), 0) AS max_score,
-       COALESCE(AVG(a.total_score), 0) AS avg_score,
-       COALESCE(MAX(ir.risk_tag), 'normal') AS risk_tag
-FROM risk_assessments a
-LEFT JOIN ip_risk_records ir ON ir.ip = a.ip
-WHERE a.created_at BETWEEN $1 AND $2 AND a.ip <> ''
-GROUP BY a.ip ORDER BY total DESC LIMIT $3`, start, end, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]securitydomain.IPHitStat, 0, limit)
-	for rows.Next() {
-		var s securitydomain.IPHitStat
-		if err := rows.Scan(&s.IP, &s.Country, &s.Count, &s.Blocked, &s.MaxScore, &s.AvgScore, &s.RiskTag); err != nil {
-			return nil, err
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
-func (r *Repository) riskTopDevices(ctx context.Context, start, end time.Time, limit int) ([]securitydomain.DeviceHitStat, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT a.device_id,
-       COUNT(*) AS total,
-       COUNT(*) FILTER (WHERE a.action IN ('block','ban')) AS blocked,
-       COALESCE(MAX(a.total_score), 0) AS max_score,
-       COALESCE(AVG(a.total_score), 0) AS avg_score,
-       COALESCE(MAX(df.risk_tag), 'normal') AS risk_tag,
-       COUNT(DISTINCT a.account) FILTER (WHERE a.account <> '') AS accounts
-FROM risk_assessments a
-LEFT JOIN device_fingerprints df ON df.device_id = a.device_id
-WHERE a.created_at BETWEEN $1 AND $2 AND a.device_id <> ''
-GROUP BY a.device_id ORDER BY total DESC LIMIT $3`, start, end, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]securitydomain.DeviceHitStat, 0, limit)
-	for rows.Next() {
-		var s securitydomain.DeviceHitStat
-		if err := rows.Scan(&s.DeviceID, &s.Count, &s.Blocked, &s.MaxScore, &s.AvgScore, &s.RiskTag, &s.Accounts); err != nil {
-			return nil, err
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
-}
-
-func (r *Repository) riskTopCountries(ctx context.Context, start, end time.Time, limit int) ([]securitydomain.CountryStat, error) {
-	rows, err := r.pool.Query(ctx, `
-SELECT country, COUNT(*), COUNT(*) FILTER (WHERE action IN ('block','ban'))
-FROM risk_assessments WHERE created_at BETWEEN $1 AND $2 AND country <> ''
-GROUP BY country ORDER BY COUNT(*) DESC LIMIT $3`, start, end, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]securitydomain.CountryStat, 0, limit)
-	for rows.Next() {
-		var s securitydomain.CountryStat
-		if err := rows.Scan(&s.Country, &s.Count, &s.Blocked); err != nil {
-			return nil, err
-		}
-		items = append(items, s)
-	}
-	return items, rows.Err()
 }
 
 // ════════════════════════════════════════════════════════════
@@ -1225,7 +1008,7 @@ func scanRiskRule(row rowScanner) (*securitydomain.RiskRule, error) {
 		&item.ID, &item.Name, &item.Description, &item.Scene,
 		&item.ConditionType, &condRaw, &item.Score, &item.IsActive, &item.Priority,
 		&item.HitCount, &item.LastHitAt, &item.CreatedBy, &item.UpdatedBy,
-		&item.CreatedAt, &item.UpdatedAt,
+		&item.CreatedAt, &item.UpdatedAt, &item.AppID, &item.Mode, &item.Decision, &item.TemplateKey,
 	); err != nil {
 		return nil, normalizeNotFound(err)
 	}
@@ -1235,6 +1018,10 @@ func scanRiskRule(row rowScanner) (*securitydomain.RiskRule, error) {
 	if item.ConditionData == nil {
 		item.ConditionData = make(map[string]any)
 	}
+	if item.Mode == "" {
+		item.Mode = securitydomain.RuleModeEnforce
+	}
+	item.Dimension = securitydomain.ConditionDimension(item.ConditionType, item.ConditionData)
 	return &item, nil
 }
 
@@ -1252,7 +1039,7 @@ func collectRiskRules(rows rowsScanner) ([]securitydomain.RiskRule, error) {
 
 func scanRiskAssessment(row rowScanner) (*securitydomain.RiskAssessment, error) {
 	var item securitydomain.RiskAssessment
-	var rulesRaw, contextRaw []byte
+	var rulesRaw, contextRaw, dimRaw, listRaw, enforceRaw []byte
 	if err := row.Scan(
 		&item.ID, &item.Scene, &item.AppID, &item.UserID, &item.IdentityID, &item.Account,
 		&item.IP, &item.DeviceID, &item.UserAgent, &item.Country,
@@ -1260,9 +1047,20 @@ func scanRiskAssessment(row rowScanner) (*securitydomain.RiskAssessment, error) 
 		&item.Action, &item.ActionDetail,
 		&item.Reviewed, &item.ReviewerID, &item.ReviewerName, &item.ReviewResult,
 		&item.ReviewComment, &item.ReviewedAt, &item.CreatedAt,
+		&dimRaw, &listRaw, &item.DecisionBy, &enforceRaw,
 	); err != nil {
 		return nil, normalizeNotFound(err)
 	}
+	if len(dimRaw) > 0 {
+		_ = json.Unmarshal(dimRaw, &item.DimensionScores)
+	}
+	if len(listRaw) > 0 {
+		_ = json.Unmarshal(listRaw, &item.ListHits)
+	}
+	if len(enforceRaw) > 0 {
+		_ = json.Unmarshal(enforceRaw, &item.Enforcement)
+	}
+	normalizeAssessmentShape(&item)
 	if len(rulesRaw) > 0 {
 		_ = json.Unmarshal(rulesRaw, &item.MatchedRules)
 	}
@@ -1348,9 +1146,12 @@ func scanRiskAction(row rowScanner) (*securitydomain.RiskAction, error) {
 	if err := row.Scan(
 		&item.ID, &item.Scene, &item.MinScore, &item.MaxScore,
 		&item.Action, &item.BanDuration, &item.Description,
-		&item.IsActive, &item.CreatedAt,
+		&item.IsActive, &item.CreatedAt, &item.AppID, &item.BanTargets, &item.UpdatedAt,
 	); err != nil {
 		return nil, normalizeNotFound(err)
+	}
+	if item.BanTargets == nil {
+		item.BanTargets = []string{}
 	}
 	return &item, nil
 }

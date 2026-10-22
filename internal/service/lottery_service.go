@@ -522,13 +522,12 @@ func (s *LotteryService) Draw(ctx context.Context, req LotteryDrawRequest) (*lot
 	}
 	if s.risk != nil {
 		appID, userID := req.AppID, req.UserID
-		result, _ := s.risk.EvaluateRisk(ctx, securitydomain.RiskEvalRequest{
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
 			Scene: securitydomain.SceneLottery, AppID: &appID, UserID: &userID,
 			IP: req.ClientIP, DeviceID: req.DeviceID, UserAgent: req.UserAgent,
 			Extra: map[string]any{"activityId": req.ActivityID, "source": req.Source},
-		})
-		if result != nil && (result.Action == securitydomain.ActionBlock || result.Action == securitydomain.ActionBan) {
-			return nil, apperrors.New(errCodeLotteryRiskBlocked, http.StatusForbidden, "当前环境存在风险，暂时无法抽奖")
+		}, RiskGuardOption{Code: errCodeLotteryRiskBlocked, Message: "当前环境存在风险，暂时无法抽奖"}); err != nil {
+			return nil, err
 		}
 	}
 

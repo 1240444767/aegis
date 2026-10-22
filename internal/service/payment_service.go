@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -30,6 +31,7 @@ import (
 )
 
 type PaymentService struct {
+	riskHook
 	log        *zap.Logger
 	pg         *pgrepo.Repository
 	client     *resty.Client
@@ -443,6 +445,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Se
 	}
 	// 网关层统一限额校验：覆盖全部渠道（含余额支付），下单前拦截超限金额
 	if err := enforceAmountLimits(provider, config, parsedAmount); err != nil {
+		return nil, nil, err
+	}
+
+	// 风控：落单之前判。拦在这里没有任何订单要清理
+	amountValue, _ := parsedAmount.Float64()
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.ScenePayment, AppID: &session.AppID, UserID: &session.UserID, Account: session.Account,
+		IP: clientIP, DeviceID: session.DeviceID, UserAgent: session.UserAgent,
+		Extra: map[string]any{"amount": amountValue, "method": config.PaymentMethod, "purpose": metaString(metadata, paymentdomain.MetaKeyPurpose)},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法下单"}); err != nil {
 		return nil, nil, err
 	}
 

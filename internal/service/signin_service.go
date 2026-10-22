@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 )
 
 type SignInService struct {
+	riskHook
 	log       *zap.Logger
 	pg        *pgrepo.Repository
 	sessions  *redisrepo.SessionRepository
@@ -110,6 +112,14 @@ func (s *SignInService) GetStatus(ctx context.Context, session *authdomain.Sessi
 }
 
 func (s *SignInService) SignIn(ctx context.Context, session *authdomain.Session, source, deviceInfo, ipAddress, location string) (*userdomain.SignInResult, error) {
+	// 用户主动签到才过风控；自动签到（SignInForUser）是服务端代签，没有请求环境可评
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneSignIn, AppID: &session.AppID, UserID: &session.UserID, Account: session.Account,
+		IP: ipAddress, DeviceID: session.DeviceID, UserAgent: session.UserAgent,
+		Extra: map[string]any{"source": source},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法签到"}); err != nil {
+		return nil, err
+	}
 	return s.signInInternal(ctx, session.UserID, session.AppID, source, deviceInfo, ipAddress, location)
 }
 

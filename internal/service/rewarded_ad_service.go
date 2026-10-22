@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -51,6 +52,7 @@ const (
 // 密钥安全：平台的 Security Key 以 AES-GCM 密文落库（派生自 SECURITY_MASTER_KEY），
 // 管理端只看得到「配没配」与末尾提示，任何出网响应都不回传明文。
 type RewardedAdService struct {
+	riskHook
 	// publicIDs 广告用户标识里放对外 ID（SetPublicIDs）
 	publicIDs  *UserPublicIDs
 	log        *zap.Logger
@@ -541,6 +543,13 @@ func (s *RewardedAdService) Claim(ctx context.Context, input RewardedAdClaimInpu
 		return nil, apperrors.New(errCodeRewardedAdSceneUnavailable, http.StatusForbidden, "该奖励活动不存在或已下线")
 	}
 
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneAdReward, AppID: &input.AppID, UserID: &input.UserID,
+		IP: input.ClientIP, DeviceID: input.DeviceID,
+		Extra: map[string]any{"adScene": scene.Key, "placementId": input.PlacementID},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法领取奖励"}); err != nil {
+		return nil, err
+	}
 	view, err := s.pg.RecordRewardedAdView(ctx, rewardedad.RecordInput{
 		AppID:          input.AppID,
 		UserID:         input.UserID,

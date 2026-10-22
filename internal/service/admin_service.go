@@ -136,12 +136,11 @@ func (s *AdminService) Login(ctx context.Context, account, password, ip, userAge
 
 	// ── 风控评估：管理员登录 ──
 	if s.risk != nil {
-		riskResult, _ := s.risk.EvaluateRisk(ctx, securitydomain.RiskEvalRequest{
-			Scene: "login", IP: ip, UserAgent: userAgent,
-			Extra: map[string]any{"account": account},
-		})
-		if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-			return nil, apperrors.New(40398, http.StatusForbidden, "当前请求被风控拦截")
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
+			Scene: securitydomain.SceneLogin, IP: ip, UserAgent: userAgent, Account: account,
+			Extra: map[string]any{"admin": true},
+		}, RiskGuardOption{Message: "当前请求被风控拦截"}); err != nil {
+			return nil, err
 		}
 	}
 

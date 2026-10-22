@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"cmp"
 	"context"
 	"crypto/rand"
@@ -85,6 +86,7 @@ type cardKeyGuardStore interface {
 // 一张卡有两种形态：授权卡（卡即登录凭证）与兑换卡（给已登录用户发权益），
 // 共用同一套生成、作废、核销与权益目录。
 type CardKeyService struct {
+	riskHook
 	log      *zap.Logger
 	pg       *pgrepo.Repository
 	guard    cardKeyGuardStore
@@ -1014,6 +1016,12 @@ func (s *CardKeyService) describeRewards(ctx context.Context, appID int64, rewar
 // Redeem 用户兑换一张卡。
 func (s *CardKeyService) Redeem(ctx context.Context, client CardKeyClientContext, code string) (*cardkeydomain.RedeemResult, error) {
 	if err := s.checkGuard(ctx, client.AppID, client.UserID, client.ClientIP); err != nil {
+		return nil, err
+	}
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneCardKey, AppID: &client.AppID, UserID: &client.UserID,
+		IP: client.ClientIP, DeviceID: client.DeviceID, UserAgent: client.UserAgent,
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法兑换"}); err != nil {
 		return nil, err
 	}
 	result, err := s.redeem(ctx, cardkeydomain.RedeemInput{

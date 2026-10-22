@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"net/http"
 	"strings"
@@ -66,6 +67,15 @@ func (s *AuthService) CardKeyLogin(ctx context.Context, input CardKeyLoginInput)
 			return nil, err
 		}
 		app = loaded
+	}
+
+	if s.risk != nil {
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
+			Scene: securitydomain.SceneLogin, AppID: &input.AppID, IP: input.IP, DeviceID: input.DeviceID,
+			UserAgent: input.UserAgent, Extra: map[string]any{"method": "cardkey"},
+		}, RiskGuardOption{Message: "当前请求被风控拦截，请稍后重试"}); err != nil {
+			return nil, err
+		}
 	}
 
 	card, err := s.cardKey.PrepareLogin(ctx, input.AppID, input.Code, input.IP)
