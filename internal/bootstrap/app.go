@@ -545,6 +545,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	userService.SetDeviceDirectory(deviceMarketingService)
 	appService.SetDeviceDirectory(deviceMarketingService)
 	authService.SetDeviceDirectory(deviceMarketingService)
+	reportService.SetDeviceDirectory(deviceMarketingService)
 
 	// 平台级 Banner（超级管理员专属 CRUD；Overview 对所有管理员展示；上传经 StorageService）
 	platformBannerService := service.NewPlatformBannerService(log, pg, sessions, storageService)

@@ -226,10 +226,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/activity"):                                      ReportQueryParams{},                      // ReportActivity
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/channel"):                                       ReportQueryParams{},                      // ReportChannel
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/device"):                                        ReportQueryParams{},                      // ReportDevice
+		routeKey("GET", "/api/admin/apps/{appkey}/reports/engagement"):                                    ReportQueryParams{},                      // ReportEngagement
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/export"):                                        ExportQueryParams{},                      // ReportExport
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/funnel"):                                        ReportQueryParams{},                      // ReportFunnel
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/login"):                                         ReportQueryParams{},                      // ReportLogin
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/notification"):                                  ReportQueryParams{},                      // ReportNotification
+		routeKey("GET", "/api/admin/apps/{appkey}/reports/overview"):                                      ReportQueryParams{},                      // ReportOverview
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/payment"):                                       ReportQueryParams{},                      // ReportPayment
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/region"):                                        ReportQueryParams{},                      // ReportRegion
 		routeKey("GET", "/api/admin/apps/{appkey}/reports/registration"):                                  ReportQueryParams{},                      // ReportRegistration

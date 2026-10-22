@@ -1002,6 +1002,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/reports/engagement",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/reports/overview",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/reports/export",
     "permission": "app:read",
     "appScoped": true,

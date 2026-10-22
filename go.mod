@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/storage/azblob v1.8.0
 	github.com/Boostport/mjml-go v0.16.0
+	github.com/RoaringBitmap/roaring/v2 v2.16.0
 	github.com/alibabacloud-go/darabonba-openapi/v2 v2.2.4
 	github.com/alibabacloud-go/dm-20151123/v2 v2.11.1
 	github.com/alibabacloud-go/dysmsapi-20170525/v5 v5.6.0
@@ -131,6 +132,7 @@ require (
 	golang.org/x/text v0.40.0
 	golang.org/x/time v0.15.0
 	golang.org/x/tools v0.47.0
+	gonum.org/v1/gonum v0.17.0
 	google.golang.org/api v0.292.0
 	google.golang.org/genai v1.70.0
 )
@@ -146,7 +148,6 @@ require (
 	github.com/Azure/go-ntlmssp v0.1.1 // indirect
 	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/PuerkitoBio/goquery v1.12.0 // indirect
-	github.com/RoaringBitmap/roaring/v2 v2.16.0 // indirect
 	github.com/alex-ant/gomath v0.0.0-20160516115720-89013a210a82 // indirect
 	github.com/alibabacloud-go/alibabacloud-gateway-spi v0.0.5 // indirect
 	github.com/alibabacloud-go/debug v1.0.1 // indirect

@@ -517,6 +517,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.DELETE("/apps/:appkey/channels/:cid/users", h.AdminRemoveVersionChannelUsers)
 
 		// 报表分析中心
+		admin.GET("/apps/:appkey/reports/overview", h.ReportOverview)
 		admin.GET("/apps/:appkey/reports/registration", h.ReportRegistration)
 		admin.GET("/apps/:appkey/reports/login", h.ReportLogin)
 		admin.GET("/apps/:appkey/reports/retention", h.ReportRetention)
@@ -528,6 +529,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.GET("/apps/:appkey/reports/notification", h.ReportNotification)
 		admin.GET("/apps/:appkey/reports/risk", h.ReportRisk)
 		admin.GET("/apps/:appkey/reports/activity", h.ReportActivity)
+		admin.GET("/apps/:appkey/reports/engagement", h.ReportEngagement)
 		admin.GET("/apps/:appkey/reports/funnel", h.ReportFunnel)
 		admin.GET("/apps/:appkey/reports/export", h.ReportExport)
 	}

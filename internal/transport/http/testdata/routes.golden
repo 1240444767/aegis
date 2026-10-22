@@ -234,10 +234,12 @@ GET	/api/admin/apps/:appkey/reports/active	ReportActive
 GET	/api/admin/apps/:appkey/reports/activity	ReportActivity
 GET	/api/admin/apps/:appkey/reports/channel	ReportChannel
 GET	/api/admin/apps/:appkey/reports/device	ReportDevice
+GET	/api/admin/apps/:appkey/reports/engagement	ReportEngagement
 GET	/api/admin/apps/:appkey/reports/export	ReportExport
 GET	/api/admin/apps/:appkey/reports/funnel	ReportFunnel
 GET	/api/admin/apps/:appkey/reports/login	ReportLogin
 GET	/api/admin/apps/:appkey/reports/notification	ReportNotification
+GET	/api/admin/apps/:appkey/reports/overview	ReportOverview
 GET	/api/admin/apps/:appkey/reports/payment	ReportPayment
 GET	/api/admin/apps/:appkey/reports/region	ReportRegion
 GET	/api/admin/apps/:appkey/reports/registration	ReportRegistration
