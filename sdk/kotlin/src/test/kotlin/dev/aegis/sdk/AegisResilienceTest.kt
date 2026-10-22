@@ -123,6 +123,20 @@ class AegisResilienceTest {
     }
 
     @Test
+    fun engineSeesTheWrappedRequest() {
+        val seen = java.util.Collections.synchronizedList(ArrayList<String?>())
+        val client = client {
+            engine(okhttp3.Interceptor { chain ->
+                seen += chain.request().header("X-Aegis-App-Key")
+                chain.proceed(chain.request())
+            })
+        }
+        client.call("GET", "/me")
+        // 引擎排在传输拦截器之后：拿到的是已经补上应用头（signed / sealed 档还有签名与密文）的请求。
+        assertEquals("k", seen.last())
+    }
+
+    @Test
     fun unresolvableHostReportsDns() {
         val failing = OkHttpClient.Builder().dns(dns { throw UnknownHostException(it) }).build()
         val failure = assertFailsWith<AegisException> {

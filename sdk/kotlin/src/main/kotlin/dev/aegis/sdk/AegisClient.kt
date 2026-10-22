@@ -238,7 +238,11 @@ class AegisClient private constructor(
      * 默认的 OkHttp 读超时（10 秒）短于服务端挂起时间，会把每一次「没有变化」都变成超时异常。
      */
     internal fun callWithReadTimeout(path: String, query: Map<String, String>, readTimeoutSeconds: Long): JsonElement {
-        val client = http.newBuilder().readTimeout(readTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS).build()
+        // 总超时一并放宽：调用方给的 OkHttpClient 可能设了 callTimeout，它比挂起时间短时长轮询同样每次都超时。
+        val client = http.newBuilder()
+            .readTimeout(readTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(readTimeoutSeconds + 30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
         return execute(buildRequest("GET", path, null, query), requireAuth = false, allowRetry = true, optionalAuth = true, httpClient = client).data
     }
 
@@ -474,6 +478,7 @@ class AegisClient private constructor(
         private var fallbackAddresses: List<String> = emptyList()
         private var dnsOverHttps = true
         private var retryPolicy = AegisRetryPolicy()
+        private var engine: okhttp3.Interceptor? = null
         private val clock = AegisClock()
 
         /**
@@ -507,6 +512,19 @@ class AegisClient private constructor(
 
         /** 系统 DNS 失败或被劫持到内网 / 回环地址时，改用公共 DNS over HTTPS 解析。默认开启。 */
         fun dnsOverHttps(enabled: Boolean) = apply { this.dnsOverHttps = enabled }
+
+        /**
+         * 替换真正发请求的那一层（例如 Android 上的 Cronet）。
+         *
+         * 它排在所有拦截器之后、签名与加密之后，拿到的是最终要上线的请求，因此不必理解三档包装；
+         * 返回的响应再交回传输拦截器解密。可以不发请求而调 `chain.proceed` 交还给 OkHttp ——
+         * WebSocket 握手（实时通道）必须这样做，引擎自己决定不了的路线也可以这样兜底。
+         *
+         * 失败请抛 [java.io.IOException] 的对应子类（UnknownHostException、ConnectException、
+         * 带「connect」字样的 SocketTimeoutException、SSLHandshakeException …）：SDK 据此判断
+         * 请求是否已送达、能不能重发，以及给出哪一类 [AegisNetworkReason]。
+         */
+        fun engine(interceptor: okhttp3.Interceptor?) = apply { this.engine = interceptor }
 
         /** 网络失败的重试节奏，默认 3 次。传 [AegisRetryPolicy.NONE] 关闭。 */
         fun retryPolicy(policy: AegisRetryPolicy) = apply { this.retryPolicy = policy }
@@ -543,6 +561,7 @@ class AegisClient private constructor(
                         },
                     )
                 )
+                .apply { engine?.let(::addInterceptor) }
                 .build()
             return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy)
         }
