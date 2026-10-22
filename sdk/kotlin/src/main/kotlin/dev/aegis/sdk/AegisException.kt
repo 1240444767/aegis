@@ -27,6 +27,10 @@ class AegisException private constructor(
     /** 服务端给出的修复提示，接入期直接照做即可。 */
     val hint: String = "",
     cause: Throwable? = null,
+    /** NETWORK 类的细分，见 [AegisNetworkReason]；其他类为空串。 */
+    val networkReason: String = AegisNetworkReason.NONE,
+    /** 收到了 HTTP 响应但不是平台信封时的状态码（如 CDN 的 502）；其余为 0。 */
+    val httpStatus: Int = 0,
 ) : IOException(message, cause) {
 
     enum class Kind { TRANSPORT, AUTH, BUSINESS, NETWORK }
@@ -39,6 +43,8 @@ class AegisException private constructor(
 
     override fun toString(): String =
         "AegisException(kind=$kind, code=$code, message=$message" +
+            (if (networkReason.isNotEmpty()) ", networkReason=$networkReason" else "") +
+            (if (httpStatus != 0) ", httpStatus=$httpStatus" else "") +
             (if (hint.isNotEmpty()) ", hint=$hint" else "") + ")"
 
     companion object {
@@ -54,8 +60,14 @@ class AegisException private constructor(
             AegisException(Kind.TRANSPORT, 0, message, cause = cause)
 
         @JvmStatic
-        fun network(message: String, cause: Throwable? = null): AegisException =
-            AegisException(Kind.NETWORK, 0, message, cause = cause)
+        @JvmOverloads
+        fun network(
+            message: String,
+            cause: Throwable? = null,
+            reason: String = (cause as? IOException)?.networkReason() ?: AegisNetworkReason.IO,
+            httpStatus: Int = 0,
+        ): AegisException =
+            AegisException(Kind.NETWORK, 0, message, cause = cause, networkReason = reason, httpStatus = httpStatus)
 
         /**
          * 按业务码归类。[descriptor] 来自 /config 的 errors 目录 ——

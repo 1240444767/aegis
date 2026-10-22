@@ -70,6 +70,7 @@ class AegisClient private constructor(
     val tokens: AegisTokenStore,
     val clock: AegisClock,
     private val configHolder: AtomicReference<AegisConfig?>,
+    private val retryPolicy: AegisRetryPolicy,
 ) {
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -117,11 +118,16 @@ class AegisClient private constructor(
         if (cached != null && !forceRefresh) return cached
         val request = Request.Builder()
             .url(baseUrl.newBuilder().addPathSegments("api/v1/apps/$appKey/config").build())
+            // 服务端给 /config 的缓存头是 public, max-age=60, stale-while-revalidate=300，
+            // CDN 节点可以拿一份六分钟前的副本来答。里面的 serverTime 跟着旧了六分钟，
+            // 用它校准时钟反而会把时钟准的设备推出 ±300 秒的签名窗口（40071），
+            // 而强制刷新拿到的还是同一份旧副本。要求回源，回源不了时再用 Age 头补偿。
+            .header("Cache-Control", "no-cache")
             .get()
             .build()
-        val element = execute(request, requireAuth = false, allowRetry = false)
-        val config = json.decodeFromJsonElement(AegisConfig.serializer(), element)
-        clock.calibrate(config.serverTime.unix)
+        val outcome = execute(request, requireAuth = false, allowRetry = false, retrySafe = true)
+        val config = json.decodeFromJsonElement(AegisConfig.serializer(), outcome.data)
+        if (config.serverTime.unix > 0) clock.calibrate(config.serverTime.unix + outcome.ageSeconds)
         configHolder.set(config)
         return config
     }
@@ -147,9 +153,27 @@ class AegisClient private constructor(
         query: Map<String, String> = emptyMap(),
         requireAuth: Boolean = false,
         optionalAuth: Boolean = false,
-    ): JsonElement {
-        return execute(buildRequest(method, path, body, query), requireAuth, allowRetry = true, optionalAuth = optionalAuth)
-    }
+    ): JsonElement = send(method, path, body, query, requireAuth, optionalAuth)
+
+    /**
+     * [call] 加上「能不能自动重发」的判断。
+     *
+     * [retrySafe] 为空时按 HTTP 方法推断：GET / HEAD 可以重发，其余只在请求确定没发出去时重发。
+     * 登录这类重复执行也无害的写操作由调用处显式传 true；刷新令牌必须是 false ——
+     * 服务端已经换发过的旧刷新令牌再交一次，会被判为令牌复用，整条会话链都被吊销。
+     */
+    internal fun send(
+        method: String,
+        path: String,
+        body: Any? = null,
+        query: Map<String, String> = emptyMap(),
+        requireAuth: Boolean = false,
+        optionalAuth: Boolean = false,
+        retrySafe: Boolean? = null,
+    ): JsonElement = execute(
+        buildRequest(method, path, body, query), requireAuth, allowRetry = true,
+        optionalAuth = optionalAuth, retrySafe = retrySafe,
+    ).data
 
     /**
      * 上传文件。multipart 在三档下都可用：sealed 档整个 multipart 体被加密。
@@ -173,7 +197,7 @@ class AegisClient private constructor(
         val mediaType = (contentType ?: guessContentType(file.name)).toMediaType()
         builder.addFormDataPart(fieldName, file.name, file.asRequestBody(mediaType))
         val request = requestBuilder(path, emptyMap()).post(builder.build()).build()
-        return execute(request, requireAuth = true, allowRetry = true)
+        return execute(request, requireAuth = true, allowRetry = true).data
     }
 
     /**
@@ -215,7 +239,7 @@ class AegisClient private constructor(
      */
     internal fun callWithReadTimeout(path: String, query: Map<String, String>, readTimeoutSeconds: Long): JsonElement {
         val client = http.newBuilder().readTimeout(readTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS).build()
-        return execute(buildRequest("GET", path, null, query), requireAuth = false, allowRetry = true, optionalAuth = true, httpClient = client)
+        return execute(buildRequest("GET", path, null, query), requireAuth = false, allowRetry = true, optionalAuth = true, httpClient = client).data
     }
 
     /** 把信封里的 data 解成具体类型；各 Api 门面用它，未覆盖的字段自动忽略。 */
@@ -289,13 +313,27 @@ class AegisClient private constructor(
         )
     }
 
+    /** 一次成功调用的结果：信封里的 data，外加校准时钟要用的响应元数据。 */
+    private class Outcome(val data: JsonElement, val ageSeconds: Long)
+
+    /** 拆信封之前的一次 HTTP 往返。[serverDate] 是响应的 Date 头（秒），没有时为 0。 */
+    private class Exchange(val envelope: AegisEnvelope, val serverDate: Long, val ageSeconds: Long)
+
+    private val refreshLock = Any()
+
     /**
      * 发请求并拆信封。
      *
-     * 两处自动重试，都**只做一次**：
-     *   1. 传输密钥刚轮换（40074）→ 重新拉 /config 再发一次；
-     *   2. 访问令牌过期（40100）→ 用 refreshToken 换新令牌再发一次。
-     * 无限重试只会把一个明确的失败拖成一串超时。
+     * 每一轮都从 [request]（未包装的原始请求）重新出发：令牌重新取、签名与加密由传输拦截器
+     * 重新做，于是每次重发都带着新的时间戳与 nonce。OkHttp 自己的静默重试已在 Builder 里关掉，
+     * 因为它重发的是同一份字节，sealed 档下会撞上 nonce 防重放（40970）。
+     *
+     * 两类恢复：
+     *   - 网络失败：按 [retryPolicy] 退避重发。可以重发的前提是 [retrySafe]，或者失败发生在
+     *     连接阶段（请求确定没出设备）。
+     *   - 服务端拒绝：传输密钥轮换（40074）、时钟被拒（40071）、nonce 冲突（40970）、
+     *     访问令牌过期（40100）各恢复一次。同一种恢复做第二次仍失败，说明问题不在那里，
+     *     循环只会把一个明确的失败拖成一串超时。
      */
     private fun execute(
         request: Request,
@@ -303,49 +341,128 @@ class AegisClient private constructor(
         allowRetry: Boolean,
         optionalAuth: Boolean = false,
         httpClient: OkHttpClient = http,
-    ): JsonElement {
-        val prepared = if (requireAuth) {
-            val token = tokens.accessToken()
-                ?: throw AegisException.fromCode(40100, "尚未登录：没有可用的访问令牌")
-            request.newBuilder().header("Authorization", "Bearer $token").build()
-        } else if (optionalAuth) {
-            // 免登录接口：已登录就带上令牌，服务端据此按用户定向；令牌失效时服务端按未登录处理
-            tokens.accessToken()?.let { request.newBuilder().header("Authorization", "Bearer $it").build() } ?: request
-        } else {
-            request
-        }
+        retrySafe: Boolean? = null,
+    ): Outcome {
+        val canResend = retrySafe ?: (request.method == "GET" || request.method == "HEAD")
+        var networkAttempts = 0
+        var configRefreshed = false
+        var clockSynced = false
+        var nonceRenewed = false
+        var tokenRefreshed = false
 
-        val envelope = try {
-            httpClient.newCall(prepared).execute().use { response ->
-                val text = response.body?.string().orEmpty()
-                if (text.isBlank()) {
-                    throw AegisException.network("HTTP ${response.code}：响应为空")
+        while (true) {
+            val token = when {
+                requireAuth -> tokens.accessToken()
+                    ?: throw AegisException.fromCode(40100, "尚未登录：没有可用的访问令牌")
+                optionalAuth -> tokens.accessToken()
+                else -> null
+            }
+            // 免登录接口：已登录就带上令牌，服务端据此按用户定向；令牌失效时服务端按未登录处理
+            val prepared = token?.let { request.newBuilder().header("Authorization", "Bearer $it").build() } ?: request
+
+            val exchange = try {
+                exchange(prepared, httpClient)
+            } catch (failure: AegisException) {
+                networkAttempts++
+                val cause = failure.cause as? IOException
+                val resendable = failure.kind == AegisException.Kind.NETWORK &&
+                    cause?.isPermanent() != true &&
+                    (canResend || cause?.failedBeforeSending() == true)
+                if (!resendable || networkAttempts >= retryPolicy.maxAttempts) throw failure
+                pause(retryPolicy.delayBefore(networkAttempts))
+                continue
+            }
+
+            val envelope = exchange.envelope
+            if (envelope.code == 200) {
+                return Outcome(envelope.data ?: JsonNull, exchange.ageSeconds)
+            }
+
+            val descriptor = configHolder.get()?.errors?.firstOrNull { it.code == envelope.code }
+            val failure = AegisException.fromCode(envelope.code, envelope.message, descriptor)
+            if (!allowRetry) throw failure
+
+            when {
+                failure.isRetryableAfterConfigRefresh && !configRefreshed -> {
+                    configRefreshed = true
+                    config(forceRefresh = true)
                 }
-                json.decodeFromString(AegisEnvelope.serializer(), text)
+                (failure.recovery == AegisRecovery.SYNC_CLOCK || failure.code == CODE_CLOCK_SKEW) && !clockSynced -> {
+                    clockSynced = true
+                    // 拒绝这次请求的响应本身就带着服务端的当前时间，而且它不可能来自缓存；
+                    // 比再拉一次 /config 更准，也少一次往返。
+                    if (exchange.serverDate > 0) clock.calibrate(exchange.serverDate + exchange.ageSeconds)
+                    else config(forceRefresh = true)
+                }
+                // 被防重放拦下的请求服务端没有执行，换一个 nonce 重发是安全的。
+                (failure.recovery == AegisRecovery.NEW_NONCE || failure.code == CODE_NONCE_REPLAY) && !nonceRenewed -> {
+                    nonceRenewed = true
+                }
+                failure.isRetryableWithRefresh && requireAuth && !tokenRefreshed && tokens.refreshToken() != null -> {
+                    tokenRefreshed = true
+                    refreshTokens(staleAccessToken = token)
+                }
+                else -> throw failure
+            }
+        }
+    }
+
+    /**
+     * 单飞刷新。
+     *
+     * 进程刚回到前台时，十来个并发请求会同时拿着过期令牌收到 40100。各自去刷新的话，
+     * 只有第一个能成功：后面的拿着已被换掉的刷新令牌，服务端判定为令牌复用，
+     * 把整条会话链（包括刚换发的那一份）一起吊销 —— 用户看到的就是「刚登录又掉了」。
+     * 这里串行化，并且排在后面的线程发现令牌已经换过就直接用新的。
+     */
+    private fun refreshTokens(staleAccessToken: String?) {
+        synchronized(refreshLock) {
+            val current = tokens.accessToken()
+            if (current != null && current != staleAccessToken) return
+            auth.refresh()
+        }
+    }
+
+    /** 一次往返：只负责把字节变成信封，以及把「不是信封的响应」归成网络失败。 */
+    private fun exchange(request: Request, httpClient: OkHttpClient): Exchange {
+        try {
+            httpClient.newCall(request).execute().use { response ->
+                // 可空写法：上游 SDK 钉的 OkHttp 4 里 body 是可空的。
+                val text = response.body?.string().orEmpty()
+                val serverDate = response.headers.getDate("Date")?.time?.div(1000) ?: 0L
+                val age = response.header("Age")?.trim()?.toLongOrNull()?.coerceAtLeast(0) ?: 0L
+                val envelope = if (text.isBlank()) null else try {
+                    json.decodeFromString(AegisEnvelope.serializer(), text)
+                } catch (_: kotlinx.serialization.SerializationException) {
+                    null
+                } catch (_: IllegalArgumentException) {
+                    null
+                }
+                // CDN 的 502 / 504 错误页、运营商或防火墙的拦截页、被截断的响应都会走到这里。
+                // 它们说明的是「这条路此刻不通」，不是服务端的业务结论，按网络失败处理才会被重试。
+                if (envelope == null || (envelope.code == 0 && envelope.message.isEmpty() && envelope.data == null)) {
+                    throw AegisException.network(
+                        if (text.isBlank()) "HTTP ${response.code}：响应为空" else "HTTP ${response.code}：响应不是平台信封",
+                        reason = AegisNetworkReason.HTTP,
+                        httpStatus = response.code,
+                    )
+                }
+                return Exchange(envelope, serverDate, age)
             }
         } catch (error: AegisException) {
             throw error
         } catch (error: IOException) {
-            throw AegisException.network("请求失败：${error.message}", error)
+            throw AegisException.network("请求失败：${error.message ?: error.javaClass.simpleName}", error)
         }
+    }
 
-        if (envelope.code == 200) {
-            return envelope.data ?: JsonNull
+    private fun pause(millis: Long) {
+        try {
+            Thread.sleep(millis)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw AegisException.network("请求已取消", java.io.InterruptedIOException("interrupted").apply { initCause(interrupted) })
         }
-
-        val descriptor = configHolder.get()?.errors?.firstOrNull { it.code == envelope.code }
-        val failure = AegisException.fromCode(envelope.code, envelope.message, descriptor)
-        if (!allowRetry) throw failure
-
-        if (failure.isRetryableAfterConfigRefresh) {
-            config(forceRefresh = true)
-            return execute(request, requireAuth, allowRetry = false, optionalAuth = optionalAuth, httpClient = httpClient)
-        }
-        if (failure.isRetryableWithRefresh && requireAuth && tokens.refreshToken() != null) {
-            auth.refresh()
-            return execute(request, requireAuth, allowRetry = false)
-        }
-        throw failure
     }
 
     class Builder internal constructor(baseUrl: String, private val appKey: String) {
@@ -354,6 +471,9 @@ class AegisClient private constructor(
         private var tokenStore: AegisTokenStore = AegisTokenStore.inMemory()
         private var okHttp: OkHttpClient? = null
         private var deviceProvider: (() -> AegisDevice?)? = null
+        private var fallbackAddresses: List<String> = emptyList()
+        private var dnsOverHttps = true
+        private var retryPolicy = AegisRetryPolicy()
         private val clock = AegisClock()
 
         /**
@@ -367,8 +487,29 @@ class AegisClient private constructor(
 
         fun tokenStore(store: AegisTokenStore) = apply { this.tokenStore = store }
 
-        /** 传入自己的 OkHttpClient（超时、代理、日志、证书固定都在这里配）。 */
+        /**
+         * 传入自己的 OkHttpClient（超时、代理、日志、证书固定都在这里配）。
+         *
+         * SDK 在它的基础上再改三处：关掉 OkHttp 的静默重试（重试由 SDK 自己做，见 execute）、
+         * 换上多路解析（见 [fallbackAddresses] / [dnsOverHttps]）、没配心跳时补一个 HTTP/2 心跳。
+         */
         fun httpClient(client: OkHttpClient) = apply { this.okHttp = client }
+
+        /**
+         * 服务端域名的备用 IP（通常是源站），系统 DNS 与 DoH 的结果都连不上时依次尝试。
+         *
+         * 只换连接地址，TLS 仍按原域名校验证书，所以这里只能填真正持有该域名证书的机器。
+         * 用于 CDN 节点在部分地区不可达、或 CDN 的 CNAME 被运营商 DNS 拦截的情况。
+         */
+        fun fallbackAddresses(addresses: List<String>) = apply {
+            this.fallbackAddresses = addresses.map(String::trim).filter(String::isNotEmpty)
+        }
+
+        /** 系统 DNS 失败或被劫持到内网 / 回环地址时，改用公共 DNS over HTTPS 解析。默认开启。 */
+        fun dnsOverHttps(enabled: Boolean) = apply { this.dnsOverHttps = enabled }
+
+        /** 网络失败的重试节奏，默认 3 次。传 [AegisRetryPolicy.NONE] 关闭。 */
+        fun retryPolicy(policy: AegisRetryPolicy) = apply { this.retryPolicy = policy }
 
         /**
          * 设备信息，随每个请求以 `X-Device-*` 请求头上报，见 [AegisDevice]。
@@ -381,8 +522,15 @@ class AegisClient private constructor(
 
         fun build(): AegisClient {
             val configHolder = AtomicReference<AegisConfig?>(null)
-            val base = okHttp ?: OkHttpClient()
+            val base = okHttp ?: OkHttpClient.Builder()
+                .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
             val client = base.newBuilder()
+                .dns(buildDns(base))
+                .retryOnConnectionFailure(false)
+                .apply { if (base.pingIntervalMillis == 0) pingInterval(20, java.util.concurrent.TimeUnit.SECONDS) }
                 .apply { deviceProvider?.let { addInterceptor(AegisDeviceInterceptor(it)) } }
                 .addInterceptor(
                     AegisTransportInterceptor(
@@ -396,12 +544,35 @@ class AegisClient private constructor(
                     )
                 )
                 .build()
-            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder)
+            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy)
+        }
+
+        private fun buildDns(base: OkHttpClient): okhttp3.Dns {
+            if (fallbackAddresses.isEmpty() && !dnsOverHttps) return base.dns
+            // DoH 请求自己走系统解析与短超时，不能绕回这个 Dns，否则查不到时会递归。
+            val bootstrap = base.newBuilder()
+                .dns(okhttp3.Dns.SYSTEM)
+                .connectTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(4, java.util.concurrent.TimeUnit.SECONDS)
+                .callTimeout(6, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            return AegisDns(
+                system = base.dns,
+                primaryHosts = setOf(normalizedBase.host.lowercase()),
+                // 只接受 IP 字面量：这里填域名就又回到了「先得解析它」的问题。
+                fallbackAddresses = fallbackAddresses
+                    .filter { IP_LITERAL.matches(it) }
+                    .mapNotNull { runCatching { java.net.InetAddress.getByName(it) }.getOrNull() },
+                doh = if (dnsOverHttps) AegisDns.publicResolvers(bootstrap) else emptyList(),
+            )
         }
     }
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private const val CODE_CLOCK_SKEW = 40071
+        private const val CODE_NONCE_REPLAY = 40970
+        private val IP_LITERAL = Regex("""^(\d{1,3}(\.\d{1,3}){3}|[0-9a-fA-F:]*:[0-9a-fA-F:.]*)$""")
 
         @JvmStatic
         fun builder(baseUrl: String, appKey: String): Builder = Builder(baseUrl, appKey)

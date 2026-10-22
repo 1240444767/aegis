@@ -399,7 +399,11 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
 
     /** 登录类接口的公共收口：解析会话并写进 tokenStore。 */
     private fun login(body: Map<String, Any?>, path: String = "/auth/login"): AegisSession {
-        val session = client.decodeAs(client.call("POST", path, body), AegisSession.serializer())
+        // 账号密码 / 短信 / 卡密登录重复执行只会多出一个会话，网络断在半路时可以自动重发。
+        // 其余几条都消耗一次性凭据（刷新令牌、二次认证挑战、OAuth 票据、Passkey 断言），
+        // 重发会被拒；刷新令牌更会被判为复用，整条会话链被吊销。它们只在确定没发出去时重发。
+        val retrySafe = path == "/auth/login"
+        val session = client.decodeAs(client.send("POST", path, body, retrySafe = retrySafe), AegisSession.serializer())
         if (session.accessToken.isNotEmpty()) {
             client.tokens.save(session.accessToken, session.refreshToken)
         }

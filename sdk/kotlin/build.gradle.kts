@@ -17,6 +17,8 @@ repositories {
 dependencies {
     api("com.squareup.okhttp3:okhttp:4.12.0")
     api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    // 系统 DNS 被拦或解析到不可达的 CDN 节点时的第二条解析路径，见 AegisNetwork.kt。
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     // X25519 / HKDF / ChaCha20-Poly1305。纯 Java 实现，不需要 NDK，
     // 也不受 Android API 33 才有 XDH 的限制。
     implementation("org.bouncycastle:bcprov-jdk18on:1.79")
