@@ -1089,6 +1089,56 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
             optionalAuth = true,
         )
 
+    // ── 崩溃报告 ──
+
+    /**
+     * 上报一份崩溃报告。免登录；带令牌时挂到账号上。只在用户明确同意发送这一份报告后调用
+     * （例如在崩溃屏上点了「发送此报告」）。
+     *
+     * [reportId] 是客户端自己的记录编号（8–64 位字母数字 `_` `-`），同一应用内重复上报返回
+     * 原来那一条，`duplicate = true`。[kind] 取 `java` / `native` / `anr` / `exit`。[report] 是
+     * 完整的纯文本报告，上限 256 KB；[occurredAt] 是崩溃发生的时间（RFC 3339）。
+     *
+     * 返回 `{ id, duplicate }`。按设备与 IP 限频，超出时报 429。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitCrashReport(
+        reportId: String,
+        kind: String,
+        title: String,
+        report: String,
+        occurredAt: String,
+        detail: String? = null,
+        appVersion: String? = null,
+        versionCode: Long? = null,
+        osVersion: String? = null,
+        model: String? = null,
+        abi: String? = null,
+        processName: String? = null,
+        source: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/crash-reports",
+        buildBody(
+            "reportId" to reportId,
+            "kind" to kind,
+            "title" to title,
+            "report" to report,
+            "occurredAt" to occurredAt,
+            "detail" to detail,
+            "appVersion" to appVersion,
+            "versionCode" to versionCode,
+            "osVersion" to osVersion,
+            "model" to model,
+            "abi" to abi,
+            "processName" to processName,
+            "source" to source,
+            "deviceId" to deviceId,
+        ),
+        optionalAuth = true,
+    )
+
     // ── 站内信 ──
 
     @Throws(IOException::class)

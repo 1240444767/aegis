@@ -144,6 +144,9 @@ func gatewayRequestModels() map[string]any {
 		"adConsent":      AdConsentRequest{},
 		"splashAdEvents": AdSplashReportRequest{},
 
+		// 崩溃报告
+		"crashReport": CrashReportRequest{},
+
 		// 钱包 / 会员 / 支付
 		"walletTransactions": WalletTransactionsQuery{},
 		"walletConsume":      WalletConsumeRequest{},

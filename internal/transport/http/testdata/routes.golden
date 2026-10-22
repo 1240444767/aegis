@@ -15,6 +15,7 @@ DELETE	/api/admin/apps/:appkey/channels/:cid	AdminDeleteVersionChannel
 DELETE	/api/admin/apps/:appkey/channels/:cid/users	AdminRemoveVersionChannelUsers
 DELETE	/api/admin/apps/:appkey/client-control/devices/:deviceId	AdminDeleteClientControlDevice
 DELETE	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminDeleteClientControlRule
+DELETE	/api/admin/apps/:appkey/crash-reports/:crashId	AdminDeleteCrashReport
 DELETE	/api/admin/apps/:appkey/device-limit/overrides/:userId	AdminDeleteDeviceLimitOverride
 DELETE	/api/admin/apps/:appkey/device-limit/users/:userId/ledger	AdminResetDeviceLimitLedger
 DELETE	/api/admin/apps/:appkey/function-keys/:keyId	AdminRevokeAppFunctionKey
@@ -182,6 +183,9 @@ GET	/api/admin/apps/:appkey/cloud-storage/users	AdminCloudStorageUsers
 GET	/api/admin/apps/:appkey/commerce	AdminAppCommerceSettings
 GET	/api/admin/apps/:appkey/commerce/overview	AdminAppCommerceOverview
 GET	/api/admin/apps/:appkey/content/overview	AdminContentOverview
+GET	/api/admin/apps/:appkey/crash-reports	AdminCrashReports
+GET	/api/admin/apps/:appkey/crash-reports/:crashId	AdminCrashReport
+GET	/api/admin/apps/:appkey/crash-reports/facets	AdminCrashReportFacets
 GET	/api/admin/apps/:appkey/device-limit	AdminDeviceLimitOverview
 GET	/api/admin/apps/:appkey/device-limit/events	AdminDeviceLimitEvents
 GET	/api/admin/apps/:appkey/device-limit/overrides	AdminDeviceLimitOverrides
@@ -809,6 +813,8 @@ POST	/api/admin/apps/:appkey/client-control/rules/:ruleId/enable	AdminEnableClie
 POST	/api/admin/apps/:appkey/client-control/rules/reorder	AdminReorderClientControlRules
 POST	/api/admin/apps/:appkey/client-control/simulate	AdminSimulateClientControl
 POST	/api/admin/apps/:appkey/cloud-storage/purge-expired	AdminPurgeExpiredCloudTrash
+POST	/api/admin/apps/:appkey/crash-reports/delete	AdminDeleteCrashReports
+POST	/api/admin/apps/:appkey/crash-reports/resolve	AdminResolveCrashReports
 POST	/api/admin/apps/:appkey/device-limit/simulate	AdminSimulateDeviceLimit
 POST	/api/admin/apps/:appkey/device-limit/users/:userId/enforce	AdminEnforceDeviceLimit
 POST	/api/admin/apps/:appkey/device-limit/users/:userId/remove	AdminRemoveDeviceLimitDevices
@@ -1234,6 +1240,7 @@ POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/link	AppCloudItemLink
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/restore	AppRestoreCloudItem
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/rollback	AppRollbackCloudItem
 POST	/api/v1/apps/:appkey/cloud/items/:namespace/:key/upload	AppUploadCloudItem
+POST	/api/v1/apps/:appkey/crash-reports	AppSubmitCrashReport
 POST	/api/v1/apps/:appkey/features/time/:feature/leases	AppLeaseFeatureTime
 POST	/api/v1/apps/:appkey/features/time/leases/:leaseNo/settle	AppSettleFeatureTimeLease
 POST	/api/v1/apps/:appkey/feedback	AppCreateFeedback

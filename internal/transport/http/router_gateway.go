@@ -80,6 +80,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		// 带令牌时按账号回答，开屏记录也挂到账号上。
 		appGatewayOptional.GET("/ads/policy", h.AppAdPolicy)
 		appGatewayOptional.POST("/ads/splash/events", h.AppReportSplashAd)
+		// 崩溃报告：用户在崩溃屏上逐份同意后上报，未登录也能发；带令牌时挂到账号上（docs/crash-reports.md）
+		appGatewayOptional.POST("/crash-reports", h.AppSubmitCrashReport)
 	}
 
 	// 网关内需要 Bearer 令牌的部分。

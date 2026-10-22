@@ -125,6 +125,12 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "splashAdEvents", Method: "POST", Path: "/ads/splash/events",
 		Summary: "上报开屏广告记录（shown / clicked / failed / timeout），带令牌时记到账号上"},
 
+	// ── 崩溃报告 ──
+	//
+	// 只在用户明确同意发送这一份报告后调用（如崩溃屏上的「发送此报告」），免登录可用。
+	{Key: "crashReport", Method: "POST", Path: "/crash-reports",
+		Summary: "上报一份崩溃报告（kind: java | native | anr | exit，report 上限 256 KB）；reportId 重复时返回原来那一条，按设备与 IP 限频"},
+
 	// ── 当前用户 ──
 	{Key: "me", Method: "GET", Path: "/me", Auth: true, Summary: "当前登录用户资料"},
 	{Key: "profile", Method: "GET", Path: "/me/profile", Auth: true, Summary: "个人资料详情"},
@@ -641,6 +647,10 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: 50260, Name: "CLOUD_CONTENT_UNREADABLE", Message: "内容读取失败",
 		Recovery: authprotocol.RecoveryNone, Hint: "存储桶里的对象暂时读不出来，稍后重试；持续失败请联系管理员检查存储配置"},
+	// ── 通用限频 ──
+	// 防火墙全局限流与崩溃报告（同一设备 / 同一 IP 每小时 20 份）共用这一个码。
+	{Code: errCodeCrashReportRateLimited, Name: "RATE_LIMITED", Message: "请求过于频繁，请稍后再试",
+		Recovery: authprotocol.RecoveryNone, Hint: "不要立即重试；崩溃报告留在本机，过一段时间（如下次启动）再发"},
 	// ── 意见反馈与工单附件 ──
 	{Code: errCodeFeedbackRateLimited, Name: "FEEDBACK_RATE_LIMITED", Message: feedbackRateLimitedMessage,
 		Recovery: authprotocol.RecoveryNone, Hint: "同一用户每小时最多 5 条、每天最多 20 条反馈，稍后再提交"},

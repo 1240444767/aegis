@@ -446,6 +446,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 广告服务策略：开屏广告与激励视频传给 SDK 的是同一个带签名的用户标识。
 	adPolicyService := service.NewAdPolicyService(log, pg, rewardedAdService)
 	adPolicyService.SetEventPublishers(realtimeService, realtimeService)
+	// 崩溃报告：用户在崩溃屏上逐份同意后免登录上报（docs/crash-reports.md）
+	crashReportService := service.NewCrashReportService(log, pg, locationService)
 	// 功能时长：看激励广告领到的使用时长，先租后用、停用时结算（发放在激励广告的结算事务里）。
 	featureTimeService := service.NewFeatureTimeService(log, pg)
 	// 积分商城：人工发放的处理结果走站内信，兑换后通知用户的其它在线设备刷新积分与权益。
@@ -667,6 +669,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		RewardedAd:       rewardedAdService,
 		FeatureTime:      featureTimeService,
 		AdPolicy:         adPolicyService,
+		CrashReport:      crashReportService,
 		PointsStore:      pointsStoreService,
 		Invite:           inviteService,
 		Leaderboard:      leaderboardService,

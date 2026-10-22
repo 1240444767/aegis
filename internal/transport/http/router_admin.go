@@ -258,6 +258,13 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.GET("/apps/:appkey/ad-policy/consent-logs", h.AdminListAdConsentLogs)
 		admin.GET("/apps/:appkey/ad-policy/splash-events", h.AdminListSplashAdEvents)
 		admin.GET("/apps/:appkey/ad-policy/stats", h.AdminAdPolicyStats)
+		// 崩溃报告（docs/crash-reports.md）。批量操作用 POST 动词子路径，与 :crashId 同层的静态段先注册。
+		admin.GET("/apps/:appkey/crash-reports", h.AdminCrashReports)
+		admin.GET("/apps/:appkey/crash-reports/facets", h.AdminCrashReportFacets)
+		admin.POST("/apps/:appkey/crash-reports/resolve", h.AdminResolveCrashReports)
+		admin.POST("/apps/:appkey/crash-reports/delete", h.AdminDeleteCrashReports)
+		admin.GET("/apps/:appkey/crash-reports/:crashId", h.AdminCrashReport)
+		admin.DELETE("/apps/:appkey/crash-reports/:crashId", h.AdminDeleteCrashReport)
 		// 积分商城。单个用户的功能解锁挂在 users/:userId 之下，按用户数据权限判定。
 		admin.GET("/apps/:appkey/points-store/catalog", h.AdminPointsStoreCatalog)
 		admin.GET("/apps/:appkey/points-store/settings", h.AdminPointsStoreSettings)

@@ -52,6 +52,7 @@ type RouterDeps struct {
 	RewardedAd       *service.RewardedAdService
 	FeatureTime      *service.FeatureTimeService
 	AdPolicy         *service.AdPolicyService
+	CrashReport      *service.CrashReportService
 	PointsStore      *service.PointsStoreService
 	Invite           *service.InviteService
 	Leaderboard      *service.LeaderboardService
@@ -196,6 +197,7 @@ func (d RouterDeps) newHandler() *Handler {
 		rewardedAd:         d.RewardedAd,
 		featureTime:        d.FeatureTime,
 		adPolicy:           d.AdPolicy,
+		crashReport:        d.CrashReport,
 		pointsStore:        d.PointsStore,
 		invite:             d.Invite,
 		leaderboard:        d.Leaderboard,

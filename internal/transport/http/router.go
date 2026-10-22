@@ -63,6 +63,7 @@ type Handler struct {
 	rewardedAd      *service.RewardedAdService
 	featureTime     *service.FeatureTimeService
 	adPolicy        *service.AdPolicyService
+	crashReport     *service.CrashReportService
 	pointsStore     *service.PointsStoreService
 	invite          *service.InviteService
 	leaderboard     *service.LeaderboardService

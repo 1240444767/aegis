@@ -46,7 +46,9 @@ func resetTestDatabase(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 			}
 			if _, err := pool.Exec(ctx, sql); err != nil {
 				if msg := err.Error(); strings.Contains(msg, "vector") || strings.Contains(msg, "postgis") ||
-					strings.Contains(msg, "geography") || strings.Contains(msg, "geometry") {
+					strings.Contains(msg, "geography") || strings.Contains(msg, "geometry") ||
+					// 地理事件表随 PostGIS 迁移一起被跳过，后续给它补索引的迁移（000119）同样跳过
+					strings.Contains(msg, `relation "login_geo_events" does not exist`) {
 					continue
 				}
 				t.Fatalf("round %d apply %s: %v", round+1, filepath.Base(file), err)

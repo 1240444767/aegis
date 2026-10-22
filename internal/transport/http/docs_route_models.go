@@ -165,6 +165,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/cloud-storage/users"):                                   CloudStorageUserListQuery{},              // AdminCloudStorageUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/commerce"):                                              app.CommerceSettings{},                   // UpdateAdminAppCommerceSettings
 		routeKey("GET", "/api/admin/apps/{appkey}/commerce/overview"):                                     AdminWalletStatsQuery{},                  // AdminAppCommerceOverview
+		routeKey("POST", "/api/admin/apps/{appkey}/crash-reports/delete"):                                 CrashReportIDsRequest{},                  // AdminDeleteCrashReports
+		routeKey("POST", "/api/admin/apps/{appkey}/crash-reports/resolve"):                                CrashReportResolveRequest{},              // AdminResolveCrashReports
 		routeKey("PUT", "/api/admin/apps/{appkey}/device-limit/overrides/{userId}"):                       devicelimit.OverrideInput{},              // AdminSaveDeviceLimitOverride
 		routeKey("PUT", "/api/admin/apps/{appkey}/device-limit/policy"):                                   devicelimit.Policy{},                     // AdminUpdateDeviceLimitPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/device-limit/simulate"):                                devicelimit.SimulateInput{},              // AdminSimulateDeviceLimit
@@ -669,6 +671,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}"):                            CloudItemPutRequest{},                    // AppPutCloudItem
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/link"):                      CloudItemLinkRequest{},                   // AppCloudItemLink
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/rollback"):                  CloudItemRollbackRequest{},               // AppRollbackCloudItem
+		routeKey("POST", "/api/v1/apps/{appkey}/crash-reports"):                                           CrashReportRequest{},                     // AppSubmitCrashReport
 		routeKey("POST", "/api/v1/apps/{appkey}/features/time/leases/{leaseNo}/settle"):                   FeatureTimeSettleRequest{},               // AppSettleFeatureTimeLease
 		routeKey("POST", "/api/v1/apps/{appkey}/features/time/{feature}/leases"):                          FeatureTimeLeaseRequest{},                // AppLeaseFeatureTime
 		routeKey("GET", "/api/v1/apps/{appkey}/feedback"):                                                 FeedbackListQuery{},                      // AppListFeedback
