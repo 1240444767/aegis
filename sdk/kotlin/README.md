@@ -165,6 +165,30 @@ val client = AegisClient.builder(baseUrl, appKey)
 Android 上放进协程 / IO 线程；服务端直接调。
 `AegisClient` 线程安全，全进程共用一个实例即可（内部 OkHttpClient 自带连接池）。
 
+## AI 中转（client.ai.relay）
+
+`client.ai.relay` 用当前登录会话调用 AI 中转（应用需开启 `allowSessionToken`），`client.ai.relay(apiKey)` 用 `sk-ag-` 密钥。
+请求体与响应体是 OpenAI / Anthropic 的原生 JSON，按需取字段：
+
+```kotlin
+val relay = client.ai.relay
+val reply = relay.chat(buildJsonObject { put("model", "gpt-4o"); putJsonArray("messages") { addJsonObject { put("role", "user"); put("content", "你好") } } })
+relay.chatStream(body) { chunk -> /* chat.completion.chunk */ }
+
+val cancel = AegisAICancellation()          // 别的线程调 cancel()：断开连接、取消任务，不扣费
+val images = relay.generateImages(
+    buildJsonObject { put("model", "gpt-image-1"); put("prompt", "一只猫"); put("size", "1024x1024") },
+    AegisAIJobOptions(timeoutSeconds = 600, cancellation = cancel, onProgress = { job -> println(job.status) }),
+)
+val png = images.images.first().bytes()
+```
+
+生图、改图、语音合成、转写走**异步任务**：提交后立刻拿到任务编号，再长轮询取结果。每个请求都很短，
+不会被中间反向代理的读超时（常见 60–100 秒）切断，轮询途中断网自动重试，任务不受影响。
+底层的 `submitJob` / `job` / `awaitJob` / `cancelJob` / `jobContent` 也公开，可以把任务编号存下来，进程重启后接着取。
+失败抛 `AegisException`：`code` 是网关的 402xx 业务码（上游自己的错误为 0），`httpStatus` 是同步调用会回的状态，
+取消时 `isCanceled` 为 true。全部方法阻塞，请在后台线程调用。
+
 ## 服务端校验会员（AegisServerClient）
 
 `AegisClient` 是**终端用户**的客户端：凭据是登录换来的用户令牌。

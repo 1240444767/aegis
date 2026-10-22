@@ -48,6 +48,9 @@ class AegisException private constructor(
      */
     val isSignedOut: Boolean get() = code in SIGNED_OUT_CODES
 
+    /** 调用方自己取消的（见 [AegisAICancellation]），不是失败。 */
+    val isCanceled: Boolean get() = networkReason == AegisNetworkReason.CANCELED
+
     override fun toString(): String =
         "AegisException(kind=$kind, code=$code, message=$message" +
             (if (networkReason.isNotEmpty()) ", networkReason=$networkReason" else "") +
@@ -99,6 +102,31 @@ class AegisException private constructor(
                 hint = descriptor?.hint.orEmpty(),
             )
         }
+
+        /**
+         * AI 中转（`/api/ai/v1`）的错误：那一组接口回 OpenAI / Anthropic 形状的错误信封而不是平台信封。
+         * [code] 是信封里的 `aegis_code`（上游自己的错误没有，为 0），[httpStatus] 是同步调用会回的状态码。
+         */
+        internal fun relay(code: Int, message: String, httpStatus: Int): AegisException {
+            val kind = when (code) {
+                in AUTH_CODES, in SIGNED_OUT_CODES -> Kind.AUTH
+                else -> Kind.BUSINESS
+            }
+            return AegisException(
+                kind = kind,
+                code = code,
+                message = message.ifEmpty { "AI 调用失败（HTTP $httpStatus）" },
+                recovery = if (code in SIGNED_OUT_CODES) AegisRecovery.REAUTH else defaultRecovery(kind),
+                httpStatus = httpStatus,
+            )
+        }
+
+        /** 调用方取消。 */
+        internal fun canceled(): AegisException = AegisException(
+            Kind.NETWORK, 0, "调用已取消",
+            cause = java.io.InterruptedIOException("canceled"),
+            networkReason = AegisNetworkReason.CANCELED,
+        )
 
         private fun defaultRecovery(kind: Kind): String = when (kind) {
             Kind.AUTH -> AegisRecovery.REFRESH_TOKEN

@@ -247,6 +247,32 @@ class AegisClient private constructor(
         return execute(buildRequest("GET", path, null, query), requireAuth = false, allowRetry = true, optionalAuth = true, httpClient = client).data
     }
 
+    // ── AI 中转（/api/ai/v1）用的口子 ─────────────────────────────────────
+    //
+    // 中转面回的是 OpenAI / Anthropic 形状的响应，不是平台信封，所以不走 execute；
+    // 但连接（多路解析、引擎、设备头）、令牌与单飞刷新、重试节奏都与平台接口共用。见 AegisAIRelay.kt。
+
+    internal fun relayUrl(path: String, query: Map<String, String> = emptyMap()): HttpUrl =
+        baseUrl.newBuilder()
+            .addPathSegments("api/ai/v1/" + path.trimStart('/'))
+            .apply { query.forEach { (key, value) -> addQueryParameter(key, value) } }
+            .build()
+
+    /** 中转调用用的 HTTP 客户端：读超时按调用放宽（生图、长轮询），总超时跟着放宽。 */
+    internal fun relayHttp(readTimeoutSeconds: Long): OkHttpClient = http.newBuilder()
+        .readTimeout(readTimeoutSeconds, java.util.concurrent.TimeUnit.SECONDS)
+        .callTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
+
+    internal val relayRetryPolicy: AegisRetryPolicy get() = retryPolicy
+
+    /** 访问令牌过期时单飞刷新；没有刷新令牌返回 false。 */
+    internal fun refreshForRelay(staleAccessToken: String?): Boolean {
+        if (tokens.refreshToken() == null) return false
+        refreshTokens(staleAccessToken)
+        return true
+    }
+
     /** 把信封里的 data 解成具体类型；各 Api 门面用它，未覆盖的字段自动忽略。 */
     internal fun <T> decodeAs(element: JsonElement, serializer: kotlinx.serialization.DeserializationStrategy<T>): T =
         json.decodeFromJsonElement(serializer, element)

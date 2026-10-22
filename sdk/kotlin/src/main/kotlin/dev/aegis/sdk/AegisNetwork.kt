@@ -41,6 +41,8 @@ object AegisNetworkReason {
     const val HTTP = "http"
     /** 其他 I/O 错误（连接中途被重置等）。 */
     const val IO = "io"
+    /** 调用方主动取消（[AegisAICancellation]）。不要重试，也不必提示网络问题。 */
+    const val CANCELED = "canceled"
 }
 
 /**

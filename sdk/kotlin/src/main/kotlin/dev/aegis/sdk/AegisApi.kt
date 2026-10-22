@@ -1905,9 +1905,9 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
 /**
  * AI 中转网关的账户侧（docs/ai-gateway.md）。
  *
- * 调用面本身不在这里：把任意 OpenAI / Anthropic SDK 的 baseURL 指到 `{站点}/api/ai/v1`
- * （[overview] 返回的 `baseUrl`），api key 填 [createKey] 返回的 `secret`；应用允许时
- * （`allowSessionToken = true`）也可以直接填当前登录会话的访问令牌。
+ * 调用面在 [relay]（会话令牌）与 `relay(apiKey)`（密钥）上；也可以把任意 OpenAI / Anthropic SDK 的
+ * baseURL 指到 `{站点}/api/ai/v1`（[overview] 返回的 `baseUrl`），api key 填 [createKey] 返回的 `secret`；
+ * 应用允许时（`allowSessionToken = true`）也可以直接填当前登录会话的访问令牌。
  *
  * 费用按模型单价 × 本人倍率计算，按 `sources` 的顺序从免费额度、会员额度、赠送额度、积分、余额里扣。
  * 调用失败不扣费；每次调用的响应头 `X-Aegis-Request-No` 对得上 [request] 的明细。
@@ -1915,6 +1915,15 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
  * 金额（点、元）一律是十进制字符串，与钱包同一惯例：用 Double 会丢精度。
  */
 class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
+
+    /**
+     * 调用面（对话、流式、嵌入、重排、生图、改图、语音、转写），用当前登录会话的访问令牌。
+     * 应用需开启 `allowSessionToken`。见 [AegisAIRelay]。
+     */
+    val relay: AegisAIRelay = AegisAIRelay(client, null)
+
+    /** 调用面，用 [createKey] 领到的 `sk-ag-` 密钥（服务端、脚本、不想绑定登录态的场景）。 */
+    fun relay(apiKey: String): AegisAIRelay = AegisAIRelay(client, apiKey)
 
     /** 总览：是否开放、能不能用、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址。 */
     @Throws(IOException::class)
