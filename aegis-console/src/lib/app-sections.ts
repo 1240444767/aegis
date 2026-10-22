@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Bug,
   Cloud,
   CreditCard,
   Crown,
@@ -64,7 +65,8 @@ export const appSectionGroups: AppSectionGroup[] = [
     sections: [
       { key: "info", title: "基本信息", summary: "标识、开关与关联入口", icon: Info },
       { key: "stats", title: "统计分析", summary: "用户规模与增长趋势", icon: BarChart3 },
-      { key: "audit", title: "审计日志", summary: "登录、会话与通知记录", icon: ScrollText }
+      { key: "audit", title: "审计日志", summary: "登录、会话与通知记录", icon: ScrollText },
+      { key: "crash-reports", title: "崩溃报告", summary: "客户端上报的崩溃与排查记录", icon: Bug }
     ]
   },
   {

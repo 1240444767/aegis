@@ -707,6 +707,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/rewarded-ad.ts` / `lib/rewarded-ad-hooks.ts` | 激励广告域 API 与 React Query hooks |
 | `components/apps/ad-policy/` | 广告服务区块：概览 / 用户 / 开屏 / 策略（见下节） |
 | `lib/api/ad-policy.ts` / `lib/ad-policy-hooks.ts` | 广告服务策略域 API 与 React Query hooks |
+| `components/apps/crash-reports/` | 崩溃报告区块：单页列表 + 筛选 + 详情抽屉（见下节） |
+| `lib/api/crash-reports.ts` / `lib/crash-report-hooks.ts` | 崩溃报告域 API 与 React Query hooks |
 | `components/apps/points-store/` | 积分商城区块：概览 / 商品 / 兑换记录（见下节） |
 | `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
 | `components/apps/invite/` | 邀请区块：概览 / 配置 / 邀请码 / 邀请记录（见下节） |
@@ -989,6 +991,23 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 `configured: false` 表示应用没保存过策略，客户端此时按自己内置的默认策略处理，界面上如实显示「未配置」。
 判定与接口见 [docs/ad-policy.md](../docs/ad-policy.md)。
+
+## 崩溃报告区块（/apps/{appKey}?tab=crash-reports）
+
+客户端在崩溃屏上经用户逐份同意后上报，规则见 [docs/crash-reports.md](../docs/crash-reports.md)。放在「概览」分组，
+**一页完成、不分标签**（报表类页面不做多标签）。
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/crash-reports/app-crash-reports-panel.tsx` | 摘要（总数 / 未处理 / 近 24 小时）+ 筛选（关键字、类型、版本、状态、时间）+ 列表 + 本页批量标记与删除 |
+| `components/apps/crash-reports/crash-report-detail-sheet.tsx` | 详情抽屉：全部字段、上报账号与对外用户 ID、报告正文（等宽、复制、下载 .txt）、标记与删除 |
+| `components/apps/crash-reports/crash-report-shared.tsx` | 类型与状态徽标、版本 / 设备 / 位置的拼接、下载 |
+
+三条约束：
+
+1. **列表不带正文**，正文只在详情接口里取：一份报告最多 256 KB，一页 20 份全带上就是几 MB。
+2. **版本下拉只列 facets 接口给的版本**（真实出现过的），不让管理员手打版本号。
+3. **选择只作用于当前页**，翻页或改筛选即清空，批量操作不会落到看不见的行上。写操作整组失效（前缀 `admin-crash-reports`）。
 
 ## 积分商城区块（/apps/{appKey}?tab=points-store）
 
