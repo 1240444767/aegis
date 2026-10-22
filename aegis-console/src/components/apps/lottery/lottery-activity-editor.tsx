@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { AlertTriangle, ArrowRight, Ban, Coins, Disc3, Gift, Grid3x3, Loader2, Save, Ticket } from "lucide-react";
+import { AlertTriangle, ArrowRight, Ban, Coins, Disc3, FlaskConical, Gift, Grid3x3, Loader2, Save, Ticket } from "lucide-react";
 import { toast } from "sonner";
 import { FieldGroup, ModeCard, NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import {
@@ -18,6 +18,8 @@ import {
   type ActivityForm
 } from "@/components/apps/lottery/lottery-activity-form";
 import { LotteryPrizeBoard } from "@/components/apps/lottery/lottery-prize-board";
+import { LotteryStrategyEditor } from "@/components/apps/lottery/lottery-strategy-editor";
+import { LotteryStrategySimulator } from "@/components/apps/lottery/lottery-strategy-simulator";
 import {
   LIFETIME_POLICIES,
   LIFETIME_POLICY_META,
@@ -86,6 +88,7 @@ export function LotteryActivityEditor({
 
   const [draft, setDraft] = useState<{ id: number; value: ActivityForm } | null>(null);
   const [selectedKey, setSelectedKey] = useState<number | null>(null);
+  const [simulating, setSimulating] = useState(false);
   const scope = activity?.id ?? 0;
   const form = draft?.id === scope ? draft.value : seedForm(activity, catalog);
   const update = (next: Partial<ActivityForm>) => setDraft({ id: scope, value: { ...form, ...next } });
@@ -99,7 +102,7 @@ export function LotteryActivityEditor({
 
   const probabilities = useMemo(() => prizeProbabilities(form.prizes.map(weightedOf)), [form.prizes]);
   const issues = useMemo(() => validateForm(form, catalog), [form, catalog]);
-  const prizeIssues = issues.filter((issue) => issue.scope === "prizes");
+  const prizeIssues = issues.filter((issue) => issue.scope === "prizes" || issue.scope === "strategy");
 
   const close = () => {
     setDraft(null);
@@ -158,7 +161,7 @@ export function LotteryActivityEditor({
       return;
     }
     try {
-      await saveMutation.mutateAsync({ activityId: activity?.id, payload: toPayload(form, kinds) });
+      await saveMutation.mutateAsync({ activityId: activity?.id, payload: toPayload(form, kinds, catalog) });
       toast.success(activity ? "活动已保存" : "活动已创建");
       close();
     } catch (error) {
@@ -374,6 +377,13 @@ export function LotteryActivityEditor({
               ) : null}
             </FieldGroup>
 
+            <LotteryStrategyEditor
+              value={form.strategy}
+              onChange={(strategy) => patch("strategy", strategy)}
+              catalog={catalog}
+              prizeLabels={form.prizes.map((prize) => prizeName(prize.key))}
+            />
+
             <FieldGroup label="已拥有的奖品">
               <p className="text-xs text-muted-foreground">
                 永久会员抽中会员天数或已包含的套餐、功能，或用户已永久解锁某个功能时，这一格对他不再有新的权益。抽奖时由服务端按下面的方式处理。
@@ -470,6 +480,22 @@ export function LotteryActivityEditor({
         ) : null}
 
         <div className="flex shrink-0 items-center justify-end gap-2 border-t px-6 py-3">
+          <Button
+            variant="outline"
+            size="sm"
+            className="mr-auto"
+            onClick={() => {
+              if (issues.length > 0) {
+                toast.error(issues[0].message);
+                return;
+              }
+              setSimulating(true);
+            }}
+            disabled={catalogQuery.isLoading}
+          >
+            <FlaskConical className="size-3.5" />
+            模拟
+          </Button>
           <Button variant="ghost" size="sm" onClick={close}>
             取消
           </Button>
@@ -479,6 +505,14 @@ export function LotteryActivityEditor({
           </Button>
         </div>
       </SheetContent>
+      <LotteryStrategySimulator
+        appKey={appKey}
+        activityId={activity?.id}
+        payload={() => toPayload(form, kinds, catalog)}
+        catalog={catalog}
+        open={simulating}
+        onOpenChange={setSimulating}
+      />
     </Sheet>
   );
 }

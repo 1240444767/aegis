@@ -142,6 +142,16 @@ export function LotteryPrizeBoard({
           限 {prize.quantity}
         </Badge>
       ) : null}
+      {Number(prize.dailyLimit) > 0 ? (
+        <Badge variant="outline" size="sm" className="px-1 py-0 text-[10px] tabular-nums">
+          日 {prize.dailyLimit}
+        </Badge>
+      ) : null}
+      {Number(prize.userLimit) > 0 || Number(prize.userDailyLimit) > 0 ? (
+        <Badge variant="outline" size="sm" className="px-1 py-0 text-[10px] tabular-nums">
+          每人 {Number(prize.userLimit) > 0 ? prize.userLimit : `日 ${prize.userDailyLimit}`}
+        </Badge>
+      ) : null}
     </span>
   );
 
@@ -443,6 +453,33 @@ export function LotteryPrizeBoard({
                 onChange={(value) => patch(selected.key, { quantity: value })}
               />
             )}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-3">
+            <NumberField
+              label="全站每日"
+              value={selected.dailyLimit}
+              min={0}
+              unit="个，0 为不限"
+              disabled={selected.fallback}
+              onChange={(value) => patch(selected.key, { dailyLimit: value })}
+            />
+            <NumberField
+              label="每人累计"
+              value={selected.userLimit}
+              min={0}
+              unit="次，0 为不限"
+              disabled={selected.fallback}
+              onChange={(value) => patch(selected.key, { userLimit: value })}
+            />
+            <NumberField
+              label="每人每日"
+              value={selected.userDailyLimit}
+              min={0}
+              unit="次，0 为不限"
+              disabled={selected.fallback}
+              onChange={(value) => patch(selected.key, { userDailyLimit: value })}
+            />
           </div>
 
           <div className="grid gap-2 sm:grid-cols-2">

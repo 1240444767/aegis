@@ -2,11 +2,12 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Loader2, PackageCheck, ReceiptText } from "lucide-react";
+import { Loader2, PackageCheck, ReceiptText, Route } from "lucide-react";
 import { toast } from "sonner";
 import { SectionCard } from "@/components/apps/app-config-primitives";
 import { AdPolicyPager } from "@/components/apps/ad-policy/ad-policy-pager";
 import { LIMITS } from "@/components/apps/lottery/lottery-activity-form";
+import { DrawPlanView } from "@/components/apps/lottery/lottery-plan-view";
 import {
   ConversionBadge,
   DRAW_STATUSES,
@@ -88,6 +89,7 @@ export function LotteryDrawsPanel({
   const [range, setRange] = useState<CommerceRange>({});
   const [page, setPage] = useState(1);
   const [handling, setHandling] = useState<LotteryDraw | null>(null);
+  const [tracing, setTracing] = useState<LotteryDraw | null>(null);
   const [note, setNote] = useState("");
 
   const debouncedKeyword = useDebouncedValue(keyword, 300);
@@ -112,6 +114,9 @@ export function LotteryDrawsPanel({
   const totalPages = Math.max(1, listQuery.data?.totalPages ?? 1);
   const filtered = Boolean(keyword || activityId || status || source || winning || user || range.start || range.end);
   const kinds = catalogQuery.data?.kinds ?? [];
+  const catalog = catalogQuery.data;
+  const activityPrizes = (activityId: number) =>
+    activitiesQuery.data?.find((activity) => activity.id === activityId)?.prizes ?? [];
 
   const userHref = (userId: number) => `/app-users/${encodeURIComponent(appKey)}/${userId}?tab=assets`;
 
@@ -334,7 +339,12 @@ export function LotteryDrawsPanel({
                     {formatStoreDate(draw.createdAt)}
                     {draw.clientIp ? <p className="mt-0.5 font-mono text-[11px]">{draw.clientIp}</p> : null}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    {draw.trace ? (
+                      <Button size="sm" variant="ghost" className="h-7" onClick={() => setTracing(draw)}>
+                        <Route className="size-3.5" /> 方案
+                      </Button>
+                    ) : null}
                     {draw.status === "pending" ? (
                       <Button size="sm" variant="outline" className="h-7" onClick={() => openFulfill(draw)}>
                         <PackageCheck className="size-3.5" /> 标记已发放
@@ -349,6 +359,27 @@ export function LotteryDrawsPanel({
       )}
 
       <AdPolicyPager total={total} page={page} totalPages={totalPages} onPage={setPage} />
+
+      <Dialog open={Boolean(tracing)} onOpenChange={(open) => !open && setTracing(null)}>
+        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>出奖方案</DialogTitle>
+            <DialogDescription>
+              {tracing ? `${tracing.drawNo}，${tracing.account || `#${tracing.userId}`}` : ""}
+            </DialogDescription>
+          </DialogHeader>
+          {tracing?.trace ? (
+            <DrawPlanView
+              plan={tracing.trace}
+              signals={catalog?.signals}
+              prizeName={(id, position) =>
+                activityPrizes(tracing.activityId).find((prize) => prize.id === id)?.name ||
+                (tracing.trace?.picked === id ? tracing.prizeName : `位置 ${position + 1}`)
+              }
+            />
+          ) : null}
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(handling)} onOpenChange={(open) => !open && setHandling(null)}>
         <DialogContent className="sm:max-w-md">

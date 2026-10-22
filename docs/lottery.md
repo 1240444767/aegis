@@ -20,8 +20,10 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 3. `requestId` 回放：同一个键再来一次，原样返回第一次的记录（`replayed: true`）；
 4. 判定用哪一种次数（`lottery.EvaluateChances` / `ResolveSource`，与活动页显示的剩余次数同一个函数）；
 5. 扣次数：bonus 用条件 UPDATE（`balance > 0`）；积分在落记录之后按记录 ID 记账；
-6. 选奖品：到了保底就直接给保底奖，否则在「有库存、权重 > 0」的奖品里用 `crypto/rand` 按权重抽；
-7. 限量奖品用条件 UPDATE（`used < quantity`）扣库存，恰好被别人抽走最后一份时改发兜底奖；
+6. 选奖品：按[出奖策略](#出奖策略)算出这个人这一次每个奖品的最终概率；到了保底且保底奖有资格时直接给它，
+   否则按最终概率抽（gonum `sampleuv` 加权抽样，随机源是每次用 `crypto/rand` 播种的 ChaCha8）；
+7. 占名额：设了全站每日限量的先占当天名额（`lottery_prize_daily` 条件 UPSERT），限量奖品再扣库存（`used < quantity`），
+   任何一步恰好被别人抢光时改发兜底奖；
 8. 落记录（奖品存快照）→ 发奖（与积分商城、邀请同一套账本）→ 更新连续未中次数。
 
 任何一步失败整笔回滚：免费次数、bonus、积分都没有花出去。不存在「客户端上报抽中了 X，服务端照着发」这条路。
@@ -52,6 +54,77 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 `pityThreshold = N`、`pityPrizeId` 指向一个不是「谢谢参与」的奖品：连续 N−1 次没抽中（谢谢参与），
 第 N 次必中保底奖（记录上 `pity: true`）。抽中任何奖品都会清零。活动页的 `pity.remaining` 是「最多再抽几次必中」，
 保底奖抽光后不再返回 `pity`。连续未中次数存在 `lottery_user_states`，按人按活动。
+
+## 出奖策略
+
+旧版只有「固定权重随机 + 硬保底」。现在活动可以配一份 `strategy`（迁移 `000124`），在基础权重上逐个维度乘系数，
+算出**这个人、这一次**的最终概率。全部不配、奖品不设限量时与旧版完全相同。
+
+| 维度 | 配置 | 作用 |
+|---|---|---|
+| 硬性资格 | 奖品的 `dailyLimit` / `userLimit` / `userDailyLimit`，库存 | 全站每天最多出几个、每人最多中几次、每人每天最多中几次；不满足的这一次权重为 0（`blocked`） |
+| 设备聚集 | `risk.deviceAccounts` / `risk.ipAccounts` | 本活动当天同设备（同 IP）抽过奖的账号数超过上限时，这个人只出未中奖，保底也不触发 |
+| 库存匀速释放 | `pacing.slack`（提前量，库存比例）/ `pacing.maxBoost` | 限量奖品按活动时间进度放量：已放量 = 库存 ×（进度 + 提前量）。超前时在提前量内线性降到 0，落后超过一个提前量时放大到 `maxBoost` 倍。需要结束时间 |
+| 积分预算 | `budget.dailyPoints` | 本活动当天发出的积分（含折算）过半后，积分奖按剩余比例线性收紧；单个奖品超过剩余预算时不出。并发下是软上限 |
+| 行为画像 | `behavior` | 见下节 |
+| 中奖冷却 | `cooldown.draws` / `cooldown.factor` | 这个人最近 N 次里中过的奖品，权重 × factor |
+| 自定义规则 | `rules[]` | expr 表达式为真时，给命中的奖品（类型 / 位置）乘系数，0 等于这一次剔除 |
+| 软保底 | `softPity.start` / `softPity.step` | 连续未中达到 start 次起，每多一次未中，中奖总概率抬高 step 个百分点（中奖奖品之间比例不变，只缩小未中奖） |
+| 硬保底 | `pityThreshold`（原有） | 到点直接给保底奖；保底奖这一次被硬性资格挡掉时退回常规抽取 |
+
+每一次的完整方案（各奖品的基础权重、每个维度的系数与原因、最终概率、行为分明细、是否保底 / 改发兜底）
+写进 `lottery_draws.trace`，管理端记录里点「方案」可看；客户端接口一律不返回。
+
+### 行为画像
+
+抽奖前（事务外，一条语句）取这个人在应用里的全部行为，按活动配置的权重加权成 0–1 的行为分：
+
+| 信号 | 来源 | 映射 |
+|---|---|---|
+| 注册时长 | `users.created_at` | x / (x + half) |
+| 近 7 / 30 天在线时长、近 30 天在线天数 | `user_online_daily`：实时连接心跳满 5 分钟与断开时按 UTC 自然日累计，单日封顶 86400 秒 | 同上 |
+| 近 30 天登录天数、距上次活跃 | `login_audit_logs`、`user_online_daily`、`user_login_devices` | 距上次活跃为 half / (x + half) |
+| 连续签到、近 30 天签到天数、累计签到 | `sign_stats`、`daily_signins`（连签只在昨天或今天签过时算） | x / (x + half) |
+| 当前会员、永久会员、会员率 | `users.vip_expire_at` / `vip_lifetime_at`、`vip_transactions` | 会员率 = 累计会员天数 / 注册天数（永久会员为 1） |
+| 累计付费、付费笔数 | `payment_orders`（status = paid） | x / (x + half) |
+| 等级、近 30 天获得积分 | `users.experience` → `user_levels`、`integral_transactions` | 同上 |
+| 邀请人数、近 30 天看完激励广告、兑换次数 | `invite_relations`、`app_rewarded_ad_views`、`points_store_redemptions` + `card_key_redemptions` | 同上 |
+| 近 30 天风险分（负向） | `risk_assessments` 最高分 | 乘法惩罚 |
+
+行为分 = 正向信号的加权平均 × Π(1 − s)^权重（负向信号不参与平均，否则「没有风险」会白送分数给新号）。
+再折成中奖奖品的系数：`minFactor + (maxBoost − minFactor) × 行为分`，可限定只作用于某些奖品类型。
+`signals` 不填时用目录里每个信号的推荐权重与半饱和值；控制台可逐项改。画像取不到时按空画像继续，不拦抽奖。
+
+### 自定义规则
+
+表达式用 [expr-lang/expr](https://expr-lang.org)，强类型环境，写错变量名在**保存时**就报错，执行有编译缓存：
+
+- `user.*`：画像的全部字段（`registeredDays`、`onlineMinutes30d`、`signStreak`、`memberRate`、`paidAmount`、`level`、`invites`、`adViews30d`、`riskScore30d`、`signedToday`、`devices`……），
+  本活动里的 `totalDraws`、`todayDraws`、`missStreak`、`winsTotal`、`winsToday`、`prizeWins`、`prizeWinsToday`，行为分 `score`
+- `draw.*`：`source`、`hour` / `weekday`（应用时区）、`deviceAccounts`、`ipAccounts`
+- `prize.*`：`id`、`kind`、`position`、`amount`、`weight`、`probability`（公示 %）、`limited`、`remaining`
+- `activity.*`：`progress`（0–1）、`daysLeft`、`pointsIssuedToday`
+
+```json
+"strategy": {
+  "softPity": {"start": 5, "step": 5},
+  "pacing": {"slack": 0.05, "maxBoost": 1.5},
+  "cooldown": {"draws": 5, "factor": 0.3},
+  "budget": {"dailyPoints": 10000},
+  "risk": {"deviceAccounts": 3, "ipAccounts": 0},
+  "behavior": {"minFactor": 0.8, "maxBoost": 1.5, "kinds": ["points", "vip_days"],
+               "signals": [{"key": "onlineMinutes30d", "weight": 2, "half": 900}]},
+  "rules": [{"name": "连签一周", "when": "user.signStreak >= 7", "kinds": ["points"], "factor": 1.5}]
+}
+```
+
+### 模拟
+
+`POST /api/admin/apps/{appKey}/lottery/simulate` 让一批虚拟用户（同一画像）各自连续抽若干次，每一次走与线上同一套
+`PlanDraw` / `PityChoice` / `Sample`；软保底、冷却、个人上限随每个人的进度演变，库存、每日限量与积分预算默认所有人共享
+（`isolatedStock` 时各用一份）。返回实际中奖率对公示概率、首次中奖与最长连续未中的分位数（gonum `stat`）、保底触发次数、
+各奖品出现比例与受限次数。`activity` 传控制台里未保存的编辑内容；`userId` 用真实用户的画像、已拥有的奖品与本活动进度，
+并附他此刻再抽一次的方案（`current`）。规模上限：5000 人、每人 1000 次、合计 20 万次。不写库、不发奖。
 
 ## 奖品
 
@@ -137,6 +210,7 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 | GET | `/api/admin/apps/{appKey}/lottery/activities/{activityId}/stats?days=14` | 概览、按天趋势、来源与奖品分布 |
 | GET | `/api/admin/apps/{appKey}/lottery/draws` | 记录（activityId / userId / status / source / winning / keyword / start / end） |
 | POST | `/api/admin/apps/{appKey}/lottery/draws/{drawId}/fulfill` | 人工发放的奖品标记已发放（`{note}` 写进站内信；重复标记 `40926`） |
+| POST | `/api/admin/apps/{appKey}/lottery/simulate` | 出奖策略模拟（见上文「模拟」） |
 
 活动的保存体：
 
@@ -171,8 +245,12 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
 积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、
 已拥有的奖品（四种处理方式、单奖品改发、剔除后的概率与保底、已永久解锁的功能、统计）、删除与统计，
-最后在旧表形状上跑 000110 + 000114 两遍核对搬迁。
+最后在旧表形状上跑 000110 + 000114 + 000124 两遍核对搬迁。
+
+`TestLotteryStrategyIntegration`：12 人并发下全站每日限量不超发、个人上限、积分预算、同设备聚集、
+行为画像整条查询（签到、会员率、邀请、在线时长累计）与规则、方案落库且不给用户端、模拟与单人预览、策略回读与非法规则。
+策略、画像、规则、卡方抽样检验与模拟的单元测试在 `internal/domain/lottery/strategy_test.go`。
 
 ```
-AEGIS_TEST_PG_DSN=postgres://... go test ./internal/service -run TestLotteryIntegration
+AEGIS_TEST_PG_DSN=postgres://... go test ./internal/service -run 'TestLotteryIntegration|TestLotteryStrategyIntegration'
 ```

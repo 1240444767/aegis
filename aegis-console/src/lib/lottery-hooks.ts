@@ -10,9 +10,11 @@ import {
   listLotteryActivities,
   listLotteryDraws,
   setLotteryActivityStatus,
+  simulateLottery,
   updateLotteryActivity,
   type LotteryActivityPayload,
   type LotteryDrawParams,
+  type LotterySimulatePayload,
   type LotteryStatus
 } from "@/lib/api/lottery";
 import { useAdminToken } from "@/lib/admin-hooks";
@@ -133,5 +135,15 @@ export function useFulfillLotteryDrawMutation(appKey?: string | null) {
     mutationFn: (input: { drawId: number; note: string }) =>
       fulfillLotteryDraw(token as string, appKey as string, input.drawId, input.note),
     onSuccess: invalidate
+  });
+}
+
+// ── 策略模拟 ──
+
+/** 模拟不改任何数据，不失效缓存 */
+export function useSimulateLotteryMutation(appKey: string) {
+  const token = useAdminToken();
+  return useMutation({
+    mutationFn: (payload: LotterySimulatePayload) => simulateLottery(token as string, appKey, payload)
   });
 }

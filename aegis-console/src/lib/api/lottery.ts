@@ -78,6 +78,180 @@ export type LotteryCatalog = {
     pointsLifetime: number;
     draws: number;
   };
+  /** 行为画像的信号目录 */
+  signals?: LotterySignalSpec[];
+  /** 自定义规则里能用的变量 */
+  ruleVariables?: LotteryRuleVariable[];
+  strategyLimits?: LotteryStrategyLimits;
+};
+
+// ── 出奖策略 ──
+
+/** 信号映射：saturate 越多越高（边际递减）/ decay 越大越低 / bool / ratio（0–1 原值） */
+export type LotterySignalMap = "saturate" | "decay" | "bool" | "ratio";
+
+export type LotterySignalSpec = {
+  key: string;
+  label: string;
+  group: string;
+  unit?: string;
+  map: LotterySignalMap;
+  /** 负向信号（风险）：乘法惩罚 */
+  negative?: boolean;
+  /** 半饱和值：达到它时映射为 0.5 */
+  half?: number;
+  /** 推荐权重 */
+  weight: number;
+};
+
+export type LotteryRuleVariable = { name: string; type: "number" | "bool" | "string"; label: string };
+
+export type LotteryStrategyLimits = {
+  rules: number;
+  ruleFactor: number;
+  softPityStep: number;
+  cooldownDraws: number;
+  pacingBoost: number;
+  behaviorBoost: number;
+  prizeLimit: number;
+  simulationUsers: number;
+  simulationEach: number;
+  simulationDraws: number;
+};
+
+export type LotteryStrategyRule = {
+  name: string;
+  /** expr 表达式，空为总是生效 */
+  when: string;
+  kinds?: string[];
+  positions?: number[];
+  factor: number;
+  disabled?: boolean;
+};
+
+export type LotteryBehaviorModel = {
+  /** 空为全部信号的推荐权重 */
+  signals?: Array<{ key: string; weight: number; half?: number }>;
+  minFactor: number;
+  maxBoost: number;
+  kinds?: string[];
+};
+
+/** 多维度出奖策略：每一项都可以不设，全部不设时为纯加权随机 + 硬保底 */
+export type LotteryStrategy = {
+  softPity?: { start: number; step: number };
+  pacing?: { slack: number; maxBoost: number };
+  cooldown?: { draws: number; factor: number };
+  budget?: { dailyPoints: number };
+  risk?: { deviceAccounts: number; ipAccounts: number };
+  behavior?: LotteryBehaviorModel;
+  rules?: LotteryStrategyRule[];
+};
+
+/** 行为画像（全部行为的原始值） */
+export type LotteryBehaviorProfile = {
+  registeredDays: number;
+  onlineMinutes7d: number;
+  onlineMinutes30d: number;
+  onlineDays30d: number;
+  loginDays30d: number;
+  recencyDays: number;
+  signStreak: number;
+  signDays30d: number;
+  signTotalDays: number;
+  signedToday: boolean;
+  member: boolean;
+  lifetime: boolean;
+  memberDays: number;
+  memberRate: number;
+  paidAmount: number;
+  paidOrders: number;
+  experience: number;
+  level: number;
+  integral: number;
+  pointsEarned30d: number;
+  invites: number;
+  adViews30d: number;
+  redemptions: number;
+  devices: number;
+  riskScore30d: number;
+};
+
+export type LotteryBehaviorScore = {
+  score: number;
+  factor: number;
+  signals: Array<{ key: string; value: number; score: number; weight: number }>;
+};
+
+/** 一个奖品在一次抽奖里的系数与最终概率（k 为维度：stock / dailyLimit / userLimit / userDailyLimit / risk / pacing / budget / behavior / cooldown / rule / softPity） */
+export type LotteryPrizeOdds = {
+  id: number;
+  pos: number;
+  base: number;
+  w: number;
+  /** 0–1 */
+  p: number;
+  f?: Array<{ k: string; v: number; n?: string }>;
+  blocked?: string;
+};
+
+/** 一次抽奖的出奖方案（记录的 trace） */
+export type LotteryDrawPlan = {
+  odds: LotteryPrizeOdds[];
+  softPity?: number;
+  risk?: boolean;
+  behavior?: LotteryBehaviorScore;
+  winRate: number;
+  pity?: boolean;
+  picked?: number;
+  fallback?: boolean;
+};
+
+export type LotteryDistribution = { mean: number; p50: number; p90: number; p99: number; max: number };
+
+export type LotterySimulationResult = {
+  users: number;
+  draws: number;
+  winRate: number;
+  baseWinRate: number;
+  pityHits: number;
+  softPityDraws: number;
+  firstWin: LotteryDistribution;
+  neverWon: number;
+  missStreak: LotteryDistribution;
+  pointsIssued: number;
+  prizes: Array<{
+    prizeId: number;
+    position: number;
+    name: string;
+    kind: string;
+    wins: number;
+    rate: number;
+    baseRate: number;
+    blocked: number;
+  }>;
+  behavior?: LotteryBehaviorScore;
+};
+
+export type LotterySimulatePayload = {
+  activityId?: number;
+  /** 还没保存的编辑内容 */
+  activity?: LotteryActivityPayload;
+  userId?: number;
+  profile?: Partial<LotteryBehaviorProfile>;
+  users: number;
+  drawsPerUser: number;
+  source?: string;
+  isolatedStock?: boolean;
+  seed?: number;
+};
+
+export type LotterySimulateResponse = {
+  result: LotterySimulationResult;
+  profile: LotteryBehaviorProfile;
+  behavior?: LotteryBehaviorScore;
+  /** 指定用户此刻再抽一次的方案（只对已保存的活动） */
+  current?: LotteryDrawPlan;
 };
 
 export type LotteryReward = {
@@ -117,6 +291,10 @@ export type LotteryPrize = {
   fallback: boolean;
   /** 抽中的人已拥有这个奖品时改发什么；空为按活动的处理方式 */
   lifetimeReward?: LotteryReward | null;
+  /** 全站每天最多出几个 / 每人最多中几次 / 每人每天最多中几次，0 为不限 */
+  dailyLimit?: number;
+  userLimit?: number;
+  userDailyLimit?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -147,6 +325,7 @@ export type LotteryActivity = {
   lifetimePointsLifetime?: number;
   /** 改发抽奖次数时发几次 */
   lifetimeDraws?: number;
+  strategy?: LotteryStrategy;
   sortOrder: number;
   createdBy?: string;
   createdAt: string;
@@ -174,6 +353,9 @@ export type LotteryPrizePayload = {
   fallback: boolean;
   /** 未设置时为 null */
   lifetimeReward: LotteryReward | null;
+  dailyLimit: number;
+  userLimit: number;
+  userDailyLimit: number;
 };
 
 export type LotteryActivityPayload = {
@@ -195,6 +377,7 @@ export type LotteryActivityPayload = {
   lifetimePointsPerDay: number;
   lifetimePointsLifetime: number;
   lifetimeDraws: number;
+  strategy: LotteryStrategy;
   sortOrder: number;
   prizes: LotteryPrizePayload[];
 };
@@ -226,6 +409,8 @@ export type LotteryDraw = {
   requestId?: string;
   deviceId?: string;
   clientIp?: string;
+  /** 出奖方案：各奖品的系数与最终概率、行为分 */
+  trace?: LotteryDrawPlan;
   createdAt: string;
 };
 
@@ -346,5 +531,16 @@ export function fulfillLotteryDraw(token: string, appKey: string, drawId: number
     method: "POST",
     token,
     body: JSON.stringify({ note })
+  });
+}
+
+// ── 策略模拟 ──
+
+/** 虚拟用户连续抽奖的模拟（不写库、不发奖）；指定 userId 时附带此人的画像与下一次的出奖方案 */
+export function simulateLottery(token: string, appKey: string, payload: LotterySimulatePayload) {
+  return apiRequest<LotterySimulateResponse>(`${base(appKey)}/simulate`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
   });
 }

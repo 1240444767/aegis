@@ -1,4 +1,11 @@
 import { toLocalInput } from "@/components/apps/points-store/points-store-shared";
+import {
+  STRATEGY_LIMITS,
+  seedStrategy,
+  strategyPayload,
+  validateStrategy,
+  type StrategyDraft
+} from "@/components/apps/lottery/lottery-strategy-form";
 import type {
   LotteryActivityPayload,
   LotteryAdminActivity,
@@ -69,6 +76,10 @@ export type PrizeDraft = {
   /** 已拥有时改发的类型；空为按活动的处理方式 */
   swapType: string;
   swapAmount: string;
+  /** 全站每日限量 / 每人累计上限 / 每人每日上限，0 为不限 */
+  dailyLimit: string;
+  userLimit: string;
+  userDailyLimit: string;
 };
 
 export type ActivityForm = {
@@ -91,12 +102,14 @@ export type ActivityForm = {
   lifetimePointsPerDay: string;
   lifetimePointsLifetime: string;
   lifetimeDraws: string;
+  /** 多维度出奖策略 */
+  strategy: StrategyDraft;
   sortOrder: string;
   /** 下标即位置：九宫格为外圈顺时针 0–7，转盘为从顶部起顺时针 */
   prizes: PrizeDraft[];
 };
 
-export type FormIssue = { scope: "basic" | "prizes"; message: string };
+export type FormIssue = { scope: "basic" | "prizes" | "strategy"; message: string };
 
 export const nextPrizeKey = (prizes: PrizeDraft[]) => prizes.reduce((max, prize) => Math.max(max, prize.key), 0) + 1;
 
@@ -117,7 +130,10 @@ export function blankPrize(key: number, type: string, amount: number, weight: nu
     weight: String(weight),
     fallback: false,
     swapType: "",
-    swapAmount: ""
+    swapAmount: "",
+    dailyLimit: "0",
+    userLimit: "0",
+    userDailyLimit: "0"
   };
 }
 
@@ -161,6 +177,7 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
       lifetimePointsPerDay: String(defaults.pointsPerDay),
       lifetimePointsLifetime: String(defaults.pointsLifetime),
       lifetimeDraws: String(defaults.draws),
+      strategy: seedStrategy(null),
       sortOrder: "0",
       prizes: defaultPrizes()
     };
@@ -183,7 +200,10 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
       weight: String(prize.weight),
       fallback: prize.fallback,
       swapType: prize.lifetimeReward?.type ?? "",
-      swapAmount: prize.lifetimeReward?.type ? String(prize.lifetimeReward.amount ?? 0) : ""
+      swapAmount: prize.lifetimeReward?.type ? String(prize.lifetimeReward.amount ?? 0) : "",
+      dailyLimit: String(prize.dailyLimit ?? 0),
+      userLimit: String(prize.userLimit ?? 0),
+      userDailyLimit: String(prize.userDailyLimit ?? 0)
     }));
   const pityPrize = activity.prizes.find((prize) => prize.id === activity.pityPrizeId);
   const pityKey = pityPrize ? prizes.find((draft) => draft.id === pityPrize.id)?.key ?? null : null;
@@ -207,6 +227,7 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
     lifetimePointsPerDay: String(activity.lifetimePointsPerDay ?? defaults.pointsPerDay),
     lifetimePointsLifetime: String(activity.lifetimePointsLifetime ?? defaults.pointsLifetime),
     lifetimeDraws: String(activity.lifetimeDraws || defaults.draws),
+    strategy: seedStrategy(activity.strategy),
     sortOrder: String(activity.sortOrder),
     prizes
   };
@@ -275,7 +296,11 @@ export function weightedOf(prize: PrizeDraft) {
   };
 }
 
-export function toPayload(form: ActivityForm, kinds: LotteryRewardSpec[]): LotteryActivityPayload {
+export function toPayload(
+  form: ActivityForm,
+  kinds: LotteryRewardSpec[],
+  catalog?: LotteryCatalog | null
+): LotteryActivityPayload {
   const pityIndex = form.pity ? form.prizes.findIndex((prize) => prize.key === form.pityKey) : -1;
   return {
     name: form.name.trim(),
@@ -295,6 +320,7 @@ export function toPayload(form: ActivityForm, kinds: LotteryRewardSpec[]): Lotte
     lifetimePointsPerDay: toInt(form.lifetimePointsPerDay),
     lifetimePointsLifetime: toInt(form.lifetimePointsLifetime),
     lifetimeDraws: toInt(form.lifetimeDraws),
+    strategy: strategyPayload(form.strategy, catalog),
     sortOrder: toInt(form.sortOrder),
     prizes: form.prizes.map((prize, index) => {
       const weighted = weightedOf(prize);
@@ -307,7 +333,10 @@ export function toPayload(form: ActivityForm, kinds: LotteryRewardSpec[]): Lotte
         weight: weighted.weight,
         position: index,
         fallback: prize.fallback,
-        lifetimeReward: swapRewardOf(prize)
+        lifetimeReward: swapRewardOf(prize),
+        dailyLimit: Math.max(0, toInt(prize.dailyLimit)),
+        userLimit: Math.max(0, toInt(prize.userLimit)),
+        userDailyLimit: Math.max(0, toInt(prize.userDailyLimit))
       };
     })
   };
@@ -381,9 +410,14 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
     }
     totalWeight += Math.max(0, weight);
     if (prize.unlimited) unlimited = true;
+    const limitMax = catalog?.strategyLimits?.prizeLimit ?? STRATEGY_LIMITS.prizeLimit;
+    const limits = [toInt(prize.dailyLimit), toInt(prize.userLimit), toInt(prize.userDailyLimit)];
+    if (limits.some((limit) => limit < 0 || limit > limitMax)) prizes(`${label}的限量需要在 0–${limitMax} 之间（0 为不限）`);
+    if (limits[1] > 0 && limits[2] > limits[1]) prizes(`${label}的每人每日上限不能大于每人累计上限`);
     if (prize.fallback) {
       fallbacks += 1;
       if (!prize.unlimited) prizes(`${label}是兜底奖，库存必须不限`);
+      if (limits.some((limit) => limit > 0)) prizes(`${label}是兜底奖，不能设置限量`);
     }
   });
   if (fallbacks > 1) prizes("最多设置一个兜底奖");
@@ -411,6 +445,10 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
       prizes(`第 ${index + 1} 个奖品的改发：${spec.label}需要在 ${spec.min ?? 0}–${spec.max ?? amount} 之间`);
     }
   });
+
+  for (const message of validateStrategy(form.strategy, count, catalog?.strategyLimits ?? STRATEGY_LIMITS)) {
+    issues.push({ scope: "strategy", message });
+  }
 
   if (form.pity) {
     const threshold = toInt(form.pityThreshold);
