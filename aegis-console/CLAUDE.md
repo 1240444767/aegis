@@ -1158,6 +1158,30 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 规格见 [docs/ai-gateway.md](../docs/ai-gateway.md)。
 
+## 登录设备区块（/apps/{appKey}?tab=device-limit）
+
+规则见 [docs/device-limit.md](../docs/device-limit.md)。六个视图（状态不进 URL）：
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/device-limit/app-device-limit-panel.tsx` | 视图切换；**策略草稿在这一层**（按 appKey 绑定），模拟要能拿未保存的草稿试 |
+| `device-limit-overview-panel.tsx` | 策略摘要条、处置指标、趋势 / 终端分布 / 每人设备数 / 触发维度、撞上限最多的用户 |
+| `device-limit-policy-panel.tsx` | 总数与类别上限、超限处置、同设备、会员档位、新设备频率；右侧「生效上限一览」 |
+| `device-limit-users-panel.tsx` | 单个用户：上限来源、各维度占用、在线设备、台账、处置时间线；下线 / 整理 / 例外 / 清台账 |
+| `device-limit-overrides-panel.tsx` / `device-limit-override-dialog.tsx` | 例外名单与编辑弹窗（两处共用） |
+| `device-limit-events-panel.tsx` | 处置记录 |
+| `device-limit-simulator-panel.tsx` | 模拟：真实用户或虚构场景，服务端用与登录相同的判定 |
+| `device-limit-shared.tsx` | 类别 / 处置 / 事件 / 来源的文案、图标与配色，`DeviceSlots`、`LimitStepper` |
+| `lib/api/device-limit.ts` / `lib/device-limit-hooks.ts` | API 与 hooks，写操作整组失效（前缀 `admin-device-limit`） |
+
+三条约束：
+
+1. **类别色两套写法要同步**：`CLASS_META.color` 给图表（ChartConfig theme），`fill` / `tint` 是 Tailwind 类给槽位与图标底，
+   改一处要改另一处，否则图例和槽位颜色对不上。
+2. **概览的设备分布是台账口径**（窗口内登录过），不是此刻在线；此刻在线要逐个用户看会话，在用户设备视图里。
+3. **「认证与会话」不再提交 `multiDeviceLogin` 两个旧字段**，那里只留一个状态入口。旧表单总带一个默认上限，
+   提交它会让没配过设备数的应用凭空被限制（后端旧接口也已不再写它们）。
+
 ## 卡密区块（/apps/{appKey}?tab=card-key）
 
 | 文件 | 职责 |
