@@ -376,6 +376,12 @@ var adminRouteRules = []RouteRule{
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionRead, Scope: ScopeApp},
 	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/client-control/simulate", Permission: PermVersionRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionWrite, Scope: ScopeApp},
+	// 登录设备数控制：查看（含模拟）是用户数据的读；改策略是应用配置的写；例外、下线、整理、清台账是用户数据的写
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/device-limit", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/device-limit/*", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/device-limit/simulate", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"PUT"}, Pattern: "/api/admin/apps/:appkey/device-limit/policy", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/device-limit/*", Permission: PermAppUserWrite, Scope: ScopeApp},
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeWrite, Scope: ScopeApp},
 

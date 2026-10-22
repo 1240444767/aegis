@@ -8,6 +8,7 @@ import (
 
 	captchadomain "aegis/internal/domain/captcha"
 	devicedomain "aegis/internal/domain/device"
+	"aegis/internal/domain/devicelimit"
 	"aegis/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -121,6 +122,7 @@ func (h *Handler) enrichDeviceFromDict(c *gin.Context, deviceID, clientDevice st
 	c.Request = c.Request.WithContext(devicedomain.WithClient(c.Request.Context(), devicedomain.Client{
 		Model: clientDevice, Platform: platform, Extra: extra,
 	}))
+	markDeviceLimitChallenge(c)
 	if h == nil || h.deviceMarketing == nil {
 		return clientDevice
 	}
@@ -202,4 +204,12 @@ func (h *Handler) enforceDevicePolicyIDOnly(c *gin.Context, appID int64, bodyDev
 // guessDeviceFromUA 从 UA 粗略推断设备描述，实现在 devicedomain（服务层展示兜底也用它）。
 func guessDeviceFromUA(ua string) string {
 	return devicedomain.GuessFromUserAgent(ua)
+}
+
+// markDeviceLimitChallenge 客户端用请求头声明能让用户选择下线哪台设备（登录设备数已满时），
+// 记到请求上下文上，签发处据此决定给选择页还是按兜底方式处理（docs/device-limit.md）。
+func markDeviceLimitChallenge(c *gin.Context) {
+	if strings.TrimSpace(c.GetHeader(devicelimit.ChallengeHeader)) == "1" {
+		c.Request = c.Request.WithContext(devicelimit.WithChallengeSupport(c.Request.Context()))
+	}
 }

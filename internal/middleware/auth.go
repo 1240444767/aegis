@@ -1,10 +1,12 @@
 package middleware
 
 import (
+	"errors"
 	"net/http"
 
 	authdomain "aegis/internal/domain/auth"
 	"aegis/internal/service"
+	apperrors "aegis/pkg/errors"
 	"aegis/pkg/response"
 	"github.com/gin-gonic/gin"
 )
@@ -25,7 +27,7 @@ func Auth(authService *service.AuthService) gin.HandlerFunc {
 		}
 		session, err := authService.ValidateAccessToken(c.Request.Context(), token)
 		if err != nil {
-			response.Error(c, http.StatusUnauthorized, 40100, err.Error())
+			response.Error(c, http.StatusUnauthorized, authFailureCode(err), err.Error())
 			c.Abort()
 			return
 		}
@@ -68,4 +70,15 @@ func bearerToken(header string) string {
 		return ""
 	}
 	return header[len(prefix):]
+}
+
+// authFailureCode 令牌失效一律报 40100（客户端据此刷新令牌），只有「被设备数控制挤下线」与
+// 「被设备管理移除」原样透出：这两种情况刷新令牌也一并失效了，客户端要据此提示用户并回到登录页，
+// 而不是先刷新、失败、再报一句笼统的「登录已过期」（docs/device-limit.md）。
+func authFailureCode(err error) int {
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) && (appErr.Code == 40130 || appErr.Code == 40131) {
+		return appErr.Code
+	}
+	return 40100
 }

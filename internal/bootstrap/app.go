@@ -547,6 +547,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	authService.SetDeviceDirectory(deviceMarketingService)
 	reportService.SetDeviceDirectory(deviceMarketingService)
 
+	// 登录设备数控制：新登录的签发收口过关卡，超限自动下线 / 拒绝 / 让用户选择（docs/device-limit.md）
+	deviceLimitService := service.NewDeviceLimitService(log, pg, sessions, appService, cfg.JWT.RefreshTTL)
+	deviceLimitService.SetVipService(vipService)
+	deviceLimitService.SetDeviceDirectory(deviceMarketingService)
+	deviceLimitService.SetNotificationService(notificationService)
+	deviceLimitService.SetRealtime(realtimeService)
+	authService.SetDeviceLimitService(deviceLimitService)
+
 	// 平台级 Banner（超级管理员专属 CRUD；Overview 对所有管理员展示；上传经 StorageService）
 	platformBannerService := service.NewPlatformBannerService(log, pg, sessions, storageService)
 
@@ -668,6 +676,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Version:          versionService,
 		Release:          releaseService,
 		ClientControl:    clientControlService,
+		DeviceLimit:      deviceLimitService,
 		PlatformSettings: systemService,
 		PlatformBanner:   platformBannerService,
 		Governance:       governanceService,

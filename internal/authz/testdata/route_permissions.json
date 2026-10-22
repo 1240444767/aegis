@@ -7582,6 +7582,90 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/policy",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/device-limit/policy",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/simulate",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/events",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides/:userId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides/:userId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/remove",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/enforce",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/ledger",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/apps/:appkey/releases",
     "permission": "",
     "appScoped": false,

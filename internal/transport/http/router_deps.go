@@ -61,6 +61,7 @@ type RouterDeps struct {
 	Version          *service.VersionService
 	Release          *service.ReleaseService
 	ClientControl    ClientControlAPI
+	DeviceLimit      *service.DeviceLimitService
 	PlatformSettings *service.PlatformSettingsService
 	PlatformBanner   *service.PlatformBannerService
 	Governance       *service.PlatformGovernanceService
@@ -159,6 +160,7 @@ func (d RouterDeps) newHandler() *Handler {
 		version:            d.Version,
 		release:            d.Release,
 		clientControl:      d.ClientControl,
+		deviceLimit:        d.DeviceLimit,
 		roleApp:            d.RoleApplication,
 		email:              d.Email,
 		payment:            d.Payment,

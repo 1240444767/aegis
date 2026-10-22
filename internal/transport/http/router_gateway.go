@@ -28,6 +28,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGateway.POST("/auth/login", h.AppLogin)
 		appGateway.POST("/auth/refresh", h.AppRefresh)
 		appGateway.POST("/auth/2fa/verify", h.AppSecondFactor)
+		// 登录设备数已满时，用户选好要下线的设备后凭凭证完成登录（docs/device-limit.md）
+		appGateway.POST("/auth/device-limit/resolve", h.AppDeviceLimitResolve)
 		// 网页扫码登录：网页发码与轮询（网站服务端代为调用），扫码与确认在 Bearer 组
 		appGateway.POST("/auth/qr/create", h.AppQRLoginCreate)
 		appGateway.POST("/auth/qr/poll", h.AppQRLoginPoll)
@@ -166,6 +168,9 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/me/sessions", h.UserSessions)
 		appGatewayAuthed.DELETE("/me/sessions/:tokenHash", h.RevokeUserSession)
 		appGatewayAuthed.POST("/me/sessions/revoke-all", h.RevokeAllUserSessions)
+		// 登录设备：按设备合并的在线登录、生效上限与占用，下线其他设备
+		appGatewayAuthed.GET("/me/devices", h.AppMyDevices)
+		appGatewayAuthed.POST("/me/devices/remove", h.AppRemoveMyDevices)
 		appGatewayAuthed.GET("/me/oauth2/grants", h.AppMyOAuth2Grants)
 		appGatewayAuthed.DELETE("/me/oauth2/grants/:clientId", h.AppRevokeMyOAuth2Grant)
 

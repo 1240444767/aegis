@@ -1395,6 +1395,8 @@ func setDefaults(cfg *Config) {
 			"X-Device-OS",
 			"X-Device-OS-Version",
 			"X-App-Version",
+			// 登录设备数已满时客户端能让用户选择下线哪台（docs/device-limit.md）
+			"X-Device-Limit-Challenge",
 			// 版本管控的身份上报（docs/client-control.md）
 			"X-App-Version-Code",
 			"X-App-Package",

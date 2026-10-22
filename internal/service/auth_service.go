@@ -17,6 +17,7 @@ import (
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
 	devicedomain "aegis/internal/domain/device"
+	"aegis/internal/domain/devicelimit"
 	oauthdomain "aegis/internal/domain/oauth"
 	platformdomain "aegis/internal/domain/platform"
 	plugindomain "aegis/internal/domain/plugin"
@@ -80,6 +81,13 @@ type AuthService struct {
 	deletion        *AccountDeletionService
 	// notifications 站内信出口（密码已重置等），见 SetNotificationService
 	notifications notificationDeliverer
+	// deviceLimit 登录设备数控制，见 SetDeviceLimitService；未注入时不做限制
+	deviceLimit *DeviceLimitService
+}
+
+// SetDeviceLimitService 接上登录设备数控制（docs/device-limit.md）。
+func (s *AuthService) SetDeviceLimitService(deviceLimit *DeviceLimitService) {
+	s.deviceLimit = deviceLimit
 }
 
 // SetNotificationService 接上站内信：安全类提醒经 NotificationService.Deliver 投递并实时推送。
@@ -869,6 +877,13 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 	if err != nil {
 		return nil, err
 	}
+	if s.deviceLimit != nil {
+		appID, userID, familyID := refreshSession.AppID, refreshSession.UserID, refreshSession.FamilyID
+		client := devicedomain.ClientFrom(ctx)
+		s.runDetached("refresh.device_ledger", 3*time.Second, func(actx context.Context) {
+			s.deviceLimit.TouchRefresh(actx, appID, userID, deviceID, userAgent, familyID, ip, client)
+		})
+	}
 	now := timeutil.NowUTC()
 	refreshSession.UsedAt = &now
 	refreshSession.RotatedAt = &now
@@ -977,12 +992,12 @@ func (s *AuthService) ValidateAccessToken(ctx context.Context, token string) (*a
 		return nil, err
 	}
 	tokenID, _ := claims["jti"].(string)
-	blacklisted, err := s.sessions.IsBlacklisted(ctx, tokenID)
+	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
 	}
 	if blacklisted {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "Token 已失效")
+		return nil, revokedTokenError(reason, "Token 已失效")
 	}
 	session, err := s.sessions.GetSession(ctx, token)
 	if err != nil {
@@ -1007,12 +1022,12 @@ func (s *AuthService) validateRefreshToken(ctx context.Context, token string) (*
 		return nil, err
 	}
 	tokenID, _ := claims["jti"].(string)
-	blacklisted, err := s.sessions.IsBlacklisted(ctx, tokenID)
+	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
 	}
 	if blacklisted {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌已失效")
+		return nil, revokedTokenError(reason, "刷新令牌已失效")
 	}
 	session, err := s.sessions.GetRefreshSession(ctx, token)
 	if err != nil {
@@ -1024,14 +1039,26 @@ func (s *AuthService) validateRefreshToken(ctx context.Context, token string) (*
 	if session.TokenID != tokenID {
 		return nil, apperrors.New(40102, http.StatusUnauthorized, "刷新令牌无效")
 	}
-	revoked, err := s.sessions.IsRefreshFamilyRevoked(ctx, session.AppID, session.UserID, session.FamilyID)
+	reason, revoked, err := s.sessions.RefreshFamilyRevokedReason(ctx, session.AppID, session.UserID, session.FamilyID)
 	if err != nil {
 		return nil, err
 	}
 	if revoked {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌族已失效")
+		return nil, revokedTokenError(reason, "刷新令牌族已失效")
 	}
 	return session, nil
+}
+
+// revokedTokenError 按失效原因给出错误：被设备数控制挤下线、被设备管理下线的各有专门的码，
+// 客户端据此提示「账号已在其他设备登录」而不是笼统的「登录已过期」。
+func revokedTokenError(reason, fallback string) error {
+	switch reason {
+	case redisrepo.RevokeReasonDeviceLimit:
+		return apperrors.New(errCodeDeviceLimitKicked, http.StatusUnauthorized, "账号已在其他设备登录，当前设备已退出登录")
+	case redisrepo.RevokeReasonRemoved:
+		return apperrors.New(errCodeDeviceRemoved, http.StatusUnauthorized, "当前设备已在设备管理中被移除，请重新登录")
+	}
+	return apperrors.New(40104, http.StatusUnauthorized, fallback)
 }
 
 func (s *AuthService) parseTokenClaims(token string, expectedType string) (jwt.MapClaims, error) {
@@ -1150,7 +1177,7 @@ func (s *AuthService) finalizeLogin(ctx context.Context, app *appdomain.App, use
 		s.recordFirstDevice(actx, record)
 	})
 	result, err := s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
-	if err == nil && result != nil && s.deletion != nil {
+	if err == nil && result != nil && result.DeviceLimit == nil && s.deletion != nil {
 		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
 	}
 	return result, err
@@ -1235,12 +1262,96 @@ func (s *AuthService) ensureUserSessionState(ctx context.Context, user *userdoma
 	return enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSession)
 }
 
+// issueSession 新登录的签发：先过设备数关卡，再签发，最后执行关卡给出的处置。
+// 全部登录方式都经 finalizeLogin 走到这里；刷新令牌延续已有设备，直接走 issueSessionBundle。
 func (s *AuthService) issueSession(ctx context.Context, app *appdomain.App, user *userdomain.User, provider, loginType, deviceID, device, ip, userAgent string) (*authdomain.LoginResult, error) {
+	return s.issueSessionChecked(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent, nil)
+}
+
+func (s *AuthService) issueSessionChecked(ctx context.Context, app *appdomain.App, user *userdomain.User, provider, loginType, deviceID, device, ip, userAgent string, chosen []string) (*authdomain.LoginResult, error) {
+	var admission *DeviceAdmission
+	if s.deviceLimit != nil {
+		if app == nil && s.app != nil {
+			loaded, err := s.app.GetApp(ctx, user.AppID)
+			if err != nil {
+				return nil, err
+			}
+			app = loaded
+		}
+		var challenge *devicelimit.Challenge
+		var err error
+		admission, challenge, err = s.deviceLimit.Admit(ctx, app, user, DeviceLoginInput{
+			Provider: provider, LoginType: loginType, DeviceID: deviceID, Device: device, IP: ip, UserAgent: userAgent,
+			Client: devicedomain.ClientFrom(ctx), Chosen: chosen, CanAsk: devicelimit.ChallengeSupported(ctx),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if challenge != nil {
+			// 不签发令牌：客户端凭 ticket 让用户选好要下线的设备，再调 /auth/device-limit/resolve
+			return &authdomain.LoginResult{
+				UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account, Provider: provider,
+				AuthenticationState: AuthStateDeviceLimitRequired, DeviceLimit: challenge,
+			}, nil
+		}
+		defer admission.Release()
+	}
 	bundle, err := s.issueSessionBundle(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent, "")
 	if err != nil {
 		return nil, err
 	}
+	if admission != nil {
+		s.deviceLimit.Commit(ctx, admission, IssuedLogin{FamilyID: bundle.RefreshSession.FamilyID})
+	}
 	return bundle.Result, nil
+}
+
+// AuthStateDeviceLimitRequired LoginResult.AuthenticationState：登录设备数已满，等用户选择下线哪台
+const AuthStateDeviceLimitRequired = "device_limit_required"
+
+// ResolveDeviceLimitChallenge 用户在选择页勾好了要下线的设备：下线它们并完成那次被挂起的登录。
+//
+// 登录现场（登录方式、设备、IP）取自暂存的凭证而不是这次请求 —— 选择页可能是在另一个网络环境下提交的，
+// 但被签发的仍是当初那台设备的登录。账号与应用状态在这里重新判定一次：选择期间账号可能被封禁。
+func (s *AuthService) ResolveDeviceLimitChallenge(ctx context.Context, appID int64, ticket string, chosen []string) (*authdomain.LoginResult, error) {
+	if s.deviceLimit == nil {
+		return nil, apperrors.New(errCodeDeviceLimitTicket, http.StatusNotFound, "设备选择已失效，请重新登录")
+	}
+	chosen = uniqueStrings(chosen)
+	if len(chosen) == 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择要下线的设备")
+	}
+	pending, err := s.deviceLimit.LoadChallenge(ctx, appID, ticket)
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.pg.GetUserByID(ctx, pending.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || user.AppID != appID {
+		return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
+	}
+	if err := s.ensureUserLoginState(ctx, user); err != nil {
+		return nil, err
+	}
+	var app *appdomain.App
+	if s.app != nil {
+		if app, err = s.app.EnsureLoginAllowed(ctx, appID); err != nil {
+			return nil, err
+		}
+	}
+	ctx = devicedomain.WithClient(ctx, devicedomain.Client{Model: pending.Model, Platform: pending.Platform, Extra: pending.Extra.Value()})
+	result, err := s.issueSessionChecked(ctx, app, user, pending.Provider, pending.LoginType, pending.DeviceID, pending.Device,
+		pending.IP, pending.UserAgent, chosen)
+	if err != nil {
+		return nil, err
+	}
+	s.deviceLimit.FinishChallenge(ctx, ticket)
+	if result != nil && s.deletion != nil {
+		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
+	}
+	return result, nil
 }
 
 // signSessionToken 统一构造并签名访问/刷新令牌（消除两段重复的 claims 组装）。
@@ -1359,9 +1470,6 @@ func (s *AuthService) issueSessionBundle(ctx context.Context, app *appdomain.App
 	if err := writeGroup.Wait(); err != nil {
 		_ = s.sessions.DeleteSession(ctx, signedAccess)
 		_ = s.sessions.DeleteRefreshSession(ctx, signedRefresh)
-		return nil, err
-	}
-	if err := s.enforceSessionPolicy(ctx, app, user.AppID, user.ID, accessTokenID, refreshFamilyID); err != nil {
 		return nil, err
 	}
 	_ = s.publisher.PublishJSON(ctx, event.SubjectAuthLoginAuditRequested, map[string]any{
@@ -1508,63 +1616,6 @@ func (s *AuthService) validateRegisterPolicy(ctx context.Context, app *appdomain
 		if exists {
 			return apperrors.New(40902, http.StatusConflict, "IP已注册过账号")
 		}
-	}
-	return nil
-}
-
-func (s *AuthService) enforceSessionPolicy(ctx context.Context, app *appdomain.App, appID int64, userID int64, currentTokenID string, currentFamilyID string) error {
-	if s.app == nil || s.sessions == nil {
-		return nil
-	}
-	if app == nil {
-		loaded, err := s.app.GetApp(ctx, appID)
-		if err != nil {
-			return err
-		}
-		app = loaded
-	}
-	policy := s.app.ResolvePolicy(app)
-	// 多设备无上限时直接跳过整个会话扫描
-	if policy.MultiDeviceLogin && policy.MultiDeviceLimit <= 0 {
-		return nil
-	}
-	limit := policy.MultiDeviceLimit
-	if limit <= 0 {
-		limit = 1
-	}
-	sessions, err := s.sessions.ListUserSessions(ctx, appID, userID)
-	if err != nil {
-		return err
-	}
-	if len(sessions) <= limit {
-		return nil
-	}
-	excess := len(sessions) - limit
-	for _, item := range sessions {
-		if excess <= 0 {
-			break
-		}
-		if item.Session.TokenID == currentTokenID {
-			continue
-		}
-		if err := s.sessions.DeleteSessionByHash(ctx, appID, userID, item.TokenHash); err != nil {
-			return err
-		}
-		ttl := time.Until(item.Session.ExpiresAt)
-		if ttl > 0 {
-			if err := s.sessions.BlacklistToken(ctx, item.Session.TokenID, ttl); err != nil {
-				return err
-			}
-		}
-		if item.Session.RefreshFamilyID != "" && item.Session.RefreshFamilyID != currentFamilyID {
-			if err := s.sessions.RevokeRefreshFamily(ctx, appID, userID, item.Session.RefreshFamilyID, s.cfg.JWT.RefreshTTL); err != nil {
-				return err
-			}
-			if err := s.revokeRefreshFamilySessions(ctx, appID, userID, item.Session.RefreshFamilyID); err != nil {
-				return err
-			}
-		}
-		excess--
 	}
 	return nil
 }

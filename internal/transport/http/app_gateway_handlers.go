@@ -371,6 +371,7 @@ func (h *Handler) AppSecondFactor(c *gin.Context) {
 	if _, _, ok := h.resolveGatewayApp(c); !ok {
 		return
 	}
+	markDeviceLimitChallenge(c)
 	h.VerifySecondFactor(c)
 }
 

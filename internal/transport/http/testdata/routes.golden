@@ -15,6 +15,8 @@ DELETE	/api/admin/apps/:appkey/channels/:cid	AdminDeleteVersionChannel
 DELETE	/api/admin/apps/:appkey/channels/:cid/users	AdminRemoveVersionChannelUsers
 DELETE	/api/admin/apps/:appkey/client-control/devices/:deviceId	AdminDeleteClientControlDevice
 DELETE	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminDeleteClientControlRule
+DELETE	/api/admin/apps/:appkey/device-limit/overrides/:userId	AdminDeleteDeviceLimitOverride
+DELETE	/api/admin/apps/:appkey/device-limit/users/:userId/ledger	AdminResetDeviceLimitLedger
 DELETE	/api/admin/apps/:appkey/function-keys/:keyId	AdminRevokeAppFunctionKey
 DELETE	/api/admin/apps/:appkey/function-kv	AdminDeleteAppFunctionKV
 DELETE	/api/admin/apps/:appkey/functions/:functionName	AdminDeleteAppFunction
@@ -180,6 +182,11 @@ GET	/api/admin/apps/:appkey/cloud-storage/users	AdminCloudStorageUsers
 GET	/api/admin/apps/:appkey/commerce	AdminAppCommerceSettings
 GET	/api/admin/apps/:appkey/commerce/overview	AdminAppCommerceOverview
 GET	/api/admin/apps/:appkey/content/overview	AdminContentOverview
+GET	/api/admin/apps/:appkey/device-limit	AdminDeviceLimitOverview
+GET	/api/admin/apps/:appkey/device-limit/events	AdminDeviceLimitEvents
+GET	/api/admin/apps/:appkey/device-limit/overrides	AdminDeviceLimitOverrides
+GET	/api/admin/apps/:appkey/device-limit/policy	AdminDeviceLimitPolicy
+GET	/api/admin/apps/:appkey/device-limit/users/:userId	AdminDeviceLimitUser
 GET	/api/admin/apps/:appkey/encryption	AdminAppEncryption
 GET	/api/admin/apps/:appkey/function-catalog	AdminAppFunctionCatalog
 GET	/api/admin/apps/:appkey/function-keys	AdminListAppFunctionKeys
@@ -619,6 +626,7 @@ GET	/api/v1/apps/:appkey/me/audits/sessions	UserSessionAudits
 GET	/api/v1/apps/:appkey/me/auto-sign	AppAutoSignStatus
 GET	/api/v1/apps/:appkey/me/avatar/history	ListUserAvatarHistory
 GET	/api/v1/apps/:appkey/me/deletion	AppAccountDeletion
+GET	/api/v1/apps/:appkey/me/devices	AppMyDevices
 GET	/api/v1/apps/:appkey/me/oauth2/grants	AppMyOAuth2Grants
 GET	/api/v1/apps/:appkey/me/passkeys	ListPasskeys
 GET	/api/v1/apps/:appkey/me/profile	Profile
@@ -801,6 +809,9 @@ POST	/api/admin/apps/:appkey/client-control/rules/:ruleId/enable	AdminEnableClie
 POST	/api/admin/apps/:appkey/client-control/rules/reorder	AdminReorderClientControlRules
 POST	/api/admin/apps/:appkey/client-control/simulate	AdminSimulateClientControl
 POST	/api/admin/apps/:appkey/cloud-storage/purge-expired	AdminPurgeExpiredCloudTrash
+POST	/api/admin/apps/:appkey/device-limit/simulate	AdminSimulateDeviceLimit
+POST	/api/admin/apps/:appkey/device-limit/users/:userId/enforce	AdminEnforceDeviceLimit
+POST	/api/admin/apps/:appkey/device-limit/users/:userId/remove	AdminRemoveDeviceLimitDevices
 POST	/api/admin/apps/:appkey/function-keys	AdminCreateAppFunctionKey
 POST	/api/admin/apps/:appkey/functions	AdminCreateAppFunction
 POST	/api/admin/apps/:appkey/functions/:functionName/analyze	AdminAnalyzeAppFunction
@@ -1184,6 +1195,7 @@ POST	/api/v1/apps/:appkey/ads/rewarded/claim	AppClaimRewardedAd
 POST	/api/v1/apps/:appkey/ads/splash/events	AppReportSplashAd
 POST	/api/v1/apps/:appkey/ai/keys	AppCreateAIKey
 POST	/api/v1/apps/:appkey/auth/2fa/verify	AppSecondFactor
+POST	/api/v1/apps/:appkey/auth/device-limit/resolve	AppDeviceLimitResolve
 POST	/api/v1/apps/:appkey/auth/email/code	AppEmailCode
 POST	/api/v1/apps/:appkey/auth/email/verify	AppEmailVerify
 POST	/api/v1/apps/:appkey/auth/login	AppLogin
@@ -1242,6 +1254,7 @@ POST	/api/v1/apps/:appkey/me/avatar/restore	RestoreUserAvatar
 POST	/api/v1/apps/:appkey/me/deletion	AppSubmitAccountDeletion
 POST	/api/v1/apps/:appkey/me/deletion/cancel	AppCancelAccountDeletion
 POST	/api/v1/apps/:appkey/me/deletion/code	AppAccountDeletionCode
+POST	/api/v1/apps/:appkey/me/devices/remove	AppRemoveMyDevices
 POST	/api/v1/apps/:appkey/me/passkeys	FinishPasskeyRegistration
 POST	/api/v1/apps/:appkey/me/passkeys/options	BeginPasskeyRegistration
 POST	/api/v1/apps/:appkey/me/password/recovery	AppMyPasswordRecoveryStart
@@ -1301,6 +1314,8 @@ PUT	/api/admin/apps/:appkey/client-control/rules/:ruleId	AdminUpdateClientContro
 PUT	/api/admin/apps/:appkey/client-control/settings	AdminUpdateClientControlSettings
 PUT	/api/admin/apps/:appkey/cloud-storage/config	AdminSaveCloudStorageConfig
 PUT	/api/admin/apps/:appkey/commerce	UpdateAdminAppCommerceSettings
+PUT	/api/admin/apps/:appkey/device-limit/overrides/:userId	AdminSaveDeviceLimitOverride
+PUT	/api/admin/apps/:appkey/device-limit/policy	AdminUpdateDeviceLimitPolicy
 PUT	/api/admin/apps/:appkey/encryption	UpdateAdminAppEncryption
 PUT	/api/admin/apps/:appkey/functions/:functionName	AdminUpdateAppFunction
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId	AdminUpdateInviteCode

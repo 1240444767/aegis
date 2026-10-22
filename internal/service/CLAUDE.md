@@ -272,7 +272,7 @@ Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 | `loginCheckDeviceTimeOut` | `LoginConsistencyService` | **设备换绑冷却秒数**（旧字段原义即「登录换绑机器码间隔」），从上次换绑起算 |
 | `loginCheckIp` | `LoginConsistencyService` | 与上次成功登录不在同一网段（IPv4 /24、IPv6 /48）即拦截 |
 | `loginCheckUser` | `LoginConsistencyService` | 登录属地（国家 + 省/州）与上次不一致即拦截 |
-| `multiDeviceLogin` / `multiDeviceLimit` | `enforceSessionPolicy` | 同时在线设备上限，超出踢最旧会话 |
+| `multiDeviceLogin` / `multiDeviceLimit` | 已由登录设备数控制接管（`DeviceLimitService`，执行点 `issueSession`） | 旧字段只在没保存过 `deviceLimit` 时用来推导策略，见 [docs/device-limit.md](../../docs/device-limit.md) |
 | `registerCheckIp` | `validateRegisterPolicy` | 同一 IP 不允许重复注册 |
 
 三项强绑定策略（device / ip / user）**全关时不产生任何 Redis I/O**，绝大多数应用走这条路径。

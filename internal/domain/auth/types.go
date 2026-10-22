@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"aegis/internal/domain/devicelimit"
 	"time"
 
 	"aegis/internal/domain/accountdeletion"
@@ -125,6 +126,9 @@ type LoginResult struct {
 	// AccountDeletion 账号处于注销冷静期或待审核时出现；Cancelled 为真表示这次登录撤销了冷静期。
 	// 客户端据此提示「账号将于某日注销」或「注销已撤销」
 	AccountDeletion *accountdeletion.LoginNotice `json:"accountDeletion,omitempty"`
+	// DeviceLimit 登录设备数已满、需要用户选择下线哪台时出现（authenticationState=device_limit_required）。
+	// 此时不签发令牌：客户端展示设备列表，凭 Ticket 调 /auth/device-limit/resolve 完成登录（docs/device-limit.md）
+	DeviceLimit *devicelimit.Challenge `json:"deviceLimit,omitempty"`
 }
 
 // OAuthLinkTicket 待关联的第三方身份。

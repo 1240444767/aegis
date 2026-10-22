@@ -24,6 +24,7 @@ import (
 	"aegis/internal/domain/aigateway"
 	"aegis/internal/domain/app"
 	"aegis/internal/domain/authprotocol"
+	"aegis/internal/domain/devicelimit"
 	"aegis/internal/domain/storage"
 	"aegis/internal/domain/system"
 	"aegis/internal/service"
@@ -164,6 +165,10 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/cloud-storage/users"):                                   CloudStorageUserListQuery{},              // AdminCloudStorageUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/commerce"):                                              app.CommerceSettings{},                   // UpdateAdminAppCommerceSettings
 		routeKey("GET", "/api/admin/apps/{appkey}/commerce/overview"):                                     AdminWalletStatsQuery{},                  // AdminAppCommerceOverview
+		routeKey("PUT", "/api/admin/apps/{appkey}/device-limit/overrides/{userId}"):                       devicelimit.OverrideInput{},              // AdminSaveDeviceLimitOverride
+		routeKey("PUT", "/api/admin/apps/{appkey}/device-limit/policy"):                                   devicelimit.Policy{},                     // AdminUpdateDeviceLimitPolicy
+		routeKey("POST", "/api/admin/apps/{appkey}/device-limit/simulate"):                                devicelimit.SimulateInput{},              // AdminSimulateDeviceLimit
+		routeKey("POST", "/api/admin/apps/{appkey}/device-limit/users/{userId}/remove"):                   DeviceKeysRequest{},                      // AdminRemoveDeviceLimitDevices
 		routeKey("PUT", "/api/admin/apps/{appkey}/encryption"):                                            app.TransportEncryptionUpdate{},          // UpdateAdminAppEncryption
 		routeKey("POST", "/api/admin/apps/{appkey}/function-keys"):                                        createAppFunctionKeyRequest{},            // AdminCreateAppFunctionKey
 		routeKey("POST", "/api/admin/apps/{appkey}/functions"):                                            createAppFunctionRequest{},               // AdminCreateAppFunction
@@ -634,6 +639,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/ai/keys"):                                                 AIGatewayKeyRequest{},                    // AppCreateAIKey
 		routeKey("PUT", "/api/v1/apps/{appkey}/ai/keys/{keyId}"):                                          AIGatewayKeyRequest{},                    // AppUpdateAIKey
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/2fa/verify"):                                         SecondFactorVerifyRequest{},              // AppSecondFactor
+		routeKey("POST", "/api/v1/apps/{appkey}/auth/device-limit/resolve"):                               AppDeviceLimitResolveRequest{},           // AppDeviceLimitResolve
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/login"):                                              authprotocol.LoginInput{},                // AppLogin
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/token"):                                   OAuthBindTokenRequest{},                  // OAuthBindToken
 		routeKey("POST", "/api/v1/apps/{appkey}/auth/oauth/bind/url"):                                     OAuthBindURLRequest{},                    // OAuthBindURL
@@ -691,6 +697,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/me/avatar/restore"):                                       AvatarRestoreRequest{},                   // RestoreUserAvatar
 		routeKey("POST", "/api/v1/apps/{appkey}/me/deletion"):                                             AccountDeletionSubmitRequest{},           // AppSubmitAccountDeletion
 		routeKey("POST", "/api/v1/apps/{appkey}/me/deletion/code"):                                        AccountDeletionCodeRequest{},             // AppAccountDeletionCode
+		routeKey("POST", "/api/v1/apps/{appkey}/me/devices/remove"):                                       DeviceKeysRequest{},                      // AppRemoveMyDevices
 		routeKey("POST", "/api/v1/apps/{appkey}/me/passkeys"):                                             PasskeyRegistrationFinishRequest{},       // FinishPasskeyRegistration
 		routeKey("POST", "/api/v1/apps/{appkey}/me/password/recovery"):                                    AppPasswordRecoveryDeviceRequest{},       // AppMyPasswordRecoveryStart
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/profile"):                                               UpdateProfileRequest{},                   // UpdateProfile
