@@ -17,7 +17,9 @@ export const STRATEGY_LIMITS: LotteryStrategyLimits = {
   prizeLimit: 1_000_000,
   simulationUsers: 5000,
   simulationEach: 1000,
-  simulationDraws: 200_000
+  simulationDraws: 200_000,
+  luckStrength: 2,
+  controlGain: 20
 };
 
 export type RuleDraft = {
@@ -46,6 +48,8 @@ export type StrategyDraft = {
   cooldownFactor: string;
   budget: boolean;
   budgetPoints: string;
+  /** 按当天时间进度放量 */
+  budgetPaced: boolean;
   risk: boolean;
   riskDevice: string;
   riskIp: string;
@@ -57,6 +61,24 @@ export type StrategyDraft = {
   customSignals: boolean;
   signals: Record<string, SignalDraft>;
   rules: RuleDraft[];
+  luck: boolean;
+  luckStrength: string;
+  /** 伪随机分布（与软保底二选一） */
+  prd: boolean;
+  winRate: boolean;
+  /** 百分比 */
+  winRateTarget: string;
+  winRateGain: string;
+  winRatePrior: string;
+  guard: boolean;
+  /** 百分比，空为不限 */
+  guardMin: string;
+  guardMax: string;
+  guardValue: string;
+  guardExpRate: string;
+  guardDrawValue: string;
+  /** 奖品类型 → 单次占比上限（百分比） */
+  guardCaps: Record<string, string>;
 };
 
 const num = (value: number | undefined, fallback: number) => String(value ?? fallback);
@@ -79,6 +101,7 @@ export function seedStrategy(strategy?: LotteryStrategy | null): StrategyDraft {
     cooldownFactor: num(s.cooldown?.factor, 0.3),
     budget: Boolean(s.budget),
     budgetPoints: num(s.budget?.dailyPoints, 10000),
+    budgetPaced: Boolean(s.budget?.paced),
     risk: Boolean(s.risk),
     riskDevice: num(s.risk?.deviceAccounts, 3),
     riskIp: num(s.risk?.ipAccounts, 0),
@@ -96,9 +119,27 @@ export function seedStrategy(strategy?: LotteryStrategy | null): StrategyDraft {
       positions: rule.positions ?? [],
       factor: String(rule.factor),
       disabled: Boolean(rule.disabled)
-    }))
+    })),
+    luck: Boolean(s.luck),
+    luckStrength: num(s.luck?.strength, 0.3),
+    prd: s.variance === "prd",
+    winRate: Boolean(s.winRate),
+    winRateTarget: pct(s.winRate?.target, 30),
+    winRateGain: num(s.winRate?.gain, 1),
+    winRatePrior: num(s.winRate?.prior, 50),
+    guard: Boolean(s.guard),
+    guardMin: s.guard?.minWinRate ? pct(s.guard.minWinRate, 0) : "",
+    guardMax: s.guard?.maxWinRate && s.guard.maxWinRate < 1 ? pct(s.guard.maxWinRate, 0) : "",
+    guardValue: s.guard?.maxValue ? String(s.guard.maxValue) : "",
+    guardExpRate: s.guard?.experienceRate ? String(s.guard.experienceRate) : "",
+    guardDrawValue: s.guard?.drawValue ? String(s.guard.drawValue) : "",
+    guardCaps: Object.fromEntries(Object.entries(s.guard?.kindCaps ?? {}).map(([kind, cap]) => [kind, pct(cap, 0)]))
   };
 }
+
+/** 0–1 → 百分比字符串（保留一位小数） */
+const pct = (value: number | undefined, fallback: number) =>
+  String(value === undefined ? fallback : Math.round(value * 1000) / 10);
 
 const toNumber = (value: string) => {
   const parsed = Number(value);
@@ -112,7 +153,7 @@ export function strategyPayload(draft: StrategyDraft, catalog?: LotteryCatalog |
   if (draft.softPity) out.softPity = { start: toInt(draft.softPityStart), step: toNumber(draft.softPityStep) };
   if (draft.pacing) out.pacing = { slack: toNumber(draft.pacingSlack) / 100, maxBoost: toNumber(draft.pacingBoost) };
   if (draft.cooldown) out.cooldown = { draws: toInt(draft.cooldownDraws), factor: toNumber(draft.cooldownFactor) };
-  if (draft.budget) out.budget = { dailyPoints: toInt(draft.budgetPoints) };
+  if (draft.budget) out.budget = { dailyPoints: toInt(draft.budgetPoints), paced: draft.budgetPaced || undefined };
   if (draft.risk) out.risk = { deviceAccounts: toInt(draft.riskDevice), ipAccounts: toInt(draft.riskIp) };
   if (draft.behavior) {
     out.behavior = {
@@ -130,6 +171,30 @@ export function strategyPayload(draft: StrategyDraft, catalog?: LotteryCatalog |
         };
       });
     }
+  }
+  if (draft.luck) out.luck = { strength: toNumber(draft.luckStrength) };
+  if (draft.prd) out.variance = "prd";
+  if (draft.winRate) {
+    out.winRate = {
+      target: toNumber(draft.winRateTarget) / 100,
+      gain: toNumber(draft.winRateGain),
+      prior: toNumber(draft.winRatePrior) || undefined
+    };
+  }
+  if (draft.guard) {
+    const caps = Object.fromEntries(
+      Object.entries(draft.guardCaps)
+        .filter(([, value]) => value.trim() !== "")
+        .map(([kind, value]) => [kind, toNumber(value) / 100])
+    );
+    out.guard = {
+      minWinRate: draft.guardMin.trim() ? toNumber(draft.guardMin) / 100 : 0,
+      maxWinRate: draft.guardMax.trim() ? toNumber(draft.guardMax) / 100 : 0,
+      maxValue: draft.guardValue.trim() ? toNumber(draft.guardValue) : 0,
+      experienceRate: draft.guardExpRate.trim() ? toNumber(draft.guardExpRate) : undefined,
+      drawValue: draft.guardDrawValue.trim() ? toNumber(draft.guardDrawValue) : undefined,
+      kindCaps: Object.keys(caps).length ? caps : undefined
+    };
   }
   if (draft.rules.length) {
     out.rules = draft.rules.map((rule) => ({
@@ -172,6 +237,32 @@ export function validateStrategy(draft: StrategyDraft, prizeCount: number, limit
     if (min < 0 || min > 1) issues.push("行为分为 0 时的系数需要在 0–1 之间");
     if (maxBoost < min || maxBoost > limits.behaviorBoost) issues.push(`行为分满分时的系数需要在 ${min}–${limits.behaviorBoost} 之间`);
   }
+  if (draft.luck) {
+    const strength = toNumber(draft.luckStrength);
+    const max = limits.luckStrength ?? 2;
+    if (strength <= 0 || strength > max) issues.push(`运气平衡强度需要在 0–${max} 之间`);
+  }
+  if (draft.prd && draft.softPity) issues.push("伪随机分布与软保底只能二选一");
+  if (draft.winRate) {
+    const target = toNumber(draft.winRateTarget);
+    const gain = toNumber(draft.winRateGain);
+    const max = limits.controlGain ?? 20;
+    if (target <= 0 || target >= 100) issues.push("全站目标中奖率需要在 0–100% 之间");
+    if (gain <= 0 || gain > max) issues.push(`全站反馈增益需要在 0–${max} 之间`);
+  }
+  if (draft.guard) {
+    const min = draft.guardMin.trim() ? toNumber(draft.guardMin) : 0;
+    const max = draft.guardMax.trim() ? toNumber(draft.guardMax) : 100;
+    if (min < 0 || min >= 100 || max <= 0 || max > 100) issues.push("中奖率上下限需要在 0–100% 之间");
+    else if (min > max) issues.push("中奖率下限不能高于上限");
+    if (toNumber(draft.guardValue) < 0) issues.push("期望价值上限不能为负");
+    if (Object.values(draft.guardCaps).some((value) => value.trim() && (toNumber(value) < 0 || toNumber(value) > 100))) {
+      issues.push("奖品类型占比上限需要在 0–100% 之间");
+    }
+    if (!draft.guardMin.trim() && !draft.guardMax.trim() && !draft.guardValue.trim() && !Object.values(draft.guardCaps).some((v) => v.trim())) {
+      issues.push("护栏至少设置一项");
+    }
+  }
   if (draft.rules.length > limits.rules) issues.push(`自定义规则最多 ${limits.rules} 条`);
   draft.rules.forEach((rule, index) => {
     const label = rule.name.trim() ? `规则「${rule.name.trim()}」` : `第 ${index + 1} 条规则`;
@@ -194,5 +285,9 @@ export const FACTOR_LABEL: Record<string, string> = {
   behavior: "行为画像",
   cooldown: "中奖冷却",
   rule: "规则",
-  softPity: "软保底"
+  softPity: "软保底",
+  luck: "运气平衡",
+  prd: "伪随机分布",
+  control: "全站反馈",
+  guard: "护栏"
 };

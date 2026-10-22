@@ -455,7 +455,7 @@ export function LotteryPrizeBoard({
             )}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2">
             <NumberField
               label="全站每日"
               value={selected.dailyLimit}
@@ -479,6 +479,13 @@ export function LotteryPrizeBoard({
               unit="次，0 为不限"
               disabled={selected.fallback}
               onChange={(value) => patch(selected.key, { userDailyLimit: value })}
+            />
+            <NumberField
+              label="积分当量"
+              value={selected.value}
+              min={0}
+              unit="0 为自动估算"
+              onChange={(value) => patch(selected.key, { value })}
             />
           </div>
 

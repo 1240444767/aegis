@@ -20,6 +20,7 @@ import {
   kindLabelOf
 } from "@/components/apps/lottery/lottery-shared";
 import { buildChartConfig, ChartCard, type ThemedColor } from "@/components/commerce/commerce-charts";
+import { LotteryAuditCard } from "@/components/apps/lottery/lottery-audit-card";
 import { StatTile } from "@/components/content/content-shared";
 import {
   ChartContainer,
@@ -247,6 +248,13 @@ export function LotteryStatsPanel({
           )}
         </div>
       </div>
+
+      <LotteryAuditCard
+        appKey={appKey}
+        activityId={currentId}
+        days={days}
+        prizes={activities.find((activity) => activity.id === currentId)?.prizes ?? []}
+      />
     </div>
   );
 }

@@ -80,6 +80,8 @@ export type PrizeDraft = {
   dailyLimit: string;
   userLimit: string;
   userDailyLimit: string;
+  /** 积分当量，0 为按类型估算 */
+  value: string;
 };
 
 export type ActivityForm = {
@@ -133,7 +135,8 @@ export function blankPrize(key: number, type: string, amount: number, weight: nu
     swapAmount: "",
     dailyLimit: "0",
     userLimit: "0",
-    userDailyLimit: "0"
+    userDailyLimit: "0",
+    value: "0"
   };
 }
 
@@ -203,7 +206,8 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
       swapAmount: prize.lifetimeReward?.type ? String(prize.lifetimeReward.amount ?? 0) : "",
       dailyLimit: String(prize.dailyLimit ?? 0),
       userLimit: String(prize.userLimit ?? 0),
-      userDailyLimit: String(prize.userDailyLimit ?? 0)
+      userDailyLimit: String(prize.userDailyLimit ?? 0),
+      value: String(prize.value ?? 0)
     }));
   const pityPrize = activity.prizes.find((prize) => prize.id === activity.pityPrizeId);
   const pityKey = pityPrize ? prizes.find((draft) => draft.id === pityPrize.id)?.key ?? null : null;
@@ -336,7 +340,8 @@ export function toPayload(
         lifetimeReward: swapRewardOf(prize),
         dailyLimit: Math.max(0, toInt(prize.dailyLimit)),
         userLimit: Math.max(0, toInt(prize.userLimit)),
-        userDailyLimit: Math.max(0, toInt(prize.userDailyLimit))
+        userDailyLimit: Math.max(0, toInt(prize.userDailyLimit)),
+        value: Math.max(0, toInt(prize.value))
       };
     })
   };

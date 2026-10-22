@@ -33,6 +33,32 @@ export function DrawPlanView({
         <Badge variant="outline" size="sm">
           中奖率 {percent(plan.winRate)}
         </Badge>
+        {plan.fair !== undefined && Math.abs(plan.fair - plan.winRate) > 1e-6 ? (
+          <Badge variant="outline" size="sm">
+            控制前 {percent(plan.fair)}
+          </Badge>
+        ) : null}
+        {plan.value ? (
+          <Badge variant="outline" size="sm">
+            期望价值 {plan.value.toFixed(2)}
+          </Badge>
+        ) : null}
+        {plan.luck ? (
+          <Badge variant={plan.luck < 0 ? "info" : "warning"} size="sm">
+            运气 z {plan.luck > 0 ? "+" : ""}
+            {plan.luck.toFixed(2)}
+          </Badge>
+        ) : null}
+        {plan.prd ? (
+          <Badge variant="info" size="sm">
+            伪随机 {percent(plan.prd)}
+          </Badge>
+        ) : null}
+        {plan.guardInfeasible ? (
+          <Badge variant="danger" size="sm">
+            护栏不可行
+          </Badge>
+        ) : null}
         {plan.softPity ? (
           <Badge variant="info" size="sm">
             软保底 +{plan.softPity.toFixed(1)} 个百分点

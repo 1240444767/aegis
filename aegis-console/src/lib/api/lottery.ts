@@ -117,6 +117,8 @@ export type LotteryStrategyLimits = {
   simulationUsers: number;
   simulationEach: number;
   simulationDraws: number;
+  luckStrength?: number;
+  controlGain?: number;
 };
 
 export type LotteryStrategyRule = {
@@ -142,10 +144,26 @@ export type LotteryStrategy = {
   softPity?: { start: number; step: number };
   pacing?: { slack: number; maxBoost: number };
   cooldown?: { draws: number; factor: number };
-  budget?: { dailyPoints: number };
+  /** paced：按当天时间进度放量 */
+  budget?: { dailyPoints: number; paced?: boolean };
   risk?: { deviceAccounts: number; ipAccounts: number };
   behavior?: LotteryBehaviorModel;
   rules?: LotteryStrategyRule[];
+  /** 运气平衡：每 1σ 在对数几率上校正多少 */
+  luck?: { strength: number };
+  /** prd 为伪随机分布（替代软保底）；空为独立抽取 */
+  variance?: "" | "prd";
+  /** 全站中奖率反馈（Beta 后验） */
+  winRate?: { target: number; gain: number; prior?: number };
+  /** 护栏：精确 I-投影 */
+  guard?: {
+    minWinRate: number;
+    maxWinRate: number;
+    maxValue: number;
+    experienceRate?: number;
+    drawValue?: number;
+    kindCaps?: Record<string, number>;
+  };
 };
 
 /** 行为画像（全部行为的原始值） */
@@ -202,9 +220,52 @@ export type LotteryDrawPlan = {
   risk?: boolean;
   behavior?: LotteryBehaviorScore;
   winRate: number;
+  /** 这一次的期望价值（积分当量） */
+  value?: number;
+  /** 控制层之前的中奖率 */
+  fair?: number;
+  /** 运气 z 分数 */
+  luck?: number;
+  /** 伪随机分布给这一次定的中奖率 */
+  prd?: number;
+  guardInfeasible?: boolean;
   pity?: boolean;
   picked?: number;
   fallback?: boolean;
+};
+
+/** 距首次中奖次数的精确分布（吸收马尔可夫链） */
+export type LotteryStreakAnalysis = {
+  hazard: number[];
+  survival: number[];
+  mean: number;
+  std: number;
+  p50: number;
+  p90: number;
+  p99: number;
+  longRunWinRate: number;
+  never?: boolean;
+};
+
+/** 出奖审计：Mahalanobis χ² 整体检验与各奖品的边际检验 */
+export type LotteryAuditResult = {
+  draws: number;
+  skipped: number;
+  statistic: number;
+  df: number;
+  pValue: number;
+  alpha: number;
+  passed: boolean;
+  prizes: Array<{
+    prizeId: number;
+    position: number;
+    observed: number;
+    expected: number;
+    std: number;
+    z: number;
+    pValue: number;
+    flagged?: boolean;
+  }>;
 };
 
 export type LotteryDistribution = { mean: number; p50: number; p90: number; p99: number; max: number };
@@ -220,6 +281,8 @@ export type LotterySimulationResult = {
   neverWon: number;
   missStreak: LotteryDistribution;
   pointsIssued: number;
+  winsPerUser?: LotteryDistribution;
+  valuePerDraw?: number;
   prizes: Array<{
     prizeId: number;
     position: number;
@@ -252,6 +315,7 @@ export type LotterySimulateResponse = {
   behavior?: LotteryBehaviorScore;
   /** 指定用户此刻再抽一次的方案（只对已保存的活动） */
   current?: LotteryDrawPlan;
+  analytic?: LotteryStreakAnalysis;
 };
 
 export type LotteryReward = {
@@ -295,6 +359,8 @@ export type LotteryPrize = {
   dailyLimit?: number;
   userLimit?: number;
   userDailyLimit?: number;
+  /** 积分当量，0 为按类型估算 */
+  value?: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -356,6 +422,7 @@ export type LotteryPrizePayload = {
   dailyLimit: number;
   userLimit: number;
   userDailyLimit: number;
+  value: number;
 };
 
 export type LotteryActivityPayload = {
@@ -543,4 +610,9 @@ export function simulateLottery(token: string, appKey: string, payload: LotteryS
     token,
     body: JSON.stringify(payload)
   });
+}
+
+/** 出奖审计：最近 days 天的记录是否服从每一次方案给出的概率 */
+export function getLotteryAudit(token: string, appKey: string, activityId: number, days: number) {
+  return apiRequest<LotteryAuditResult>(`${base(appKey)}/activities/${activityId}/audit${buildQuery({ days })}`, { token });
 }

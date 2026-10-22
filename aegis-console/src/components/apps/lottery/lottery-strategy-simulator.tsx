@@ -20,6 +20,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ApiError } from "@/lib/api/client";
 import type {
+  LotteryStreakAnalysis,
+  LotterySimulationResult,
   LotteryActivityPayload,
   LotteryCatalog,
   LotteryDistribution,
@@ -198,7 +200,11 @@ function SimulationReport({
       </div>
       <p className="text-[11px] text-muted-foreground">
         共 {formatCount(sim.users)} 人、{formatCount(sim.draws)} 次，发出积分 {formatCount(sim.pointsIssued)}
+        {sim.valuePerDraw !== undefined ? `，平均每次 ${sim.valuePerDraw.toFixed(2)} 积分当量` : ""}
+        {sim.winsPerUser ? `，每人中奖 P50 ${sim.winsPerUser.p50} 次、P90 ${sim.winsPerUser.p90} 次` : ""}
       </p>
+
+      {result.analytic && !result.analytic.never ? <AnalyticView analytic={result.analytic} sim={sim} /> : null}
 
       <div className="space-y-1.5">
         <span className="text-[11px] font-medium">各奖品出现比例</span>
@@ -298,6 +304,39 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
         {value}
       </div>
       {sub ? <div className="truncate text-[10px] text-muted-foreground">{sub}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * 首中精确分布（吸收马尔可夫链）：每个连败状态的中奖率曲线与精确的均值、分位数，旁边对照模拟值。
+ * 长期中奖率 = 1/E[T]（更新报酬定理）。
+ */
+function AnalyticView({ analytic, sim }: { analytic: LotteryStreakAnalysis; sim: LotterySimulationResult }) {
+  const shown = analytic.hazard.slice(0, 40);
+  const width = 320;
+  const height = 64;
+  const step = shown.length > 1 ? width / (shown.length - 1) : width;
+  const path = shown.map((h, k) => `${k === 0 ? "M" : "L"}${(k * step).toFixed(1)},${(height - h * height).toFixed(1)}`).join(" ");
+  return (
+    <div className="space-y-2 rounded-xl border border-border p-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[11px] font-medium">首次中奖精确分布</span>
+        <span className="text-[10px] text-muted-foreground">括号内为模拟值</span>
+      </div>
+      <div className="grid gap-2 sm:grid-cols-4">
+        <Stat label="期望次数" value={analytic.mean.toFixed(2)} sub={`标准差 ${analytic.std.toFixed(2)}（${sim.firstWin.mean.toFixed(2)}）`} />
+        <Stat label="中位" value={`第 ${analytic.p50} 次`} sub={`模拟 ${sim.firstWin.p50 || "—"}`} />
+        <Stat label="P90 / P99" value={`${analytic.p90} / ${analytic.p99}`} sub={`模拟 ${sim.firstWin.p90 || "—"} / ${sim.firstWin.p99 || "—"}`} />
+        <Stat label="长期中奖率" value={percent(analytic.longRunWinRate)} sub={`模拟 ${percent(sim.winRate)}`} />
+      </div>
+      <div className="space-y-1">
+        <span className="text-[10px] text-muted-foreground">连续未中 k 次后下一次的中奖率（k = 0–{shown.length - 1}）</span>
+        <svg viewBox={`0 0 ${width} ${height}`} className="h-16 w-full" preserveAspectRatio="none" role="img" aria-label="中奖率曲线">
+          <line x1="0" y1={height} x2={width} y2={height} className="stroke-border" strokeWidth="1" />
+          <path d={path} fill="none" className="stroke-emerald-500" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+        </svg>
+      </div>
     </div>
   );
 }

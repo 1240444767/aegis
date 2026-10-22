@@ -5,6 +5,7 @@ import {
   createLotteryActivity,
   deleteLotteryActivity,
   fulfillLotteryDraw,
+  getLotteryAudit,
   getLotteryCatalog,
   getLotteryStats,
   listLotteryActivities,
@@ -31,7 +32,8 @@ const KEY = {
   catalog: "admin-lottery-catalog",
   activities: "admin-lottery-activities",
   draws: "admin-lottery-draws",
-  stats: "admin-lottery-stats"
+  stats: "admin-lottery-stats",
+  audit: "admin-lottery-audit"
 } as const;
 
 const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats];
@@ -145,5 +147,16 @@ export function useSimulateLotteryMutation(appKey: string) {
   const token = useAdminToken();
   return useMutation({
     mutationFn: (payload: LotterySimulatePayload) => simulateLottery(token as string, appKey, payload)
+  });
+}
+
+/** 出奖审计（读全部带方案的记录，按需手动刷新） */
+export function useLotteryAuditQuery(appKey: string | null | undefined, activityId: number | null | undefined, days: number) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.audit, token, appKey, activityId, days],
+    queryFn: () => getLotteryAudit(token as string, appKey as string, activityId as number, days),
+    enabled: Boolean(token && appKey && activityId),
+    staleTime: 60_000
   });
 }

@@ -4,6 +4,10 @@ import { useMemo } from "react";
 import {
   Activity,
   Braces,
+  Dices,
+  Scale,
+  ShieldCheck,
+  Target,
   Fingerprint,
   Gauge,
   Hourglass,
@@ -64,6 +68,21 @@ const DIMENSIONS: Dimension[] = [
   { key: "risk", label: "设备聚集", hint: "同设备或网络多账号只出未中奖", icon: Activity }
 ];
 
+type Control = {
+  key: "luck" | "prd" | "winRate" | "guard";
+  label: string;
+  hint: string;
+  icon: LucideIcon;
+};
+
+/** 概率控制层：在各维度系数之后整体校正这一次的分布（docs/lottery.md「概率控制层」） */
+const CONTROLS: Control[] = [
+  { key: "luck", label: "运气平衡", hint: "按实际与应得中奖次数的偏差校正", icon: Scale },
+  { key: "prd", label: "伪随机分布", hint: "长期中奖率不变，减少连败与连中", icon: Dices },
+  { key: "winRate", label: "全站中奖率目标", hint: "按今日全站中奖率闭环调节", icon: Target },
+  { key: "guard", label: "护栏", hint: "中奖率区间与期望价值上限", icon: ShieldCheck }
+];
+
 const MAP_HINT: Record<string, string> = {
   saturate: "越多越高",
   decay: "越久越低",
@@ -91,7 +110,10 @@ export function LotteryStrategyEditor({
   const kinds = catalog?.kinds ?? [];
   const winningKinds = kinds.filter((spec) => spec.type !== "none");
   const patch = (next: Partial<StrategyDraft>) => onChange({ ...value, ...next });
-  const enabled = DIMENSIONS.filter((dimension) => value[dimension.key]).length + (value.rules.length ? 1 : 0);
+  const enabled =
+    DIMENSIONS.filter((dimension) => value[dimension.key]).length +
+    CONTROLS.filter((control) => value[control.key]).length +
+    (value.rules.length ? 1 : 0);
 
   return (
     <FieldGroup label="出奖策略" hint={enabled ? `已启用 ${enabled} 项` : "未启用，按权重随机"}>
@@ -110,6 +132,78 @@ export function LotteryStrategyEditor({
           );
         })}
       </div>
+
+      <span className="block pt-1 text-[11px] font-medium text-muted-foreground">概率控制</span>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {CONTROLS.map((control) => {
+          const Icon = control.icon;
+          return (
+            <SwitchRow
+              key={control.key}
+              label={control.label}
+              hint={control.hint}
+              icon={<Icon className="size-3.5" />}
+              checked={value[control.key]}
+              disabled={control.key === "prd" && value.softPity}
+              onChange={(checked) => patch({ [control.key]: checked } as Partial<StrategyDraft>)}
+            />
+          );
+        })}
+      </div>
+
+      {value.luck ? (
+        <DimensionBox title="运气平衡">
+          <NumberField
+            label="校正强度"
+            value={value.luckStrength}
+            min={0}
+            max={limits.luckStrength ?? 2}
+            unit="每 1σ 的对数几率"
+            onChange={(next) => patch({ luckStrength: next })}
+          />
+          <p className="self-end text-[11px] text-muted-foreground">
+            0.3 时，比应得少中 2σ 的用户中奖率约提高 1.8 倍
+          </p>
+        </DimensionBox>
+      ) : null}
+
+      {value.prd ? (
+        <p className="rounded-xl border border-border px-3 py-2.5 text-[11px] text-muted-foreground">
+          距上次中奖第 n 次的中奖率为 n·C，C 按当前中奖率反解，长期中奖率不变
+        </p>
+      ) : null}
+
+      {value.winRate ? (
+        <DimensionBox title="全站中奖率目标">
+          <NumberField
+            label="目标中奖率"
+            value={value.winRateTarget}
+            min={0}
+            max={100}
+            unit="%"
+            onChange={(next) => patch({ winRateTarget: next })}
+          />
+          <NumberField
+            label="增益"
+            value={value.winRateGain}
+            min={0}
+            max={limits.controlGain ?? 20}
+            unit="1 为完全拉回"
+            onChange={(next) => patch({ winRateGain: next })}
+          />
+          <NumberField
+            label="先验强度"
+            value={value.winRatePrior}
+            min={1}
+            unit="次，样本少于它时少调"
+            onChange={(next) => patch({ winRatePrior: next })}
+          />
+        </DimensionBox>
+      ) : null}
+
+      {value.guard ? (
+        <GuardPanel value={value} patch={patch} winningKinds={winningKinds} />
+      ) : null}
 
       {value.behavior ? (
         <BehaviorPanel value={value} patch={patch} signals={catalog?.signals ?? []} winningKinds={winningKinds} limits={limits} />
@@ -190,6 +284,13 @@ export function LotteryStrategyEditor({
             unit="积分，含折算"
             onChange={(next) => patch({ budgetPoints: next })}
           />
+          <div className="self-end">
+            <SwitchRow
+              label="按时间进度放量"
+              checked={value.budgetPaced}
+              onChange={(checked) => patch({ budgetPaced: checked })}
+            />
+          </div>
         </DimensionBox>
       ) : null}
 
@@ -228,6 +329,91 @@ function DimensionBox({ title, children }: { title: string; children: React.Reac
     <div className="space-y-3 rounded-xl border border-border p-3">
       <span className="text-[11px] font-medium text-muted-foreground">{title}</span>
       <div className="grid gap-3 sm:grid-cols-2">{children}</div>
+    </div>
+  );
+}
+
+// ── 护栏 ──
+
+function GuardPanel({
+  value,
+  patch,
+  winningKinds
+}: {
+  value: StrategyDraft;
+  patch: (next: Partial<StrategyDraft>) => void;
+  winningKinds: Array<{ type: string; label: string }>;
+}) {
+  return (
+    <div className="space-y-3 rounded-xl border border-border p-3">
+      <span className="text-[11px] font-medium text-muted-foreground">护栏</span>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <NumberField
+          label="中奖率下限"
+          value={value.guardMin}
+          min={0}
+          max={100}
+          unit="%"
+          placeholder="不限"
+          onChange={(next) => patch({ guardMin: next })}
+        />
+        <NumberField
+          label="中奖率上限"
+          value={value.guardMax}
+          min={0}
+          max={100}
+          unit="%"
+          placeholder="不限"
+          onChange={(next) => patch({ guardMax: next })}
+        />
+        <NumberField
+          label="每次期望价值上限"
+          value={value.guardValue}
+          min={0}
+          unit="积分当量"
+          placeholder="不限"
+          onChange={(next) => patch({ guardValue: next })}
+        />
+        <NumberField
+          label="经验折算"
+          value={value.guardExpRate}
+          min={0}
+          unit="积分/点"
+          placeholder="0.1"
+          onChange={(next) => patch({ guardExpRate: next })}
+        />
+        <NumberField
+          label="抽奖次数折算"
+          value={value.guardDrawValue}
+          min={0}
+          unit="积分/次"
+          placeholder="积分抽奖价"
+          onChange={(next) => patch({ guardDrawValue: next })}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <span className="text-[11px] font-medium">奖品类型单次占比上限</span>
+        <div className="grid gap-2 sm:grid-cols-3">
+          {winningKinds.map((spec) => (
+            <div key={spec.type} className="flex items-center gap-2">
+              <span className="w-20 shrink-0 truncate text-[11px] text-muted-foreground">{spec.label}</span>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                step={0.1}
+                value={value.guardCaps[spec.type] ?? ""}
+                placeholder="不限"
+                onChange={(event) => patch({ guardCaps: { ...value.guardCaps, [spec.type]: event.target.value } })}
+                className="h-7 font-mono text-xs tabular-nums"
+                aria-label={`${spec.label}占比上限`}
+              />
+              <span className="text-[10px] text-muted-foreground">%</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <p className="text-[10px] text-muted-foreground">在满足全部约束的分布中取与原分布差异最小的一个</p>
     </div>
   );
 }
