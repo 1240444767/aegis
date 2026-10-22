@@ -165,6 +165,8 @@ func init() {
 		Write("PUT /api/admin/apps/:appkey/ai-gateway/models/:modelId", "修改 AI 中转模型与价格", "AI 模型", SeverityMedium),
 		Write("DELETE /api/admin/apps/:appkey/ai-gateway/models/:modelId", "删除 AI 中转模型", "AI 模型", SeverityMedium),
 		View("GET /api/admin/apps/:appkey/ai-gateway/requests", "查看 AI 调用记录", ""),
+		View("GET /api/admin/apps/:appkey/ai-gateway/requests/summary", "查看 AI 调用实时概况", ""),
+		View("GET /api/admin/apps/:appkey/ai-gateway/requests/live", "订阅 AI 调用实时推送", ""),
 		View("GET /api/admin/apps/:appkey/ai-gateway/requests/:requestNo", "查看 AI 调用详情", "AI 调用"),
 		Write("POST /api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund", "AI 调用整笔退款", "AI 调用", SeverityHigh),
 		View("GET /api/admin/apps/:appkey/ai-gateway/keys", "查看用户 AI 密钥", ""),

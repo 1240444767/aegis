@@ -416,7 +416,9 @@ r.upstream_model, r.config_id, r.provider, r.stream, r.status, r.price, r.factor
 r.billing, r.clamp_max_tokens, r.input_tokens, r.output_tokens, r.images, r.characters, r.audio_ms, r.usage_estimated,
 r.cost, r.charged, r.shortfall, r.charges, COALESCE(r.integral_txn_no, ''), COALESCE(r.wallet_txn_no, ''),
 r.error_code, r.error_message, COALESCE(r.client_ip, ''), COALESCE(r.user_agent, ''), r.latency_ms,
-COALESCE(r.refund_reason, ''), COALESCE(r.refunded_by, ''), r.refunded_at, r.created_at, r.expires_at, r.settled_at`
+COALESCE(r.refund_reason, ''), COALESCE(r.refunded_by, ''), r.refunded_at, r.created_at, r.expires_at, r.settled_at,
+r.attempts, r.first_token_ms, r.finish_reason, r.upstream_request_id, r.request_bytes, r.response_bytes,
+COALESCE((SELECT c.name FROM ai_provider_configs c WHERE c.id = r.config_id), '')`
 
 func scanAIGatewayRequest(row interface{ Scan(dest ...any) error }, extra ...any) (*aigateway.Request, error) {
 	var item aigateway.Request
@@ -428,7 +430,9 @@ func scanAIGatewayRequest(row interface{ Scan(dest ...any) error }, extra ...any
 		&item.InputTokens, &item.OutputTokens, &item.Images, &item.Characters, &item.AudioMillis, &item.UsageEstimated,
 		&item.CostMicro, &item.ChargedMicro, &item.ShortfallMicro, &charges, &item.IntegralTxnNo, &item.WalletTxnNo,
 		&item.ErrorCode, &item.ErrorMessage, &item.ClientIP, &item.UserAgent, &item.LatencyMs, &item.RefundReason,
-		&item.RefundedBy, &item.RefundedAt, &item.CreatedAt, &item.ExpiresAt, &item.SettledAt}
+		&item.RefundedBy, &item.RefundedAt, &item.CreatedAt, &item.ExpiresAt, &item.SettledAt,
+		&item.Attempts, &item.FirstTokenMs, &item.FinishReason, &item.UpstreamRequestID, &item.RequestBytes,
+		&item.ResponseBytes, &item.ConfigName}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrAIGatewayRequestNotFound
@@ -500,6 +504,14 @@ func (r *Repository) ListAIGatewayRequests(ctx context.Context, query aigateway.
 	}
 	if query.Endpoint != "" {
 		add("r.endpoint = $%d", query.Endpoint)
+	}
+	if query.ConfigID > 0 {
+		add("r.config_id = $%d", query.ConfigID)
+	}
+	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
+		pattern := escapeLikePattern(keyword) + "%"
+		args = append(args, pattern)
+		where = append(where, fmt.Sprintf("(r.request_no LIKE $%d OR r.upstream_request_id LIKE $%d)", len(args), len(args)))
 	}
 	if query.From != nil {
 		add("r.created_at >= $%d", *query.From)

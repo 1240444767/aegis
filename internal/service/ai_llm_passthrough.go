@@ -178,7 +178,10 @@ func (s *AIProviderService) Passthrough(ctx context.Context, appID, configID int
 	var lastErr error
 	for i := range usable {
 		channel := &usable[i]
+		trace := aiTraceFrom(ctx)
+		trace.beginAttempt(channel, req.Model)
 		status, contentType, body, err := s.client.passthrough(ctx, channel.Config, channel.Meta, req)
+		trace.endAttempt(ctx, err)
 		if err == nil {
 			return &aiPassthroughResponse{Status: status, ContentType: contentType, Body: body, Channel: channel}, nil
 		}

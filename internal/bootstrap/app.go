@@ -482,6 +482,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	aiAgentService := service.NewAIAgentService(log, pg, aiProviderService, appFunctionService)
 	// 面向应用终端用户的计费中转：通道复用上面的链路，计费落积分 / 余额 / 额度（docs/ai-gateway.md）。
 	aiGatewayService := service.NewAIGatewayService(log, pg, authService, aiProviderService)
+	// 调用记录的实时事件经 NATS 跨实例分发（控制台调用记录页的实时刷新）。
+	aiGatewayService.AttachLiveBus(natsConn)
 	// script 运行时的 SDK 依赖：脚本通过它们读写平台数据。
 	// 未装配的那一项对应的能力会在绑定时被拒绝并点名，
 	// 而不是绑上去等脚本调用时空指针（wasm/http 不受影响）。

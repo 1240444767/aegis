@@ -213,6 +213,8 @@ type Settings struct {
 	DefaultMaxTokens int `json:"defaultMaxTokens"`
 	// Timezone 周期额度与每日上限按哪个时区切日。
 	Timezone string `json:"timezone"`
+	// RedactContent 调用追踪不留提示词与正文，只留参数与长度。
+	RedactContent bool `json:"redactContent"`
 
 	UpdatedBy string     `json:"updatedBy,omitempty"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
@@ -550,12 +552,19 @@ type Request struct {
 	ClientIP       string          `json:"clientIp,omitempty"`
 	UserAgent      string          `json:"userAgent,omitempty"`
 	LatencyMs      int             `json:"latencyMs"`
-	RefundReason   string          `json:"refundReason,omitempty"`
-	RefundedBy     string          `json:"refundedBy,omitempty"`
-	RefundedAt     *time.Time      `json:"refundedAt,omitempty"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	ExpiresAt      time.Time       `json:"expiresAt"`
-	SettledAt      *time.Time      `json:"settledAt,omitempty"`
+	TraceSummary
+	// ConfigName 实际使用的通道名（联表取，通道删了就空）。
+	ConfigName string `json:"configName,omitempty"`
+	// Trace 追踪详情：只有管理端的单条查询带。
+	Trace *Trace `json:"trace,omitempty"`
+	// Live 进行中调用的实时进度：只在实时推送里有。
+	Live         *LiveProgress `json:"live,omitempty"`
+	RefundReason string        `json:"refundReason,omitempty"`
+	RefundedBy   string        `json:"refundedBy,omitempty"`
+	RefundedAt   *time.Time    `json:"refundedAt,omitempty"`
+	CreatedAt    time.Time     `json:"createdAt"`
+	ExpiresAt    time.Time     `json:"expiresAt"`
+	SettledAt    *time.Time    `json:"settledAt,omitempty"`
 
 	// 库里的微点原值，服务端用。
 	EstimateMicro  int64 `json:"-"`
@@ -573,6 +582,9 @@ type RequestQuery struct {
 	Model    string
 	Status   string
 	Endpoint string
+	// Keyword 按调用编号或上游请求编号查（前缀匹配）。
+	Keyword  string
+	ConfigID int64
 	From     *time.Time
 	To       *time.Time
 	Page     int

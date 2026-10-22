@@ -449,6 +449,8 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.PUT("/apps/:appkey/ai-gateway/models/:modelId", h.AdminUpdateAIGatewayModel)
 		admin.DELETE("/apps/:appkey/ai-gateway/models/:modelId", h.AdminDeleteAIGatewayModel)
 		admin.GET("/apps/:appkey/ai-gateway/requests", h.AdminAIGatewayRequests)
+		admin.GET("/apps/:appkey/ai-gateway/requests/summary", h.AdminAIGatewayRequestSummary)
+		admin.GET("/apps/:appkey/ai-gateway/requests/live", h.AdminAIGatewayRequestsLive)
 		admin.GET("/apps/:appkey/ai-gateway/requests/:requestNo", h.AdminAIGatewayRequest)
 		admin.POST("/apps/:appkey/ai-gateway/requests/:requestNo/refund", h.AdminRefundAIGatewayRequest)
 		admin.GET("/apps/:appkey/ai-gateway/keys", h.AdminAIGatewayKeys)

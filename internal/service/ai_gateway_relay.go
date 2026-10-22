@@ -31,6 +31,8 @@ type AIGatewayChatInput struct {
 	Request        aidomain.ChatRequest
 	Stream         bool
 	IdempotencyKey string
+	// RequestBytes 调用方请求体的大小（追踪用）。
+	RequestBytes int64
 	// OnReserved 暂扣成功、开始调用上游之前回调（处理器在这里写响应头）。
 	OnReserved func(requestNo string)
 }
@@ -55,7 +57,10 @@ type AIGatewayPassthroughInput struct {
 	Meter            func(contentType string, body []byte) (aigateway.Meters, bool, error)
 	MaxResponseBytes int64
 	IdempotencyKey   string
-	OnReserved       func(requestNo string)
+	// Describe 请求的追踪摘要（参数原样、长文本截断、文件只记名字与大小）。
+	Describe     func(opts aigateway.SanitizeOptions) aigateway.TraceContent
+	RequestBytes int64
+	OnReserved   func(requestNo string)
 }
 
 // AIGatewayPassthroughResult 原样转发的结论。
@@ -85,7 +90,7 @@ func (s *AIGatewayService) reserve(ctx context.Context, principal *AIGatewayPrin
 }
 
 // release 失败放回。放回本身失败只记日志：暂扣会被后台循环按过期放回，结论一样是不扣费。
-func (s *AIGatewayService) release(ctx context.Context, requestNo string, cause error, channel *resolvedChannel, started time.Time) {
+func (s *AIGatewayService) release(ctx context.Context, requestNo string, cause error, channel *resolvedChannel, started time.Time) *aigateway.Request {
 	input := aigateway.ReleaseInput{
 		RequestNo: requestNo, Status: aigateway.StatusFailed, LatencyMs: elapsedMs(started),
 		ErrorCode: aiGatewayErrorCode(cause), ErrorMessage: aiGatewayErrorMessage(cause),
@@ -93,9 +98,12 @@ func (s *AIGatewayService) release(ctx context.Context, requestNo string, cause 
 	if channel != nil {
 		input.ConfigID, input.Provider = channel.Config.ID, channel.Config.Provider
 	}
-	if _, err := s.pg.ReleaseAIGatewayRequest(context.WithoutCancel(ctx), input); err != nil {
+	record, err := s.pg.ReleaseAIGatewayRequest(context.WithoutCancel(ctx), input)
+	if err != nil {
 		s.log.Error("AI 网关放回暂扣失败，将由后台按过期放回", zap.String("requestNo", requestNo), zap.Error(err))
+		return nil
 	}
+	return record
 }
 
 func (s *AIGatewayService) settle(ctx context.Context, requestNo, status string, meters aigateway.Meters, estimated bool,
@@ -183,6 +191,8 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 	if in.OnReserved != nil {
 		in.OnReserved(reserved.RequestNo)
 	}
+	hide := principal.Settings.RedactContent
+	ctx, call := s.beginCall(ctx, principal, reserved.RequestNo, chatTraceRequest(request, in.Endpoint, hide), in.RequestBytes)
 
 	started := time.Now()
 	// 流式：累计上游已经生成的内容，客户端中途断开时按它计费。
@@ -206,6 +216,7 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 					delivered.ToolCalls[index].Arguments = append(delivered.ToolCalls[index].Arguments, event.Delta...)
 				}
 			}
+			call.observeStream(event)
 			if err := onEvent(event); err != nil {
 				clientGone = true
 				return err
@@ -219,10 +230,16 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 		aborted := in.Stream && (clientGone || ctx.Err() != nil)
 		if output := aigateway.EstimateChatOutput(&delivered); aborted && output > 0 {
 			meters := aigateway.Meters{InputTokens: estimate.InputTokens, OutputTokens: output}
-			_, _ = s.settle(ctx, reserved.RequestNo, aigateway.StatusAborted, meters, true, channel, request.Model, started)
+			record, _ := s.settle(ctx, reserved.RequestNo, aigateway.StatusAborted, meters, true, channel, request.Model, started)
+			call.finish(ctx, record, chatTraceResponse(&delivered, hide, true), "client-closed")
 			return nil, err
 		}
-		s.release(ctx, reserved.RequestNo, err, channel, started)
+		record := s.release(ctx, reserved.RequestNo, err, channel, started)
+		var partial aigateway.TraceContent
+		if in.Stream && (delivered.Text != "" || delivered.Reasoning != "" || len(delivered.ToolCalls) > 0) {
+			partial = chatTraceResponse(&delivered, hide, true)
+		}
+		call.finish(ctx, record, partial, aidomain.FinishError)
 		return nil, err
 	}
 
@@ -237,6 +254,7 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 		upstreamModel = request.Model
 	}
 	record, err := s.settle(ctx, reserved.RequestNo, aigateway.StatusSucceeded, meters, estimated, channel, upstreamModel, started)
+	call.finish(ctx, record, chatTraceResponse(response, hide, false), response.FinishReason)
 	if err != nil && !in.Stream {
 		// 非流式还没交付：记不上账就不交付，暂扣由后台放回（不扣费）。
 		return nil, apperrors.New(50000, http.StatusInternalServerError, "计费失败，本次调用不扣费，请重试")
@@ -262,6 +280,12 @@ func (s *AIGatewayService) RelayPassthrough(ctx context.Context, principal *AIGa
 	if in.OnReserved != nil {
 		in.OnReserved(reserved.RequestNo)
 	}
+	sanitize := aigateway.SanitizeOptions{HideContent: principal.Settings.RedactContent}
+	var described aigateway.TraceContent
+	if in.Describe != nil {
+		described = in.Describe(sanitize)
+	}
+	ctx, call := s.beginCall(ctx, principal, reserved.RequestNo, described, in.RequestBytes)
 
 	started := time.Now()
 	response, err := s.ai.Passthrough(ctx, principal.AppID, model.ConfigID, aiPassthroughRequest{
@@ -272,16 +296,18 @@ func (s *AIGatewayService) RelayPassthrough(ctx context.Context, principal *AIGa
 		channel = response.Channel
 	}
 	if err != nil {
-		s.release(ctx, reserved.RequestNo, err, channel, started)
+		call.finish(ctx, s.release(ctx, reserved.RequestNo, err, channel, started), nil, aidomain.FinishError)
 		return nil, err
 	}
+	traced := aigateway.SanitizeJSON(response.Body, response.ContentType, sanitize)
 	meters, estimated, err := in.Meter(response.ContentType, response.Body)
 	if err != nil {
 		cause := apperrors.New(50201, http.StatusBadGateway, "上游返回了无法使用的结果："+err.Error())
-		s.release(ctx, reserved.RequestNo, cause, channel, started)
+		call.finish(ctx, s.release(ctx, reserved.RequestNo, cause, channel, started), traced, aidomain.FinishError)
 		return nil, cause
 	}
 	record, err := s.settle(ctx, reserved.RequestNo, aigateway.StatusSucceeded, meters, estimated, channel, model.Upstream(), started)
+	call.finish(ctx, record, traced, aidomain.FinishStop)
 	if err != nil {
 		return nil, apperrors.New(50000, http.StatusInternalServerError, "计费失败，本次调用不扣费，请重试")
 	}

@@ -137,6 +137,8 @@ GET	/api/admin/apps/:appkey/ai-gateway/keys	AdminAIGatewayKeys
 GET	/api/admin/apps/:appkey/ai-gateway/models	AdminAIGatewayModels
 GET	/api/admin/apps/:appkey/ai-gateway/requests	AdminAIGatewayRequests
 GET	/api/admin/apps/:appkey/ai-gateway/requests/:requestNo	AdminAIGatewayRequest
+GET	/api/admin/apps/:appkey/ai-gateway/requests/live	AdminAIGatewayRequestsLive
+GET	/api/admin/apps/:appkey/ai-gateway/requests/summary	AdminAIGatewayRequestSummary
 GET	/api/admin/apps/:appkey/ai-gateway/settings	AdminAIGatewaySettings
 GET	/api/admin/apps/:appkey/ai-gateway/stats	AdminAIGatewayStats
 GET	/api/admin/apps/:appkey/ai-gateway/users/:userId/account	AdminAIGatewayUserAccount

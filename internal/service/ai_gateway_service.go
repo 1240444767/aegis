@@ -31,6 +31,8 @@ type AIGatewayService struct {
 	auth *AuthService
 	ai   *AIProviderService
 	now  func() time.Time
+	// live 调用记录的实时推送（ai_gateway_live.go）。
+	live *aiGatewayLiveHub
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -38,7 +40,8 @@ type AIGatewayService struct {
 
 // NewAIGatewayService 构造网关服务。
 func NewAIGatewayService(log *zap.Logger, pg *pgrepo.Repository, auth *AuthService, ai *AIProviderService) *AIGatewayService {
-	return &AIGatewayService{log: log, pg: pg, auth: auth, ai: ai, now: time.Now, stop: make(chan struct{})}
+	return &AIGatewayService{log: log, pg: pg, auth: auth, ai: ai, now: time.Now, live: newAIGatewayLiveHub(log),
+		stop: make(chan struct{})}
 }
 
 // RelayBasePath OpenAI SDK 的 baseURL 应填的路径（相对站点根）。
@@ -144,7 +147,10 @@ func (s *AIGatewayService) Start(ctx context.Context) {
 
 // Stop 停止后台循环。
 func (s *AIGatewayService) Stop() {
-	s.stopOnce.Do(func() { close(s.stop) })
+	s.stopOnce.Do(func() {
+		close(s.stop)
+		s.live.close()
+	})
 }
 
 // SweepExpiredHolds 放回已过期的暂扣，返回放回的条数。
@@ -165,6 +171,7 @@ func (s *AIGatewayService) SweepExpiredHolds(ctx context.Context) (int, error) {
 		}
 		if record.Status == aigateway.StatusExpired {
 			released++
+			s.publishFinished(record)
 		}
 	}
 	return released, nil
@@ -255,10 +262,24 @@ func (s *AIGatewayService) ListRequests(ctx context.Context, query aigateway.Req
 	return page, mapAIGatewayError(err)
 }
 
-// GetRequest 一条调用记录。
+// GetRequest 一条调用记录，带追踪详情（每一次上游尝试、请求与响应摘要）。
 func (s *AIGatewayService) GetRequest(ctx context.Context, appID int64, requestNo string) (*aigateway.Request, error) {
 	record, err := s.pg.GetAIGatewayRequest(ctx, appID, 0, strings.TrimSpace(requestNo))
-	return record, mapAIGatewayError(err)
+	if err != nil {
+		return nil, mapAIGatewayError(err)
+	}
+	trace, err := s.pg.GetAIGatewayTrace(ctx, record.ID)
+	if err != nil {
+		return nil, err
+	}
+	record.Trace = trace
+	return record, nil
+}
+
+// LiveSummary 最近 minutes 分钟的调用概况（5–1440）。
+func (s *AIGatewayService) LiveSummary(ctx context.Context, appID int64, minutes int) (*aigateway.LiveSummary, error) {
+	minutes = min(max(minutes, 5), 1440)
+	return s.pg.AIGatewayLiveSummary(ctx, appID, minutes, s.now())
 }
 
 // RefundRequest 管理员整笔退款。
@@ -270,6 +291,9 @@ func (s *AIGatewayService) RefundRequest(ctx context.Context, in aigateway.Refun
 	}
 	in.Reason = reason
 	record, err := s.pg.RefundAIGatewayRequest(ctx, in)
+	if err == nil {
+		s.publishFinished(record)
+	}
 	return record, mapAIGatewayError(err)
 }
 
@@ -567,6 +591,10 @@ func redactAIGatewayRequestForUser(record *aigateway.Request) {
 	record.UpstreamModel = ""
 	record.Account = ""
 	record.RefundedBy = ""
+	record.ConfigName = ""
+	record.UpstreamRequestID = ""
+	record.Trace = nil
+	record.Live = nil
 }
 
 // ListMyCredits 我的赠送额度流水。

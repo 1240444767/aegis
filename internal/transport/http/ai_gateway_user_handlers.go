@@ -1,6 +1,8 @@
 package httptransport
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -64,6 +66,8 @@ func aiGatewayRequestQuery(c *gin.Context) aigateway.RequestQuery {
 		To:       cardKeyQueryTime(c.Query("end")),
 	}
 	query.KeyID, _ = strconv.ParseInt(c.Query("keyId"), 10, 64)
+	query.Keyword = strings.TrimSpace(c.Query("keyword"))
+	query.ConfigID, _ = strconv.ParseInt(c.Query("configId"), 10, 64)
 	return query
 }
 
@@ -359,6 +363,89 @@ func (h *Handler) AdminAIGatewayRequest(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, "ok", record)
+}
+
+// AdminAIGatewayRequestSummary GET /api/admin/apps/:appkey/ai-gateway/requests/summary?minutes=60
+func (h *Handler) AdminAIGatewayRequestSummary(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok || !h.aiGatewayReady(c) {
+		return
+	}
+	summary, err := h.aiGateway.LiveSummary(c.Request.Context(), appID, parsePositiveInt(c.Query("minutes"), 60))
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "ok", summary)
+}
+
+const (
+	aiGatewayLiveHeartbeat = 15 * time.Second
+	// aiGatewayLiveMaxAge 一条实时连接最长保持多久；到点由控制台重连（顺带重新校验登录与权限）。
+	aiGatewayLiveMaxAge = 30 * time.Minute
+)
+
+// AdminAIGatewayRequestsLive GET /api/admin/apps/:appkey/ai-gateway/requests/live
+//
+// SSE：调用记录的实时事件（created / attempt / progress / finished / resync），见 docs/ai-gateway.md「实时」。
+// 先发一条 ready，之后每 15 秒一条注释行保活。
+func (h *Handler) AdminAIGatewayRequestsLive(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok || !h.aiGatewayReady(c) {
+		return
+	}
+	h.streamAIGatewayLive(c, appID)
+}
+
+func (h *Handler) streamAIGatewayLive(c *gin.Context, appID int64) {
+	events, cancel := h.aiGateway.SubscribeLive(appID)
+	defer cancel()
+
+	header := c.Writer.Header()
+	header.Set("Content-Type", "text/event-stream; charset=utf-8")
+	header.Set("Cache-Control", "no-cache, no-transform")
+	header.Set("X-Accel-Buffering", "no")
+	// 长连接不受服务器的写超时约束。
+	_ = http.NewResponseController(c.Writer).SetWriteDeadline(time.Time{})
+	c.Status(http.StatusOK)
+
+	write := func(event string, payload any) bool {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return true
+		}
+		if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, encoded); err != nil {
+			return false
+		}
+		c.Writer.Flush()
+		return true
+	}
+	if !write("ready", gin.H{"appid": appID, "at": time.Now()}) {
+		return
+	}
+	heartbeat := time.NewTicker(aiGatewayLiveHeartbeat)
+	defer heartbeat.Stop()
+	deadline := time.NewTimer(aiGatewayLiveMaxAge)
+	defer deadline.Stop()
+	ctx := c.Request.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline.C:
+			write("bye", gin.H{"reason": "max-age"})
+			return
+		case <-heartbeat.C:
+			if _, err := c.Writer.WriteString(": ping\n\n"); err != nil {
+				return
+			}
+			c.Writer.Flush()
+		case event := <-events:
+			if !write(event.Type, event) {
+				return
+			}
+		}
+	}
 }
 
 // AIGatewayRefundRequest 管理员退款。

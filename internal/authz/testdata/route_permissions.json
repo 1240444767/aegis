@@ -7296,6 +7296,18 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/summary",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/live",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/ai-gateway/requests/:requestNo",
     "permission": "app:read",
     "appScoped": true

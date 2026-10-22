@@ -209,6 +209,22 @@ func rewriteResponseModel(body []byte, model string) []byte {
 	return rewritten
 }
 
+// jsonDescriber 请求体的追踪摘要；model 记调用方传的对外名（请求体里的会被换成上游名）。
+func jsonDescriber(payload map[string]json.RawMessage) func(aigateway.SanitizeOptions) aigateway.TraceContent {
+	model := rawString(payload["model"])
+	return func(opts aigateway.SanitizeOptions) aigateway.TraceContent {
+		out := aigateway.SanitizeMap(payload, opts)
+		if model != "" {
+			out["model"] = model
+		}
+		return out
+	}
+}
+
+func aiRelayRequestBytes(c *gin.Context) int64 {
+	return max(c.Request.ContentLength, 0)
+}
+
 func writeAIRelayPassthrough(c *gin.Context, result *service.AIGatewayPassthroughResult, model string) {
 	contentType := result.ContentType
 	if contentType == "" {
@@ -288,7 +304,7 @@ func (h *Handler) AIRelayMessages(c *gin.Context) {
 func (h *Handler) relayChat(c *gin.Context, principal *service.AIGatewayPrincipal, protocol, endpoint string,
 	request aidomain.ChatRequest, stream bool) {
 	input := service.AIGatewayChatInput{
-		Endpoint: endpoint, Request: request, Stream: stream,
+		Endpoint: endpoint, Request: request, Stream: stream, RequestBytes: aiRelayRequestBytes(c),
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
 	}
 	writeErr := func(err error) { writeAIRelayError(c, protocol, err) }
@@ -339,6 +355,7 @@ func (h *Handler) AIRelayEmbeddings(c *gin.Context) {
 	estimate := aigateway.Meters{InputTokens: max(aigateway.EstimateTokens(string(payload["input"])), 1)}
 	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointEmbeddings, Path: "embeddings", Model: model, Build: jsonBuilder(payload),
+		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: estimate, MaxResponseBytes: aiRelayResponseLimit,
 		Meter: func(_ string, body []byte) (aigateway.Meters, bool, error) {
 			return aigateway.MeterEmbeddings(body, estimate)
@@ -381,7 +398,7 @@ func (h *Handler) AIRelayImageGenerations(c *gin.Context) {
 	model := rawString(payload["model"])
 	size, quality := rawString(payload["size"]), rawString(payload["quality"])
 	h.relayImages(c, principal, aigateway.EndpointImageGenerate, "images/generations", model,
-		jsonBuilder(payload), imageEstimate(n, size, quality, rawString(payload["prompt"])), size, quality)
+		jsonBuilder(payload), jsonDescriber(payload), imageEstimate(n, size, quality, rawString(payload["prompt"])), size, quality)
 }
 
 // AIRelayImageEdits POST /api/ai/v1/images/edits —— multipart（OpenAI 原生）与 JSON（images[].image_url）都收。
@@ -403,7 +420,7 @@ func (h *Handler) AIRelayImageEdits(c *gin.Context) {
 		}
 		size, quality := form.value("size", ""), form.value("quality", "")
 		h.relayImages(c, principal, aigateway.EndpointImageEdit, "images/edits", form.value("model", ""),
-			form.builder(nil), imageEstimate(n, size, quality, form.value("prompt", "")), size, quality)
+			form.builder(nil), form.describer(), imageEstimate(n, size, quality, form.value("prompt", "")), size, quality)
 		return
 	}
 	payload, ok := readAIRelayJSON(c, aidomain.ProtocolOpenAI)
@@ -418,13 +435,15 @@ func (h *Handler) AIRelayImageEdits(c *gin.Context) {
 	}
 	size, quality := rawString(payload["size"]), rawString(payload["quality"])
 	h.relayImages(c, principal, aigateway.EndpointImageEdit, "images/edits", rawString(payload["model"]),
-		jsonBuilder(payload), imageEstimate(n, size, quality, rawString(payload["prompt"])), size, quality)
+		jsonBuilder(payload), jsonDescriber(payload), imageEstimate(n, size, quality, rawString(payload["prompt"])), size, quality)
 }
 
 func (h *Handler) relayImages(c *gin.Context, principal *service.AIGatewayPrincipal, endpoint, path, model string,
-	build func(string) ([]byte, string, error), estimate aigateway.Meters, size, quality string) {
+	build func(string) ([]byte, string, error), describe func(aigateway.SanitizeOptions) aigateway.TraceContent,
+	estimate aigateway.Meters, size, quality string) {
 	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
 		Endpoint: endpoint, Path: path, Model: model, Build: build, Estimate: estimate,
+		Describe: describe, RequestBytes: aiRelayRequestBytes(c),
 		MaxResponseBytes: aiRelayImageResponseLimit,
 		Meter: func(_ string, body []byte) (aigateway.Meters, bool, error) {
 			return aigateway.MeterImages(body, size, quality)
@@ -461,6 +480,7 @@ func (h *Handler) AIRelaySpeech(c *gin.Context) {
 	model := rawString(payload["model"])
 	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointSpeech, Path: "audio/speech", Model: model, Build: jsonBuilder(payload),
+		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: aigateway.Meters{Characters: characters}, MaxResponseBytes: aiRelayResponseLimit,
 		Meter: func(_ string, body []byte) (aigateway.Meters, bool, error) {
 			if len(body) == 0 {
@@ -520,6 +540,7 @@ func (h *Handler) relayTranscription(c *gin.Context, endpoint, path string) {
 	model := form.value("model", "")
 	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
 		Endpoint: endpoint, Path: path, Model: model, Build: form.builder(overrides), Estimate: estimate,
+		Describe: form.describer(), RequestBytes: aiRelayRequestBytes(c),
 		MaxResponseBytes: aiRelayResponseLimit,
 		Meter: func(contentType string, body []byte) (aigateway.Meters, bool, error) {
 			return aigateway.MeterTranscription(contentType, body, estimate)
@@ -560,6 +581,7 @@ func (h *Handler) AIRelayRerank(c *gin.Context) {
 		aigateway.EstimateTokens(string(payload["documents"])), 1)}
 	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointRerank, Path: "rerank", Model: model, Build: jsonBuilder(payload),
+		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: estimate, MaxResponseBytes: aiRelayResponseLimit,
 		Meter: func(_ string, body []byte) (aigateway.Meters, bool, error) {
 			return aigateway.MeterRerank(body, estimate)
@@ -662,6 +684,41 @@ func (f *aiRelayForm) builder(overrides map[string]string) func(string) ([]byte,
 			return nil, "", err
 		}
 		return buffer.Bytes(), writer.FormDataContentType(), nil
+	}
+}
+
+// describer 表单的追踪摘要：字段按 JSON 值同样处理，文件只记字段名、文件名、类型与大小。
+func (f *aiRelayForm) describer() func(aigateway.SanitizeOptions) aigateway.TraceContent {
+	return func(opts aigateway.SanitizeOptions) aigateway.TraceContent {
+		out := aigateway.TraceContent{}
+		fields := map[string]any{}
+		for key, values := range f.form.Value {
+			if len(values) == 1 {
+				fields[key] = values[0]
+			} else {
+				items := make([]any, 0, len(values))
+				for _, value := range values {
+					items = append(items, value)
+				}
+				fields[key] = items
+			}
+		}
+		if sanitized, ok := aigateway.SanitizeValue(fields, opts).(map[string]any); ok {
+			for key, value := range sanitized {
+				out[key] = value
+			}
+		}
+		files := make([]map[string]any, 0)
+		for key, headers := range f.form.File {
+			for _, file := range headers {
+				files = append(files, map[string]any{"field": key, "name": aigateway.TruncateText(file.Filename, 120),
+					"size": file.Size, "contentType": file.Header.Get("Content-Type")})
+			}
+		}
+		if len(files) > 0 {
+			out["files"] = files
+		}
+		return out
 	}
 }
 

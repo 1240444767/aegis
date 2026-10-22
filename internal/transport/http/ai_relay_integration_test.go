@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,10 +12,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -56,11 +59,22 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO apps (id, name) VALUES ($1, 'relay-test')`, appID); err != nil {
 		t.Fatal(err)
 	}
-	name, provider, enabled := "fake", aidomain.ProviderCustomOpenAI, true
-	if _, err := ai.Save(ctx, aidomain.ConfigMutation{AppID: appID, Name: &name, Provider: &provider, Enabled: &enabled,
-		Settings: map[string]string{aidomain.KeyBaseURL: upstream.server.URL + "/v1"},
-		Secrets:  map[string]string{aidomain.KeyAPIKey: "upstream-secret"}}); err != nil {
-		t.Fatal(err)
+	// 链路：先走一条总是 503 的通道（可重试），再回退到正常的 fake —— 追踪里应有两次尝试。
+	broken := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-request-id", "bad-1")
+		http.Error(w, `{"error":{"message":"overloaded"}}`, http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(broken.Close)
+	for _, channel := range []struct {
+		name, url string
+		priority  int
+	}{{"broken", broken.URL + "/v1", 1}, {"fake", upstream.server.URL + "/v1", 10}} {
+		name, provider, enabled, priority := channel.name, aidomain.ProviderCustomOpenAI, true, channel.priority
+		if _, err := ai.Save(ctx, aidomain.ConfigMutation{AppID: appID, Name: &name, Provider: &provider, Enabled: &enabled,
+			Priority: &priority, Settings: map[string]string{aidomain.KeyBaseURL: channel.url},
+			Secrets: map[string]string{aidomain.KeyAPIKey: "upstream-secret"}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	settings := aigateway.DefaultSettings()
 	settings.Enabled = true
@@ -98,8 +112,46 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	relay.POST("/messages", h.AIRelayMessages)
 	relay.POST("/images/edits", h.AIRelayImageEdits)
 	relay.POST("/audio/transcriptions", h.AIRelayTranscriptions)
+	router.GET("/live", func(c *gin.Context) { h.streamAIGatewayLive(c, appID) })
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
+
+	// 管理端 SSE：先 ready，再收到调用的 created / finished。
+	liveCtx, stopLive := context.WithCancel(ctx)
+	defer stopLive()
+	liveReq, _ := http.NewRequestWithContext(liveCtx, "GET", server.URL+"/live", nil)
+	liveResp, err := http.DefaultClient.Do(liveReq)
+	if err != nil || liveResp.StatusCode != 200 || !strings.HasPrefix(liveResp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("SSE 连接失败：%v %+v", err, liveResp)
+	}
+	defer liveResp.Body.Close()
+	sseLines := make(chan string, 256)
+	go func() {
+		scanner := bufio.NewScanner(liveResp.Body)
+		scanner.Buffer(make([]byte, 1<<20), 1<<20)
+		for scanner.Scan() {
+			sseLines <- scanner.Text()
+		}
+		close(sseLines)
+	}()
+	waitSSE := func(prefix string) string {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for {
+			select {
+			case line, ok := <-sseLines:
+				if !ok {
+					t.Fatalf("SSE 断开，未等到 %q", prefix)
+				}
+				if strings.HasPrefix(line, prefix) {
+					return line
+				}
+			case <-deadline:
+				t.Fatalf("SSE 未等到 %q", prefix)
+			}
+		}
+	}
+	waitSSE("event: ready")
 
 	do := func(method, path, contentType string, body io.Reader, headers map[string]string) (*http.Response, []byte) {
 		t.Helper()
@@ -127,6 +179,8 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	}
 
 	// 非流式对话：OpenAI 形状、对外模型名、请求编号头
+	live, cancelLive := gw.SubscribeLive(appID)
+	defer cancelLive()
 	chatBody := `{"model":"chat","messages":[{"role":"user","content":"hi"}],"max_tokens":20}`
 	resp, body = do("POST", "/api/ai/v1/chat/completions", "application/json", strings.NewReader(chatBody), bearer)
 	var completion struct {
@@ -148,6 +202,60 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 		t.Fatalf("应带请求编号头，得到 %q", requestNo)
 	}
 
+	// 实时事件：created → attempt… → finished，finished 带两次尝试与上游请求编号。
+	var kinds []string
+	var finished service.AIGatewayLiveEvent
+	for finished.Type == "" {
+		select {
+		case event := <-live:
+			if event.RequestNo != requestNo {
+				continue
+			}
+			kinds = append(kinds, event.Type)
+			if event.Type == service.AIGatewayLiveFinished {
+				finished = event
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("没有收到 finished 事件，已收到 %v", kinds)
+		}
+	}
+	if kinds[0] != service.AIGatewayLiveCreated || !slices.Contains(kinds, service.AIGatewayLiveAttempt) ||
+		finished.Request == nil || finished.Request.Attempts != 2 || finished.Request.Account != "relay-user" ||
+		finished.Request.UpstreamRequestID != "up-123" || finished.Request.Status != aigateway.StatusSucceeded {
+		t.Fatalf("实时事件不对：%v %+v", kinds, finished.Request)
+	}
+
+	waitSSE("event: created")
+	if line := waitSSE("event: finished"); line == "" {
+		t.Fatal("SSE 应推 finished")
+	}
+	if data := waitSSE("data: "); !strings.Contains(data, requestNo) || !strings.Contains(data, `"upstreamRequestId":"up-123"`) {
+		t.Fatalf("SSE finished 数据不对：%s", data)
+	}
+
+	// 追踪：第一次尝试 503 失败（可重试），第二次成功；请求与响应摘要。
+	traced, err := gw.GetRequest(ctx, appID, requestNo)
+	if err != nil || traced.Trace == nil || len(traced.Trace.Attempts) != 2 {
+		t.Fatalf("追踪应有两次尝试：%+v %v", traced, err)
+	}
+	first, second := traced.Trace.Attempts[0], traced.Trace.Attempts[1]
+	if first.Status != aigateway.AttemptFailed || first.HTTPStatus != 503 || !first.Retryable || first.ConfigName != "broken" ||
+		first.UpstreamRequestID != "bad-1" || !strings.HasSuffix(first.URL, "/v1/chat/completions") {
+		t.Fatalf("第一次尝试不对：%+v", first)
+	}
+	if second.Status != aigateway.AttemptSucceeded || second.HTTPStatus != 200 || second.ConfigName != "fake" ||
+		second.UpstreamRequestID != "up-123" || second.RateLimit["x-ratelimit-remaining-requests"] != "99" ||
+		second.ResponseBytes == 0 || second.RequestBytes == 0 || second.HeadersMs == 0 || second.Model != "up-chat" {
+		t.Fatalf("第二次尝试不对：%+v", second)
+	}
+	if traced.Attempts != 2 || traced.ConfigName != "fake" || traced.FinishReason != "stop" || traced.RequestBytes == 0 ||
+		traced.Trace.Response["text"] != "Hello" || traced.Trace.Request["messageCount"] != float64(1) {
+		t.Fatalf("追踪摘要不对：%+v %+v %+v", traced.TraceSummary, traced.Trace.Request, traced.Trace.Response)
+	}
+	if page, err := gw.ListRequests(ctx, aigateway.RequestQuery{AppID: appID, Keyword: "up-12"}); err != nil || page.Total != 1 {
+		t.Fatalf("应能按上游请求编号查到：%+v %v", page, err)
+	}
+
 	// 流式：SSE chunk、用量块、[DONE]
 	streamBody := `{"model":"chat","stream":true,"messages":[{"role":"user","content":"hi"}],"max_tokens":20}`
 	resp, body = do("POST", "/api/ai/v1/chat/completions", "application/json", strings.NewReader(streamBody), bearer)
@@ -156,6 +264,10 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 		!strings.Contains(text, `"content":"Hel"`) || !strings.Contains(text, `"prompt_tokens":10`) ||
 		!strings.HasSuffix(strings.TrimSpace(text), "data: [DONE]") || !strings.Contains(text, `"model":"chat"`) {
 		t.Fatalf("流式响应不对：%d %s", resp.StatusCode, text)
+	}
+	if streamed, err := gw.GetRequest(ctx, appID, resp.Header.Get("X-Aegis-Request-No")); err != nil ||
+		streamed.FirstTokenMs <= 0 || streamed.Trace.Attempts[1].FirstTokenMs <= 0 || streamed.Trace.Response["text"] != "Hel" {
+		t.Fatalf("流式应记首字耗时与已生成内容：%+v %v", streamed, err)
 	}
 
 	// Anthropic Messages：x-api-key 鉴权、Messages 形状
@@ -209,6 +321,10 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	if got := upstream.field("prompt"); got != "make it green" || upstream.file("image") != "PNGDATA" {
 		t.Fatalf("表单字段与文件应原样转发：prompt=%q file=%q", got, upstream.file("image"))
 	}
+	if edited, err := gw.GetRequest(ctx, appID, resp.Header.Get("X-Aegis-Request-No")); err != nil ||
+		edited.Trace.Request["prompt"] != "make it green" || edited.Trace.Request["files"] == nil || edited.Trace.Response["data"] == nil {
+		t.Fatalf("表单请求的追踪不对：%+v %v", edited.Trace, err)
+	}
 
 	// 转写：客户端要 text，上游收到 json（带时长），客户端拿到纯文本；按 90 秒计 3 点
 	form.Reset()
@@ -228,6 +344,29 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	record, err := gw.GetRequest(ctx, appID, resp.Header.Get("X-Aegis-Request-No"))
 	if err != nil || record.AudioMillis != 90_000 || record.CostMicro != 3_000_000 || record.UsageEstimated {
 		t.Fatalf("转写应按上游报的 90 秒计 3 点：%+v %v", record, err)
+	}
+
+	// 隐藏内容：追踪只留参数与长度。
+	settings.RedactContent = true
+	if _, err := gw.SaveSettings(ctx, appID, settings, "test"); err != nil {
+		t.Fatal(err)
+	}
+	resp, _ = do("POST", "/api/ai/v1/chat/completions", "application/json", strings.NewReader(chatBody), bearer)
+	hidden, err := gw.GetRequest(ctx, appID, resp.Header.Get("X-Aegis-Request-No"))
+	if err != nil || hidden.Trace == nil || hidden.Trace.Response["text"] != "[已隐藏 5 字]" ||
+		!strings.Contains(fmt.Sprint(hidden.Trace.Request["messages"]), "[已隐藏 2 字]") {
+		t.Fatalf("隐藏内容时不应留正文：%+v %v", hidden.Trace, err)
+	}
+
+	// 概况：按通道汇总上游尝试，broken 每次都失败。
+	summary, err := gw.LiveSummary(ctx, appID, 60)
+	if err != nil || summary.Total < 6 || summary.Retried < 5 || summary.InFlight != 0 || len(summary.Upstreams) != 2 {
+		t.Fatalf("概况不对：%+v %v", summary, err)
+	}
+	for _, item := range summary.Upstreams {
+		if item.ConfigName == "broken" && (item.Failed != item.Attempts || item.LastError == "") {
+			t.Fatalf("broken 通道应全部失败并带最后的错误：%+v", item)
+		}
 	}
 }
 
@@ -277,6 +416,8 @@ func newRelayFakeUpstream(t *testing.T) *relayFakeUpstream {
 	fake := &relayFakeUpstream{fields: map[string]string{}, files: map[string]string{}}
 	fake.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-request-id", "up-123")
+		w.Header().Set("x-ratelimit-remaining-requests", "99")
 		if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/") {
 			if err := r.ParseMultipartForm(8 << 20); err != nil {
 				http.Error(w, err.Error(), 400)

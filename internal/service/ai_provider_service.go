@@ -522,6 +522,8 @@ func (s *AIProviderService) dispatch(ctx context.Context, args aiChatArgs,
 			}
 		}
 
+		trace := aiTraceFrom(ctx)
+		trace.beginAttempt(channel, request.Model)
 		var response *aidomain.ChatResponse
 		var err error
 		if onEvent != nil {
@@ -529,6 +531,7 @@ func (s *AIProviderService) dispatch(ctx context.Context, args aiChatArgs,
 		} else {
 			response, err = s.client.Chat(ctx, channel.Config, request)
 		}
+		trace.endAttempt(ctx, err)
 		if err == nil {
 			return response, channel, nil
 		}

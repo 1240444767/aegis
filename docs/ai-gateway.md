@@ -142,8 +142,54 @@ text 格式不带任何用量，原样转发就只能估算。上游什么用量
 | `GET /ai/credits` | 赠送额度流水 |
 
 管理端 `/api/admin/apps/{appkey}/ai-gateway/*`：`catalog`、`settings`、`models`、`requests`（含 `refund`）、
-`keys`（含 `status`）、`stats`、`users/{userId}/account`、`users/{userId}/credits`（GET 流水 / POST 调整，`requestId` 幂等）。
-权限沿用应用级 `app:read` / `app:write`。
+`requests/summary`、`requests/live`、`keys`（含 `status`）、`stats`、`users/{userId}/account`、
+`users/{userId}/credits`（GET 流水 / POST 调整，`requestId` 幂等）。权限沿用应用级 `app:read` / `app:write`。
+`requests` 另收 `keyword`（调用编号或上游请求编号，前缀匹配）与 `configId`（实际使用的通道）。
+
+## 调用追踪
+
+调用记录只留计费需要的东西；追踪是给管理员排查用的，**只在管理端**，用户端的调用记录不带。
+
+记录行上的摘要（列表直接显示）：`attempts`（上游尝试次数，>1 即发生过链路回退）、`firstTokenMs`（流式首字，
+从暂扣成功算起）、`finishReason`、`upstreamRequestId`（成功那次尝试的上游请求编号）、`requestBytes`、
+`responseBytes`、`configName`（通道名，联表取）。
+
+详情在 `ai_gateway_request_traces`（迁移 `000122`），单条查询 `GET …/requests/{requestNo}` 的 `trace` 字段：
+
+- `attempts[]`：链路里每一次上游调用 —— 通道、协议、是否平台共享、上游模型名、URL（**只有主机与路径**，
+  Gemini 把密钥放在查询串里）、HTTP 状态、上游请求编号（`x-request-id` / `request-id` / `cf-ray` 等）、
+  `headersMs` 首包、`firstTokenMs` 首字、`latencyMs`、请求与响应字节数、限流余量（`x-ratelimit-*` /
+  `anthropic-ratelimit-*` / `retry-after`）、错误与是否可重试。状态 `succeeded` / `failed` / `canceled`（客户端断开）。
+- `request` / `response`：内容摘要。对话记参数、系统提示、最后 20 条消息、工具名；其余接口记请求体。
+  长文本截到 2000 字（JSON 里的字符串 1000 字）、base64 与 data URL 换成 `[image/png · 1.2 MB]` 占位、
+  长向量只记个数、`api_key` 一类的键去掉；表单里的文件只记字段名、文件名、类型与大小。
+  流式中途断开时 `response.partial=true`，是已生成的部分。
+- 设置 `redactContent` 打开时不留提示词与正文，只留参数与 `[已隐藏 N 字]`。
+
+采集方式：中转把 `aiTrace` 放进 ctx，链路循环每换一条通道记一次尝试，上游 HTTP 客户端外包的
+`aiTraceTransport` 从同一个 ctx 取到它记 HTTP 细节（`service/ai_gateway_trace.go`）。追踪在结算或放回之后写，
+不进计费事务，写失败只记日志。
+
+## 实时
+
+`GET …/ai-gateway/requests/live` 是 SSE（读响应体要带 `Authorization`，浏览器的 `EventSource` 带不了头，
+控制台用 `fetch` 读流）。事件：
+
+| 事件 | 何时 | 数据 |
+|---|---|---|
+| `ready` | 连上 | `appid` |
+| `created` | 暂扣成功 | `request`（列表形状，`status=reserved`，带 `live` 进度） |
+| `attempt` | 开始 / 收到响应头 / 结束一次上游尝试 | `attempts`、`progress` |
+| `progress` | 首字到达；流式进行中至多每秒一次 | `progress`：已用时、首字、已生成字数与估算 token |
+| `finished` | 结算、放回、超时放回、退款 | `request`（终态）、`attempts` |
+| `resync` | 这条连接丢过事件 | 控制台应重新拉一次列表 |
+| `bye` | 连接满 30 分钟 | 控制台重连 |
+
+每 15 秒一条 `: ping` 注释行保活。多实例经 NATS 主题 `aegis.aigateway.live` 互通（调用落在哪个实例都推得到），
+没有 NATS 时只推本机。推送尽力而为，不保证送达；控制台断线时退回定时刷新。
+
+`GET …/requests/summary?minutes=60`（5–1440）：进行中、总数、成功 / 失败、发生回退的、用户数、token、扣费、
+平均与 P95 耗时、平均首字，以及按通道汇总的上游尝试（次数、失败、平均耗时、最近一次错误）。
 
 ## 错误码（402xx）
 
@@ -181,7 +227,11 @@ go test ./internal/domain/aigateway/              # 计价、零头、退款恒�
 # 真实 Postgres（测试会 DROP SCHEMA public，切勿指向开发库）
 AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/service -run TestAIGatewayBillingIntegration
 AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/transport/http -run TestAIRelayHTTPIntegration
+go test ./internal/service -run 'LiveHub|AITrace'   # 实时推送的分发与补 resync、追踪的尝试与首字
 ```
+
+中转集成测试里链路是「总回 503 的通道 → 正常的假上游」，核对两次尝试的状态、上游请求编号、限流余量、
+首包与字节数，SSE 的 ready / created / finished，按上游请求编号搜索，隐藏内容，以及概况里按通道的汇总。
 
 计费集成测试经真实通道链路调 httptest 假上游，覆盖零头凑整、失败不扣费、余额不足、压低输出上限、免费额度、
 赠送额度幂等、余额冻结、溢出 shortfall、流式断开与上游中断、图像按实际张数、密钥上限与停用、过期回收与迟到结算、
@@ -190,5 +240,6 @@ AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/transport/htt
 ## 未做
 
 - `/v1/responses`、`/v1/completions`（旧版补全）、实时语音（Realtime）、视频生成接口。
-- 调用记录没有自动清理，量大后需要按 `created_at` 归档或分区。
+- 调用记录与追踪没有自动清理，量大后需要按 `created_at` 归档或分区。
+- 缓存命中与推理 token 没有单独计量（统一协议的 `Usage` 只有输入、输出与合计）。
 - 赠送额度不过期；激励广告发的额度与管理员发的额度不分开记余额。

@@ -54,12 +54,15 @@ func (e *aiUpstreamError) Error() string {
 // Timeout 恒为 0：流式响应可以持续几分钟，整体超时交给 ctx 控制；
 // 响应头超时单独给足 —— 推理模型出第一个字前会思考很久。
 func (c *aiLLMClient) httpClient(provider string) *http.Client {
-	return egress.NewClient(egress.Profile{
+	client := egress.NewClient(egress.Profile{
 		Name:                  "ai." + provider,
 		Timeout:               0,
 		DialTimeout:           15 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Minute,
 	})
+	// 网关的调用追踪：ctx 里带 aiTrace 时记下每次往返（ai_gateway_trace.go），否则原样透传。
+	client.Transport = aiTraceTransport{base: client.Transport}
+	return client
 }
 
 // Chat 非流式调用。
