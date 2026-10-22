@@ -33,6 +33,8 @@ type AIGatewayService struct {
 	now  func() time.Time
 	// live 调用记录的实时推送（ai_gateway_live.go）。
 	live *aiGatewayLiveHub
+	// jobs 本实例上正在跑的异步任务（ai_gateway_jobs.go）。
+	jobs *aiGatewayJobRegistry
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -40,8 +42,10 @@ type AIGatewayService struct {
 
 // NewAIGatewayService 构造网关服务。
 func NewAIGatewayService(log *zap.Logger, pg *pgrepo.Repository, auth *AuthService, ai *AIProviderService) *AIGatewayService {
-	return &AIGatewayService{log: log, pg: pg, auth: auth, ai: ai, now: time.Now, live: newAIGatewayLiveHub(log),
-		stop: make(chan struct{})}
+	s := &AIGatewayService{log: log, pg: pg, auth: auth, ai: ai, now: time.Now, live: newAIGatewayLiveHub(log),
+		jobs: newAIGatewayJobRegistry(), stop: make(chan struct{})}
+	s.live.onCancel = s.jobs.cancel
+	return s
 }
 
 // RelayBasePath OpenAI SDK 的 baseURL 应填的路径（相对站点根）。
@@ -108,6 +112,8 @@ func mapAIGatewayError(err error) error {
 		return aiGatewayError(40224, http.StatusConflict, "赠送额度不足，无法扣减")
 	case errors.Is(err, pgrepo.ErrAIGatewayCreditRequestReused):
 		return aiGatewayError(40225, http.StatusConflict, "请求编号已用于另一笔调整")
+	case errors.Is(err, pgrepo.ErrAIGatewayJobNotFound):
+		return aiGatewayError(40226, http.StatusNotFound, "任务不存在或结果已过期")
 	case errors.Is(err, pgrepo.ErrUserNotFound):
 		return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
@@ -139,6 +145,11 @@ func (s *AIGatewayService) Start(ctx context.Context) {
 				} else if released > 0 {
 					s.log.Warn("超时的 AI 暂扣已放回", zap.Int("count", released))
 				}
+				if _, interrupted, err := s.pg.SweepAIGatewayJobs(ctx, s.now()); err != nil {
+					s.log.Warn("清理 AI 异步任务失败", zap.Error(err))
+				} else if interrupted > 0 {
+					s.log.Warn("中断的 AI 异步任务已判为失败", zap.Int64("count", interrupted))
+				}
 				timer.Reset(aiGatewaySweepInterval)
 			}
 		}
@@ -149,6 +160,7 @@ func (s *AIGatewayService) Start(ctx context.Context) {
 func (s *AIGatewayService) Stop() {
 	s.stopOnce.Do(func() {
 		close(s.stop)
+		s.jobs.drain(aiGatewayJobDrainTimeout)
 		s.live.close()
 	})
 }

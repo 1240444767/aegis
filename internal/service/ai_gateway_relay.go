@@ -265,6 +265,28 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 
 // RelayPassthrough 原样转发（图像、嵌入、语音、重排）。
 func (s *AIGatewayService) RelayPassthrough(ctx context.Context, principal *AIGatewayPrincipal, in AIGatewayPassthroughInput) (*AIGatewayPassthroughResult, error) {
+	prepared, err := s.preparePassthrough(ctx, principal, in)
+	if err != nil {
+		return nil, err
+	}
+	return s.executePassthrough(ctx, prepared)
+}
+
+// preparedPassthrough 已经暂扣、还没调上游的一次原样转发。
+// 拆成两半是为了异步任务：请求体（含 multipart 的临时文件）必须在处理器返回前组装好，
+// 慢的那一半（调上游、结算）放到后台跑。
+type preparedPassthrough struct {
+	principal   *AIGatewayPrincipal
+	in          AIGatewayPassthroughInput
+	model       *aigateway.Model
+	body        []byte
+	contentType string
+	requestNo   string
+	call        *aiGatewayCall
+	sanitize    aigateway.SanitizeOptions
+}
+
+func (s *AIGatewayService) preparePassthrough(ctx context.Context, principal *AIGatewayPrincipal, in AIGatewayPassthroughInput) (*preparedPassthrough, error) {
 	model, err := s.resolveModel(ctx, principal, in.Model, in.Endpoint)
 	if err != nil {
 		return nil, err
@@ -285,34 +307,40 @@ func (s *AIGatewayService) RelayPassthrough(ctx context.Context, principal *AIGa
 	if in.Describe != nil {
 		described = in.Describe(sanitize)
 	}
-	ctx, call := s.beginCall(ctx, principal, reserved.RequestNo, described, in.RequestBytes)
+	_, call := s.beginCall(ctx, principal, reserved.RequestNo, described, in.RequestBytes)
+	return &preparedPassthrough{principal: principal, in: in, model: model, body: body, contentType: contentType,
+		requestNo: reserved.RequestNo, call: call, sanitize: sanitize}, nil
+}
 
+func (s *AIGatewayService) executePassthrough(ctx context.Context, p *preparedPassthrough) (*AIGatewayPassthroughResult, error) {
+	ctx = withAITrace(ctx, p.call.trace)
+	in, call := p.in, p.call
 	started := time.Now()
-	response, err := s.ai.Passthrough(ctx, principal.AppID, model.ConfigID, aiPassthroughRequest{
-		Path: in.Path, Model: model.Upstream(), ContentType: contentType, Body: body, MaxResponseBytes: in.MaxResponseBytes,
+	response, err := s.ai.Passthrough(ctx, p.principal.AppID, p.model.ConfigID, aiPassthroughRequest{
+		Path: in.Path, Model: p.model.Upstream(), ContentType: p.contentType, Body: p.body, MaxResponseBytes: in.MaxResponseBytes,
 	})
 	var channel *resolvedChannel
 	if response != nil {
 		channel = response.Channel
 	}
 	if err != nil {
-		call.finish(ctx, s.release(ctx, reserved.RequestNo, err, channel, started), nil, aidomain.FinishError)
+		call.finish(ctx, s.release(ctx, p.requestNo, err, channel, started), nil, aidomain.FinishError)
 		return nil, err
 	}
-	traced := aigateway.SanitizeJSON(response.Body, response.ContentType, sanitize)
+	traced := aigateway.SanitizeJSON(response.Body, response.ContentType, p.sanitize)
 	meters, estimated, err := in.Meter(response.ContentType, response.Body)
 	if err != nil {
 		cause := apperrors.New(50201, http.StatusBadGateway, "上游返回了无法使用的结果："+err.Error())
-		call.finish(ctx, s.release(ctx, reserved.RequestNo, cause, channel, started), traced, aidomain.FinishError)
+		call.finish(ctx, s.release(ctx, p.requestNo, cause, channel, started), traced, aidomain.FinishError)
 		return nil, cause
 	}
-	record, err := s.settle(ctx, reserved.RequestNo, aigateway.StatusSucceeded, meters, estimated, channel, model.Upstream(), started)
+	record, err := s.settle(ctx, p.requestNo, aigateway.StatusSucceeded, meters, estimated, channel, p.model.Upstream(), started)
 	call.finish(ctx, record, traced, aidomain.FinishStop)
 	if err != nil {
 		return nil, apperrors.New(50000, http.StatusInternalServerError, "计费失败，本次调用不扣费，请重试")
 	}
 	return &AIGatewayPassthroughResult{ContentType: response.ContentType, Body: response.Body,
-		RequestNo: reserved.RequestNo, Record: record}, nil
+		RequestNo: p.requestNo, Record: record}, nil
 }
 
 // AIUpstreamStatus 错误若来自上游供应商，返回上游的 HTTP 状态（传输层据此决定回给调用方的状态码）。

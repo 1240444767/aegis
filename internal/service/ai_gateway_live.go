@@ -21,6 +21,8 @@ import (
 
 const (
 	aiGatewayLiveSubject = "aegis.aigateway.live"
+	// aiGatewayCancelSubject 取消异步任务：任务跑在哪个实例，就由那个实例取消。
+	aiGatewayCancelSubject = "aegis.aigateway.cancel"
 	aiGatewayLiveBuffer  = 256
 	// aiGatewayProgressInterval 流式进度至多每秒推一次。
 	aiGatewayProgressInterval = time.Second
@@ -59,6 +61,9 @@ type aiGatewayLiveHub struct {
 	subs map[*aiGatewayLiveSubscriber]struct{}
 	conn *nats.Conn
 	sub  *nats.Subscription
+	// cancelSub / onCancel 取消异步任务的广播；onCancel 由网关在构造时接上。
+	cancelSub *nats.Subscription
+	onCancel  func(requestNo string) bool
 }
 
 func newAIGatewayLiveHub(log *zap.Logger) *aiGatewayLiveHub {
@@ -81,9 +86,32 @@ func (h *aiGatewayLiveHub) attach(conn *nats.Conn) {
 		h.log.Warn("AI 网关实时推送订阅 NATS 失败，退回本机推送", zap.Error(err))
 		return
 	}
+	cancelSub, err := conn.Subscribe(aiGatewayCancelSubject, func(msg *nats.Msg) {
+		if h.onCancel != nil {
+			h.onCancel(string(msg.Data))
+		}
+	})
+	if err != nil {
+		h.log.Warn("AI 网关任务取消订阅 NATS 失败，只能取消本机的任务", zap.Error(err))
+	}
 	h.mu.Lock()
-	h.conn, h.sub = conn, sub
+	h.conn, h.sub, h.cancelSub = conn, sub, cancelSub
 	h.mu.Unlock()
+}
+
+// publishCancel 广播取消一个异步任务；没有 NATS 时只取消本机的。
+func (h *aiGatewayLiveHub) publishCancel(requestNo string) {
+	h.mu.RLock()
+	conn := h.conn
+	h.mu.RUnlock()
+	if conn != nil && h.cancelSub != nil {
+		if err := conn.Publish(aiGatewayCancelSubject, []byte(requestNo)); err == nil {
+			return
+		}
+	}
+	if h.onCancel != nil {
+		h.onCancel(requestNo)
+	}
 }
 
 func (h *aiGatewayLiveHub) close() {
@@ -92,6 +120,10 @@ func (h *aiGatewayLiveHub) close() {
 	if h.sub != nil {
 		_ = h.sub.Unsubscribe()
 		h.sub = nil
+	}
+	if h.cancelSub != nil {
+		_ = h.cancelSub.Unsubscribe()
+		h.cancelSub = nil
 	}
 	h.conn = nil
 }

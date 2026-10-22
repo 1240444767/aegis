@@ -1,18 +1,18 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	aidomain "aegis/internal/domain/ai"
 	apperrors "aegis/pkg/errors"
+
+	openaioption "github.com/openai/openai-go/v3/option"
 
 	"go.uber.org/zap"
 )
@@ -45,68 +45,43 @@ type aiPassthroughResponse struct {
 	Channel     *resolvedChannel
 }
 
-// passthrough 向一条通道发一次请求。非 2xx 收敛成 aiUpstreamError（与 SDK 中间件同一套规则）。
+// passthrough 向一条通道发一次请求，走 openai-go 的请求管线：通道的地址、鉴权（含 Azure 的部署路径、
+// api-version 与 api-key 头）、附加请求头与对话完全同一套（openAIClient），非 2xx 由
+// upstreamErrorMiddleware 收敛成 aiUpstreamError。SDK 只负责发请求，请求体与响应体都是原样字节：
+// 网关不解析这些接口的结构，只从响应里读用量。
 func (c *aiLLMClient) passthrough(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta,
 	req aiPassthroughRequest) (int, string, []byte, error) {
-	base := c.baseURL(cfg, meta)
-	key := cfg.Secret(aidomain.KeyAPIKey)
-	endpoint := base + "/" + strings.TrimLeft(req.Path, "/")
-	headers := http.Header{}
-	if cfg.Provider == aidomain.ProviderAzureOpenAI {
-		version := cfg.Setting(aidomain.KeyAPIVersion)
-		if version == "" {
-			version = "2024-10-21"
-		}
-		endpoint = base + "/openai/deployments/" + url.PathEscape(req.Model) + "/" + strings.TrimLeft(req.Path, "/") +
-			"?api-version=" + url.QueryEscape(version)
-		if key != "" {
-			headers.Set("api-key", key)
-		}
-	} else if key != "" {
-		headers.Set("Authorization", "Bearer "+key)
-	}
-	for headerKey, headerValue := range cfg.SettingMap(aidomain.KeyExtraHeaders) {
-		if headerKey = strings.TrimSpace(headerKey); headerKey != "" {
-			headers.Set(headerKey, headerValue)
-		}
-	}
-
+	client := c.openAIClient(cfg, meta, req.Model)
 	ctx, cancel := context.WithTimeout(ctx, aiPassthroughTimeout)
 	defer cancel()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(req.Body))
+
+	var response *http.Response
+	err := client.Execute(ctx, http.MethodPost, strings.TrimLeft(req.Path, "/"), nil, nil,
+		openaioption.WithRequestBody(req.ContentType, req.Body),
+		openaioption.WithResponseBodyInto(&response))
 	if err != nil {
-		return 0, "", nil, &aiUpstreamError{Provider: meta.Provider, Message: err.Error()}
-	}
-	httpReq.Header = headers
-	httpReq.Header.Set("Content-Type", req.ContentType)
-	response, err := c.httpClient(meta.Provider).Do(httpReq)
-	if err != nil {
+		var upstream *aiUpstreamError
+		if errors.As(err, &upstream) {
+			return 0, "", nil, upstream
+		}
 		if ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			return 0, "", nil, err
 		}
 		return 0, "", nil, &aiUpstreamError{Provider: meta.Provider, Message: err.Error(), Retryable: true}
+	}
+	if response == nil || response.Body == nil {
+		return 0, "", nil, &aiUpstreamError{Provider: meta.Provider, Message: "上游没有返回响应", Retryable: true}
 	}
 	defer response.Body.Close()
 	limit := req.MaxResponseBytes
 	if limit <= 0 {
 		limit = 64 << 20
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		message := parseUpstreamErrorMessage(body)
-		if message == "" {
-			message = summarizeOpaqueUpstreamBody(body, response.Status)
-		}
-		if message == "" {
-			message = response.Status
-		}
-		return 0, "", nil, &aiUpstreamError{
-			Provider: meta.Provider, Status: response.StatusCode, Message: message,
-			Retryable: response.StatusCode != http.StatusBadRequest,
-		}
-	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, limit+1))
 	if err != nil {
+		if ctx.Err() != nil && !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return 0, "", nil, err
+		}
 		return 0, "", nil, &aiUpstreamError{Provider: meta.Provider, Message: "读取响应失败：" + err.Error(), Retryable: true}
 	}
 	if int64(len(body)) > limit {

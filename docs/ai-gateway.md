@@ -43,12 +43,47 @@ client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "conte
 | `POST /audio/transcriptions`、`/translations` | transcription | `usage.seconds` / `usage` token / `duration` / 字幕最后一个时间戳 |
 | `POST /rerank` | rerank | `usage.total_tokens` / Cohere `meta.billed_units` |
 
-对话走 `AIProviderService` 的统一链路（OpenAI / Anthropic / Gemini 三种协议的通道都能接，可链路回退）；
-其余接口经 **OpenAI 兼容协议的通道原样转发**（含 Azure），只替换模型名与鉴权，响应原样交回，
+对话走 `AIProviderService` 的统一链路（OpenAI / Anthropic / Gemini 三种协议的通道都能接，可链路回退），
+上游分别用官方 SDK `openai-go`、`anthropic-sdk-go`、`google.golang.org/genai` 调用；
+其余接口经 **OpenAI 兼容协议的通道原样转发**（含 Azure），同样走 `openai-go` 的请求管线（地址、鉴权、
+Azure 部署路径与 api-version、附加请求头、错误收敛与对话一致），只替换模型名，请求体与响应体都是原样字节，
 响应里的 `model` 换回对外名。图像编辑与转写收 multipart，按原样重组（文件保留原 Content-Type）。
 
 转写的客户端要 `response_format=text` 时，网关向上游要 `json`（带用量），再把 `text` 作为纯文本交回 ——
 text 格式不带任何用量，原样转发就只能估算。上游什么用量都没报时，按上传文件大小以 32 kbps 估算时长并标记「估算」。
+
+## 长调用：异步任务与保活
+
+生图、改图、转写常要一两分钟，而网关前面的反向代理都有读超时（常见 60–100 秒）。同步调用挂过这个时间，
+客户端拿到的是代理的 502 / 504 页面（不是 JSON），网关这边看到的是客户端断开 —— 调用不扣费，但用户什么也没拿到。
+两种出路：
+
+**异步任务（推荐，Aegis SDK 默认用它）**。原样转发的接口（图像、嵌入、语音、转写、重排）都支持：
+
+```http
+POST /api/ai/v1/images/generations
+Prefer: respond-async            # 或 ?async=true
+
+202 Accepted
+Location: /api/ai/v1/jobs/AIG…
+{"id":"AIG…","object":"aegis.job","endpoint":"images.generations","status":"in_progress","created_at":…,"elapsed_ms":0,"poll_after_ms":2000}
+```
+
+- 鉴权、组装请求体、暂扣在提交时同步做：余额不足、模型不存在等错误照常立刻返回（4xx），不会变成一个失败的任务。
+- `GET /jobs/{id}?wait=20`：长轮询，任务还在进行中就最多挂 `wait` 秒（上限 25）。状态 `in_progress` / `completed` /
+  `failed` / `canceled`。完成时 JSON 结果原样内嵌在 `result`（与同步调用的响应体逐字节相同）；
+  二进制结果（语音合成）给 `result_url`，即 `GET /jobs/{id}/content`。失败时 `error` 是与同步调用一致的错误
+  `{message, type, code, aegis_code, status}`。
+- `DELETE /jobs/{id}`：取消进行中的任务（经 NATS `aegis.aigateway.cancel` 找到跑它的实例），整笔放回、不扣费。
+- 任务编号就是调用编号，计费、追踪、实时推送都与同步调用相同。凭据可以是同一用户的任意密钥或登录令牌。
+- 结果在结束后保留 1 小时；进行中超过 15 分钟没有结论（实例被杀）的由后台判为 `failed`（`job_interrupted`），
+  对应的暂扣按过期放回。进程退出时等进行中的任务最多 20 秒，之后取消（不扣费）。
+- 表 `ai_gateway_jobs`（迁移 `000123`），服务端 `service/ai_gateway_jobs.go`。
+
+**同步保活（兼容不改调用方式的 OpenAI SDK）**。图像、嵌入、JSON 格式的转写、重排与非流式对话：
+调用超过 20 秒还没结果时，先回 `200` 与响应头（`X-Aegis-Keepalive: whitespace`），之后每 15 秒写一个空格，
+代理看到持续有字节就不会断开；结果到了再写 JSON（JSON 允许前导空白，各家 SDK 都能解析）。
+代价是保活开始后出错也只能是 `200` + 错误信封。请求头 `X-Aegis-Keepalive: off` 关掉。
 
 ## 计价
 
@@ -214,6 +249,7 @@ text 格式不带任何用量，原样转发就只能估算。上游什么用量
 | 40222 | 424 | 没有支持该接口的通道（非对话接口需要 OpenAI 协议通道） |
 | 40223 | 400 | 请求体不合法 |
 | 40224 / 40225 | 409 | 赠送额度不足以扣减 / 调整的请求编号被挪用 |
+| 40226 / 40227 | 404 / 409 | 异步任务不存在或结果已过期 / 任务还没有完成（取结果原文时） |
 
 `/api/ai/v1` 的错误按 OpenAI（`{"error":{"message","type","code","aegis_code"}}`）或
 Anthropic（`{"type":"error","error":{"type","message"}}`）形状回：402 是 `insufficient_quota` / `billing_error`，
@@ -229,6 +265,9 @@ AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/service -run 
 AEGIS_TEST_PG_DSN=postgres://…/aegis_aig_test go test ./internal/transport/http -run TestAIRelayHTTPIntegration
 go test ./internal/service -run 'LiveHub|AITrace'   # 实时推送的分发与补 resync、追踪的尝试与首字
 ```
+
+中转集成测试还覆盖异步任务（提交 202、长轮询拿到内嵌结果并扣费、另一把密钥可取、取消不扣费、上游拒绝的错误信封、
+语音的 result_url 与原文、后台判中断与删过期结果）和同步保活（前导空格、保活后出错、关掉保活）。
 
 中转集成测试里链路是「总回 503 的通道 → 正常的假上游」，核对两次尝试的状态、上游请求编号、限流余量、
 首包与字节数，SSE 的 ready / created / finished，按上游请求编号搜索，隐藏内容，以及概况里按通道的汇总。

@@ -96,6 +96,10 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		relay.POST("/audio/transcriptions", h.AIRelayTranscriptions)
 		relay.POST("/audio/translations", h.AIRelayTranslations)
 		relay.POST("/rerank", h.AIRelayRerank)
+		// 异步任务：长调用以 `Prefer: respond-async` 提交后在这里轮询、取结果、取消。
+		relay.GET("/jobs/:jobId", h.AIRelayJob)
+		relay.GET("/jobs/:jobId/content", h.AIRelayJobContent)
+		relay.DELETE("/jobs/:jobId", h.AIRelayCancelJob)
 	}
 
 	userPublic := router.Group("/api/user")

@@ -120,21 +120,29 @@ func aiRelayErrorOf(err error) aiRelayErrorShape {
 	return shape
 }
 
-// writeAIRelayError 按协议的错误信封回错。
-func writeAIRelayError(c *gin.Context, protocol string, err error) {
-	shape := aiRelayErrorOf(err)
+// aiRelayErrorBody 按协议的错误信封。
+func aiRelayErrorBody(protocol string, shape aiRelayErrorShape) gin.H {
 	if protocol == aidomain.ProtocolAnthropic {
-		c.JSON(shape.status, gin.H{
-			"type":  "error",
-			"error": gin.H{"type": shape.anthropic, "message": shape.message},
-		})
-		return
+		return gin.H{"type": "error", "error": gin.H{"type": shape.anthropic, "message": shape.message}}
 	}
 	body := gin.H{"message": shape.message, "type": shape.openAI, "code": shape.code, "param": nil}
 	if shape.aegisCode != 0 {
 		body["aegis_code"] = shape.aegisCode
 	}
-	c.JSON(shape.status, gin.H{"error": body})
+	return gin.H{"error": body}
+}
+
+// writeAIRelayError 按协议的错误信封回错。
+func writeAIRelayError(c *gin.Context, protocol string, err error) {
+	shape := aiRelayErrorOf(err)
+	c.JSON(shape.status, aiRelayErrorBody(protocol, shape))
+}
+
+// aiRelayJobError 异步任务失败时的错误，与同步调用会回的错误信封一致。
+func aiRelayJobError(err error) aigateway.JobError {
+	shape := aiRelayErrorOf(err)
+	return aigateway.JobError{Message: shape.message, Type: shape.openAI, Code: shape.code,
+		AegisCode: shape.aegisCode, Status: shape.status}
 }
 
 func (h *Handler) aiRelayOnReserved(c *gin.Context) func(string) {
@@ -225,15 +233,75 @@ func aiRelayRequestBytes(c *gin.Context) int64 {
 	return max(c.Request.ContentLength, 0)
 }
 
-func writeAIRelayPassthrough(c *gin.Context, result *service.AIGatewayPassthroughResult, model string) {
-	contentType := result.ContentType
-	if contentType == "" {
-		contentType = "application/json"
+// aiRelayRender 把上游结果变成交给调用方的响应体。同步调用与异步任务共用，保证两条路拿到的结果一模一样。
+type aiRelayRender func(result *service.AIGatewayPassthroughResult) (contentType string, body []byte)
+
+// jsonRender 原样交回，JSON 响应顶层的 model 换回对外名。
+func jsonRender(model string) aiRelayRender {
+	return func(result *service.AIGatewayPassthroughResult) (string, []byte) {
+		contentType := result.ContentType
+		if contentType == "" {
+			contentType = "application/json"
+		}
+		body := result.Body
+		if strings.HasPrefix(contentType, "application/json") {
+			body = rewriteResponseModel(body, model)
+		}
+		return contentType, body
 	}
-	body := result.Body
-	if strings.HasPrefix(contentType, "application/json") {
-		body = rewriteResponseModel(body, model)
+}
+
+// aiRelayWantsAsync 调用方要异步任务：`Prefer: respond-async`（RFC 7240）或 `?async=true`。
+func aiRelayWantsAsync(c *gin.Context) bool {
+	for _, value := range c.Request.Header.Values("Prefer") {
+		for _, token := range strings.Split(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(token), "respond-async") {
+				return true
+			}
+		}
 	}
+	switch strings.ToLower(strings.TrimSpace(c.Query("async"))) {
+	case "1", "true", "yes":
+		return true
+	}
+	return false
+}
+
+// relayPassthrough 原样转发的统一出口：异步任务、带保活的同步调用、普通同步调用三选一。
+// keepalive 只对 JSON 响应开（保活写的是空格，JSON 允许前导空白）。
+func (h *Handler) relayPassthrough(c *gin.Context, principal *service.AIGatewayPrincipal,
+	input service.AIGatewayPassthroughInput, render aiRelayRender, keepalive bool) {
+	ctx := c.Request.Context()
+	if aiRelayWantsAsync(c) {
+		job, err := h.aiGateway.SubmitJob(ctx, principal, service.AIGatewayJobInput{
+			Passthrough: input, Render: render, Fail: aiRelayJobError,
+		})
+		if err != nil {
+			writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
+			return
+		}
+		c.Header("Location", service.RelayBasePath+"/jobs/"+job.ID)
+		c.JSON(http.StatusAccepted, job)
+		return
+	}
+	if keepalive && aiRelayKeepaliveEnabled(c) {
+		runAIRelayWithKeepalive(c, aidomain.ProtocolOpenAI, func(onReserved func(string)) (string, []byte, error) {
+			input.OnReserved = onReserved
+			result, err := h.aiGateway.RelayPassthrough(ctx, principal, input)
+			if err != nil {
+				return "", nil, err
+			}
+			contentType, body := render(result)
+			return contentType, body, nil
+		})
+		return
+	}
+	result, err := h.aiGateway.RelayPassthrough(ctx, principal, input)
+	if err != nil {
+		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
+		return
+	}
+	contentType, body := render(result)
 	c.Data(http.StatusOK, contentType, body)
 }
 
@@ -309,16 +377,29 @@ func (h *Handler) relayChat(c *gin.Context, principal *service.AIGatewayPrincipa
 	}
 	writeErr := func(err error) { writeAIRelayError(c, protocol, err) }
 	if !stream {
-		result, err := h.aiGateway.RelayChat(c.Request.Context(), principal, input, nil)
+		run := func(onReserved func(string)) (string, []byte, error) {
+			input.OnReserved = onReserved
+			result, err := h.aiGateway.RelayChat(c.Request.Context(), principal, input, nil)
+			if err != nil {
+				return "", nil, err
+			}
+			var payload any = openAIGatewayResponse(result.Response)
+			if protocol == aidomain.ProtocolAnthropic {
+				payload = anthropicGatewayResponse(result.Response)
+			}
+			body, err := json.Marshal(payload)
+			return "application/json; charset=utf-8", body, err
+		}
+		if aiRelayKeepaliveEnabled(c) {
+			runAIRelayWithKeepalive(c, protocol, run)
+			return
+		}
+		contentType, body, err := run(h.aiRelayOnReserved(c))
 		if err != nil {
 			writeErr(err)
 			return
 		}
-		if protocol == aidomain.ProtocolAnthropic {
-			c.JSON(http.StatusOK, anthropicGatewayResponse(result.Response))
-			return
-		}
-		c.JSON(http.StatusOK, openAIGatewayResponse(result.Response))
+		c.Data(http.StatusOK, contentType, body)
 		return
 	}
 	run := func(onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
@@ -353,7 +434,7 @@ func (h *Handler) AIRelayEmbeddings(c *gin.Context) {
 	}
 	model := rawString(payload["model"])
 	estimate := aigateway.Meters{InputTokens: max(aigateway.EstimateTokens(string(payload["input"])), 1)}
-	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
+	h.relayPassthrough(c, principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointEmbeddings, Path: "embeddings", Model: model, Build: jsonBuilder(payload),
 		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: estimate, MaxResponseBytes: aiRelayResponseLimit,
@@ -361,12 +442,7 @@ func (h *Handler) AIRelayEmbeddings(c *gin.Context) {
 			return aigateway.MeterEmbeddings(body, estimate)
 		},
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
-	})
-	if err != nil {
-		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
-		return
-	}
-	writeAIRelayPassthrough(c, result, model)
+	}, jsonRender(model), true)
 }
 
 // ── 图像 ──
@@ -441,7 +517,7 @@ func (h *Handler) AIRelayImageEdits(c *gin.Context) {
 func (h *Handler) relayImages(c *gin.Context, principal *service.AIGatewayPrincipal, endpoint, path, model string,
 	build func(string) ([]byte, string, error), describe func(aigateway.SanitizeOptions) aigateway.TraceContent,
 	estimate aigateway.Meters, size, quality string) {
-	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
+	h.relayPassthrough(c, principal, service.AIGatewayPassthroughInput{
 		Endpoint: endpoint, Path: path, Model: model, Build: build, Estimate: estimate,
 		Describe: describe, RequestBytes: aiRelayRequestBytes(c),
 		MaxResponseBytes: aiRelayImageResponseLimit,
@@ -449,12 +525,7 @@ func (h *Handler) relayImages(c *gin.Context, principal *service.AIGatewayPrinci
 			return aigateway.MeterImages(body, size, quality)
 		},
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
-	})
-	if err != nil {
-		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
-		return
-	}
-	writeAIRelayPassthrough(c, result, model)
+	}, jsonRender(model), true)
 }
 
 // ── 语音 ──
@@ -478,7 +549,7 @@ func (h *Handler) AIRelaySpeech(c *gin.Context) {
 	delete(payload, "stream_format")
 	characters := int64(utf8.RuneCountInString(text))
 	model := rawString(payload["model"])
-	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
+	h.relayPassthrough(c, principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointSpeech, Path: "audio/speech", Model: model, Build: jsonBuilder(payload),
 		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: aigateway.Meters{Characters: characters}, MaxResponseBytes: aiRelayResponseLimit,
@@ -489,16 +560,13 @@ func (h *Handler) AIRelaySpeech(c *gin.Context) {
 			return aigateway.Meters{Characters: characters}, false, nil
 		},
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
-	})
-	if err != nil {
-		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
-		return
-	}
-	contentType := result.ContentType
-	if contentType == "" {
-		contentType = "audio/mpeg"
-	}
-	c.Data(http.StatusOK, contentType, result.Body)
+	}, func(result *service.AIGatewayPassthroughResult) (string, []byte) {
+		contentType := result.ContentType
+		if contentType == "" {
+			contentType = "audio/mpeg"
+		}
+		return contentType, result.Body
+	}, false)
 }
 
 // AIRelayTranscriptions POST /api/ai/v1/audio/transcriptions
@@ -538,7 +606,9 @@ func (h *Handler) relayTranscription(c *gin.Context, endpoint, path string) {
 		overrides["response_format"] = "json"
 	}
 	model := form.value("model", "")
-	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
+	render := jsonRender(model)
+	format := strings.ToLower(form.value("response_format", "json"))
+	h.relayPassthrough(c, principal, service.AIGatewayPassthroughInput{
 		Endpoint: endpoint, Path: path, Model: model, Build: form.builder(overrides), Estimate: estimate,
 		Describe: form.describer(), RequestBytes: aiRelayRequestBytes(c),
 		MaxResponseBytes: aiRelayResponseLimit,
@@ -546,18 +616,14 @@ func (h *Handler) relayTranscription(c *gin.Context, endpoint, path string) {
 			return aigateway.MeterTranscription(contentType, body, estimate)
 		},
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
-	})
-	if err != nil {
-		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
-		return
-	}
-	if wantsText {
-		if text, ok := aigateway.TranscriptionText(result.Body); ok {
-			c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(text))
-			return
+	}, func(result *service.AIGatewayPassthroughResult) (string, []byte) {
+		if wantsText {
+			if text, ok := aigateway.TranscriptionText(result.Body); ok {
+				return "text/plain; charset=utf-8", []byte(text)
+			}
 		}
-	}
-	writeAIRelayPassthrough(c, result, model)
+		return render(result)
+	}, format == "json" || format == "verbose_json")
 }
 
 // ── 重排 ──
@@ -579,7 +645,7 @@ func (h *Handler) AIRelayRerank(c *gin.Context) {
 	model := rawString(payload["model"])
 	estimate := aigateway.Meters{InputTokens: max(aigateway.EstimateTokens(string(payload["query"]))+
 		aigateway.EstimateTokens(string(payload["documents"])), 1)}
-	result, err := h.aiGateway.RelayPassthrough(c.Request.Context(), principal, service.AIGatewayPassthroughInput{
+	h.relayPassthrough(c, principal, service.AIGatewayPassthroughInput{
 		Endpoint: aigateway.EndpointRerank, Path: "rerank", Model: model, Build: jsonBuilder(payload),
 		Describe: jsonDescriber(payload), RequestBytes: aiRelayRequestBytes(c),
 		Estimate: estimate, MaxResponseBytes: aiRelayResponseLimit,
@@ -587,12 +653,7 @@ func (h *Handler) AIRelayRerank(c *gin.Context) {
 			return aigateway.MeterRerank(body, estimate)
 		},
 		IdempotencyKey: aiRelayIdempotencyKey(c), OnReserved: h.aiRelayOnReserved(c),
-	})
-	if err != nil {
-		writeAIRelayError(c, aidomain.ProtocolOpenAI, err)
-		return
-	}
-	writeAIRelayPassthrough(c, result, model)
+	}, jsonRender(model), true)
 }
 
 // ── multipart ──

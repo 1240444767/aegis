@@ -101,6 +101,7 @@ DELETE	/api/admin/tickets/groups/:id	AdminDeleteTicketGroup
 DELETE	/api/admin/tickets/quick-replies/:id	AdminDeleteTicketQuickReply
 DELETE	/api/admin/tickets/sla-policies/:id	AdminDeleteTicketSLAPolicy
 DELETE	/api/admin/user-settings/cleanup	AdminCleanupUserSettings
+DELETE	/api/ai/v1/jobs/:jobId	AIRelayCancelJob
 DELETE	/api/auth/oauth2/bindings/:provider	UnbindMyOAuthProvider
 DELETE	/api/notifications/:notificationId	DeleteNotification
 DELETE	/api/user/delete-site	DeleteSite
@@ -503,6 +504,8 @@ GET	/api/admin/tickets/workbench	AdminTicketWorkbench
 GET	/api/admin/user-settings/check-integrity	AdminCheckUserSettingsIntegrity
 GET	/api/admin/user-settings/stats	AdminUserSettingsStats
 GET	/api/admin/user-settings/user	AdminUserSettings
+GET	/api/ai/v1/jobs/:jobId	AIRelayJob
+GET	/api/ai/v1/jobs/:jobId/content	AIRelayJobContent
 GET	/api/ai/v1/models	AIRelayModels
 GET	/api/app/password-policy/templates	PasswordPolicyTemplates
 GET	/api/app/public	AppPublic

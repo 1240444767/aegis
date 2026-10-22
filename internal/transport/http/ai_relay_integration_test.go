@@ -87,6 +87,8 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 		{Model: "chat", UpstreamModel: "up-chat", Kind: aigateway.KindChat, InputPrice: decimal.NewFromInt(1000), OutputPrice: decimal.NewFromInt(1000)},
 		{Model: "edit", UpstreamModel: "up-edit", Kind: aigateway.KindImage, ImagePrice: decimal.NewFromInt(1)},
 		{Model: "whisper", UpstreamModel: "up-whisper", Kind: aigateway.KindTranscription, MinutePrice: decimal.NewFromInt(2)},
+		{Model: "draw", UpstreamModel: "up-draw", Kind: aigateway.KindImage, ImagePrice: decimal.NewFromInt(2)},
+		{Model: "tts", UpstreamModel: "up-tts", Kind: aigateway.KindSpeech, CharPrice: decimal.NewFromInt(1000)},
 	} {
 		if _, err := gw.CreateModel(ctx, appID, input); err != nil {
 			t.Fatal(err)
@@ -112,6 +114,11 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 	relay.POST("/messages", h.AIRelayMessages)
 	relay.POST("/images/edits", h.AIRelayImageEdits)
 	relay.POST("/audio/transcriptions", h.AIRelayTranscriptions)
+	relay.POST("/images/generations", h.AIRelayImageGenerations)
+	relay.POST("/audio/speech", h.AIRelaySpeech)
+	relay.GET("/jobs/:jobId", h.AIRelayJob)
+	relay.GET("/jobs/:jobId/content", h.AIRelayJobContent)
+	relay.DELETE("/jobs/:jobId", h.AIRelayCancelJob)
 	router.GET("/live", func(c *gin.Context) { h.streamAIGatewayLive(c, appID) })
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
@@ -346,6 +353,130 @@ func TestAIRelayHTTPIntegration(t *testing.T) {
 		t.Fatalf("转写应按上游报的 90 秒计 3 点：%+v %v", record, err)
 	}
 
+	// ── 异步任务 ──
+	integral := func() int64 {
+		t.Helper()
+		var value int64
+		if err := pool.QueryRow(ctx, `SELECT integral FROM users WHERE id = $1`, userID).Scan(&value); err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	asyncHeaders := map[string]string{"Authorization": "Bearer " + secret, "Prefer": "respond-async"}
+	before := integral()
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"a cat","n":1}`), asyncHeaders)
+	var job aigateway.JobView
+	if err := json.Unmarshal(body, &job); err != nil || resp.StatusCode != 202 || job.Status != aigateway.JobInProgress ||
+		resp.Header.Get("Location") != "/api/ai/v1/jobs/"+job.ID || job.Object != "aegis.job" {
+		t.Fatalf("异步提交应回 202 与进行中的任务：%d %s", resp.StatusCode, body)
+	}
+	resp, body = do("GET", "/api/ai/v1/jobs/"+job.ID+"?wait=5", "", nil, bearer)
+	if err := json.Unmarshal(body, &job); err != nil || resp.StatusCode != 200 || job.Status != aigateway.JobCompleted ||
+		!strings.Contains(string(job.Result), `"b64_json":"AAAA"`) || job.CompletedAt == nil {
+		t.Fatalf("长轮询应拿到完成的任务与内嵌结果：%d %s", resp.StatusCode, body)
+	}
+	if after := integral(); after != before-2 {
+		t.Fatalf("异步生图应扣 2 积分：%d → %d", before, after)
+	}
+	other, err := gw.CreateKey(ctx, &authdomain.Session{AppID: appID, UserID: userID}, aigateway.KeyInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp, _ = do("GET", "/api/ai/v1/jobs/"+job.ID, "", nil, map[string]string{"Authorization": "Bearer " + other.Secret}); resp.StatusCode != 200 {
+		t.Fatalf("同一用户的另一把密钥应能取到任务：%d", resp.StatusCode)
+	}
+	if resp, body = do("GET", "/api/ai/v1/jobs/AIGnope", "", nil, bearer); resp.StatusCode != 404 || !strings.Contains(string(body), "40226") {
+		t.Fatalf("不存在的任务应 404：%d %s", resp.StatusCode, body)
+	}
+
+	// 取消：上游挂着不回，DELETE 后任务为 canceled、积分不变。
+	before = integral()
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"slow cat","n":1}`), asyncHeaders)
+	if err := json.Unmarshal(body, &job); err != nil || resp.StatusCode != 202 {
+		t.Fatalf("提交慢任务失败：%d %s", resp.StatusCode, body)
+	}
+	time.Sleep(200 * time.Millisecond)
+	resp, body = do("DELETE", "/api/ai/v1/jobs/"+job.ID, "", nil, bearer)
+	if err := json.Unmarshal(body, &job); err != nil || job.Status != aigateway.JobCanceled || job.Error == nil || job.Error.Code != "job_canceled" {
+		t.Fatalf("取消后应为 canceled：%d %s", resp.StatusCode, body)
+	}
+	if after := integral(); after != before {
+		t.Fatalf("取消的任务不应扣费：%d → %d", before, after)
+	}
+	if canceled, _ := gw.GetRequest(ctx, appID, job.ID); canceled.Status != aigateway.StatusFailed {
+		t.Fatalf("取消的调用应已放回：%+v", canceled)
+	}
+
+	// 上游拒绝：任务 failed，错误信封与同步调用一致（上游 400 原样报 400）。
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"reject me","n":1}`), asyncHeaders)
+	_ = json.Unmarshal(body, &job)
+	resp, body = do("GET", "/api/ai/v1/jobs/"+job.ID+"?wait=5", "", nil, bearer)
+	if err := json.Unmarshal(body, &job); err != nil || job.Status != aigateway.JobFailed || job.Error == nil ||
+		job.Error.Status != 400 || !strings.Contains(job.Error.Message, "unsafe prompt") {
+		t.Fatalf("上游拒绝的任务应 failed：%d %s", resp.StatusCode, body)
+	}
+
+	// 二进制结果：语音合成走 result_url。
+	resp, body = do("POST", "/api/ai/v1/audio/speech", "application/json",
+		strings.NewReader(`{"model":"tts","input":"你好","voice":"alloy"}`), asyncHeaders)
+	_ = json.Unmarshal(body, &job)
+	resp, body = do("GET", "/api/ai/v1/jobs/"+job.ID+"?wait=5", "", nil, bearer)
+	if err := json.Unmarshal(body, &job); err != nil || job.Status != aigateway.JobCompleted ||
+		job.ResultURL != "/api/ai/v1/jobs/"+job.ID+"/content" || job.ContentType != "audio/mpeg" {
+		t.Fatalf("语音任务应给 result_url：%s", body)
+	}
+	if resp, body = do("GET", job.ResultURL, "", nil, bearer); resp.StatusCode != 200 || string(body) != "MP3DATA" ||
+		resp.Header.Get("Content-Type") != "audio/mpeg" {
+		t.Fatalf("取结果应回原始音频：%d %q", resp.StatusCode, body)
+	}
+
+	// 清理：超时仍在进行中的任务判为中断；结果过期的任务删掉。
+	if _, err := pool.Exec(ctx, `INSERT INTO ai_gateway_jobs (request_id, request_no, appid, user_id, endpoint, status, created_at, expires_at)
+SELECT id, request_no, appid, user_id, endpoint, 'in_progress', NOW() - interval '1 hour', NOW() - interval '1 minute'
+FROM ai_gateway_requests WHERE request_no = $1`, requestNo); err != nil {
+		t.Fatal(err)
+	}
+	if _, interrupted, err := pg.SweepAIGatewayJobs(ctx, time.Now()); err != nil || interrupted != 1 {
+		t.Fatalf("应判一个中断：%d %v", interrupted, err)
+	}
+	resp, body = do("GET", "/api/ai/v1/jobs/"+requestNo, "", nil, bearer)
+	if !strings.Contains(string(body), `"code":"job_interrupted"`) || !strings.Contains(string(body), `"status":"failed"`) {
+		t.Fatalf("中断的任务应 failed：%s", body)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE ai_gateway_jobs SET expires_at = NOW() - interval '1 second' WHERE request_no = $1`, requestNo); err != nil {
+		t.Fatal(err)
+	}
+	if deleted, _, err := pg.SweepAIGatewayJobs(ctx, time.Now()); err != nil || deleted != 1 {
+		t.Fatalf("过期结果应删掉：%d %v", deleted, err)
+	}
+
+	// 同步保活：上游慢于阈值时先回 200 头，再写空格，最后是 JSON。
+	aiRelayKeepaliveAfter, aiRelayKeepaliveEvery = 150*time.Millisecond, 100*time.Millisecond
+	defer func() { aiRelayKeepaliveAfter, aiRelayKeepaliveEvery = 20*time.Second, 15*time.Second }()
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"slowish cat","n":1}`), bearer)
+	var images struct {
+		Data []map[string]any `json:"data"`
+	}
+	if resp.StatusCode != 200 || resp.Header.Get("X-Aegis-Keepalive") != "whitespace" || !strings.HasPrefix(string(body), " ") ||
+		json.Unmarshal(body, &images) != nil || len(images.Data) != 1 || !strings.HasPrefix(resp.Header.Get("X-Aegis-Request-No"), "AIG") {
+		t.Fatalf("保活响应不对：%d %v %q", resp.StatusCode, resp.Header, body)
+	}
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"slowish reject me","n":1}`), bearer)
+	if resp.StatusCode != 200 || !strings.Contains(string(body), "unsafe prompt") || !strings.HasPrefix(string(body), " ") {
+		t.Fatalf("保活开始后出错应是 200 + 错误信封：%d %q", resp.StatusCode, body)
+	}
+	resp, body = do("POST", "/api/ai/v1/images/generations", "application/json",
+		strings.NewReader(`{"model":"draw","prompt":"slowish cat","n":1}`),
+		map[string]string{"Authorization": "Bearer " + secret, "X-Aegis-Keepalive": "off"})
+	if resp.StatusCode != 200 || strings.HasPrefix(string(body), " ") || resp.Header.Get("X-Aegis-Keepalive") != "" {
+		t.Fatalf("关掉保活后应是普通响应：%d %q", resp.StatusCode, body)
+	}
+
 	// 隐藏内容：追踪只留参数与长度。
 	settings.RedactContent = true
 	if _, err := gw.SaveSettings(ctx, appID, settings, "test"); err != nil {
@@ -435,7 +566,35 @@ func newRelayFakeUpstream(t *testing.T) *relayFakeUpstream {
 			}
 			fake.mu.Unlock()
 		}
+		var payload struct {
+			Prompt string `json:"prompt"`
+		}
+		if strings.HasPrefix(r.Header.Get("Content-Type"), "application/json") && strings.HasSuffix(r.URL.Path, "/images/generations") {
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+		}
 		switch {
+		case strings.Contains(payload.Prompt, "slow cat"):
+			select {
+			case <-r.Context().Done():
+			case <-time.After(10 * time.Second):
+			}
+			_, _ = w.Write([]byte(`{"created":1,"data":[{"b64_json":"AAAA"}]}`))
+		case strings.Contains(payload.Prompt, "slowish"):
+			time.Sleep(450 * time.Millisecond)
+			if strings.Contains(payload.Prompt, "reject") {
+				w.WriteHeader(400)
+				_, _ = w.Write([]byte(`{"error":{"message":"unsafe prompt"}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"created":1,"data":[{"b64_json":"AAAA"}]}`))
+		case strings.Contains(payload.Prompt, "reject me"):
+			w.WriteHeader(400)
+			_, _ = w.Write([]byte(`{"error":{"message":"unsafe prompt"}}`))
+		case strings.HasSuffix(r.URL.Path, "/images/generations"):
+			_, _ = w.Write([]byte(`{"created":1,"data":[{"b64_json":"AAAA"}]}`))
+		case strings.HasSuffix(r.URL.Path, "/audio/speech"):
+			w.Header().Set("Content-Type", "audio/mpeg")
+			_, _ = w.Write([]byte("MP3DATA"))
 		case strings.HasSuffix(r.URL.Path, "/images/edits"):
 			_, _ = w.Write([]byte(`{"created":1,"data":[{"b64_json":"AAAA"}]}`))
 		case strings.HasSuffix(r.URL.Path, "/audio/transcriptions"):
