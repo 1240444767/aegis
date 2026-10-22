@@ -5,7 +5,6 @@ import { evictAvatarCache } from "@/components/ui/avatar";
 import * as appOAuth from "@/lib/api/app-oauth";
 import * as authProtocol from "@/lib/api/app-auth-protocol";
 import * as database from "@/lib/api/database";
-import * as reports from "@/lib/api/reports";
 import * as risk from "@/lib/api/risk";
 import * as userMaster from "@/lib/api/user-master";
 import * as storageRes from "@/lib/api/storage-resource";
@@ -572,23 +571,8 @@ export function useRevokeDelegationMutation() {
 // 大盘、IP 库与设备库五张表，散在这里会漏。
 
 // ── 报表分析 Hooks ──
-
-function useReportQuery<T>(key: string, appKey: string | undefined, fn: (token: string, appKey: string, p: { start: string; end: string }) => Promise<T>, start?: string, end?: string) {
-  const token = useAdminToken();
-  return useQuery({ queryKey: [key, appKey, start, end, token], queryFn: () => fn(token as string, appKey as string, { start: start!, end: end! }), enabled: Boolean(token && appKey && start && end) });
-}
-export function useRegistrationReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-registration", appKey, reports.getRegistrationReport, start, end); }
-export function useLoginReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-login", appKey, reports.getLoginReport, start, end); }
-export function useRetentionReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-retention", appKey, reports.getRetentionReport, start, end); }
-export function useActiveReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-active", appKey, reports.getActiveReport, start, end); }
-export function useDeviceReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-device", appKey, reports.getDeviceReport, start, end); }
-export function useRegionReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-region", appKey, reports.getRegionReport, start, end); }
-export function useChannelReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-channel", appKey, reports.getChannelReport, start, end); }
-export function usePaymentReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-payment", appKey, reports.getPaymentReport, start, end); }
-export function useNotificationReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-notification", appKey, reports.getNotificationReport, start, end); }
-export function useRiskReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-risk", appKey, reports.getRiskReport, start, end); }
-export function useActivityReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-activity", appKey, reports.getActivityReport, start, end); }
-export function useFunnelReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-funnel", appKey, reports.getFunnelReport, start, end); }
+//
+// 已迁至 lib/report-hooks.ts。
 
 // ── 用户主数据 Hooks ──
 

@@ -171,7 +171,7 @@ export function OverviewHero() {
   const metrics = [
     { icon: LayoutGrid, label: "应用", value: stats?.totalApps, href: "/apps" },
     { icon: Users, label: "用户", value: stats?.totalUsers, href: "/app-users" },
-    { icon: LogIn, label: "今日登录", value: stats?.todayLogins, href: "/reports?tab=login" },
+    { icon: LogIn, label: "今日登录", value: stats?.todayLogins, href: "/reports?tab=channels&preset=today" },
     { icon: Activity, label: "活跃会话", value: stats?.activeSessions, href: "/users?tab=online" }
   ];
 
