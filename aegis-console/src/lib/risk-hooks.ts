@@ -5,7 +5,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as risk from "@/lib/api/risk";
 import { useAdminToken } from "@/lib/admin-hooks";
 import type {
-  RiskAssessmentQuery, RiskEntityQuery, RiskSimulatePayload, RiskRuleInput, RiskActionInput,
+  RiskAccountQuery, RiskActionInput, RiskAssessmentQuery, RiskDisposeInput, RiskEntityQuery,
+  RiskListCheckInput, RiskListCreateInput, RiskListQuery, RiskListUpdateInput, RiskReviewInput,
+  RiskRuleInput, RiskSimulatePayload, RiskTemplateApplyInput,
 } from "@/lib/api/types";
 
 /**
@@ -22,6 +24,7 @@ const RISK_KEYS = {
   dashboard: ["risk-dashboard"] as const,
   rules: ["risk-rules"] as const,
   rule: ["risk-rule"] as const,
+  templates: ["risk-templates"] as const,
   assessments: ["risk-assessments"] as const,
   assessment: ["risk-assessment"] as const,
   reviews: ["risk-reviews"] as const,
@@ -30,7 +33,20 @@ const RISK_KEYS = {
   ips: ["risk-ips"] as const,
   ip: ["risk-ip"] as const,
   actions: ["risk-actions"] as const,
+  lists: ["risk-lists"] as const,
+  accounts: ["risk-accounts"] as const,
+  account: ["risk-account"] as const,
 };
+
+/**
+ * 「对象的名单状态变了」会同时影响的全部查询：名单本身、账号 / 设备 / IP 的画像
+ * （各自带「现行名单」）、评估详情（带现行名单）、大盘（名单统计）。
+ * 名单、处置、复核三类写操作都走这一组，避免各自漏掉其中几张表。
+ */
+const ENTITY_STATE_KEYS = [
+  RISK_KEYS.lists, RISK_KEYS.accounts, RISK_KEYS.account, RISK_KEYS.devices, RISK_KEYS.device,
+  RISK_KEYS.ips, RISK_KEYS.ip, RISK_KEYS.assessment, RISK_KEYS.dashboard,
+] as const;
 
 function useInvalidate() {
   const qc = useQueryClient();
@@ -62,22 +78,23 @@ export function useValidateExpressionMutation() {
 
 // ── 大盘 ──
 
-export function useRiskDashboardQuery(start?: string, end?: string) {
+export function useRiskDashboardQuery(start?: string, end?: string, appId?: number) {
   const token = useAdminToken();
   return useQuery({
-    queryKey: [...RISK_KEYS.dashboard, start, end, token],
-    queryFn: () => risk.getRiskDashboard(token as string, start as string, end as string),
+    queryKey: [...RISK_KEYS.dashboard, start, end, appId ?? null, token],
+    queryFn: () => risk.getRiskDashboard(token as string, start as string, end as string, appId),
     enabled: Boolean(token && start && end),
+    placeholderData: (previous) => previous,
   });
 }
 
 // ── 规则 ──
 
-export function useRiskRulesQuery(scene?: string) {
+export function useRiskRulesQuery(scene?: string, appId?: number) {
   const token = useAdminToken();
   return useQuery({
-    queryKey: [...RISK_KEYS.rules, scene ?? "", token],
-    queryFn: () => risk.listRiskRules(token as string, scene),
+    queryKey: [...RISK_KEYS.rules, scene ?? "", appId ?? null, token],
+    queryFn: () => risk.listRiskRules(token as string, scene, appId),
     enabled: Boolean(token),
   });
 }
@@ -96,7 +113,7 @@ export function useCreateRiskRuleMutation() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (data: RiskRuleInput) => risk.createRiskRule(token as string, data),
-    onSuccess: () => invalidate(RISK_KEYS.rules, RISK_KEYS.dashboard),
+    onSuccess: () => invalidate(RISK_KEYS.rules, RISK_KEYS.dashboard, RISK_KEYS.templates),
   });
 }
 
@@ -115,7 +132,27 @@ export function useDeleteRiskRuleMutation() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (id: number) => risk.deleteRiskRule(token as string, id),
-    onSuccess: () => invalidate(RISK_KEYS.rules, RISK_KEYS.dashboard),
+    onSuccess: () => invalidate(RISK_KEYS.rules, RISK_KEYS.dashboard, RISK_KEYS.templates),
+  });
+}
+
+// ── 规则模板 ──
+
+export function useRiskTemplatesQuery(appId?: number) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [...RISK_KEYS.templates, appId ?? null, token],
+    queryFn: () => risk.listRiskTemplates(token as string, appId),
+    enabled: Boolean(token),
+  });
+}
+
+export function useApplyRiskTemplateMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (data: RiskTemplateApplyInput) => risk.applyRiskTemplate(token as string, data),
+    onSuccess: () => invalidate(RISK_KEYS.templates, RISK_KEYS.rules, RISK_KEYS.actions, RISK_KEYS.dashboard),
   });
 }
 
@@ -166,17 +203,17 @@ export function usePurgeAssessmentsMutation() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (days: number) => risk.purgeAssessments(token as string, days),
-    onSuccess: () => invalidate(RISK_KEYS.assessments, RISK_KEYS.reviews, RISK_KEYS.dashboard),
+    onSuccess: () => invalidate(RISK_KEYS.assessments, RISK_KEYS.reviews, RISK_KEYS.dashboard, RISK_KEYS.accounts),
   });
 }
 
 // ── 复核 ──
 
-export function usePendingReviewsQuery(page = 1, pageSize = 20) {
+export function usePendingReviewsQuery(page = 1, pageSize = 20, appId?: number) {
   const token = useAdminToken();
   return useQuery({
-    queryKey: [...RISK_KEYS.reviews, page, pageSize, token],
-    queryFn: () => risk.listPendingReviews(token as string, { page, pageSize }),
+    queryKey: [...RISK_KEYS.reviews, page, pageSize, appId ?? null, token],
+    queryFn: () => risk.listPendingReviews(token as string, { page, pageSize, appId }),
     enabled: Boolean(token),
     placeholderData: (previous) => previous,
   });
@@ -186,13 +223,91 @@ export function useReviewAssessmentMutation() {
   const token = useAdminToken();
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (args: { id: number; result: string; comment?: string }) =>
-      risk.reviewAssessment(token as string, args.id, { result: args.result, comment: args.comment }),
-    // 复核拒绝会连带把 IP / 设备标成封禁，四张表一起失效
-    onSuccess: () => invalidate(
-      RISK_KEYS.reviews, RISK_KEYS.assessments, RISK_KEYS.assessment,
-      RISK_KEYS.dashboard, RISK_KEYS.ips, RISK_KEYS.devices,
-    ),
+    mutationFn: (args: { id: number } & RiskReviewInput) => {
+      const { id, ...data } = args;
+      return risk.reviewAssessment(token as string, id, data);
+    },
+    // 复核会顺带加白 / 处置对象、撤销自动封禁：名单与全部实体画像一起失效
+    onSuccess: () => invalidate(RISK_KEYS.reviews, RISK_KEYS.assessments, ...ENTITY_STATE_KEYS),
+  });
+}
+
+// ── 人工处置 ──
+
+export function useDisposeRiskMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (data: RiskDisposeInput) => risk.disposeRisk(token as string, data),
+    onSuccess: () => invalidate(...ENTITY_STATE_KEYS),
+  });
+}
+
+// ── 名单库 ──
+
+export function useRiskListsQuery(params?: RiskListQuery) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [...RISK_KEYS.lists, params, token],
+    queryFn: () => risk.listRiskLists(token as string, params),
+    enabled: Boolean(token),
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useCreateRiskListMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (data: RiskListCreateInput) => risk.createRiskListEntries(token as string, data),
+    onSuccess: () => invalidate(...ENTITY_STATE_KEYS),
+  });
+}
+
+export function useUpdateRiskListMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (args: { id: number; data: RiskListUpdateInput }) =>
+      risk.updateRiskListEntry(token as string, args.id, args.data),
+    onSuccess: () => invalidate(...ENTITY_STATE_KEYS),
+  });
+}
+
+export function useDeleteRiskListMutation() {
+  const token = useAdminToken();
+  const invalidate = useInvalidate();
+  return useMutation({
+    mutationFn: (ids: number[]) => ids.length === 1
+      ? risk.deleteRiskListEntry(token as string, ids[0]).then(() => ({ removed: 1 }))
+      : risk.batchDeleteRiskListEntries(token as string, ids),
+    onSuccess: () => invalidate(...ENTITY_STATE_KEYS),
+  });
+}
+
+export function useCheckRiskListsMutation() {
+  const token = useAdminToken();
+  return useMutation({ mutationFn: (data: RiskListCheckInput) => risk.checkRiskLists(token as string, data) });
+}
+
+// ── 账号画像 ──
+
+export function useRiskAccountsQuery(params?: RiskAccountQuery) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [...RISK_KEYS.accounts, params, token],
+    queryFn: () => risk.listRiskAccounts(token as string, params),
+    enabled: Boolean(token),
+    placeholderData: (previous) => previous,
+  });
+}
+
+export function useRiskAccountQuery(target?: { appId?: number | null; account?: string; userId?: number | null } | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [...RISK_KEYS.account, target?.appId ?? null, target?.account ?? "", target?.userId ?? null, token],
+    queryFn: () => risk.getRiskAccountDetail(token as string, target ?? {}),
+    enabled: Boolean(token && target && (target.account || target.userId)),
   });
 }
 
@@ -223,7 +338,8 @@ export function useUpdateDeviceTagMutation() {
   return useMutation({
     mutationFn: (args: { id: number; tag: string; note?: string }) =>
       risk.updateDeviceTag(token as string, args.id, args.tag, args.note),
-    onSuccess: () => invalidate(RISK_KEYS.devices, RISK_KEYS.device),
+    // 封禁 / 受信标签与名单库联动
+    onSuccess: () => invalidate(RISK_KEYS.devices, RISK_KEYS.device, RISK_KEYS.lists),
   });
 }
 
@@ -254,7 +370,7 @@ export function useUpdateIPTagMutation() {
   return useMutation({
     mutationFn: (args: { id: number; tag: string; note?: string }) =>
       risk.updateIPTag(token as string, args.id, args.tag, args.note),
-    onSuccess: () => invalidate(RISK_KEYS.ips, RISK_KEYS.ip),
+    onSuccess: () => invalidate(RISK_KEYS.ips, RISK_KEYS.ip, RISK_KEYS.lists),
   });
 }
 
@@ -269,11 +385,11 @@ export function useRefreshIPReputationMutation() {
 
 // ── 处置策略 ──
 
-export function useRiskActionsQuery(scene?: string) {
+export function useRiskActionsQuery(scene?: string, appId?: number) {
   const token = useAdminToken();
   return useQuery({
-    queryKey: [...RISK_KEYS.actions, scene ?? "", token],
-    queryFn: () => risk.listRiskActions(token as string, scene),
+    queryKey: [...RISK_KEYS.actions, scene ?? "", appId ?? null, token],
+    queryFn: () => risk.listRiskActions(token as string, scene, appId),
     enabled: Boolean(token),
   });
 }
@@ -283,7 +399,7 @@ export function useCreateRiskActionMutation() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (data: RiskActionInput) => risk.createRiskAction(token as string, data),
-    onSuccess: () => invalidate(RISK_KEYS.actions),
+    onSuccess: () => invalidate(RISK_KEYS.actions, RISK_KEYS.dashboard),
   });
 }
 
@@ -291,9 +407,9 @@ export function useUpdateRiskActionMutation() {
   const token = useAdminToken();
   const invalidate = useInvalidate();
   return useMutation({
-    mutationFn: (args: { id: number; data: Partial<RiskActionInput> & { isActive?: boolean } }) =>
+    mutationFn: (args: { id: number; data: Partial<RiskActionInput> }) =>
       risk.updateRiskAction(token as string, args.id, args.data),
-    onSuccess: () => invalidate(RISK_KEYS.actions),
+    onSuccess: () => invalidate(RISK_KEYS.actions, RISK_KEYS.dashboard),
   });
 }
 
@@ -302,6 +418,6 @@ export function useDeleteRiskActionMutation() {
   const invalidate = useInvalidate();
   return useMutation({
     mutationFn: (id: number) => risk.deleteRiskAction(token as string, id),
-    onSuccess: () => invalidate(RISK_KEYS.actions),
+    onSuccess: () => invalidate(RISK_KEYS.actions, RISK_KEYS.dashboard),
   });
 }

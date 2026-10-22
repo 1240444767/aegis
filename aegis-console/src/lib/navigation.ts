@@ -367,11 +367,10 @@ export const navigationGroups: NavigationGroup[] = [
           { title: "风控大盘", tab: "dashboard" },
           { title: "评估记录", tab: "assessments" },
           { title: "人工复核", tab: "reviews" },
-          { title: "风险规则", tab: "rules" },
-          { title: "处置策略", tab: "actions" },
-          { title: "规则模拟", tab: "simulator" },
-          { title: "设备指纹", tab: "devices" },
-          { title: "IP 风险库", tab: "ips" }
+          { title: "规则策略", tab: "rules" },
+          { title: "名单库", tab: "lists" },
+          { title: "实体画像", tab: "entities" },
+          { title: "规则模拟", tab: "simulator" }
         ]
       },
       {

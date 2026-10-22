@@ -801,39 +801,51 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 ## 风控中心（/risk-control）
 
-八个页签同步到 URL（`?tab=dashboard|assessments|reviews|rules|actions|simulator|devices|ips`）：
+七个页签同步到 URL（`?tab=dashboard|assessments|reviews|rules|lists|entities|simulator`），
+另有 `section=rules|actions|templates`（规则策略分区）、`entity=account|device|ip`（实体画像类型）、
+`app=<应用 ID>`（应用作用域）。旧值 `tab=actions|templates|devices|ips|accounts` 兼容跳到新位置。
 
 | 文件 | 职责 |
 |---|---|
-| `(console)/risk-control/page.tsx` | 页面骨架、Tab 路由、跨页签的「带着一个实体去看它的记录」 |
-| `components/risk/risk-shared.tsx` | 目录上下文 `RiskCatalogProvider`、徽标、配色、格式化 |
-| `components/risk/risk-dashboard.tsx` | 大盘：趋势 / 分布 / 直方图 / Top 榜（全部 shadcn chart） |
+| `(console)/risk-control/page.tsx` | 页面骨架、Tab / 分区 / 实体类型路由、跨页签导航（`RiskNavProvider`） |
+| `components/risk/risk-shared.tsx` | 目录上下文 `RiskCatalogProvider`、配色（等级 / 动作 / 维度 / 名单 / 判定来源）、徽标、维度条、分页、格式化 |
+| `components/risk/risk-scope.tsx` | 应用作用域（`RiskScopeProvider` / 页头选择器 / `ScopeBadge` / 编辑器里的 `ScopeField`） |
+| `components/risk/risk-nav.tsx` | 跨页签导航上下文：带着对象去评估记录 / 实体画像 / 规则详情 / 模板 / 名单库 |
+| `components/risk/risk-dashboard.tsx` | 大盘：引擎运行态与执行器就绪、KPI、趋势、维度贡献、判定来源、名单、场景矩阵、榜单 |
+| `components/risk/risk-assessments.tsx` | 评估记录（维度条 + 判定来源）、详情抽屉（维度得分 / 名单命中 / 实际处置 / 规则轨迹 / 现行名单 / 重放） |
+| `components/risk/risk-reviews.tsx` | 复核队列（卡片两列） |
+| `components/risk/risk-dispose-dialog.tsx` | **唯一的**处置弹窗与复核弹窗、处置结果列表 `EnforcementList` |
+| `components/risk/risk-policy.tsx` | 规则策略页签：规则 / 处置策略 / 规则模板三个分区 |
+| `components/risk/risk-rules.tsx` | 规则列表（按维度 / 场景分组、生效 / 观察切换）、编辑器（作用域 / 模式 / 强制处置）、规则详情 |
+| `components/risk/risk-actions.tsx` | 处置策略（作用域、全部场景通用、封禁对象、分数覆盖条） |
+| `components/risk/risk-templates.tsx` | 规则模板卡片、逐条预览（已安装标记）、安装选项 |
 | `components/risk/risk-condition-form.tsx` | **schema 驱动**的条件参数表单 + 表达式变量速查 |
-| `components/risk/risk-rules.tsx` | 规则列表、编辑器、启停、规则详情（效果 + 最近命中 + 趋势） |
-| `components/risk/risk-simulator.tsx` | 模拟器：草稿规则试跑 + 环境变量逐项覆写 |
-| `components/risk/risk-assessments.tsx` | 评估记录、详情抽屉（判据 / 快照 / 关联 / 重放）、清理 |
-| `components/risk/risk-reviews.tsx` | 人工复核队列 |
-| `components/risk/risk-entities.tsx` | 设备指纹与 IP 风险库（含详情抽屉与人工处置） |
+| `components/risk/risk-lists.tsx` | 名单库（筛选 / 批量添加 / 编辑 / 批量删除 / 名单检测）、`CurrentListEntries` |
+| `components/risk/risk-entities.tsx` | 实体画像外壳 + 设备 / IP 列表与详情（现行名单、防火墙封禁、处置） |
+| `components/risk/risk-accounts.tsx` | 账号画像列表与详情（维度得分、现行封禁、名单、关联 IP / 设备） |
+| `components/risk/risk-simulator.tsx` | 模拟器：草稿规则（可观察模式）+ 环境覆写 + 用户 ID / 已过验证码 |
 | `lib/api/risk.ts` / `lib/risk-hooks.ts` | 风控域 API 与 React Query hooks |
 
-四条硬约束：
+六条硬约束：
 
 1. **枚举与参数 schema 一律来自 `/risk/metadata`，不在前端硬编码。**
-   场景、等级、动作、条件类型的参数字段都由后端目录下发；
-   在组件里另抄一份，会让「后端新增一种条件类型」变成一次静默的漏项 ——
-   规则存得进去，但表单上没有它的参数字段，配出来的是一条永不命中的规则。
-2. **图表一律用 shadcn `ChartContainer`**，配色走 `ChartConfig` 的 `theme: { light, dark }`
-   （`risk-shared.tsx` 里的 `LEVEL_COLORS` / `ACTION_COLORS`）。
-   等级色与动作色刻意分色系：同一套色系会让「高危但放行」和「低危但拦截」
-   这两种最值得注意的组合在图上看起来一模一样。
-3. **分页信封在 `lib/api/risk.ts` 的 `paged()` 里统一转换**。后端返回 `{ list, total }`，
-   重构前前端直接当 `{ items }` 用 —— 评估记录 / 待复核 / 设备 / IP 四个页签
-   因此无论后端有多少数据都永远显示空列表。
-4. **失效关系集中在 `risk-hooks.ts`**。一次复核会连带影响评估记录、待复核队列、
-   大盘、IP 库与设备库五张表，散在组件里必然漏掉其中几张。
+   场景（含服务、能否弹验证码）、维度、等级、动作、规则模式、名单种类与类型、封禁对象、判定来源、
+   模板摘要、条件类型的参数字段都由后端目录下发。唯一的例外是「全部场景」取值 `*`（`SCENE_ALL`）。
+2. **图表一律用 shadcn `ChartContainer`**，配色走 `risk-shared.tsx` 的色板
+   （`LEVEL_COLORS` / `ACTION_COLORS` / `DIMENSION_COLORS` / `DECISION_COLORS` / `LIST_KIND_COLORS`）。
+   等级、动作、维度三套刻意分色系，同屏出现时不会互相混淆。面积图实色半透明填充，不用渐变。
+3. **分页信封在 `lib/api/risk.ts` 的 `paged()` 里统一转换**（后端 `{ list, total }`）。
+4. **失效关系集中在 `risk-hooks.ts`**。名单、处置、复核三类写操作走同一组 `ENTITY_STATE_KEYS`
+   （名单、账号 / 设备 / IP 画像、评估详情、大盘），复核另加评估列表与待复核队列。
+5. **处置只有一个入口组件**（`risk-dispose-dialog.tsx`）：评估详情、复核、账号 / 设备 / IP 画像都复用它。
+   对象没有对应标识时（没有设备号）该勾选项禁用；防火墙只在「黑名单」下出现。
+   提交后展示逐项的 `enforcement` 结果，失败标红 —— 「判了封禁」与「真的封上了」是两件事。
+6. **应用作用域放页面级**（`?app=`），作用于大盘、评估、复核、规则、策略、名单、账号画像与设备；
+   IP 库是全平台数据，不按应用过滤。编辑器里的作用域默认取当前作用域；规则 PUT 时 `appId: 0` 表示改回全平台。
 
 大盘顶部的**引擎运行态条**不是装饰：「大盘全是 0」有两种截然不同的原因
-（真没风险 / 根本没规则在跑），不显式说出来管理员会把后者当成前者。
+（真没风险 / 根本没规则在跑），零规则或零策略时直接给出「安装规则模板」入口。
+执行器就绪徽标（情报源、GeoIP、Redis、限流、账号封禁、防火墙、验证码）回答「ban 动作能不能真的落地」。
 
 ## 交易中心（/commerce）
 

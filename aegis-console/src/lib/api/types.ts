@@ -2594,6 +2594,16 @@ export type RiskCatalogEntry = {
 
 export type RiskLevelCatalog = RiskCatalogEntry & { minScore: number; maxScore?: number | null };
 
+/** 场景：接在哪个服务、能不能弹验证码、评估时认得出谁 */
+export type RiskSceneCatalog = RiskCatalogEntry & {
+  service: string;
+  supportsCaptcha?: boolean;
+  /** account / user / anonymous */
+  subject: string;
+};
+
+export type RiskListTypeCatalog = RiskCatalogEntry & { placeholder?: string; pattern?: boolean };
+
 export type RiskFieldSchema = {
   key: string;
   label: string;
@@ -2613,6 +2623,7 @@ export type RiskConditionCatalog = {
   label: string;
   description: string;
   group: string;
+  dimension: string;
   fields: RiskFieldSchema[] | null;
   /** 依赖外部 IP 情报源；未配置时该条件永不命中，UI 要显式提示 */
   requiresProvider?: boolean;
@@ -2629,8 +2640,21 @@ export type RiskFunctionCatalog = {
 
 export type RiskExprSample = { title: string; expression: string; note?: string };
 
+export type RiskTemplateSummary = {
+  key: string; name: string; description: string;
+  rules: number; actions: number;
+  scenes: string[] | null; dimensions: string[] | null;
+};
+
 export type RiskMetadata = {
-  scenes: RiskCatalogEntry[];
+  scenes: RiskSceneCatalog[];
+  dimensions: RiskCatalogEntry[];
+  ruleModes: RiskCatalogEntry[];
+  listKinds: RiskCatalogEntry[];
+  listTypes: RiskListTypeCatalog[];
+  banTargets: RiskCatalogEntry[];
+  decisionBy: RiskCatalogEntry[];
+  templates: RiskTemplateSummary[];
   levels: RiskLevelCatalog[];
   actions: RiskCatalogEntry[];
   conditionTypes: RiskConditionCatalog[];
@@ -2644,27 +2668,48 @@ export type RiskMetadata = {
 export type RiskExprValidation = { valid: boolean; error?: string; message?: string };
 
 export type RiskRule = {
-  id: number; name: string; description: string; scene: string;
+  id: number; appId?: number | null;
+  name: string; description: string; scene: string;
   conditionType: string; conditionData: Record<string, unknown>;
   score: number; isActive: boolean; priority: number;
+  /** enforce / observe */
+  mode: string;
+  /** 命中即强制的处置，空为只计分 */
+  decision: string;
+  dimension: string;
+  templateKey?: string;
   hitCount: number; lastHitAt?: string | null;
   createdBy?: number | null; updatedBy?: number | null;
   createdAt: string; updatedAt: string;
 };
 
 export type RiskRuleInput = {
+  /** PUT 时 0 表示改为全平台 */
+  appId?: number | null;
   name: string; description?: string; scene: string;
   conditionType: string; conditionData: Record<string, unknown>;
   score: number; priority: number; isActive?: boolean;
+  mode?: string; decision?: string;
 };
 
 export type RiskMatchedRule = {
-  ruleId: number; ruleName: string; conditionType?: string; score: number; reason?: string;
+  ruleId: number; ruleName: string; conditionType?: string; dimension?: string;
+  score: number; reason?: string; observe?: boolean; decision?: string;
 };
 
 export type RiskRuleEvaluation = {
-  ruleId: number; ruleName: string; conditionType: string;
-  score: number; priority: number; hit: boolean; reason: string; error?: string;
+  ruleId: number; ruleName: string; conditionType: string; dimension?: string;
+  score: number; priority: number; mode?: string; decision?: string;
+  hit: boolean; reason: string; error?: string;
+};
+
+export type RiskListHit = {
+  entryId: number; listType: string; kind: string; value: string; reason?: string;
+};
+
+export type RiskEnforcement = {
+  target: string; subject: string; ok: boolean;
+  detail?: string; refId?: number; until?: string | null;
 };
 
 export type RiskAssessment = {
@@ -2674,6 +2719,10 @@ export type RiskAssessment = {
   totalScore: number; riskLevel: string;
   matchedRules: RiskMatchedRule[] | null;
   evalContext?: Record<string, unknown> | null;
+  dimensionScores?: Record<string, number> | null;
+  listHits?: RiskListHit[] | null;
+  decisionBy?: string;
+  enforcement?: RiskEnforcement[] | null;
   latencyMs: number;
   action: string; actionDetail: string;
   reviewed: boolean; reviewerId?: number | null; reviewerName?: string;
@@ -2688,6 +2737,20 @@ export type RiskEntitySummary = {
   firstSeenAt?: string | null; lastSeenAt?: string | null;
 };
 
+export type RiskListEntry = {
+  id: number; appId?: number | null;
+  listType: string; value: string;
+  /** block / allow / watch */
+  kind: string;
+  scenes: string[] | null;
+  reason: string; source: string;
+  assessmentId?: number | null;
+  expiresAt?: string | null;
+  hitCount: number; lastHitAt?: string | null;
+  createdBy?: number | null;
+  createdAt: string; updatedAt: string;
+};
+
 export type RiskAssessmentDetail = {
   assessment: RiskAssessment;
   device?: RiskDeviceFingerprint | null;
@@ -2698,6 +2761,7 @@ export type RiskAssessmentDetail = {
   sameAccount: RiskAssessment[] | null;
   ipSummary: RiskEntitySummary;
   deviceSummary: RiskEntitySummary;
+  listEntries?: RiskListEntry[] | null;
 };
 
 export type RiskDeviceFingerprint = {
@@ -2713,6 +2777,7 @@ export type RiskDeviceDetail = {
   recent: RiskAssessment[] | null;
   ips: string[] | null;
   accounts: string[] | null;
+  listEntries?: RiskListEntry[] | null;
 };
 
 export type IPRiskRecord = {
@@ -2724,23 +2789,59 @@ export type IPRiskRecord = {
   firstSeenAt: string; lastSeenAt: string;
 };
 
+export type RiskFirewallBanRef = {
+  id: number; reason: string; source: string; expiresAt?: string | null; createdAt: string;
+};
+
 export type IPRiskDetail = {
   record: IPRiskRecord;
   summary: RiskEntitySummary;
   recent: RiskAssessment[] | null;
   devices: RiskDeviceFingerprint[] | null;
   accounts: string[] | null;
+  listEntries?: RiskListEntry[] | null;
+  firewallBan?: RiskFirewallBanRef | null;
+};
+
+export type RiskAccountProfile = {
+  appId?: number | null; appName?: string;
+  account: string; userId?: number | null;
+  totalAssessments: number; blocked: number; challenged: number; highRisk: number;
+  avgScore: number; maxScore: number;
+  distinctIps: number; distinctDevices: number;
+  lastLevel: string; lastScene: string; lastSeenAt?: string | null;
+  /** 现行名单种类：block / allow / watch / 空 */
+  listed?: string;
+};
+
+export type RiskAccountBanRef = {
+  id: number; banType: string; banScope: string; reason: string;
+  endAt?: string | null; startAt: string;
+};
+
+export type RiskAccountDetail = {
+  profile: RiskAccountProfile;
+  recent: RiskAssessment[] | null;
+  ips: string[] | null;
+  devices: string[] | null;
+  listEntries: RiskListEntry[] | null;
+  dimensionScores: Record<string, number> | null;
+  activeBan?: RiskAccountBanRef | null;
 };
 
 export type RiskAction = {
-  id: number; scene: string; minScore: number; maxScore?: number | null;
-  action: string; banDuration: number; description: string;
-  isActive: boolean; createdAt: string;
+  id: number; appId?: number | null;
+  scene: string; minScore: number; maxScore?: number | null;
+  action: string; banDuration: number; banTargets: string[] | null;
+  description: string;
+  isActive: boolean; createdAt: string; updatedAt?: string;
 };
 
 export type RiskActionInput = {
+  appId?: number | null;
   scene: string; minScore: number; maxScore?: number | null;
-  action: string; banDuration: number; description?: string;
+  action: string; banDuration: number; banTargets?: string[];
+  description?: string; isActive?: boolean;
 };
 
 export type RiskDashboardRange = { start: string; end: string; bucket: string };
@@ -2762,10 +2863,15 @@ export type RiskSeriesPoint = {
 };
 
 export type RiskScoreBucket = { min: number; max: number; level: string; count: number };
-export type RiskSceneStat = { scene: string; count: number; blocked: number; avgScore: number };
+export type RiskSceneStat = {
+  scene: string; count: number; blocked: number; challenged?: number; reviewed?: number; avgScore: number;
+};
 export type RiskLevelStat = { level: string; count: number };
 export type RiskActionStat = { action: string; count: number };
 export type RiskCountryStat = { country: string; count: number; blocked: number };
+export type RiskDimensionStat = { dimension: string; hits: number; score: number; requests: number };
+export type RiskListKindStat = { kind: string; entries: number; hits: number };
+export type RiskDecisionStat = { decisionBy: string; count: number };
 
 export type RiskRuleHitStat = {
   ruleId: number; ruleName: string; scene: string; conditionType: string;
@@ -2785,11 +2891,14 @@ export type RiskDeviceHitStat = {
 
 /** 引擎运行态。「大盘全是 0」有两种原因：真没风险，或根本没规则在跑。 */
 export type RiskEngineStatus = {
-  totalRules: number; activeRules: number;
-  totalActions: number; activeActions: number;
+  totalRules: number; activeRules: number; observeRules?: number;
+  totalActions: number; activeActions: number; listEntries?: number;
   scenesCovered: string[] | null; scenesUncovered: string[] | null;
   ipProvider: string; ipProviderReady: boolean;
+  geoReady?: boolean; redisReady?: boolean;
   rateLimitOn: boolean; cacheTtlSeconds: number;
+  accountBanReady?: boolean; firewallReady?: boolean; captchaReady?: boolean;
+  snapshotAt?: string | null;
 };
 
 export type RiskDashboard = {
@@ -2804,6 +2913,10 @@ export type RiskDashboard = {
   topIps: RiskIPHitStat[] | null;
   topDevices: RiskDeviceHitStat[] | null;
   topCountries: RiskCountryStat[] | null;
+  dimensions?: RiskDimensionStat[] | null;
+  lists?: RiskListKindStat[] | null;
+  decisionSources?: RiskDecisionStat[] | null;
+  topAccounts?: RiskAccountProfile[] | null;
   engine: RiskEngineStatus;
 };
 
@@ -2811,6 +2924,10 @@ export type RiskEvalResult = {
   assessmentId?: number;
   totalScore: number; riskLevel: string;
   matchedRules: RiskMatchedRule[] | null;
+  dimensionScores?: Record<string, number> | null;
+  listHits?: RiskListHit[] | null;
+  decisionBy?: string;
+  enforcement?: RiskEnforcement[] | null;
   action: string; actionDetail: string;
   latencyMs?: number;
   evalContext?: Record<string, unknown> | null;
@@ -2827,6 +2944,7 @@ export type RiskRuleDetail = {
 };
 
 export type RiskAssessmentQuery = {
+  appId?: number; userId?: number; decisionBy?: string; dimension?: string;
   scene?: string; riskLevel?: string; action?: string;
   ip?: string; deviceId?: string; account?: string; keyword?: string;
   ruleId?: number; reviewed?: string;
@@ -2836,14 +2954,87 @@ export type RiskAssessmentQuery = {
 };
 
 export type RiskEntityQuery = {
+  appId?: number;
   keyword?: string; tag?: string; onlyRisk?: string;
   page?: number; pageSize?: number;
 };
 
+export type RiskListQuery = {
+  appId?: number; listType?: string; kind?: string; keyword?: string;
+  source?: string; active?: string; page?: number; pageSize?: number;
+};
+
+export type RiskListCreateInput = {
+  appId?: number | null; listType: string; values: string[]; kind: string;
+  scenes?: string[]; reason?: string; expiresAt?: string;
+};
+
+export type RiskListUpdateInput = {
+  kind?: string; scenes?: string[]; reason?: string;
+  /** 空串表示改为永久 */
+  expiresAt?: string;
+};
+
+export type RiskListImportResult = { created: number; updated: number; invalid: string[] | null };
+
+export type RiskListCheckInput = {
+  appId?: number | null; scene?: string; ip?: string; deviceId?: string;
+  account?: string; userId?: number | null; userAgent?: string;
+};
+
+export type RiskAccountQuery = {
+  appId?: number; keyword?: string; onlyRisk?: string; days?: number;
+  page?: number; pageSize?: number;
+};
+
+export type RiskDisposeInput = {
+  assessmentId?: number; appId?: number | null; userId?: number | null;
+  account?: string; ip?: string; deviceId?: string;
+  targets: string[];
+  /** block / allow / watch */
+  kind: string;
+  /** 秒，0 = 永久 */
+  duration: number;
+  reason?: string;
+};
+
+export type RiskReviewInput = {
+  result: "approved" | "rejected";
+  comment?: string;
+  targets?: string[];
+  duration?: number;
+  revokeAuto?: boolean;
+};
+
+export type RiskTemplateRuleView = {
+  key: string; name: string; scene: string;
+  conditionType: string; conditionData: Record<string, unknown>;
+  dimension: string; score: number; decision?: string;
+  explanation: string; installed: boolean;
+};
+
+export type RiskTemplateDetail = RiskTemplateSummary & {
+  items: RiskTemplateRuleView[] | null;
+  actionItems: RiskActionInput[] | null;
+  installed: number;
+};
+
+export type RiskTemplateApplyInput = {
+  key: string; appId?: number | null; observe: boolean; withActions: boolean;
+};
+
+export type RiskTemplateApplyResult = {
+  rulesCreated: number; rulesSkipped: number;
+  actionsCreated: number; actionsSkipped: string[] | null;
+};
+
 export type RiskSimulatePayload = {
   scene: string; ip?: string; deviceId?: string; userAgent?: string; account?: string;
-  appId?: number; ruleIds?: number[];
-  draft?: { name?: string; scene?: string; conditionType: string; conditionData: Record<string, unknown>; score?: number };
+  appId?: number; userId?: number; captchaPassed?: boolean; ruleIds?: number[];
+  draft?: {
+    name?: string; scene?: string; conditionType: string; conditionData: Record<string, unknown>;
+    score?: number; mode?: string; decision?: string;
+  };
   overrides?: Record<string, unknown>;
 };
 

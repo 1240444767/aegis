@@ -16,6 +16,7 @@ import { EmptyState } from "@/components/ui/data-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import {
   useCreateRiskActionMutation, useDeleteRiskActionMutation,
@@ -23,7 +24,8 @@ import {
 } from "@/lib/risk-hooks";
 import type { RiskAction, RiskLevelCatalog } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
-import { ActionBadge, LEVEL_COLORS, fmtDuration, useRiskCatalog } from "./risk-shared";
+import { ScopeBadge, ScopeField, useRiskScope } from "./risk-scope";
+import { ActionBadge, LEVEL_COLORS, RowsSkeleton, SCENE_ALL, SceneBadge, fmtDuration, useRiskCatalog } from "./risk-shared";
 
 /**
  * 处置策略：分数区间 → 动作。
@@ -35,26 +37,30 @@ import { ActionBadge, LEVEL_COLORS, fmtDuration, useRiskCatalog } from "./risk-s
  */
 
 type ActionForm = {
+  appId: number | null;
   scene: string; minScore: string; maxScore: string;
-  action: string; banDuration: string; description: string;
+  action: string; banDuration: string; banTargets: string[]; description: string;
 };
 
 const EMPTY_FORM: ActionForm = {
-  scene: "login", minScore: "41", maxScore: "", action: "captcha", banDuration: "0", description: "",
+  appId: null, scene: SCENE_ALL, minScore: "41", maxScore: "", action: "captcha", banDuration: "0",
+  banTargets: ["account", "device"], description: "",
 };
 
 export function RiskActionsPanel() {
-  const { scenes, levels } = useRiskCatalog();
-  const [sceneFilter, setSceneFilter] = useState("login");
+  const { scenes, levels, scene: sceneMeta, banTargetLabel } = useRiskCatalog();
+  const { appId } = useRiskScope();
+  const [sceneFilter, setSceneFilter] = useState("");
   const [editing, setEditing] = useState<RiskAction | "new" | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RiskAction | null>(null);
 
-  const query = useRiskActionsQuery(sceneFilter || undefined);
+  const query = useRiskActionsQuery(sceneFilter || undefined, appId);
   const updateMut = useUpdateRiskActionMutation();
   const deleteMut = useDeleteRiskActionMutation();
 
   const actions = useMemo(
-    () => [...(query.data ?? [])].sort((a, b) => a.minScore - b.minScore),
+    () => [...(query.data ?? [])].sort((a, b) =>
+      (a.appId ?? 0) - (b.appId ?? 0) || a.scene.localeCompare(b.scene) || a.minScore - b.minScore),
     [query.data],
   );
 
@@ -73,7 +79,8 @@ export function RiskActionsPanel() {
         <Select value={sceneFilter || "all"} onValueChange={(v) => setSceneFilter(v === "all" ? "" : v)}>
           <SelectTrigger className="h-8 w-32 text-xs"><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部场景</SelectItem>
+            <SelectItem value="all">全部</SelectItem>
+            <SelectItem value={SCENE_ALL}>全部场景通用</SelectItem>
             {scenes.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
           </SelectContent>
         </Select>
@@ -85,9 +92,7 @@ export function RiskActionsPanel() {
       {sceneFilter && <CoverageBar actions={actions.filter((a) => a.isActive)} levels={levels} />}
 
       {query.isLoading ? (
-        <div className="space-y-2">{Array.from({ length: 3 }, (_, i) => (
-          <div key={i} className="h-16 animate-pulse rounded-xl bg-muted/50" />
-        ))}</div>
+        <RowsSkeleton rows={3} height={60} />
       ) : actions.length === 0 ? (
         <EmptyState title="暂无处置策略" />
       ) : (
@@ -99,6 +104,8 @@ export function RiskActionsPanel() {
               <ShieldAlert className="size-4 shrink-0 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5 text-sm">
+                  <SceneBadge scene={action.scene} />
+                  {action.appId != null && <ScopeBadge appId={action.appId} />}
                   <Badge variant="outline" size="sm" className="font-mono">
                     {action.minScore} – {action.maxScore ?? "∞"} 分
                   </Badge>
@@ -106,6 +113,12 @@ export function RiskActionsPanel() {
                   <ActionBadge action={action.action} />
                   {action.banDuration > 0 && (
                     <Badge variant="outline" size="sm">封禁 {fmtDuration(action.banDuration)}</Badge>
+                  )}
+                  {action.action === "ban" && (action.banTargets ?? []).map((t) => (
+                    <Badge key={t} variant="danger" size="sm">{banTargetLabel(t)}</Badge>
+                  ))}
+                  {action.action === "captcha" && action.scene !== SCENE_ALL && !sceneMeta(action.scene)?.supportsCaptcha && (
+                    <Badge variant="warning" size="sm">该场景无验证码，降级为复核</Badge>
                   )}
                 </div>
                 {action.description && (
@@ -130,7 +143,7 @@ export function RiskActionsPanel() {
 
       {editing && (
         <ActionEditorDialog action={editing === "new" ? null : editing}
-          defaultScene={sceneFilter || "login"} onClose={() => setEditing(null)} />
+          defaultScene={sceneFilter || SCENE_ALL} onClose={() => setEditing(null)} />
       )}
 
       <AlertDialog open={Boolean(pendingDelete)} onOpenChange={(open) => !open && setPendingDelete(null)}>
@@ -236,18 +249,21 @@ const ACTION_BAR_COLORS: Record<string, string> = {
 function ActionEditorDialog({ action, defaultScene, onClose }: {
   action: RiskAction | null; defaultScene: string; onClose: () => void;
 }) {
-  const { scenes, actions: actionCatalog } = useRiskCatalog();
+  const { scenes, actions: actionCatalog, banTargets, scene: sceneMeta } = useRiskCatalog();
+  const { appId } = useRiskScope();
   const createMut = useCreateRiskActionMutation();
   const updateMut = useUpdateRiskActionMutation();
 
   const [form, setForm] = useState<ActionForm>(() => action ? {
+    appId: action.appId ?? null,
+    banTargets: action.banTargets ?? ["account", "device"],
     scene: action.scene,
     minScore: String(action.minScore),
     maxScore: action.maxScore == null ? "" : String(action.maxScore),
     action: action.action,
     banDuration: String(action.banDuration),
     description: action.description,
-  } : { ...EMPTY_FORM, scene: defaultScene });
+  } : { ...EMPTY_FORM, appId: appId ?? null, scene: defaultScene });
 
   const needsDuration = form.action === "ban";
   const pending = createMut.isPending || updateMut.isPending;
@@ -266,9 +282,11 @@ function ActionEditorDialog({ action, defaultScene, onClose }: {
       toast.error("封禁时长须大于 0"); return;
     }
 
+    if (needsDuration && form.banTargets.length === 0) { toast.error("请选择封禁对象"); return; }
     const payload = {
+      appId: form.appId,
       scene: form.scene, minScore, maxScore,
-      action: form.action, banDuration, description: form.description.trim(),
+      action: form.action, banDuration, banTargets: form.banTargets, description: form.description.trim(),
     };
     try {
       if (action) {
@@ -291,16 +309,21 @@ function ActionEditorDialog({ action, defaultScene, onClose }: {
         <AlertDialogHeader>
           <AlertDialogTitle>{action ? "编辑处置策略" : "新建处置策略"}</AlertDialogTitle>
           <AlertDialogDescription>
-            分数区间不能与同场景的其他策略重叠。
+            分数区间不能与同作用域同场景的其他策略重叠。
           </AlertDialogDescription>
         </AlertDialogHeader>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
+            <Label className="text-xs">作用域</Label>
+            <ScopeField value={form.appId} onChange={(v) => setForm({ ...form, appId: v })} disabled={Boolean(action)} />
+          </div>
+          <div className="space-y-1">
             <Label className="text-xs">场景</Label>
             <Select value={form.scene} onValueChange={(v) => setForm({ ...form, scene: v })} disabled={Boolean(action)}>
               <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
               <SelectContent>
+                <SelectItem value={SCENE_ALL}>全部场景</SelectItem>
                 {scenes.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
               </SelectContent>
             </Select>
@@ -335,7 +358,27 @@ function ActionEditorDialog({ action, defaultScene, onClose }: {
               </p>
             </div>
           )}
-          <div className={cn("space-y-1", needsDuration ? "" : "sm:col-span-2")}>
+          {needsDuration && (
+            <div className="space-y-1">
+              <Label className="text-xs">封禁对象</Label>
+              <div className="flex flex-wrap gap-x-3 gap-y-1.5 pt-1">
+                {banTargets.map((t) => (
+                  <label key={t.value} className="flex items-center gap-1.5 text-xs">
+                    <Checkbox checked={form.banTargets.includes(t.value)}
+                      onCheckedChange={(v) => setForm({
+                        ...form,
+                        banTargets: v ? [...form.banTargets, t.value] : form.banTargets.filter((x) => x !== t.value),
+                      })} />
+                    {t.label}
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+          {form.action === "captcha" && form.scene !== SCENE_ALL && !sceneMeta(form.scene)?.supportsCaptcha && (
+            <p className="text-[11px] text-amber-600 sm:col-span-2 dark:text-amber-400">该场景不支持验证码，命中时按人工复核处理</p>
+          )}
+          <div className="space-y-1 sm:col-span-2">
             <Label className="text-xs">说明</Label>
             <Input className="h-8 text-xs" value={form.description} placeholder="选填"
               onChange={(e) => setForm({ ...form, description: e.target.value })} />
