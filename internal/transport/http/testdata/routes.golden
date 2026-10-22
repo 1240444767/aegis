@@ -840,6 +840,7 @@ POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
 POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
 POST	/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill	AdminFulfillLotteryDraw
+POST	/api/admin/apps/:appkey/lottery/simulate	AdminSimulateLottery
 POST	/api/admin/apps/:appkey/notices	CreateAdminNotice
 POST	/api/admin/apps/:appkey/notifications/bulk	AdminBulkNotifyUsers
 POST	/api/admin/apps/:appkey/notifications/delete-by-filter	DeleteAdminAppNotificationsByFilter

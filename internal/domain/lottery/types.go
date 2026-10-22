@@ -103,8 +103,10 @@ type Activity struct {
 	LifetimePointsPerDay   int64 `json:"lifetimePointsPerDay"`
 	LifetimePointsLifetime int64 `json:"lifetimePointsLifetime"`
 	// LifetimeDraws 改发抽奖次数时发几次
-	LifetimeDraws int64     `json:"lifetimeDraws"`
-	SortOrder     int       `json:"sortOrder"`
+	LifetimeDraws int64 `json:"lifetimeDraws"`
+	// Strategy 多维度出奖策略，见 strategy.go；零值为纯加权随机 + 硬保底
+	Strategy  Strategy `json:"strategy"`
+	SortOrder int      `json:"sortOrder"`
 	CreatedBy     string    `json:"createdBy,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
@@ -128,6 +130,10 @@ type Prize struct {
 	Position int `json:"position"`
 	// Fallback 抽中的奖品恰好被抢光时改发它（必须不限库存）
 	Fallback bool `json:"fallback"`
+	// DailyLimit 全站每天最多出几个；UserLimit 每人最多中几次；UserDailyLimit 每人每天最多中几次。0 为不限
+	DailyLimit     int `json:"dailyLimit"`
+	UserLimit      int `json:"userLimit"`
+	UserDailyLimit int `json:"userDailyLimit"`
 	// LifetimeReward 抽中的人已拥有这个奖品时改发什么（积分 / 经验 / 抽奖次数）；空为按活动的处理方式折算
 	LifetimeReward *Reward   `json:"lifetimeReward,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
@@ -169,6 +175,7 @@ type ActivityInput struct {
 	LifetimePointsPerDay   int64
 	LifetimePointsLifetime int64
 	LifetimeDraws          int64
+	Strategy               Strategy
 	SortOrder              int
 	Prizes                 []PrizeInput
 	Operator               string
@@ -184,6 +191,10 @@ type PrizeInput struct {
 	Weight   int    `json:"weight"`
 	Position int    `json:"position"`
 	Fallback bool   `json:"fallback"`
+	// 限量：全站每日 / 每人累计 / 每人每日，0 为不限
+	DailyLimit     int `json:"dailyLimit"`
+	UserLimit      int `json:"userLimit"`
+	UserDailyLimit int `json:"userDailyLimit"`
 	// LifetimeReward 已拥有时改发什么；nil 为按活动的处理方式
 	LifetimeReward *Reward `json:"lifetimeReward,omitempty"`
 }
@@ -226,7 +237,9 @@ type Draw struct {
 	RequestID  string      `json:"requestId,omitempty"`
 	DeviceID   string      `json:"deviceId,omitempty"`
 	ClientIP   string      `json:"clientIp,omitempty"`
-	CreatedAt  time.Time   `json:"createdAt"`
+	// Trace 出奖方案（每个奖品的系数、最终概率、行为分）。只给管理端，客户端接口返回前清空
+	Trace     *DrawPlan `json:"trace,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // DrawQuery 抽奖记录筛选。
@@ -268,6 +281,10 @@ type DrawInput struct {
 	// DayStart 「今天」从什么时候算起（应用时区的零点），由服务层算好传进来
 	DayStart time.Time
 	Now      time.Time
+	// Location 应用时区（规则里的 draw.hour / draw.weekday 按它算）；空为 Now 自带的时区
+	Location *time.Location
+	// Profile 行为画像，服务层在事务外取好
+	Profile BehaviorProfile
 }
 
 // DrawResult 一次抽奖的结果。Replayed 为 true 表示同一个 requestId 的重复提交，原样返回第一次的结果。

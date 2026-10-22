@@ -155,6 +155,7 @@ func init() {
 		Write("DELETE /api/admin/apps/:appkey/lottery/activities/:activityId", "删除抽奖活动", "抽奖活动", SeverityHigh),
 		View("GET /api/admin/apps/:appkey/lottery/draws", "查看抽奖记录", ""),
 		Write("POST /api/admin/apps/:appkey/lottery/draws/:drawId/fulfill", "标记抽奖奖品已发放", "抽奖记录", SeverityMedium),
+		View("POST /api/admin/apps/:appkey/lottery/simulate", "模拟抽奖出奖策略", ""),
 
 		// AI 中转网关（docs/ai-gateway.md）：退款与赠送额度调整直接动用户的钱，按高风险记
 		View("GET /api/admin/apps/:appkey/ai-gateway/catalog", "查看 AI 中转目录", ""),

@@ -1414,6 +1414,13 @@
     "unmapped": false
   },
   {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/simulate",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/login-baseline/:userid",
     "permission": "app:read",

@@ -195,6 +195,7 @@ func NormalizeInput(input ActivityInput) ActivityInput {
 	slices.SortStableFunc(prizes, func(a, b PrizeInput) int { return a.Position - b.Position })
 	input.Prizes = prizes
 	NormalizeLifetime(&input)
+	input.Strategy = NormalizeStrategy(input.Strategy)
 	return input
 }
 
@@ -279,6 +280,17 @@ func validatePrizes(input ActivityInput) error {
 		if prize.Quantity > MaxQuantity {
 			return fmt.Errorf("%s的库存不能超过 %d", label, MaxQuantity)
 		}
+		for _, limit := range []int{prize.DailyLimit, prize.UserLimit, prize.UserDailyLimit} {
+			if limit < 0 || limit > MaxPrizeLimit {
+				return fmt.Errorf("%s的限量需要在 0–%d 之间（0 为不限）", label, MaxPrizeLimit)
+			}
+		}
+		if prize.UserLimit > 0 && prize.UserDailyLimit > prize.UserLimit {
+			return fmt.Errorf("%s的每人每日上限不能大于每人累计上限", label)
+		}
+		if prize.Fallback && (prize.DailyLimit > 0 || prize.UserLimit > 0 || prize.UserDailyLimit > 0) {
+			return fmt.Errorf("%s是兜底奖，不能设置限量", label)
+		}
 		totalWeight += prize.Weight
 		if prize.Quantity < 0 {
 			unlimited = true
@@ -297,6 +309,9 @@ func validatePrizes(input ActivityInput) error {
 		return fmt.Errorf("奖品的权重合计必须大于 0")
 	}
 	if err := validateLifetime(input); err != nil {
+		return err
+	}
+	if err := ValidateStrategy(input.Strategy, count); err != nil {
 		return err
 	}
 	// 至少一个不限库存的奖品：否则奖池总有被抽空的一天，那之后每一次抽奖都只能报错，

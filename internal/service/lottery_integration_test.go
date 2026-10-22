@@ -624,6 +624,9 @@ VALUES ($1, $2, $3, '{"name":"5积分"}', 'awarded'), ($1, $2, $4, '{"name":"马
 		if _, err := pool.Exec(ctx, read("000114_lottery_lifetime_swap.up.sql")); err != nil {
 			t.Fatalf("round %d 000114: %v", round+1, err)
 		}
+		if _, err := pool.Exec(ctx, read("000124_lottery_strategy.up.sql")); err != nil {
+			t.Fatalf("round %d 000124: %v", round+1, err)
+		}
 	}
 	pg := pgrepo.New(pool)
 	activity, err := pg.GetLotteryActivity(ctx, appID, activityID)

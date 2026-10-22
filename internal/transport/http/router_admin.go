@@ -470,6 +470,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.GET("/apps/:appkey/lottery/activities/:activityId/stats", h.AdminLotteryStats)
 		admin.GET("/apps/:appkey/lottery/draws", h.AdminListLotteryDraws)
 		admin.POST("/apps/:appkey/lottery/draws/:drawId/fulfill", h.AdminFulfillLotteryDraw)
+		admin.POST("/apps/:appkey/lottery/simulate", h.AdminSimulateLottery)
 
 		// 版本发布管理 RESTful 路由
 		admin.GET("/apps/:appkey/versions", h.AdminListVersions)

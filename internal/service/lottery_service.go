@@ -138,6 +138,16 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 		// 抽中已拥有的奖品（永久会员抽中会员等）的处理方式与默认折算
 		"lifetimePolicies": lotterydomain.LifetimePolicyCatalog(),
 		"swapKinds":        lotterydomain.SwapKinds(),
+		// 出奖策略：行为信号、规则变量与取值上界
+		"signals":       lotterydomain.SignalCatalog(),
+		"ruleVariables": lotterydomain.RuleVariables(),
+		"strategyLimits": map[string]any{
+			"rules": lotterydomain.MaxStrategyRules, "ruleFactor": lotterydomain.MaxRuleFactor,
+			"softPityStep": lotterydomain.MaxSoftPityStep, "cooldownDraws": lotterydomain.MaxCooldownDraws,
+			"pacingBoost": lotterydomain.MaxPacingBoost, "behaviorBoost": lotterydomain.MaxBehaviorBoost,
+			"prizeLimit": lotterydomain.MaxPrizeLimit, "simulationUsers": lotterydomain.MaxSimulationUsers,
+			"simulationEach": lotterydomain.MaxSimulationEach, "simulationDraws": lotterydomain.MaxSimulationDraws,
+		},
 		"lifetimeDefaults": map[string]any{
 			"policy":         lotterydomain.LifetimePoints,
 			"pointsPerDay":   lotterydomain.DefaultLifetimePointsPerDay,
@@ -232,11 +242,13 @@ func activityInputOf(item *lotterydomain.AdminActivity) lotterydomain.ActivityIn
 		PityThreshold: item.PityThreshold, PityPosition: -1, SortOrder: item.SortOrder,
 		LifetimePolicy: item.LifetimePolicy, LifetimePointsPerDay: item.LifetimePointsPerDay,
 		LifetimePointsLifetime: item.LifetimePointsLifetime, LifetimeDraws: item.LifetimeDraws,
+		Strategy: item.Strategy,
 	}
 	for _, prize := range item.Prizes {
 		input.Prizes = append(input.Prizes, lotterydomain.PrizeInput{
 			ID: prize.ID, Name: prize.Name, Reward: prize.Reward, ImageURL: prize.ImageURL, Quantity: prize.Quantity,
 			Weight: prize.Weight, Position: prize.Position, Fallback: prize.Fallback, LifetimeReward: prize.LifetimeReward,
+			DailyLimit: prize.DailyLimit, UserLimit: prize.UserLimit, UserDailyLimit: prize.UserDailyLimit,
 		})
 		if item.PityPrizeID != nil && *item.PityPrizeID == prize.ID {
 			input.PityPosition = prize.Position
@@ -522,7 +534,8 @@ func (s *LotteryService) Draw(ctx context.Context, req LotteryDrawRequest) (*lot
 	outcome, err := s.pg.DrawLottery(ctx, lotterydomain.DrawInput{
 		AppID: req.AppID, UserID: req.UserID, ActivityID: req.ActivityID, Source: req.Source,
 		RequestID: req.RequestID, DeviceID: strings.TrimSpace(req.DeviceID), ClientIP: strings.TrimSpace(req.ClientIP),
-		UserAgent: req.UserAgent, DayStart: lotteryDayStart(now), Now: now,
+		UserAgent: req.UserAgent, DayStart: lotteryDayStart(now), Now: now, Location: timeutil.DefaultLocation(),
+		Profile: s.drawProfile(ctx, req.AppID, req.UserID, req.ActivityID, now),
 	})
 	if err != nil {
 		return nil, s.translate(err)
@@ -565,6 +578,8 @@ func (s *LotteryService) MyDraws(ctx context.Context, appID, userID, activityID 
 func userLotteryDraw(draw lotterydomain.Draw) lotterydomain.Draw {
 	draw.Account, draw.Nickname = "", ""
 	draw.DeviceID, draw.ClientIP, draw.HandledBy, draw.RequestID = "", "", "", ""
+	// 出奖方案里有策略、画像与各奖品的实时系数，不给用户端
+	draw.Trace = nil
 	if draw.Results == nil {
 		draw.Results = []lotterydomain.RewardResult{}
 	}

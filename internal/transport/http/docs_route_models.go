@@ -197,6 +197,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}"):                       LotteryActivityRequest{},                 // AdminUpdateLotteryActivity
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/status"):                LotteryStatusRequest{},                   // AdminSetLotteryActivityStatus
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/draws/{drawId}/fulfill"):                       LotteryFulfillRequest{},                  // AdminFulfillLotteryDraw
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/simulate"):                                     LotterySimulateRequest{},                 // AdminSimulateLottery
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notices"):                                            AdminBatchIDsRequest{},                   // DeleteAdminNotices
 		routeKey("GET", "/api/admin/apps/{appkey}/notices"):                                               AdminNoticeListQuery{},                   // AdminNotices
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notifications"):                                      AdminNotificationDeleteRequest{},         // DeleteAdminAppNotifications

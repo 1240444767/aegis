@@ -40,6 +40,10 @@ type LotteryPrizeRequest struct {
 	Weight   int   `json:"weight"`
 	Position int   `json:"position"`
 	Fallback bool  `json:"fallback"`
+	// DailyLimit 全站每天最多出几个；UserLimit 每人最多中几次；UserDailyLimit 每人每天最多中几次。0 为不限
+	DailyLimit     int `json:"dailyLimit"`
+	UserLimit      int `json:"userLimit"`
+	UserDailyLimit int `json:"userDailyLimit"`
 	// LifetimeReward 抽中的人已拥有这个奖品（永久会员抽中会员等）时改发什么：积分 / 经验 / 抽奖次数；
 	// 不传或 type 为空时按活动的 lifetimePolicy 折算
 	LifetimeReward *LotteryRewardRequest `json:"lifetimeReward"`
@@ -68,9 +72,26 @@ type LotteryActivityRequest struct {
 	LifetimePointsPerDay   int64 `json:"lifetimePointsPerDay"`
 	LifetimePointsLifetime int64 `json:"lifetimePointsLifetime"`
 	// LifetimeDraws 改发抽奖次数时发几次
-	LifetimeDraws int64                 `json:"lifetimeDraws"`
-	SortOrder     int                   `json:"sortOrder"`
-	Prizes        []LotteryPrizeRequest `json:"prizes"`
+	LifetimeDraws int64 `json:"lifetimeDraws"`
+	// Strategy 多维度出奖策略：softPity / pacing / cooldown / budget / risk / behavior / rules，全部可选
+	Strategy  lotterydomain.Strategy `json:"strategy"`
+	SortOrder int                    `json:"sortOrder"`
+	Prizes    []LotteryPrizeRequest  `json:"prizes"`
+}
+
+// LotterySimulateRequest 策略模拟：一批虚拟用户各自连续抽若干次，看实际中奖率、首中次数与连续未中分布。
+// activity 是控制台里还没保存的编辑内容（不传用 activityId 对应的已保存活动）；userId 用真实用户的画像，
+// 不传时用 profile（不传为空画像）。
+type LotterySimulateRequest struct {
+	ActivityID    int64                          `json:"activityId"`
+	Activity      *LotteryActivityRequest        `json:"activity"`
+	UserID        int64                          `json:"userId"`
+	Profile       *lotterydomain.BehaviorProfile `json:"profile"`
+	Users         int                            `json:"users"`
+	DrawsPerUser  int                            `json:"drawsPerUser"`
+	Source        string                         `json:"source"`
+	IsolatedStock bool                           `json:"isolatedStock"`
+	Seed          uint64                         `json:"seed"`
 }
 
 // LotteryStatusRequest 改活动状态：draft / active / paused / ended。
@@ -119,6 +140,7 @@ func (req LotteryActivityRequest) toInput(appID int64, operator string) lotteryd
 		LifetimePointsPerDay:   req.LifetimePointsPerDay,
 		LifetimePointsLifetime: req.LifetimePointsLifetime,
 		LifetimeDraws:          req.LifetimeDraws,
+		Strategy:               req.Strategy,
 		Operator:               operator,
 		Prizes:                 make([]lotterydomain.PrizeInput, 0, len(req.Prizes)),
 	}
@@ -146,6 +168,10 @@ func (req LotteryActivityRequest) toInput(appID int64, operator string) lotteryd
 			Weight:   prize.Weight,
 			Position: prize.Position,
 			Fallback: prize.Fallback,
+
+			DailyLimit:     prize.DailyLimit,
+			UserLimit:      prize.UserLimit,
+			UserDailyLimit: prize.UserDailyLimit,
 		})
 	}
 	return input
@@ -264,6 +290,40 @@ func (h *Handler) AdminSetLotteryActivityStatus(c *gin.Context) {
 		return
 	}
 	response.Success(c, http.StatusOK, "状态已更新", item)
+}
+
+// AdminSimulateLottery 按出奖策略模拟（不写库、不发奖）；指定 userId 时附带这个人的画像与下一次抽奖的出奖方案。
+func (h *Handler) AdminSimulateLottery(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req LotterySimulateRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	sim := service.LotterySimulation{
+		AppID: appID, ActivityID: req.ActivityID, UserID: req.UserID,
+		Options: lotterydomain.SimulationInput{
+			Users: req.Users, DrawsPerUser: req.DrawsPerUser, Source: strings.TrimSpace(req.Source),
+			IsolatedStock: req.IsolatedStock, Seed: req.Seed,
+		},
+	}
+	if req.Activity != nil {
+		_, operator := adminAccount(c)
+		input := req.Activity.toInput(appID, operator)
+		sim.Input = &input
+	}
+	if req.Profile != nil {
+		sim.Profile = *req.Profile
+	}
+	result, err := h.lottery.Simulate(c.Request.Context(), sim)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "ok", result)
 }
 
 // AdminDeleteLotteryActivity 删除没有抽奖记录的活动。

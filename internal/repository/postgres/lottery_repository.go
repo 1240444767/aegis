@@ -57,16 +57,18 @@ func lotteryUnavailable(reason string) error { return &LotteryUnavailableError{R
 
 const lotteryActivityColumns = `a.id, a.appid, a.name, a.description, a.rules, a.ui_mode, a.status, a.start_time, a.end_time,
 a.free_daily, a.points_cost, a.points_daily, a.video_scene, a.pity_threshold, a.pity_prize_id, a.lifetime_policy,
-a.lifetime_points_per_day, a.lifetime_points_lifetime, a.lifetime_draws, a.sort_order,
+a.lifetime_points_per_day, a.lifetime_points_lifetime, a.lifetime_draws, a.strategy, a.sort_order,
 COALESCE(a.created_by, ''), a.created_at, a.updated_at`
 
 func scanLotteryActivity(row interface{ Scan(dest ...any) error }, extra ...any) (*lotterydomain.Activity, error) {
 	var item lotterydomain.Activity
+	var strategy []byte
 	dest := []any{
 		&item.ID, &item.AppID, &item.Name, &item.Description, &item.Rules, &item.UIMode, &item.Status,
 		&item.StartTime, &item.EndTime, &item.FreeDaily, &item.PointsCost, &item.PointsDaily, &item.VideoScene,
 		&item.PityThreshold, &item.PityPrizeID, &item.LifetimePolicy, &item.LifetimePointsPerDay,
-		&item.LifetimePointsLifetime, &item.LifetimeDraws, &item.SortOrder, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.LifetimePointsLifetime, &item.LifetimeDraws, &strategy, &item.SortOrder, &item.CreatedBy, &item.CreatedAt,
+		&item.UpdatedAt,
 	}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -74,18 +76,25 @@ func scanLotteryActivity(row interface{ Scan(dest ...any) error }, extra ...any)
 		}
 		return nil, err
 	}
+	// 坏数据不拦抽奖：解析失败按没有策略处理（保存时已校验）
+	if len(strategy) > 0 {
+		_ = json.Unmarshal(strategy, &item.Strategy)
+		item.Strategy = lotterydomain.NormalizeStrategy(item.Strategy)
+	}
 	return &item, nil
 }
 
 const lotteryPrizeColumns = `p.id, p.activity_id, p.name, p.kind, p.reward, COALESCE(p.image_url, ''), p.quantity, p.used,
-p.weight, p.position, p.is_default, p.lifetime_reward, p.created_at, p.updated_at`
+p.weight, p.position, p.is_default, p.lifetime_reward, p.daily_limit, p.user_limit, p.user_daily_limit, p.created_at,
+p.updated_at`
 
 func scanLotteryPrize(row interface{ Scan(dest ...any) error }) (*lotterydomain.Prize, error) {
 	var item lotterydomain.Prize
 	var reward, swap []byte
 	var quantity, used int32
 	if err := row.Scan(&item.ID, &item.ActivityID, &item.Name, &item.Kind, &reward, &item.ImageURL, &quantity, &used,
-		&item.Weight, &item.Position, &item.Fallback, &swap, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&item.Weight, &item.Position, &item.Fallback, &swap, &item.DailyLimit, &item.UserLimit, &item.UserDailyLimit,
+		&item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if len(swap) > 0 {
@@ -104,7 +113,7 @@ func scanLotteryPrize(row interface{ Scan(dest ...any) error }) (*lotterydomain.
 const lotteryDrawColumns = `d.id, d.draw_no, d.appid, d.activity_id, COALESCE(a.name, ''), d.user_id, COALESCE(u.account, ''),
 COALESCE(up.nickname, ''), d.prize_id, d.prize_name, d.prize_kind, d.reward, d.position, d.source, d.points_cost, d.pity,
 d.status, d.results, d.conversion, COALESCE(d.note, ''), COALESCE(d.handled_by, ''), d.handled_at, COALESCE(d.request_id, ''),
-COALESCE(d.device_id, ''), COALESCE(d.client_ip, ''), d.created_at`
+COALESCE(d.device_id, ''), COALESCE(d.client_ip, ''), d.trace, d.created_at`
 
 const lotteryDrawJoins = `FROM lottery_draws d
 LEFT JOIN lottery_activities a ON a.id = d.activity_id
@@ -113,11 +122,11 @@ LEFT JOIN user_profiles up ON up.user_id = d.user_id`
 
 func scanLotteryDraw(row interface{ Scan(dest ...any) error }) (*lotterydomain.Draw, error) {
 	var item lotterydomain.Draw
-	var reward, results, conversion []byte
+	var reward, results, conversion, trace []byte
 	if err := row.Scan(&item.ID, &item.DrawNo, &item.AppID, &item.ActivityID, &item.ActivityName, &item.UserID,
 		&item.Account, &item.Nickname, &item.PrizeID, &item.PrizeName, &item.PrizeKind, &reward, &item.Position,
 		&item.Source, &item.PointsCost, &item.Pity, &item.Status, &results, &conversion, &item.Note, &item.HandledBy,
-		&item.HandledAt, &item.RequestID, &item.DeviceID, &item.ClientIP, &item.CreatedAt); err != nil {
+		&item.HandledAt, &item.RequestID, &item.DeviceID, &item.ClientIP, &trace, &item.CreatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrLotteryDrawNotFound
 		}
@@ -135,6 +144,12 @@ func scanLotteryDraw(row interface{ Scan(dest ...any) error }) (*lotterydomain.D
 	}
 	if item.Results == nil {
 		item.Results = []lotterydomain.RewardResult{}
+	}
+	if len(trace) > 0 {
+		var plan lotterydomain.DrawPlan
+		if err := json.Unmarshal(trace, &plan); err == nil && len(plan.Odds) > 0 {
+			item.Trace = &plan
+		}
 	}
 	return &item, nil
 }
@@ -270,16 +285,20 @@ func (r *Repository) SaveLotteryActivity(ctx context.Context, activityID int64, 
 		}
 	}()
 
+	strategy, err := json.Marshal(input.Strategy)
+	if err != nil {
+		return nil, err
+	}
 	if activityID == 0 {
 		if err := tx.QueryRow(ctx, `INSERT INTO lottery_activities
 (appid, name, description, rules, ui_mode, status, start_time, end_time, free_daily, points_cost, points_daily,
  video_scene, pity_threshold, sort_order, created_by, lifetime_policy, lifetime_points_per_day,
- lifetime_points_lifetime, lifetime_draws)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+ lifetime_points_lifetime, lifetime_draws, strategy)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
 			input.AppID, input.Name, input.Description, input.Rules, input.UIMode, input.Status, input.StartTime,
 			input.EndTime, input.FreeDaily, input.PointsCost, input.PointsDaily, input.VideoScene, input.PityThreshold,
 			input.SortOrder, nullableString(input.Operator), input.LifetimePolicy, input.LifetimePointsPerDay,
-			input.LifetimePointsLifetime, input.LifetimeDraws).Scan(&activityID); err != nil {
+			input.LifetimePointsLifetime, input.LifetimeDraws, strategy).Scan(&activityID); err != nil {
 			return nil, err
 		}
 	} else {
@@ -288,11 +307,11 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETU
   name = $3, description = $4, rules = $5, ui_mode = $6, status = $7, start_time = $8, end_time = $9,
   free_daily = $10, points_cost = $11, points_daily = $12, video_scene = $13, pity_threshold = $14,
   sort_order = $15, lifetime_policy = $16, lifetime_points_per_day = $17, lifetime_points_lifetime = $18,
-  lifetime_draws = $19, updated_at = NOW()
+  lifetime_draws = $19, strategy = $20, updated_at = NOW()
 WHERE id = $1 AND appid = $2`, activityID, input.AppID, input.Name, input.Description, input.Rules, input.UIMode,
 			input.Status, input.StartTime, input.EndTime, input.FreeDaily, input.PointsCost, input.PointsDaily,
 			input.VideoScene, input.PityThreshold, input.SortOrder, input.LifetimePolicy, input.LifetimePointsPerDay,
-			input.LifetimePointsLifetime, input.LifetimeDraws)
+			input.LifetimePointsLifetime, input.LifetimeDraws, strategy)
 		if err != nil {
 			return nil, err
 		}
@@ -329,18 +348,21 @@ WHERE id = $1 AND appid = $2`, activityID, input.AppID, input.Name, input.Descri
 			}
 			if _, err := tx.Exec(ctx, `UPDATE lottery_prizes SET
   name = $2, kind = $3, reward = $4, image_url = $5, quantity = $6, weight = $7, position = $8, is_default = $9,
-  lifetime_reward = $10, updated_at = NOW()
+  lifetime_reward = $10, daily_limit = $11, user_limit = $12, user_daily_limit = $13, updated_at = NOW()
 WHERE id = $1`, prize.ID, prize.Name, prize.Reward.Type, reward, nullableString(prize.ImageURL), prize.Quantity,
-				prize.Weight, prize.Position, prize.Fallback, swap); err != nil {
+				prize.Weight, prize.Position, prize.Fallback, swap, prize.DailyLimit, prize.UserLimit,
+				prize.UserDailyLimit); err != nil {
 				return nil, err
 			}
 			id = prize.ID
 		} else {
 			// 带了不属于这个活动的 ID：按新建处理，不去碰别的活动的奖品
 			if err := tx.QueryRow(ctx, `INSERT INTO lottery_prizes
-(activity_id, name, kind, reward, image_url, quantity, weight, position, is_default, lifetime_reward)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`, activityID, prize.Name, prize.Reward.Type, reward,
-				nullableString(prize.ImageURL), prize.Quantity, prize.Weight, prize.Position, prize.Fallback, swap).Scan(&id); err != nil {
+(activity_id, name, kind, reward, image_url, quantity, weight, position, is_default, lifetime_reward,
+ daily_limit, user_limit, user_daily_limit)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`, activityID, prize.Name, prize.Reward.Type, reward,
+				nullableString(prize.ImageURL), prize.Quantity, prize.Weight, prize.Position, prize.Fallback, swap,
+				prize.DailyLimit, prize.UserLimit, prize.UserDailyLimit).Scan(&id); err != nil {
 				return nil, err
 			}
 		}
@@ -597,7 +619,17 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	rule := lotterydomain.RuleOf(*activity)
 	personal := lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)
 
-	prize, pity, err := pickLotteryPrize(ctx, tx, *activity, personal, facts.MissStreak)
+	state, err := lotteryDrawState(ctx, tx, *activity, personal, input, facts, now)
+	if err != nil {
+		return nil, err
+	}
+	state.Source = source
+	prize, plan, err := pickLotteryPrize(ctx, tx, *activity, personal, state, input.DayStart)
+	if err != nil {
+		return nil, err
+	}
+	pity := plan.Pity
+	trace, err := json.Marshal(plan)
 	if err != nil {
 		return nil, err
 	}
@@ -619,12 +651,12 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	drawNo := lotteryDrawNo(now)
 	if err := tx.QueryRow(ctx, `INSERT INTO lottery_draws
 (draw_no, appid, activity_id, user_id, prize_id, prize_name, prize_kind, reward, position, source, points_cost, pity,
- status, request_id, device_id, client_ip, user_agent, created_at)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+ status, request_id, device_id, client_ip, user_agent, created_at, trace)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
 		drawNo, input.AppID, activity.ID, input.UserID, prizeID, truncateColumn(prize.Name, 64), prize.Kind, reward,
 		prize.Position, source, pointsCost, pity, status, nullableString(input.RequestID),
 		nullableString(truncateColumn(input.DeviceID, 128)), nullableString(truncateColumn(input.ClientIP, 64)),
-		nullableString(truncateColumn(input.UserAgent, 256)), now).Scan(&drawID); err != nil {
+		nullableString(truncateColumn(input.UserAgent, 256)), now, trace).Scan(&drawID); err != nil {
 		return nil, err
 	}
 
@@ -696,54 +728,43 @@ WHERE activity_id = $1 AND user_id = $2`, activity.ID, input.UserID,
 	return &LotteryDrawOutcome{Draw: *draw, Activity: *activity, Prizes: prizes}, nil
 }
 
-// pickLotteryPrize 选奖品并扣库存。返回选中的奖品与是否保底触发。
+// pickLotteryPrize 按出奖策略选奖品并占库存。返回选中的奖品与完整的出奖方案（写进记录的 trace）。
+//
+// 硬保底到点且保底奖这一次有资格时直接给它；否则按方案的最终权重抽（gonum 加权抽样，
+// 随机源是 crypto/rand 播种的 ChaCha8）。选中后占每日限量与库存，被并发抢光时改发兜底奖，保底不算触发。
 func pickLotteryPrize(ctx context.Context, tx pgx.Tx, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
-	missStreak int) (lotterydomain.Prize, bool, error) {
-	var chosen lotterydomain.Prize
-	var found, pity bool
-
-	if activity.PityPrizeID != nil && lotterydomain.PityDue(activity.PityThreshold, missStreak) {
-		for _, prize := range prizes {
-			if prize.ID == *activity.PityPrizeID && prize.InStock() {
-				chosen, found, pity = prize, true, true
-				break
-			}
-		}
-	}
-	if !found {
-		candidates := lotterydomain.Candidates(prizes)
-		if total := lotterydomain.TotalWeight(candidates); total > 0 {
-			roll, err := rand.Int(rand.Reader, big.NewInt(total))
-			if err != nil {
-				return chosen, false, err
-			}
-			chosen, found = lotterydomain.Pick(candidates, roll.Int64())
-		}
-	}
-	if !found {
-		fallback, ok := lotterydomain.FallbackPrize(prizes)
+	state lotterydomain.DrawState, dayStart time.Time) (lotterydomain.Prize, lotterydomain.DrawPlan, error) {
+	plan := lotterydomain.PlanDraw(activity, activity.Strategy, prizes, state)
+	fallback := func() (lotterydomain.Prize, lotterydomain.DrawPlan, error) {
+		prize, ok := lotterydomain.FallbackPrize(prizes)
 		if !ok {
-			return chosen, false, ErrLotteryPoolBroken
+			return prize, plan, ErrLotteryPoolBroken
 		}
-		return fallback, false, nil
+		plan.Pity, plan.Fallback, plan.Picked = false, true, prize.ID
+		return prize, plan, nil
 	}
-	if chosen.Quantity < 0 {
-		return chosen, pity, nil
+
+	index, pity := lotterydomain.PityChoice(activity, plan, prizes, state.MissStreak)
+	if !pity {
+		src, err := lotterydomain.NewDrawSource()
+		if err != nil {
+			return lotterydomain.Prize{}, plan, err
+		}
+		var ok bool
+		if index, ok = lotterydomain.Sample(plan, src); !ok {
+			return fallback()
+		}
 	}
-	tag, err := tx.Exec(ctx, `UPDATE lottery_prizes SET used = used + 1, updated_at = NOW()
-WHERE id = $1 AND quantity >= 0 AND used < quantity`, chosen.ID)
+	chosen := prizes[index]
+	reserved, err := reserveLotteryPrize(ctx, tx, chosen, dayStart)
 	if err != nil {
-		return chosen, false, err
+		return chosen, plan, err
 	}
-	if tag.RowsAffected() == 1 {
-		return chosen, pity, nil
+	if !reserved {
+		return fallback()
 	}
-	// 在选中与扣减之间被别人抽走了最后一份：改发兜底奖（不限量），保底不算触发
-	fallback, ok := lotterydomain.FallbackPrize(prizes)
-	if !ok {
-		return chosen, false, ErrLotteryPoolBroken
-	}
-	return fallback, false, nil
+	plan.Pity, plan.Picked = pity, chosen.ID
+	return chosen, plan, nil
 }
 
 // lotteryDrawNo 抽奖单号：LTD + UTC 秒 + 10 位加密随机数字。
