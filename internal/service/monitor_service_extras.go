@@ -146,7 +146,19 @@ func (s *MonitorService) buildControlPlaneModules(ctx context.Context, infra map
 
 func (s *MonitorService) httpAPIComponent(checkedAt time.Time) MonitorComponent {
 	status := evaluateStatus(s.auth != nil && s.app != nil && s.user != nil, nil, nil)
-	return MonitorComponent{Key: "http_api", Name: "HTTP API", Status: status, Severity: severityFromStatus(status), Available: status == monitorStatusAvailable, Summary: moduleSummary("HTTP API", status), Detail: "HTTP 路由与核心服务装配完成。", CheckedAt: checkedAt, Meta: map[string]any{"port": s.cfg.HTTPPort, "environment": s.cfg.AppEnv}}
+	return MonitorComponent{Key: "http_api", Name: "HTTP API", Status: status, Severity: severityFromStatus(status), Available: status == monitorStatusAvailable, Summary: moduleSummary("HTTP API", status), Detail: "HTTP 路由与核心服务装配完成。", CheckedAt: checkedAt, Meta: s.httpAPIMeta()}
+}
+
+func (s *MonitorService) httpAPIMeta() map[string]any {
+	meta := map[string]any{"port": s.cfg.HTTPPort, "environment": s.cfg.AppEnv}
+	if tc := s.cfg.TLSServer; tc.Enabled {
+		meta["httpsPort"] = tc.Port
+		meta["http3"] = tc.HTTP3.Enabled
+		if tc.HTTP3.Enabled {
+			meta["http3Port"] = tc.HTTP3.Port
+		}
+	}
+	return meta
 }
 
 func (s *MonitorService) monitorAPIComponent(checkedAt time.Time) MonitorComponent {

@@ -333,9 +333,21 @@ services:
       RDKIT_CAPTCHA_URL: http://rdkit-captcha:5000
       # 授权服务器（profile: oauth2）的管理端，容器网络内的地址
       HYDRA_ADMIN_URL: http://hydra:4445
+      # HTTPS + HTTP/3（TLS_ENABLED=true 时才监听）：容器内固定 8443，对外端口由下面的映射决定，
+      # Alt-Svc 宣告与明文跳转用的是对外端口。证书放进 TLS_CERT_DIR，.env 里写容器内路径
+      # （TLS_CERT_FILE=/etc/aegis/tls/fullchain.pem）；用 ACME 时证书缓存在 aegis_autocert 卷里。
+      HTTPS_PORT: "8443"
+      HTTP3_PORT: "8443"
+      HTTPS_PUBLIC_PORT: ${HTTPS_PUBLIC_PORT:-8443}
     command: ["/usr/local/bin/aegis-server"]
     ports:
       - "${HTTP_PORT:-8088}:8088"
+      # 同一个端口号，TCP 与 UDP 都要映射：只映射 TCP 时 HTTPS 照常可用，但客户端永远升级不到 HTTP/3
+      - "${HTTPS_PUBLIC_PORT:-8443}:8443/tcp"
+      - "${HTTPS_PUBLIC_PORT:-8443}:8443/udp"
+    volumes:
+      - ${TLS_CERT_DIR:-../../.runtime/tls}:/etc/aegis/tls:ro
+      - aegis_autocert:/app/.runtime/autocert
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -358,6 +370,7 @@ services:
 
 volumes:
   postgres_data:
+  aegis_autocert:
   redis_data:
   nats_data:
   nats_ui_data:

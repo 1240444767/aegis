@@ -21,6 +21,7 @@ import (
 	"aegis/pkg/clientip"
 	"aegis/pkg/crashlog"
 	"aegis/pkg/egress"
+	"aegis/pkg/httpserve"
 	pkglogger "aegis/pkg/logger"
 	"aegis/pkg/tracing"
 	"github.com/gin-gonic/gin"
@@ -39,6 +40,7 @@ type APIApp struct {
 	CrashLog        *crashlog.Logger
 	Router          *gin.Engine
 	Server          *http.Server
+	Secure          *httpserve.Server // TLS_ENABLED 时的 HTTPS + HTTP/3 监听，由 Serve 建立；未开启时为 nil
 	Postgres        *pgxpool.Pool
 	Redis           *redislib.Client
 	NATSConn        *nats.Conn
@@ -874,6 +876,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Monitor != nil {
 		a.Monitor.StopCollector()
+	}
+	if a.Secure != nil {
+		_ = a.Secure.Shutdown(ctx)
 	}
 	if a.Server != nil {
 		_ = a.Server.Shutdown(ctx)

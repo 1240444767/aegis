@@ -94,6 +94,7 @@ graph TD
 | **平台治理** | 全站应用的冻结 / 封禁 / 限制 / 申诉（超管与平台管理员） | [docs](docs/platform-governance.md) |
 | `pkg/clientip/` | **真实客户端 IP**：受信代理网段 + 平台探测 + 转发链判定 | [docs](docs/client-ip.md) |
 | `pkg/egress/` | **出海代理网关**：域名后缀路由 + 多协议端点 + 健康检查 | [docs](docs/egress-gateway.md) |
+| `pkg/httpserve/` | **HTTPS + HTTP/3（QUIC）**：自己终止 TLS 时同端口号 TCP/UDP 双监听、Alt-Svc 宣告、证书热加载 / ACME、0-RTT 非幂等请求回 425；CDN 后面不必开 | [docs](docs/http3.md) |
 | `pkg/banner/` | **启动横幅渲染引擎**：FIGlet 艺术字 + 明细表格 + 终端能力降级 | [bootstrap](internal/bootstrap/CLAUDE.md#启动横幅) |
 | `pkg/routetable/` | **路由清单渲染**：分组表格 / 树形 / Markdown / CSV / HTML / JSON，宽度自适应 | [transport/http](internal/transport/http/CLAUDE.md#路由清单与分组规则) |
 | `pkg/gifcaptcha/` | **动态图片验证码**：逐帧动画 GIF（字形位移/旋转/变色 + 漂移噪点 + 干扰线 + 水波扭曲），纯 Go、字体内嵌 | [service](internal/service/CLAUDE.md#动态图片验证码gifcaptcha) |

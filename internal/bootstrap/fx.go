@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"sync"
 	"time"
 
@@ -187,12 +186,14 @@ func registerAPIRuntimeLifecycle(lc fx.Lifecycle, shutdowner fx.Shutdowner, repo
 				return err
 			}
 
-			go func() {
-				if err := app.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					reporter.report(fmt.Errorf("api serve failed: %w", err))
-					_ = shutdowner.Shutdown()
-				}
-			}()
+			if err := app.Serve(func(err error) {
+				reporter.report(err)
+				_ = shutdowner.Shutdown()
+			}); err != nil {
+				cancel()
+				cancel = nil
+				return err
+			}
 			return nil
 		},
 		OnStop: func(ctx context.Context) error {

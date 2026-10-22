@@ -52,6 +52,8 @@ func AccessLog(log *zap.Logger, skipPaths ...string) gin.HandlerFunc {
 		status := c.Writer.Status()
 		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
+			// HTTP/1.1、HTTP/2.0、HTTP/3.0：确认客户端是否真的升级到了 QUIC，看这一列
+			zap.String("proto", c.Request.Proto),
 			zap.String("path", path),
 			zap.Int("status", status),
 			zap.Duration("latency", time.Since(started)),

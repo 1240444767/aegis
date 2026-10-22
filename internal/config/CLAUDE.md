@@ -20,6 +20,7 @@ Config
 ├── AdminAPIToken / AdminSessionTTL / AdminBootstrap
 ├── ReadTimeout / WriteTimeout / ShutdownTimeout
 ├── ClientIP   → clientip.Config (受信代理网段 + 判定方式 + 平台探测)
+├── TLSServer  → TLSServerConfig (HTTPS + HTTP/3 监听、证书文件/ACME、HSTS、0-RTT，见 docs/http3.md)
 ├── CORS       → CORSConfig
 ├── JWT        → JWTConfig (Secret, Issuer, TTL, RefreshTTL)
 ├── Firewall   → FirewallConfig (WAF、限流、CIDR 黑白名单、UA 过滤)

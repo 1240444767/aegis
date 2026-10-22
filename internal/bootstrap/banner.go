@@ -226,7 +226,16 @@ func bannerHighlights(rt BannerRuntime, build banner.BuildFacts, proc banner.Run
 // 服务端实际 bind 的是 ":port"（所有网卡），这里显示 127.0.0.1 是因为
 // 横幅是给运行它的人看的，本机地址才是那个能点开的链接。
 func listenURL(cfg config.Config) string {
-	return fmt.Sprintf("http://127.0.0.1:%d", cfg.HTTPPort)
+	plain := fmt.Sprintf("http://127.0.0.1:%d", cfg.HTTPPort)
+	tc := cfg.TLSServer
+	if !tc.Enabled {
+		return plain
+	}
+	secure := fmt.Sprintf("https://127.0.0.1:%d", tc.Port)
+	if tc.HTTP3.Enabled {
+		secure += fmt.Sprintf(" (HTTP/3 %d/udp)", tc.HTTP3.Port)
+	}
+	return plain + " " + secure
 }
 
 // ── 分区 ───────────────────────────────────────────────────────────────

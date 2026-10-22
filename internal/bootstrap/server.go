@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 
 	"aegis/internal/config"
 	"aegis/pkg/crashlog"
@@ -53,11 +52,15 @@ func (u *UnifiedApp) Run(ctx context.Context) error {
 		}
 	}()
 
-	go func() {
-		if err := u.API.Server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("api serve failed: %w", err)
+	report := func(err error) {
+		select {
+		case errCh <- err:
+		default:
 		}
-	}()
+	}
+	if err := u.API.Serve(report); err != nil {
+		return err
+	}
 
 	select {
 	case <-ctx.Done():

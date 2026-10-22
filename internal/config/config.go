@@ -52,7 +52,10 @@ type Config struct {
 	// ClientIP 真实客户端 IP 的判定方式（含受信代理网段）。
 	// 限流、封禁、地理风控、审计全部建立在它算出来的那个地址上，
 	// 判错不会报错，只会让这几样一起静默失效。详见 pkg/clientip 与 docs/client-ip.md。
-	ClientIP         clientip.Config
+	ClientIP clientip.Config
+	// TLSServer 本进程直接终止 TLS 时的 HTTPS + HTTP/3 监听，见 tls_server.go 与 docs/http3.md。
+	// 关闭时（默认）只有明文 HTTP_PORT，TLS 交给前面的 CDN / 反代。
+	TLSServer        TLSServerConfig
 	CORS             CORSConfig
 	JWT              JWTConfig
 	Firewall         FirewallConfig
@@ -1188,6 +1191,14 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	tlsServer, err := loadTLSServerConfig(v)
+	if err != nil {
+		return Config{}, err
+	}
+	if tlsServer.Enabled && tlsServer.Port == cfg.HTTPPort {
+		return Config{}, fmt.Errorf("HTTPS_PORT 与 HTTP_PORT 不能相同（都是 %d）", cfg.HTTPPort)
+	}
+	cfg.TLSServer = tlsServer
 	cfg.Egress = egressCfg.Normalize()
 	if err := cfg.Egress.Validate(); err != nil {
 		return Config{}, fmt.Errorf("出海网关配置无效: %w", err)
