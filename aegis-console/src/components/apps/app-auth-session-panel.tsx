@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import {
+  ArrowRight,
   Fingerprint,
   Globe,
   Link2Off,
@@ -41,10 +43,12 @@ import {
   NoAppSelected,
   NumberField,
   SectionCard,
-  SliderField,
   StatusDot,
   SwitchRow
 } from "@/components/apps/app-config-primitives";
+import { OVERFLOW_META } from "@/components/apps/device-limit/device-limit-shared";
+import { appSectionHref } from "@/lib/app-sections";
+import { useDeviceLimitPolicyQuery } from "@/lib/device-limit-hooks";
 
 type PolicyForm = {
   loginCheckDevice: boolean;
@@ -52,8 +56,6 @@ type PolicyForm = {
   deviceRebindInterval: string;
   loginCheckIp: boolean;
   loginCheckUser: boolean;
-  multiDeviceLogin: boolean;
-  multiDeviceLimit: number;
   registerCheckIp: boolean;
 };
 
@@ -62,8 +64,6 @@ const defaultForm: PolicyForm = {
   deviceRebindInterval: "0",
   loginCheckIp: false,
   loginCheckUser: false,
-  multiDeviceLogin: true,
-  multiDeviceLimit: 5,
   registerCheckIp: false
 };
 
@@ -74,8 +74,6 @@ function seed(data?: Record<string, unknown> | null): PolicyForm {
     deviceRebindInterval: String(Number(data.loginCheckDeviceTimeOut) || 0),
     loginCheckIp: Boolean(data.loginCheckIp),
     loginCheckUser: Boolean(data.loginCheckUser),
-    multiDeviceLogin: data.multiDeviceLogin !== false,
-    multiDeviceLimit: Number(data.multiDeviceLimit) || 5,
     registerCheckIp: Boolean(data.registerCheckIp)
   };
 }
@@ -113,8 +111,6 @@ export function AppAuthSessionPanel({ appKey }: { appKey?: string | null }) {
         loginCheckDeviceTimeOut: rebindSeconds,
         loginCheckIp: form.loginCheckIp,
         loginCheckUser: form.loginCheckUser,
-        multiDeviceLogin: form.multiDeviceLogin,
-        multiDeviceLimit: form.multiDeviceLimit,
         registerCheckIp: form.registerCheckIp
       });
       toast.success("已保存");
@@ -188,42 +184,18 @@ export function AppAuthSessionPanel({ appKey }: { appKey?: string | null }) {
         </div>
       </SectionCard>
 
-      <SectionCard
-        icon={<MonitorSmartphone className="size-4" />}
-        title="会话与注册"
-      >
-        <div className="space-y-5">
-          <FieldGroup label="多设备会话">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <SwitchRow
-                label="允许多设备同时在线"
-                checked={form.multiDeviceLogin}
-                onChange={(v) => patch("multiDeviceLogin", v)}
-              />
-              <SliderField
-                label="同时在线上限"
-                value={form.multiDeviceLimit}
-                min={1}
-                max={20}
-                step={1}
-                unit="台"
-                disabled={!form.multiDeviceLogin}
-                valueLabel={form.multiDeviceLogin ? `${form.multiDeviceLimit} 台` : "1 台（单设备）"}
-                onChange={(v) => patch("multiDeviceLimit", v)}
-              />
-            </div>
-          </FieldGroup>
+      <DeviceLimitEntry appKey={appKey} />
 
-          <FieldGroup label="注册准入">
-            <div className="grid gap-2.5 sm:grid-cols-2">
-              <SwitchRow
-                icon={<UserPlus className="size-3.5" />}
-                label="注册 IP 唯一"
-                checked={form.registerCheckIp}
-                onChange={(v) => patch("registerCheckIp", v)}
-              />
-            </div>
-          </FieldGroup>
+      <SectionCard icon={<UserPlus className="size-4" />} title="注册准入">
+        <div className="space-y-5">
+          <div className="grid gap-2.5 sm:grid-cols-2">
+            <SwitchRow
+              icon={<UserPlus className="size-3.5" />}
+              label="注册 IP 唯一"
+              checked={form.registerCheckIp}
+              onChange={(v) => patch("registerCheckIp", v)}
+            />
+          </div>
 
           <div className="flex justify-end pt-1">
             <Button size="sm" disabled={mutation.isPending} onClick={handleSave}>
@@ -235,6 +207,54 @@ export function AppAuthSessionPanel({ appKey }: { appKey?: string | null }) {
       </SectionCard>
 
       <LoginBaselineCard appKey={appKey} enabled={strictBindingOn} />
+    </div>
+  );
+}
+
+/**
+ * 同时登录设备数已移到「登录设备」区块（多维度上限、超限处置、在线设备），这里只留一个入口与当前状态，
+ * 免得管理员在老位置找不到它。旧的 multiDeviceLogin 两个字段本页不再提交，后端也不再从这里写，
+ * 只在没保存过新策略时用库里原有的值推导上限。
+ */
+function DeviceLimitEntry({ appKey }: { appKey: string }) {
+  const query = useDeviceLimitPolicyQuery(appKey);
+  const policy = query.data?.policy;
+  const summary = policy
+    ? [
+        policy.maxDevices > 0 ? `默认 ${policy.maxDevices} 台` : "不限总数",
+        OVERFLOW_META[policy.overflow]?.short,
+        policy.tiers.length ? `${policy.tiers.length} 档会员规则` : ""
+      ]
+        .filter(Boolean)
+        .join("，")
+    : "";
+  return (
+    <div
+      className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-border bg-card px-5 py-4"
+      style={{ boxShadow: "var(--shadow-soft)" }}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-600 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-400">
+          <MonitorSmartphone className="size-4" />
+        </div>
+        <div className="min-w-0 space-y-1">
+          <h3 className="text-sm font-semibold tracking-tight">同时登录设备</h3>
+          {query.isLoading ? (
+            <Skeleton className="h-3.5 w-40" />
+          ) : (
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusDot active={Boolean(policy?.enabled)} labelActive="已开启" labelInactive="未开启" />
+              {policy?.enabled && summary ? <span className="text-xs text-muted-foreground">{summary}</span> : null}
+            </div>
+          )}
+        </div>
+      </div>
+      <Button size="sm" variant="outline" asChild>
+        <Link href={appSectionHref(appKey, "device-limit")}>
+          管理
+          <ArrowRight className="size-3.5" />
+        </Link>
+      </Button>
     </div>
   );
 }

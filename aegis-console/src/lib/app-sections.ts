@@ -9,6 +9,7 @@ import {
   Info,
   KeyRound,
   Mail,
+  MonitorSmartphone,
   MonitorPlay,
   Network,
   PlugZap,
@@ -71,7 +72,8 @@ export const appSectionGroups: AppSectionGroup[] = [
     title: "认证与安全",
     sections: [
       // tab 键沿用 policy：已分享出去的深链不该因为改叫法而失效
-      { key: "policy", title: "认证与会话", summary: "登录校验与多端策略", icon: Fingerprint },
+      { key: "policy", title: "认证与会话", summary: "登录绑定与注册准入", icon: Fingerprint },
+      { key: "device-limit", title: "登录设备", summary: "设备数上限、超限处置与在线设备", icon: MonitorSmartphone },
       { key: "password", title: "密码与凭证", summary: "强度规则与过期策略", icon: KeyRound },
       { key: "captcha", title: "验证码", summary: "人机校验渠道与场景", icon: ShieldCheck },
       { key: "oauth", title: "第三方登录", summary: "OAuth 渠道与自动建号", icon: KeyRound },

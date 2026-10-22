@@ -742,16 +742,14 @@ func (s *AppService) UpdatePolicy(ctx context.Context, appID int64, policy appdo
 		return nil, err
 	}
 	policy.DeviceRebindInterval = max(0, policy.DeviceRebindInterval)
-	if policy.MultiDeviceLogin {
-		policy.MultiDeviceLimit = max(1, policy.MultiDeviceLimit)
-	}
 	settings := cloneSettingsMap(app.Settings)
 	settings["loginCheckDevice"] = policy.LoginCheckDevice
 	settings["loginCheckUser"] = policy.LoginCheckUser
 	settings["loginCheckIp"] = policy.LoginCheckIP
 	settings["loginCheckDeviceTimeOut"] = policy.DeviceRebindInterval
-	settings["multiDeviceLogin"] = policy.MultiDeviceLogin
-	settings["multiDeviceLoginNum"] = policy.MultiDeviceLimit
+	// multiDeviceLogin / multiDeviceLoginNum 归登录设备数控制（DeviceLimitService.SavePolicy）管，
+	// 这里不再写：旧控制台保存「登录绑定」时总会带上一个默认的上限，写进去会让没配过设备数的应用
+	// 被按旧字段推导出一个限制（docs/device-limit.md）。
 	settings["registerCheckIp"] = policy.RegisterCheckIP
 	// 注册验证码已归口到应用验证码配置（captcha.requireForRegister）。
 	// 残留键会被 ResolvePolicy 忽略，但留在库里会让人以为还能从这里配 —— 一并清掉。
