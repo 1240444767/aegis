@@ -44,6 +44,8 @@ type LotteryPrizeRequest struct {
 	DailyLimit     int `json:"dailyLimit"`
 	UserLimit      int `json:"userLimit"`
 	UserDailyLimit int `json:"userDailyLimit"`
+	// Value 奖品的积分当量（护栏的期望价值用），0 为按类型估算
+	Value int64 `json:"value"`
 	// LifetimeReward 抽中的人已拥有这个奖品（永久会员抽中会员等）时改发什么：积分 / 经验 / 抽奖次数；
 	// 不传或 type 为空时按活动的 lifetimePolicy 折算
 	LifetimeReward *LotteryRewardRequest `json:"lifetimeReward"`
@@ -172,6 +174,7 @@ func (req LotteryActivityRequest) toInput(appID int64, operator string) lotteryd
 			DailyLimit:     prize.DailyLimit,
 			UserLimit:      prize.UserLimit,
 			UserDailyLimit: prize.UserDailyLimit,
+			Value:          prize.Value,
 		})
 	}
 	return input
@@ -319,6 +322,24 @@ func (h *Handler) AdminSimulateLottery(c *gin.Context) {
 		sim.Profile = *req.Profile
 	}
 	result, err := h.lottery.Simulate(c.Request.Context(), sim)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "ok", result)
+}
+
+// AdminLotteryAudit 出奖审计（days，默认 14，最多 90）：多项分布的 Mahalanobis χ² 整体检验与各奖品的边际检验。
+func (h *Handler) AdminLotteryAudit(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	activityID, ok := cardKeyPathID(c, "activityId")
+	if !ok {
+		return
+	}
+	result, err := h.lottery.Audit(c.Request.Context(), appID, activityID, parsePositiveInt(c.Query("days"), 14))
 	if err != nil {
 		h.writeError(c, err)
 		return

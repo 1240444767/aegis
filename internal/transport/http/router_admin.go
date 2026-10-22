@@ -468,6 +468,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.PUT("/apps/:appkey/lottery/activities/:activityId/status", h.AdminSetLotteryActivityStatus)
 		admin.DELETE("/apps/:appkey/lottery/activities/:activityId", h.AdminDeleteLotteryActivity)
 		admin.GET("/apps/:appkey/lottery/activities/:activityId/stats", h.AdminLotteryStats)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId/audit", h.AdminLotteryAudit)
 		admin.GET("/apps/:appkey/lottery/draws", h.AdminListLotteryDraws)
 		admin.POST("/apps/:appkey/lottery/draws/:drawId/fulfill", h.AdminFulfillLotteryDraw)
 		admin.POST("/apps/:appkey/lottery/simulate", h.AdminSimulateLottery)

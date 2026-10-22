@@ -147,6 +147,7 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 			"pacingBoost": lotterydomain.MaxPacingBoost, "behaviorBoost": lotterydomain.MaxBehaviorBoost,
 			"prizeLimit": lotterydomain.MaxPrizeLimit, "simulationUsers": lotterydomain.MaxSimulationUsers,
 			"simulationEach": lotterydomain.MaxSimulationEach, "simulationDraws": lotterydomain.MaxSimulationDraws,
+			"luckStrength": lotterydomain.MaxLuckStrength, "controlGain": lotterydomain.MaxControlGain,
 		},
 		"lifetimeDefaults": map[string]any{
 			"policy":         lotterydomain.LifetimePoints,
@@ -249,6 +250,7 @@ func activityInputOf(item *lotterydomain.AdminActivity) lotterydomain.ActivityIn
 			ID: prize.ID, Name: prize.Name, Reward: prize.Reward, ImageURL: prize.ImageURL, Quantity: prize.Quantity,
 			Weight: prize.Weight, Position: prize.Position, Fallback: prize.Fallback, LifetimeReward: prize.LifetimeReward,
 			DailyLimit: prize.DailyLimit, UserLimit: prize.UserLimit, UserDailyLimit: prize.UserDailyLimit,
+			Value: prize.Value,
 		})
 		if item.PityPrizeID != nil && *item.PityPrizeID == prize.ID {
 			input.PityPosition = prize.Position

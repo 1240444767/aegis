@@ -220,6 +220,7 @@ GET	/api/admin/apps/:appkey/leaderboard/stats	AdminLeaderboardStats
 GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminGetLotteryActivity
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId/audit	AdminLotteryAudit
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId/stats	AdminLotteryStats
 GET	/api/admin/apps/:appkey/lottery/catalog	AdminLotteryCatalog
 GET	/api/admin/apps/:appkey/lottery/draws	AdminListLotteryDraws

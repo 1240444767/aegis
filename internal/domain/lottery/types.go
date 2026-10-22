@@ -105,11 +105,11 @@ type Activity struct {
 	// LifetimeDraws 改发抽奖次数时发几次
 	LifetimeDraws int64 `json:"lifetimeDraws"`
 	// Strategy 多维度出奖策略，见 strategy.go；零值为纯加权随机 + 硬保底
-	Strategy  Strategy `json:"strategy"`
-	SortOrder int      `json:"sortOrder"`
-	CreatedBy     string    `json:"createdBy,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	Strategy  Strategy  `json:"strategy"`
+	SortOrder int       `json:"sortOrder"`
+	CreatedBy string    `json:"createdBy,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
 // Prize 一个奖品，占奖盘上的一格。
@@ -134,6 +134,8 @@ type Prize struct {
 	DailyLimit     int `json:"dailyLimit"`
 	UserLimit      int `json:"userLimit"`
 	UserDailyLimit int `json:"userDailyLimit"`
+	// Value 奖品的积分当量（护栏的期望价值用）；0 为按类型估算，见 PrizeValue
+	Value int64 `json:"value"`
 	// LifetimeReward 抽中的人已拥有这个奖品时改发什么（积分 / 经验 / 抽奖次数）；空为按活动的处理方式折算
 	LifetimeReward *Reward   `json:"lifetimeReward,omitempty"`
 	CreatedAt      time.Time `json:"createdAt"`
@@ -195,6 +197,8 @@ type PrizeInput struct {
 	DailyLimit     int `json:"dailyLimit"`
 	UserLimit      int `json:"userLimit"`
 	UserDailyLimit int `json:"userDailyLimit"`
+	// Value 积分当量，0 为按类型估算
+	Value int64 `json:"value"`
 	// LifetimeReward 已拥有时改发什么；nil 为按活动的处理方式
 	LifetimeReward *Reward `json:"lifetimeReward,omitempty"`
 }

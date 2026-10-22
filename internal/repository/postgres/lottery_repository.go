@@ -85,7 +85,7 @@ func scanLotteryActivity(row interface{ Scan(dest ...any) error }, extra ...any)
 }
 
 const lotteryPrizeColumns = `p.id, p.activity_id, p.name, p.kind, p.reward, COALESCE(p.image_url, ''), p.quantity, p.used,
-p.weight, p.position, p.is_default, p.lifetime_reward, p.daily_limit, p.user_limit, p.user_daily_limit, p.created_at,
+p.weight, p.position, p.is_default, p.lifetime_reward, p.daily_limit, p.user_limit, p.user_daily_limit, p.points_value, p.created_at,
 p.updated_at`
 
 func scanLotteryPrize(row interface{ Scan(dest ...any) error }) (*lotterydomain.Prize, error) {
@@ -94,7 +94,7 @@ func scanLotteryPrize(row interface{ Scan(dest ...any) error }) (*lotterydomain.
 	var quantity, used int32
 	if err := row.Scan(&item.ID, &item.ActivityID, &item.Name, &item.Kind, &reward, &item.ImageURL, &quantity, &used,
 		&item.Weight, &item.Position, &item.Fallback, &swap, &item.DailyLimit, &item.UserLimit, &item.UserDailyLimit,
-		&item.CreatedAt, &item.UpdatedAt); err != nil {
+		&item.Value, &item.CreatedAt, &item.UpdatedAt); err != nil {
 		return nil, err
 	}
 	if len(swap) > 0 {
@@ -348,10 +348,10 @@ WHERE id = $1 AND appid = $2`, activityID, input.AppID, input.Name, input.Descri
 			}
 			if _, err := tx.Exec(ctx, `UPDATE lottery_prizes SET
   name = $2, kind = $3, reward = $4, image_url = $5, quantity = $6, weight = $7, position = $8, is_default = $9,
-  lifetime_reward = $10, daily_limit = $11, user_limit = $12, user_daily_limit = $13, updated_at = NOW()
+  lifetime_reward = $10, daily_limit = $11, user_limit = $12, user_daily_limit = $13, points_value = $14, updated_at = NOW()
 WHERE id = $1`, prize.ID, prize.Name, prize.Reward.Type, reward, nullableString(prize.ImageURL), prize.Quantity,
 				prize.Weight, prize.Position, prize.Fallback, swap, prize.DailyLimit, prize.UserLimit,
-				prize.UserDailyLimit); err != nil {
+				prize.UserDailyLimit, prize.Value); err != nil {
 				return nil, err
 			}
 			id = prize.ID
@@ -359,10 +359,10 @@ WHERE id = $1`, prize.ID, prize.Name, prize.Reward.Type, reward, nullableString(
 			// 带了不属于这个活动的 ID：按新建处理，不去碰别的活动的奖品
 			if err := tx.QueryRow(ctx, `INSERT INTO lottery_prizes
 (activity_id, name, kind, reward, image_url, quantity, weight, position, is_default, lifetime_reward,
- daily_limit, user_limit, user_daily_limit)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`, activityID, prize.Name, prize.Reward.Type, reward,
+ daily_limit, user_limit, user_daily_limit, points_value)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`, activityID, prize.Name, prize.Reward.Type, reward,
 				nullableString(prize.ImageURL), prize.Quantity, prize.Weight, prize.Position, prize.Fallback, swap,
-				prize.DailyLimit, prize.UserLimit, prize.UserDailyLimit).Scan(&id); err != nil {
+				prize.DailyLimit, prize.UserLimit, prize.UserDailyLimit, prize.Value).Scan(&id); err != nil {
 				return nil, err
 			}
 		}
@@ -710,10 +710,14 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETU
 WHERE id = $1`, drawID, resultsJSON, nullableString(integralTxnNo), conversionJSON); err != nil {
 		return nil, err
 	}
+	// 运气按控制层之前的公平中奖率累计（见 lottery.LuckZ）
 	if _, err := tx.Exec(ctx, `UPDATE lottery_user_states
-SET miss_streak = $3, total_draws = total_draws + 1, last_draw_at = $4, updated_at = NOW()
+SET miss_streak = $3, total_draws = total_draws + 1, last_draw_at = $4,
+  luck_expected = luck_expected + $5, luck_variance = luck_variance + $6, luck_skew = luck_skew + $7,
+  updated_at = NOW()
 WHERE activity_id = $1 AND user_id = $2`, activity.ID, input.UserID,
-		lotterydomain.NextMissStreak(facts.MissStreak, prize), now); err != nil {
+		lotterydomain.NextMissStreak(facts.MissStreak, prize), now, plan.Fair, plan.Fair*(1-plan.Fair),
+		plan.Fair*(1-plan.Fair)*(1-2*plan.Fair)); err != nil {
 		return nil, err
 	}
 

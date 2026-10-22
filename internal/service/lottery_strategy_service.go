@@ -53,6 +53,8 @@ type LotterySimulationResult struct {
 	Behavior *lotterydomain.BehaviorScore   `json:"behavior,omitempty"`
 	// Current 指定用户此刻再抽一次的方案（只对已保存的活动给出）
 	Current *lotterydomain.DrawPlan `json:"current,omitempty"`
+	// Analytic 距首次中奖次数的精确分布（吸收马尔可夫链），与模拟结果互相印证
+	Analytic lotterydomain.StreakAnalysis `json:"analytic"`
 }
 
 // Simulate 按策略模拟一批虚拟用户连续抽奖。不写库、不发奖。
@@ -86,6 +88,7 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 	}
 
 	out := &LotterySimulationResult{Profile: req.Profile}
+	base := lotterydomain.DrawState{Now: now, Source: req.Options.Source}
 	if req.UserID > 0 {
 		profile, err := s.pg.LotteryBehaviorProfile(ctx, req.AppID, req.UserID, now, lotteryDayStart(now))
 		if err != nil {
@@ -110,8 +113,11 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 			}
 			plan := lotterydomain.PlanDraw(activity, activity.Strategy, prizes, state)
 			out.Current = &plan
+			base = state
 		}
 	}
+	base.Profile = out.Profile
+	out.Analytic = lotterydomain.AnalyzeStreak(activity, activity.Strategy, prizes, base)
 	out.Behavior = lotterydomain.ScoreBehavior(activity.Strategy.Behavior, out.Profile)
 
 	options := req.Options
@@ -149,7 +155,7 @@ func draftActivity(input lotterydomain.ActivityInput, saved *lotterydomain.Admin
 			ID: id, ActivityID: activity.ID, Name: item.Name, Kind: item.Reward.Type, Reward: item.Reward,
 			Quantity: item.Quantity, Used: used[id], Weight: item.Weight, Position: item.Position,
 			Fallback: item.Fallback, DailyLimit: item.DailyLimit, UserLimit: item.UserLimit,
-			UserDailyLimit: item.UserDailyLimit, LifetimeReward: item.LifetimeReward,
+			UserDailyLimit: item.UserDailyLimit, LifetimeReward: item.LifetimeReward, Value: item.Value,
 		}
 		if prize.Quantity >= 0 && prize.Used > prize.Quantity {
 			prize.Used = prize.Quantity
@@ -161,4 +167,22 @@ func draftActivity(input lotterydomain.ActivityInput, saved *lotterydomain.Admin
 		}
 	}
 	return activity, prizes
+}
+
+// MaxLotteryAuditDays 审计最多回看多少天。
+const MaxLotteryAuditDays = 90
+
+// Audit 出奖审计：最近 days 天的记录是否服从每一次方案给出的概率（见 lottery.Audit）。
+func (s *LotteryService) Audit(ctx context.Context, appID, activityID int64, days int) (*lotterydomain.AuditResult, error) {
+	if _, err := s.pg.GetLotteryActivity(ctx, appID, activityID); err != nil {
+		return nil, s.translate(err)
+	}
+	days = min(max(days, 1), MaxLotteryAuditDays)
+	since := lotteryDayStart(time.Now()).AddDate(0, 0, -(days - 1))
+	draws, err := s.pg.LotteryAuditDraws(ctx, appID, activityID, since)
+	if err != nil {
+		return nil, err
+	}
+	result := lotterydomain.Audit(draws)
+	return &result, nil
 }

@@ -75,6 +75,36 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 每一次的完整方案（各奖品的基础权重、每个维度的系数与原因、最终概率、行为分明细、是否保底 / 改发兜底）
 写进 `lottery_draws.trace`，管理端记录里点「方案」可看；客户端接口一律不返回。
 
+### 概率控制层
+
+各维度系数是连乘的，叠多了中奖率与发出去的价值都会失控。控制层（`strategy_control.go`，迁移 `000125`）在系数之后、
+抽样之前按顺序把「这一次」的分布整体校正，每一步都有明确的数学含义：
+
+| 步骤 | 配置 | 原理 |
+|---|---|---|
+| 运气平衡 | `luck.strength` | 每次抽奖是成功率不同的伯努利试验，中奖次数服从**泊松二项分布**。逐次累加均值 Σp、方差 Σp(1−p)、三阶矩 Σp(1−p)(1−2p)（`lottery_user_states.luck_*`），用带偏度修正的**精细正态近似（RNA）**求 mid-p 分位，再取 Φ⁻¹ 得 z。倒霉（z < 0）的在 logit 上加 −strength·z，走运的减，截断 ±3σ。期望按**控制层之前的公平中奖率**（`trace.fair`）累计，否则被补偿的人期望跟着涨，会来回过冲 |
+| 波动模式 | `variance: "prd"` | **伪随机分布**：距上次中奖第 n 次的中奖率为 min(1, n·C)，C 由当前中奖率 p 二分反解（使 1/E[次数] = p）。长期中奖率不变，连败与连中都大幅减少；与软保底二选一 |
+| 全站反馈 | `winRate.target` / `gain` / `prior` | 今日全站中奖率用 **Beta–二项共轭后验**估计：先验 Beta(κ·目标, κ·(1−目标))，后验均值 (k + κ·目标)/(n + κ)；样本少时收缩到目标、不乱调。校正量 = gain ×（logit(目标) − logit(后验)） |
+| 积分节奏 | `budget.paced` | 允许已发 = 预算 ×（当天时间进度 + 5%），系数 exp(−3(已发/允许 − 1)) 截在 [0.05, 2]：超前收紧、落后放宽 |
+| 护栏 | `guard.minWinRate` / `maxWinRate` / `maxValue` / `kindCaps` | 中奖率区间、每次期望价值（积分当量）上限、按奖品类型的单次占比上限，全部是线性不等式。取满足约束且与当前分布 **KL 散度最小**的分布（**I-投影**，最小鉴别信息原理）：解为指数族 p_i ∝ q_i·exp(−λ·a_i)，在凹对偶函数上做带有效集的**投影牛顿法**，KKT 条件满足即停；约束在可发奖品上不可行时 `trace.guardInfeasible` |
+
+奖品的积分当量（`prize.value`，库列 `points_value`）：0 为按类型估算（积分按数量；经验 × `guard.experienceRate`（默认 0.1）；
+抽奖次数 × `guard.drawValue`（默认积分抽奖价，再默认 10）；会员天数、限时功能 × 每天折算积分；永久功能按永久折算；
+会员套餐按 30 天估）。人工发放与会员套餐建议显式设置。`trace` 多 `fair`（控制前中奖率）、`value`（这一次的期望价值）、`luck`（z）、`prd`。
+
+同一奖盘 2000 人 × 60 次的模拟（`strategy_control_test.go`）：独立抽取最长连败 P99 为 13 次、每人中奖次数 P10–P90 为 21–31；
+PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数区间收窄到 23–29；两者叠加 24–28。
+
+### 精确分析与审计
+
+- **首中分布**（`markov.go`）：把「已连续未中 k 次」看成马尔可夫链的状态，每个状态的中奖率 h_k（风险函数）由同一套
+  `PlanDraw` / `PityChoice` 给出，P(T > n) = Π(1 − h_k)，E[T]、方差、分位数都是精确值，尾部按几何分布补齐；
+  由**更新报酬定理**，长期中奖率 = 1/E[T]。模拟接口返回 `analytic`，与蒙特卡洛结果互相印证（测试里两者偏差 < 1%）。
+- **出奖审计**（`audit.go`，`GET /lottery/activities/{id}/audit?days=14`）：每次的概率都不同，普通卡方检验不适用。
+  第 t 次是参数 p_t 的单次多项试验，合计 O 的期望 E = Σp_t、协方差 Σ = Σ(diag(p_t) − p_t p_tᵀ)；由多元中心极限定理
+  T = (O − E)ᵀ Σ⁺ (O − E) → χ²(rank Σ)，Σ⁺ 用 SVD 求伪逆。另对每个奖品做泊松二项 z 检验，**Holm–Bonferroni** 校正，α = 0.01。
+  硬保底与改发兜底的那几次不计入。用来证明线上出奖确实服从算法给出的概率（随机源、实现、数据都没出问题）。
+
 ### 行为画像
 
 抽奖前（事务外，一条语句）取这个人在应用里的全部行为，按活动配置的权重加权成 0–1 的行为分：
@@ -210,7 +240,8 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 | GET | `/api/admin/apps/{appKey}/lottery/activities/{activityId}/stats?days=14` | 概览、按天趋势、来源与奖品分布 |
 | GET | `/api/admin/apps/{appKey}/lottery/draws` | 记录（activityId / userId / status / source / winning / keyword / start / end） |
 | POST | `/api/admin/apps/{appKey}/lottery/draws/{drawId}/fulfill` | 人工发放的奖品标记已发放（`{note}` 写进站内信；重复标记 `40926`） |
-| POST | `/api/admin/apps/{appKey}/lottery/simulate` | 出奖策略模拟（见上文「模拟」） |
+| POST | `/api/admin/apps/{appKey}/lottery/simulate` | 出奖策略模拟（见上文「模拟」），附首中精确分析 `analytic` |
+| GET | `/api/admin/apps/{appKey}/lottery/activities/{activityId}/audit?days=14` | 出奖审计（见上文「精确分析与审计」） |
 
 活动的保存体：
 
@@ -245,7 +276,7 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
 积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、
 已拥有的奖品（四种处理方式、单奖品改发、剔除后的概率与保底、已永久解锁的功能、统计）、删除与统计，
-最后在旧表形状上跑 000110 + 000114 + 000124 两遍核对搬迁。
+最后在旧表形状上跑 000110 + 000114 + 000124 + 000125 两遍核对搬迁。
 
 `TestLotteryStrategyIntegration`：12 人并发下全站每日限量不超发、个人上限、积分预算、同设备聚集、
 行为画像整条查询（签到、会员率、邀请、在线时长累计）与规则、方案落库且不给用户端、模拟与单人预览、策略回读与非法规则。

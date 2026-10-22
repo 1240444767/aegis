@@ -223,6 +223,55 @@ VALUES ($1, $2, $3, 'CODE', 'user', 'register')`, appID, invitee, loyal)
 		t.Fatalf("超出规模的模拟应被拒，得到 %v", err)
 	}
 
+	// ── 控制层：PRD + 运气平衡 + 全站反馈 + 护栏，运气累计落库，护栏写进方案 ──
+	controlled := grid("控制层", lotterydomain.PrizeInput{Value: 50}, lotterydomain.Strategy{
+		Variance: lotterydomain.VariancePRD,
+		Luck:     &lotterydomain.LuckBalance{Strength: 0.4},
+		WinRate:  &lotterydomain.WinRateControl{Target: 0.3, Gain: 3},
+		Guard:    &lotterydomain.Guard{MaxWinRate: 0.5, MaxValue: 20},
+	})
+	controlled.Prizes[1].Weight = 1
+	control := create(controlled)
+	if control.Prizes[1].Value != 50 {
+		t.Fatalf("积分当量应落库：%+v", control.Prizes[1])
+	}
+	for range 8 {
+		result := drawAs(users[8], control.ID, "")
+		_ = result
+	}
+	var expected, variance float64
+	if err := pool.QueryRow(ctx, `SELECT luck_expected, luck_variance FROM lottery_user_states WHERE activity_id = $1 AND user_id = $2`,
+		control.ID, users[8]).Scan(&expected, &variance); err != nil {
+		t.Fatal(err)
+	}
+	if expected <= 0 || variance <= 0 || expected > 8 {
+		t.Fatalf("运气累计应随抽奖增长：expected=%v variance=%v", expected, variance)
+	}
+	cp, err := lottery.ListDraws(ctx, lotterydomain.DrawQuery{AppID: appID, ActivityID: control.ID, Page: 1, Limit: 20})
+	if err != nil || len(cp.Items) != 8 {
+		t.Fatalf("控制层记录：%+v %v", cp, err)
+	}
+	for _, item := range cp.Items {
+		plan := item.Trace
+		if plan == nil || plan.Fair <= 0 || plan.WinRate > 0.5+1e-4 || plan.Value > 20+1e-3 {
+			t.Fatalf("方案应满足护栏并带公平中奖率：%+v", plan)
+		}
+	}
+
+	// ── 审计：线上出奖服从每一次的方案 ──
+	for range 40 {
+		drawAs(users[9], control.ID, "")
+	}
+	audit, err := lottery.Audit(ctx, appID, control.ID, 7)
+	if err != nil || audit.Draws+audit.Skipped != 48 || audit.DF < 1 || len(audit.Prizes) != 8 {
+		t.Fatalf("审计：%+v %v", audit, err)
+	}
+	sim2, err := lottery.Simulate(ctx, LotterySimulation{AppID: appID, ActivityID: control.ID, UserID: users[9],
+		Options: lotterydomain.SimulationInput{Users: 10, DrawsPerUser: 10, Seed: 1}})
+	if err != nil || sim2.Analytic.Mean <= 0 || sim2.Analytic.LongRunWinRate <= 0 || len(sim2.Analytic.Hazard) == 0 {
+		t.Fatalf("精确分析：%+v %v", sim2.Analytic, err)
+	}
+
 	// ── 保存与回读：策略与奖品限量原样落库 ──
 	got, err := lottery.GetActivity(ctx, appID, behavior.ID)
 	if err != nil || got.Strategy.Behavior == nil || len(got.Strategy.Rules) != 1 || got.Strategy.Behavior.MaxBoost != 2 {

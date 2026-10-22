@@ -85,10 +85,13 @@ type SimulationResult struct {
 	// SoftPityDraws 软保底生效的抽奖次数
 	SoftPityDraws int `json:"softPityDraws"`
 	// FirstWin 首次中奖是第几次（只统计中过的人）；NeverWon 一次都没中的人数
-	FirstWin     Distribution      `json:"firstWin"`
-	NeverWon     int               `json:"neverWon"`
-	MissStreak   Distribution      `json:"missStreak"`
-	PointsIssued int64             `json:"pointsIssued"`
+	FirstWin     Distribution `json:"firstWin"`
+	NeverWon     int          `json:"neverWon"`
+	MissStreak   Distribution `json:"missStreak"`
+	PointsIssued int64        `json:"pointsIssued"`
+	// WinsPerUser 每人中奖次数的分布（越集中越公平）；ValuePerDraw 实际平均每次发出的积分当量
+	WinsPerUser  Distribution      `json:"winsPerUser"`
+	ValuePerDraw float64           `json:"valuePerDraw"`
 	Prizes       []SimulationPrize `json:"prizes"`
 	Behavior     *BehaviorScore    `json:"behavior,omitempty"`
 }
@@ -98,6 +101,8 @@ type simUser struct {
 	longestMiss, firstWin        int
 	prizeWins                    map[int64]int
 	recent                       []int64
+	luckExpected, luckVariance   float64
+	luckSkew                     float64
 }
 
 // Simulate 按策略模拟。prizes 是奖盘（或某个人的个人奖盘）。
@@ -135,7 +140,13 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 	}
 	firstWins := make([]float64, 0, input.Users)
 	longest := make([]float64, 0, input.Users)
-	wins := 0
+	perUser := make([]float64, 0, input.Users)
+	wins, activityDraws, activityWins := 0, 0, 0
+	var valueIssued float64
+	dayProgress := 0.5
+	if dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()); now.After(dayStart) {
+		dayProgress = now.Sub(dayStart).Hours() / 24
+	}
 
 	for range input.Users {
 		pool := shared
@@ -151,7 +162,9 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 				TodayDraws: user.totalDraws, WinsTotal: user.wins, WinsToday: user.wins,
 				PrizeWins: user.prizeWins, PrizeWinsToday: user.prizeWins, Recent: user.recent,
 				PrizeDailyUsed: dailyUsed, PointsIssuedToday: pointsIssued, DeviceAccounts: 1, IPAccounts: 1,
-				Profile: input.Profile,
+				Profile: input.Profile, DayProgress: dayProgress,
+				ActivityDrawsToday: activityDraws, ActivityWinsToday: activityWins,
+				LuckExpected: user.luckExpected, LuckVariance: user.luckVariance, LuckSkew: user.luckSkew,
 			}
 			plan := PlanDraw(activity, strategy, pool, state)
 			if result.Behavior == nil {
@@ -191,9 +204,15 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 			}
 			result.Prizes[index].Wins++
 			result.Draws++
+			activityDraws++
 			user.totalDraws++
+			user.luckExpected += plan.Fair
+			user.luckVariance += plan.Fair * (1 - plan.Fair)
+			user.luckSkew += plan.Fair * (1 - plan.Fair) * (1 - 2*plan.Fair)
+			valueIssued += PrizeValue(activity, strategy.Guard, *prize)
 			if prize.Winning() {
 				wins++
+				activityWins++
 				user.wins++
 				user.prizeWins[prize.ID]++
 				if user.firstWin == 0 {
@@ -219,6 +238,7 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 			result.NeverWon++
 		}
 		longest = append(longest, float64(user.longestMiss))
+		perUser = append(perUser, float64(user.wins))
 	}
 
 	if result.Draws > 0 {
@@ -230,6 +250,10 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 	result.BaseWinRate = round6(result.BaseWinRate)
 	result.FirstWin = describe(firstWins)
 	result.MissStreak = describe(longest)
+	result.WinsPerUser = describe(perUser)
+	if result.Draws > 0 {
+		result.ValuePerDraw = round6(valueIssued / float64(result.Draws))
+	}
 	return result
 }
 

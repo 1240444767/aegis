@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"time"
@@ -119,6 +120,22 @@ func lotteryDrawState(ctx context.Context, tx queryExecutor, activity lotterydom
 	}
 	if input.Location != nil {
 		state.Now = now.In(input.Location)
+	}
+	if !input.DayStart.IsZero() {
+		state.DayProgress = math.Min(1, math.Max(0, now.Sub(input.DayStart).Hours()/24))
+	}
+	if err := tx.QueryRow(ctx, `SELECT luck_expected, luck_variance, luck_skew FROM lottery_user_states
+WHERE activity_id = $1 AND user_id = $2`, activity.ID, input.UserID).Scan(&state.LuckExpected, &state.LuckVariance,
+		&state.LuckSkew); err != nil &&
+		!errors.Is(err, pgx.ErrNoRows) {
+		return state, err
+	}
+	if strategy.WinRate != nil {
+		if err := tx.QueryRow(ctx, `SELECT COUNT(*), COUNT(*) FILTER (WHERE prize_kind <> 'none')
+FROM lottery_draws WHERE activity_id = $1 AND created_at >= $2`, activity.ID, input.DayStart).
+			Scan(&state.ActivityDrawsToday, &state.ActivityWinsToday); err != nil {
+			return state, err
+		}
 	}
 
 	// 本活动里这个人每个奖品中过几次、今天抽了几次
@@ -312,4 +329,32 @@ func (r *Repository) LotteryPreview(ctx context.Context, activity lotterydomain.
 	chances := lotterydomain.EvaluateChances(activity, facts, lotterydomain.VideoChances{})
 	state.Source = chances.Next
 	return state, nil
+}
+
+// MaxLotteryAuditDraws 一次审计最多读多少条记录（最近的优先）。
+const MaxLotteryAuditDraws = 200_000
+
+// LotteryAuditDraws 一个活动在 since 之后带出奖方案的记录（最近的优先，最多 MaxLotteryAuditDraws 条）。
+func (r *Repository) LotteryAuditDraws(ctx context.Context, appID, activityID int64, since time.Time) ([]lotterydomain.AuditDraw, error) {
+	rows, err := r.pool.Query(ctx, `SELECT d.trace FROM lottery_draws d
+JOIN lottery_activities a ON a.id = d.activity_id AND a.appid = $1
+WHERE d.activity_id = $2 AND d.created_at >= $3 AND d.trace IS NOT NULL
+ORDER BY d.id DESC LIMIT $4`, appID, activityID, since, MaxLotteryAuditDraws)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]lotterydomain.AuditDraw, 0, 1024)
+	for rows.Next() {
+		var raw []byte
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var plan lotterydomain.DrawPlan
+		if err := json.Unmarshal(raw, &plan); err != nil || len(plan.Odds) == 0 {
+			continue
+		}
+		out = append(out, lotterydomain.AuditDraw{Odds: plan.Odds, Picked: plan.Picked, Pity: plan.Pity, Fallback: plan.Fallback})
+	}
+	return out, rows.Err()
 }

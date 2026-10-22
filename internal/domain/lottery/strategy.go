@@ -28,7 +28,7 @@ import (
 //	    加权成 0–1 的行为分，折成中奖奖品的系数（见 behavior.go）
 //	  → 中奖冷却：最近 N 次里中过的奖品打折
 //	  → 自定义规则：expr 表达式按人、按次、按奖品、按活动进度乘系数
-//	  → 软保底：连续未中达到起点后，每多一次未中，中奖总概率抬高若干百分点
+//	  → 控制层（strategy_control.go）：运气平衡 → 软保底或伪随机分布 → 全站中奖率反馈 → 护栏投影
 //	  → 硬保底（PityThreshold，旧逻辑）：到点直接给保底奖，资格不满足时退回常规抽取
 //
 // 每个维度都把系数记进 Factor，最终概率与系数一起写进抽奖记录的 trace，管理端能看到「为什么是这个结果」。
@@ -77,6 +77,11 @@ type Strategy struct {
 	Risk     *RiskGuard     `json:"risk,omitempty"`
 	Behavior *BehaviorModel `json:"behavior,omitempty"`
 	Rules    []StrategyRule `json:"rules,omitempty"`
+	// 控制层，见 strategy_control.go
+	Luck     *LuckBalance    `json:"luck,omitempty"`
+	Variance string          `json:"variance,omitempty"`
+	WinRate  *WinRateControl `json:"winRate,omitempty"`
+	Guard    *Guard          `json:"guard,omitempty"`
 }
 
 // SoftPity 软保底：连续未中达到 Start 次后，每多一次未中，中奖总概率抬高 Step 个百分点（上限 100%）。
@@ -102,8 +107,11 @@ type Cooldown struct {
 
 // Budget 积分预算：本活动当天发出的积分（含折算）达到预算一半后，积分奖的权重随剩余比例线性收紧；
 // 单个奖品的积分超过剩余预算时不出。
+//
+// Paced 为真时改为按当天时间进度放量（见 pacedBudgetFactor）：超前收紧、落后放宽。
 type Budget struct {
 	DailyPoints int64 `json:"dailyPoints"`
+	Paced       bool  `json:"paced,omitempty"`
 }
 
 // RiskGuard 设备 / 网络聚集：本活动当天同一设备（或同一 IP）上抽过奖的账号数超过上限时，
@@ -127,7 +135,7 @@ type StrategyRule struct {
 // Empty 没有任何策略。
 func (s Strategy) Empty() bool {
 	return s.SoftPity == nil && s.Pacing == nil && s.Cooldown == nil && s.Budget == nil && s.Risk == nil &&
-		s.Behavior == nil && len(s.Rules) == 0
+		s.Behavior == nil && len(s.Rules) == 0 && s.Luck == nil && s.Variance == "" && s.WinRate == nil && s.Guard == nil
 }
 
 // NormalizeStrategy 清洗：去掉不生效的项，补默认值。
@@ -155,6 +163,7 @@ func NormalizeStrategy(s Strategy) Strategy {
 		s.Risk = nil
 	}
 	s.Behavior = normalizeBehavior(s.Behavior)
+	normalizeControl(&s)
 	rules := make([]StrategyRule, 0, len(s.Rules))
 	for _, rule := range s.Rules {
 		rule.Name = strings.TrimSpace(rule.Name)
@@ -212,6 +221,9 @@ func ValidateStrategy(s Strategy, prizeCount int) error {
 		}
 	}
 	if err := validateBehavior(s.Behavior); err != nil {
+		return err
+	}
+	if err := validateControl(s); err != nil {
 		return err
 	}
 	if len(s.Rules) > MaxStrategyRules {
@@ -274,6 +286,16 @@ type DrawState struct {
 	IPAccounts     int
 	// Profile 这个人在应用里的全部行为
 	Profile BehaviorProfile
+	// DayProgress 应用时区的今天过去了多少（0–1）
+	DayProgress float64
+	// ActivityDrawsToday / ActivityWinsToday 本活动今天全站抽了几次、中了几次（全站反馈用）
+	ActivityDrawsToday int
+	ActivityWinsToday  int
+	// LuckExpected / LuckVariance 这个人在本活动里历次抽奖的中奖概率之和与 p(1−p) 之和（运气平衡用）
+	LuckExpected float64
+	LuckVariance float64
+	// LuckSkew 历次 p(1−p)(1−2p) 之和（泊松二项分布的三阶中心矩，偏度修正用）
+	LuckSkew float64
 }
 
 // Factor 一个维度给一个奖品的系数。
@@ -304,8 +326,16 @@ type DrawPlan struct {
 	Risk     bool    `json:"risk,omitempty"`
 	// Behavior 行为分与各信号明细（启用行为画像时）
 	Behavior *BehaviorScore `json:"behavior,omitempty"`
-	// WinRate 这一次的中奖总概率（0–1）
+	// WinRate 这一次的中奖总概率（0–1）；Value 这一次的期望价值（积分当量）
 	WinRate float64 `json:"winRate"`
+	Value   float64 `json:"value"`
+	// Luck 这个人的运气 z 分数；PRD 伪随机分布给这一次定的中奖率
+	Luck float64 `json:"luck,omitempty"`
+	// Fair 控制层之前的中奖率：运气平衡按它累计「应得」的中奖次数（用校正后的概率会自我追涨、来回过冲）
+	Fair float64 `json:"fair"`
+	// GuardInfeasible 护栏约束在可发的奖品上无法同时满足（已尽力逼近）
+	GuardInfeasible bool    `json:"guardInfeasible,omitempty"`
+	PRD             float64 `json:"prd,omitempty"`
 	// Pity 硬保底触发；Picked 最终选中的奖品 ID；Fallback 选中后因库存 / 限量竞争改发了兜底奖
 	Pity     bool  `json:"pity,omitempty"`
 	Picked   int64 `json:"picked,omitempty"`
@@ -372,6 +402,9 @@ func PlanDraw(activity Activity, strategy Strategy, prizes []Prize, state DrawSt
 		}
 		if weight > 0 && strategy.Budget != nil && prize.Kind == KindPoints {
 			value, note := budgetFactor(*strategy.Budget, prize.Reward.Amount, state.PointsIssuedToday)
+			if strategy.Budget.Paced {
+				value, note = pacedBudgetFactor(*strategy.Budget, prize.Reward.Amount, state.PointsIssuedToday, state.DayProgress)
+			}
 			multiply(FactorBudget, value, note)
 		}
 		if weight > 0 && behavior != nil && behaviorApplies(strategy.Behavior, prize) {
@@ -404,11 +437,21 @@ func PlanDraw(activity Activity, strategy Strategy, prizes []Prize, state DrawSt
 		plan.Odds[index] = odds
 	}
 
-	if p := strategy.SoftPity; p != nil && state.MissStreak >= p.Start {
+	plan.Fair = round6(winShare(plan.Odds, prizes))
+	applyLuck(&plan, prizes, strategy.Luck, state)
+	if strategy.Variance == VariancePRD {
+		applyPRD(&plan, prizes, state.MissStreak)
+	} else if p := strategy.SoftPity; p != nil && state.MissStreak >= p.Start {
 		plan.SoftPity = applySoftPity(plan.Odds, prizes, p.Step*float64(state.MissStreak-p.Start+1))
 	}
+	applyWinRateControl(&plan, prizes, strategy.WinRate, state)
+	values := make([]float64, len(prizes))
+	for index, prize := range prizes {
+		values[index] = PrizeValue(activity, strategy.Guard, prize)
+	}
+	applyGuard(&plan, prizes, strategy.Guard, values)
 
-	var total, winning float64
+	var total, winning, value float64
 	for index, odds := range plan.Odds {
 		total += odds.Weight
 		if prizes[index].Winning() {
@@ -418,8 +461,10 @@ func PlanDraw(activity Activity, strategy Strategy, prizes []Prize, state DrawSt
 	if total > 0 {
 		for index := range plan.Odds {
 			plan.Odds[index].Probability = round6(plan.Odds[index].Weight / total)
+			value += plan.Odds[index].Weight / total * values[index]
 		}
 		plan.WinRate = round6(winning / total)
+		plan.Value = round6(value)
 	}
 	return plan
 }

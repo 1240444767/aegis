@@ -285,6 +285,9 @@ func validatePrizes(input ActivityInput) error {
 				return fmt.Errorf("%s的限量需要在 0–%d 之间（0 为不限）", label, MaxPrizeLimit)
 			}
 		}
+		if prize.Value < 0 || prize.Value > MaxQuantity {
+			return fmt.Errorf("%s的积分当量需要在 0–%d 之间（0 为自动估算）", label, MaxQuantity)
+		}
 		if prize.UserLimit > 0 && prize.UserDailyLimit > prize.UserLimit {
 			return fmt.Errorf("%s的每人每日上限不能大于每人累计上限", label)
 		}

@@ -43,6 +43,8 @@ type RuleUser struct {
 	PrizeWins      int     `expr:"prizeWins"`
 	PrizeWinsToday int     `expr:"prizeWinsToday"`
 	Score          float64 `expr:"score"`
+	// Luck 运气 z 分数：负数为比期望倒霉
+	Luck float64 `expr:"luck"`
 }
 
 // RuleDraw 规则里的 draw。
@@ -71,6 +73,8 @@ type RuleActivity struct {
 	Progress          float64 `expr:"progress"`
 	DaysLeft          float64 `expr:"daysLeft"`
 	PointsIssuedToday int64   `expr:"pointsIssuedToday"`
+	WinRateToday      float64 `expr:"winRateToday"`
+	DayProgress       float64 `expr:"dayProgress"`
 }
 
 // RuleEnv 一条规则执行时看到的全部变量。
@@ -174,6 +178,7 @@ func ruleEnv(state DrawState, prize Prize, probability, progress, daysLeft, scor
 			PrizeWins:       state.PrizeWins[prize.ID],
 			PrizeWinsToday:  state.PrizeWinsToday[prize.ID],
 			Score:           score,
+			Luck:            LuckZ(state),
 		},
 		Draw: RuleDraw{
 			Source:         state.Source,
@@ -186,7 +191,8 @@ func ruleEnv(state DrawState, prize Prize, probability, progress, daysLeft, scor
 			ID: prize.ID, Kind: prize.Kind, Position: prize.Position, Amount: prize.Reward.Amount,
 			Weight: prize.Weight, Probability: probability, Limited: prize.Quantity >= 0, Remaining: remaining,
 		},
-		Activity: RuleActivity{Progress: progress, DaysLeft: daysLeft, PointsIssuedToday: state.PointsIssuedToday},
+		Activity: RuleActivity{Progress: progress, DaysLeft: daysLeft, PointsIssuedToday: state.PointsIssuedToday,
+			WinRateToday: winRateToday(state), DayProgress: state.DayProgress},
 	}
 }
 
@@ -221,6 +227,7 @@ func RuleVariables() []RuleVariable {
 		RuleVariable{"user.prizeWins", "number", "抽中过这个奖品几次"},
 		RuleVariable{"user.prizeWinsToday", "number", "今天抽中过这个奖品几次"},
 		RuleVariable{"user.score", "number", "行为分（0–1）"},
+		RuleVariable{"user.luck", "number", "运气 z 分数（负数为比期望倒霉）"},
 		RuleVariable{"draw.source", "string", "次数来源：free / bonus / points"},
 		RuleVariable{"draw.hour", "number", "小时（0–23）"},
 		RuleVariable{"draw.weekday", "number", "星期（0 为周日）"},
@@ -236,6 +243,15 @@ func RuleVariables() []RuleVariable {
 		RuleVariable{"activity.progress", "number", "活动进度（0–1）"},
 		RuleVariable{"activity.daysLeft", "number", "活动剩余天数"},
 		RuleVariable{"activity.pointsIssuedToday", "number", "今天已发积分"},
+		RuleVariable{"activity.winRateToday", "number", "今天全站中奖率（0–1）"},
+		RuleVariable{"activity.dayProgress", "number", "今天已过去（0–1）"},
 	)
 	return vars
+}
+
+func winRateToday(state DrawState) float64 {
+	if state.ActivityDrawsToday <= 0 {
+		return 0
+	}
+	return float64(state.ActivityWinsToday) / float64(state.ActivityDrawsToday)
 }

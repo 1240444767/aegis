@@ -149,6 +149,7 @@ func init() {
 		View("GET /api/admin/apps/:appkey/lottery/activities", "查看抽奖活动列表", ""),
 		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId", "查看抽奖活动详情", "抽奖活动"),
 		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/stats", "查看抽奖活动统计", "抽奖活动"),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/audit", "查看抽奖出奖审计", "抽奖活动"),
 		Write("POST /api/admin/apps/:appkey/lottery/activities", "新建抽奖活动", "抽奖活动", SeverityMedium),
 		Write("PUT /api/admin/apps/:appkey/lottery/activities/:activityId", "编辑抽奖活动与奖品", "抽奖活动", SeverityMedium),
 		Write("PUT /api/admin/apps/:appkey/lottery/activities/:activityId/status", "修改抽奖活动状态", "抽奖活动", SeverityMedium),
