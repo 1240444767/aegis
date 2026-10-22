@@ -1,35 +1,72 @@
 "use client";
 
-import { useState } from "react";
-import { Loader2, ReceiptText, RotateCcw, X } from "lucide-react";
-import { toast } from "sonner";
+import { useEffect, useMemo, useState } from "react";
+import { Activity, Coins, Gauge, Pause, Play, ReceiptText, Route, Timer, Waypoints, X, Zap } from "lucide-react";
 import { SectionCard } from "@/components/apps/app-config-primitives";
+import { AIGatewayRequestSheet } from "@/components/apps/ai-gateway/ai-gateway-request-sheet";
 import {
   ENDPOINT_LABEL,
+  PulseDot,
   RequestStatusBadge,
   STATUS_LABEL,
-  describeCharge,
   describeUsage,
-  formatPoints
+  formatDuration,
+  formatPoints,
+  formatTokens
 } from "@/components/apps/ai-gateway/ai-gateway-shared";
+import { StatTile } from "@/components/content/content-shared";
 import { UserPicker, type PickedUser } from "@/components/commerce/user-picker";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
-import { useAIGatewayRequestsQuery, useRefundAIGatewayRequestMutation } from "@/lib/ai-gateway-hooks";
-import { ApiError } from "@/lib/api/client";
-import type { AIGatewayRequest, AIGatewayRequestStatus } from "@/lib/api/ai-gateway";
-import { formatDateTime } from "@/lib/datetime";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
+import {
+  useAIGatewayLiveFeed,
+  useAIGatewayRequestSummaryQuery,
+  useAIGatewayRequestsQuery,
+  type AIGatewayLiveStatus
+} from "@/lib/ai-gateway-hooks";
+import type { AIGatewayLiveSummary, AIGatewayRequest, AIGatewayRequestStatus } from "@/lib/api/ai-gateway";
+import { formatDateTime, parseInstant } from "@/lib/datetime";
 import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 20;
 const ALL = "__all__";
-const REFUND_REASONS = ["上游返回内容异常", "用户投诉，人工核实", "重复调用"];
+const RANGES = [
+  { minutes: 15, label: "15 分钟" },
+  { minutes: 60, label: "1 小时" },
+  { minutes: 1440, label: "24 小时" }
+] as const;
+/** 实时连接断开时退回的刷新间隔。 */
+const FALLBACK_REFRESH_MS = 10_000;
+
+const LIVE_LABEL: Record<AIGatewayLiveStatus, string> = {
+  connecting: "正在连接",
+  live: "实时",
+  offline: "已断开，每 10 秒刷新",
+  paused: "已暂停",
+  unauthorized: "无权订阅实时推送"
+};
+
+/** 每秒走一次的时钟：有进行中的调用时才开。 */
+function useNow(active: boolean) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0);
+    const timer = setInterval(tick, 1000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(timer);
+    };
+  }, [active]);
+  return now;
+}
 
 export function AIGatewayRequestsPanel({
   appKey,
@@ -40,36 +77,72 @@ export function AIGatewayRequestsPanel({
 }) {
   const [user, setUser] = useState<PickedUser | null>(initialFilter.userId ? { id: initialFilter.userId } : null);
   const [keyId, setKeyId] = useState<number | undefined>(initialFilter.keyId);
+  const [channel, setChannel] = useState<{ id: number; name: string } | null>(null);
   const [model, setModel] = useState(initialFilter.model ?? "");
+  const [keyword, setKeyword] = useState("");
   const [status, setStatus] = useState<string>(ALL);
   const [endpoint, setEndpoint] = useState<string>(ALL);
   const [page, setPage] = useState(1);
+  const [minutes, setMinutes] = useState(60);
+  const [paused, setPaused] = useState(false);
   const [selected, setSelected] = useState<AIGatewayRequest | null>(null);
   const debouncedModel = useDebouncedValue(model.trim(), 300);
+  const debouncedKeyword = useDebouncedValue(keyword.trim(), 300);
 
-  const query = useAIGatewayRequestsQuery(appKey, {
-    userId: user?.id,
-    keyId,
-    model: debouncedModel || undefined,
-    status: status === ALL ? undefined : status,
-    endpoint: endpoint === ALL ? undefined : endpoint,
-    page,
-    limit: PAGE_SIZE
-  });
-  const items = query.data?.items ?? [];
+  const live = useAIGatewayLiveFeed(appKey, paused);
+  const polling = live.status === "live" ? false : FALLBACK_REFRESH_MS;
+  const query = useAIGatewayRequestsQuery(
+    appKey,
+    {
+      userId: user?.id,
+      keyId,
+      configId: channel?.id,
+      model: debouncedModel || undefined,
+      keyword: debouncedKeyword || undefined,
+      status: status === ALL ? undefined : status,
+      endpoint: endpoint === ALL ? undefined : endpoint,
+      page,
+      limit: PAGE_SIZE
+    },
+    paused ? false : polling
+  );
+  const summaryQuery = useAIGatewayRequestSummaryQuery(appKey, minutes, live.status === "live" ? 60_000 : FALLBACK_REFRESH_MS);
+  const items = useMemo(() => query.data?.items ?? [], [query.data]);
   const total = query.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const now = useNow(items.some((item) => item.status === "reserved") || selected?.status === "reserved");
+
+  const resetPage = () => setPage(1);
+  const pickChannel = (id: number, name: string) => {
+    setChannel(id ? { id, name } : null);
+    resetPage();
+  };
 
   return (
-    <>
-      <SectionCard icon={<ReceiptText className="size-4" />} title="调用记录">
+    <div className="space-y-4">
+      <LiveSummaryCard
+        summary={summaryQuery.data}
+        loading={summaryQuery.isLoading}
+        minutes={minutes}
+        onMinutes={setMinutes}
+        onPickChannel={pickChannel}
+      />
+
+      <SectionCard
+        icon={<ReceiptText className="size-4" />}
+        title="调用记录"
+        description="每一次调用的上游链路、用量、耗时与扣费；进行中的调用实时更新"
+        aside={<LiveIndicator status={live.status} paused={paused} onToggle={() => setPaused((value) => !value)} />}
+      >
         <div className="mb-3 flex flex-wrap items-center gap-2">
           <div className="w-60">
-            <UserPicker appKey={appKey} value={user} onChange={(value) => { setUser(value); setPage(1); }} />
+            <UserPicker appKey={appKey} value={user} onChange={(value) => { setUser(value); resetPage(); }} />
           </div>
-          <Input value={model} placeholder="模型" className="h-8 w-40 font-mono text-xs"
-            onChange={(event) => { setModel(event.target.value); setPage(1); }} />
-          <Select value={status} onValueChange={(value) => { setStatus(value); setPage(1); }}>
+          <Input value={keyword} placeholder="调用编号 / 上游请求编号" className="h-8 w-52 font-mono text-xs"
+            onChange={(event) => { setKeyword(event.target.value); resetPage(); }} />
+          <Input value={model} placeholder="模型" className="h-8 w-36 font-mono text-xs"
+            onChange={(event) => { setModel(event.target.value); resetPage(); }} />
+          <Select value={status} onValueChange={(value) => { setStatus(value); resetPage(); }}>
             <SelectTrigger className="h-8 w-32 text-xs">
               <SelectValue />
             </SelectTrigger>
@@ -82,7 +155,7 @@ export function AIGatewayRequestsPanel({
               ))}
             </SelectContent>
           </Select>
-          <Select value={endpoint} onValueChange={(value) => { setEndpoint(value); setPage(1); }}>
+          <Select value={endpoint} onValueChange={(value) => { setEndpoint(value); resetPage(); }}>
             <SelectTrigger className="h-8 w-36 text-xs">
               <SelectValue />
             </SelectTrigger>
@@ -96,13 +169,9 @@ export function AIGatewayRequestsPanel({
             </SelectContent>
           </Select>
           {keyId ? (
-            <Badge variant="outline" className="gap-1">
-              密钥 #{keyId}
-              <button type="button" aria-label="清除密钥筛选" onClick={() => { setKeyId(undefined); setPage(1); }}>
-                <X className="size-3" />
-              </button>
-            </Badge>
+            <FilterBadge label={`密钥 #${keyId}`} onClear={() => { setKeyId(undefined); resetPage(); }} />
           ) : null}
+          {channel ? <FilterBadge label={`通道 ${channel.name}`} onClear={() => pickChannel(0, "")} /> : null}
           <span className="ml-auto text-xs text-muted-foreground tabular-nums">共 {total} 条</span>
         </div>
 
@@ -119,37 +188,24 @@ export function AIGatewayRequestsPanel({
                 <TableHead>时间</TableHead>
                 <TableHead>用户</TableHead>
                 <TableHead>模型</TableHead>
+                <TableHead>上游</TableHead>
                 <TableHead>用量</TableHead>
+                <TableHead className="text-right">耗时</TableHead>
                 <TableHead className="text-right">扣费（点）</TableHead>
                 <TableHead>状态</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {items.map((item) => (
-                <TableRow key={item.requestNo} className="cursor-pointer" onClick={() => setSelected(item)}>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">{formatDateTime(item.createdAt)}</TableCell>
-                  <TableCell className="text-xs">
-                    <button type="button" className="hover:underline"
-                      onClick={(event) => { event.stopPropagation(); setUser({ id: item.userId, account: item.account }); setPage(1); }}>
-                      {item.account || `#${item.userId}`}
-                    </button>
-                  </TableCell>
-                  <TableCell>
-                    <div className="font-mono text-xs">{item.model}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {ENDPOINT_LABEL[item.endpoint] ?? item.endpoint}
-                      {item.stream ? " · 流式" : ""}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-xs tabular-nums">
-                    {describeUsage(item)}
-                    {item.usageEstimated ? <span className="ml-1 text-muted-foreground">（估）</span> : null}
-                  </TableCell>
-                  <TableCell className="text-right font-mono text-xs tabular-nums">{formatPoints(item.charged)}</TableCell>
-                  <TableCell>
-                    <RequestStatusBadge status={item.status} />
-                  </TableCell>
-                </TableRow>
+                <RequestRow
+                  key={item.requestNo}
+                  item={item}
+                  now={now}
+                  fresh={live.fresh.has(item.requestNo)}
+                  onOpen={() => setSelected(item)}
+                  onPickUser={() => { setUser({ id: item.userId, account: item.account }); resetPage(); }}
+                  onPickChannel={() => item.configId && pickChannel(item.configId, item.configName || item.provider || `#${item.configId}`)}
+                />
               ))}
             </TableBody>
           </Table>
@@ -170,162 +226,242 @@ export function AIGatewayRequestsPanel({
         ) : null}
       </SectionCard>
 
-      <RequestDetailDialog appKey={appKey} record={selected} onClose={() => setSelected(null)} onChanged={setSelected} />
-    </>
-  );
-}
-
-function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[6rem_minmax(0,1fr)] gap-2 py-1.5 text-xs">
-      <span className="text-muted-foreground">{label}</span>
-      <span className="min-w-0 break-words">{children}</span>
+      <AIGatewayRequestSheet
+        appKey={appKey}
+        record={selected ? (items.find((item) => item.requestNo === selected.requestNo) ?? selected) : null}
+        now={now}
+        onClose={() => setSelected(null)}
+      />
     </div>
   );
 }
 
-function RequestDetailDialog({
-  appKey,
-  record,
-  onClose,
-  onChanged
-}: {
-  appKey: string;
-  record: AIGatewayRequest | null;
-  onClose: () => void;
-  onChanged: (record: AIGatewayRequest) => void;
-}) {
-  const refundMutation = useRefundAIGatewayRequestMutation(appKey);
-  const [refunding, setRefunding] = useState(false);
-  const [reason, setReason] = useState("");
-  const refundable = record?.status === "succeeded" || record?.status === "aborted";
+function FilterBadge({ label, onClear }: { label: string; onClear: () => void }) {
+  return (
+    <Badge variant="outline" className="gap-1">
+      {label}
+      <button type="button" aria-label={`清除${label}筛选`} onClick={onClear}>
+        <X className="size-3" />
+      </button>
+    </Badge>
+  );
+}
 
-  const refund = async () => {
-    if (!record) return;
-    try {
-      const updated = await refundMutation.mutateAsync({ requestNo: record.requestNo, reason: reason.trim() });
-      toast.success("已退款");
-      setRefunding(false);
-      setReason("");
-      onChanged(updated);
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "退款失败");
-    }
-  };
+function LiveIndicator({ status, paused, onToggle }: { status: AIGatewayLiveStatus; paused: boolean; onToggle: () => void }) {
+  const tone =
+    status === "live"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : status === "offline" || status === "unauthorized"
+        ? "text-amber-600 dark:text-amber-400"
+        : "text-muted-foreground";
+  return (
+    <div className="flex items-center gap-2">
+      <span className={cn("flex items-center gap-1.5 text-xs", tone)}>
+        {status === "live" ? <PulseDot /> : <span className="size-1.5 rounded-full bg-current" aria-hidden="true" />}
+        {LIVE_LABEL[status]}
+      </span>
+      <Button size="xs" variant="outline" onClick={onToggle} aria-label={paused ? "继续实时更新" : "暂停实时更新"}>
+        {paused ? <Play className="size-3" /> : <Pause className="size-3" />}
+        {paused ? "继续" : "暂停"}
+      </Button>
+    </div>
+  );
+}
+
+function RequestRow({
+  item,
+  now,
+  fresh,
+  onOpen,
+  onPickUser,
+  onPickChannel
+}: {
+  item: AIGatewayRequest;
+  now: number;
+  fresh: boolean;
+  onOpen: () => void;
+  onPickUser: () => void;
+  onPickChannel: () => void;
+}) {
+  const running = item.status === "reserved";
+  const created = parseInstant(item.createdAt)?.getTime() ?? now;
+  const elapsed = running ? Math.max(now - created, 0) : item.latencyMs;
+  const firstToken = running ? item.live?.firstTokenMs : item.firstTokenMs;
+  const channel = item.configName || item.provider;
 
   return (
-    <Dialog open={Boolean(record)} onOpenChange={(open) => { if (!open) { setRefunding(false); onClose(); } }}>
-      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 font-mono text-sm">
-            {record?.requestNo}
-            {record ? <RequestStatusBadge status={record.status} /> : null}
-          </DialogTitle>
-        </DialogHeader>
-        {record ? (
-          <div className="divide-y divide-border">
-            <DetailRow label="用户">{record.account || `#${record.userId}`}</DetailRow>
-            <DetailRow label="凭据">
-              {record.authKind === "key" ? `密钥 ${record.keyHint ?? ""}` : "登录令牌"}
-            </DetailRow>
-            <DetailRow label="接口">
-              {ENDPOINT_LABEL[record.endpoint] ?? record.endpoint}
-              {record.stream ? " · 流式" : ""}
-            </DetailRow>
-            <DetailRow label="模型">
-              <span className="font-mono">{record.model}</span>
-              {record.upstreamModel && record.upstreamModel !== record.model ? (
-                <span className="text-muted-foreground"> → {record.upstreamModel}</span>
-              ) : null}
-              {record.provider ? <span className="text-muted-foreground"> · {record.provider}</span> : null}
-            </DetailRow>
-            <DetailRow label="用量">
-              {describeUsage(record)}
-              {record.usageEstimated ? "（估算）" : ""}
-              {record.clampMaxTokens ? ` · 输出上限压到 ${record.clampMaxTokens}` : ""}
-            </DetailRow>
-            <DetailRow label="倍率">{record.factor}</DetailRow>
-            <DetailRow label="暂扣">{formatPoints(record.reserved)} 点</DetailRow>
-            <DetailRow label="价格">{formatPoints(record.cost)} 点</DetailRow>
-            <DetailRow label="实扣">
-              {formatPoints(record.charged)} 点
-              {Number(record.shortfall) > 0 ? (
-                <span className="text-amber-600 dark:text-amber-400"> · 未收 {formatPoints(record.shortfall)} 点</span>
-              ) : null}
-            </DetailRow>
-            {record.charges.length > 0 ? (
-              <DetailRow label="扣费明细">
-                <div className="space-y-0.5">
-                  {record.charges.map((charge, index) => (
-                    <div key={`${charge.source}-${index}`}>{describeCharge(charge)}</div>
-                  ))}
-                </div>
-              </DetailRow>
-            ) : null}
-            {record.integralTxnNo || record.walletTxnNo ? (
-              <DetailRow label="流水号">
-                <span className="font-mono">{[record.integralTxnNo, record.walletTxnNo].filter(Boolean).join(" / ")}</span>
-              </DetailRow>
-            ) : null}
-            {record.errorMessage ? (
-              <DetailRow label="错误">
-                <span className="text-destructive">{record.errorMessage}</span>
-                {record.errorCode ? <span className="text-muted-foreground"> · {record.errorCode}</span> : null}
-              </DetailRow>
-            ) : null}
-            <DetailRow label="耗时">{record.latencyMs} ms</DetailRow>
-            <DetailRow label="时间">
-              {formatDateTime(record.createdAt)}
-              {record.settledAt ? ` → ${formatDateTime(record.settledAt)}` : ""}
-            </DetailRow>
-            <DetailRow label="来源">
-              {record.clientIp || "—"}
-              {record.userAgent ? <span className="text-muted-foreground"> · {record.userAgent}</span> : null}
-            </DetailRow>
-            {record.status === "refunded" ? (
-              <DetailRow label="退款">
-                {formatDateTime(record.refundedAt)}
-                {record.refundedBy ? ` · ${record.refundedBy}` : ""}
-                {record.refundReason ? ` · ${record.refundReason}` : ""}
-              </DetailRow>
-            ) : null}
+    <TableRow
+      className={cn("cursor-pointer transition-colors duration-700", fresh && "bg-emerald-500/10")}
+      onClick={onOpen}
+    >
+      <TableCell className="whitespace-nowrap text-xs tabular-nums">{formatDateTime(item.createdAt)}</TableCell>
+      <TableCell className="text-xs">
+        <button type="button" className="hover:underline" onClick={(event) => { event.stopPropagation(); onPickUser(); }}>
+          {item.account || `#${item.userId}`}
+        </button>
+      </TableCell>
+      <TableCell>
+        <div className="font-mono text-xs">{item.model}</div>
+        <div className="text-[11px] text-muted-foreground">
+          {ENDPOINT_LABEL[item.endpoint] ?? item.endpoint}
+          {item.stream ? " · 流式" : ""}
+        </div>
+      </TableCell>
+      <TableCell className="text-xs">
+        {channel ? (
+          <button type="button" className="hover:underline" onClick={(event) => { event.stopPropagation(); onPickChannel(); }}>
+            {channel}
+          </button>
+        ) : (
+          <span className="text-muted-foreground">{running ? "调度中" : "—"}</span>
+        )}
+        <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+          {item.upstreamModel && item.upstreamModel !== item.model ? (
+            <span className="max-w-36 truncate font-mono">{item.upstreamModel}</span>
+          ) : null}
+          {item.attempts > 1 ? (
+            <Badge variant="warning" size="sm">
+              回退 {item.attempts - 1} 次
+            </Badge>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell className="text-xs tabular-nums">
+        {running ? (
+          item.live?.outputTokens ? (
+            <span className="text-sky-600 dark:text-sky-400">已生成约 {formatTokens(item.live.outputTokens)}</span>
+          ) : (
+            <span className="text-muted-foreground">等待输出</span>
+          )
+        ) : (
+          <>
+            {describeUsage(item)}
+            {item.usageEstimated ? <span className="ml-1 text-muted-foreground">（估）</span> : null}
+          </>
+        )}
+      </TableCell>
+      <TableCell className="text-right text-xs tabular-nums">
+        <div className={cn(running && "text-sky-600 dark:text-sky-400")}>{formatDuration(elapsed)}</div>
+        {firstToken ? <div className="text-[11px] text-muted-foreground">首字 {formatDuration(firstToken)}</div> : null}
+      </TableCell>
+      <TableCell className="text-right font-mono text-xs tabular-nums">
+        {running ? <span className="text-muted-foreground">暂扣 {formatPoints(item.reserved)}</span> : formatPoints(item.charged)}
+      </TableCell>
+      <TableCell>
+        <RequestStatusBadge status={item.status} />
+        {item.errorMessage && !running ? (
+          <div className="mt-0.5 max-w-40 truncate text-[11px] text-destructive" title={item.errorMessage}>
+            {item.errorMessage}
           </div>
         ) : null}
+      </TableCell>
+    </TableRow>
+  );
+}
 
-        {refunding ? (
-          <div className="space-y-2 rounded-xl border border-border p-3">
-            <div className="flex flex-wrap gap-1.5">
-              {REFUND_REASONS.map((item) => (
-                <Button key={item} size="xs" variant={reason === item ? "secondary" : "outline"} onClick={() => setReason(item)}>
-                  {item}
-                </Button>
-              ))}
+function LiveSummaryCard({
+  summary,
+  loading,
+  minutes,
+  onMinutes,
+  onPickChannel
+}: {
+  summary?: AIGatewayLiveSummary;
+  loading: boolean;
+  minutes: number;
+  onMinutes: (minutes: number) => void;
+  onPickChannel: (id: number, name: string) => void;
+}) {
+  const successRate = summary && summary.total > 0 ? Math.round((summary.succeeded / summary.total) * 1000) / 10 : null;
+  const range = RANGES.find((item) => item.minutes === minutes)?.label ?? `${minutes} 分钟`;
+
+  return (
+    <SectionCard
+      icon={<Activity className="size-4" />}
+      title="实时概况"
+      description={`最近 ${range}的调用，以及每条上游通道的尝试情况`}
+      aside={
+        <ToggleGroup type="single" size="sm" variant="outline" value={String(minutes)}
+          onValueChange={(value) => value && onMinutes(Number(value))}>
+          {RANGES.map((item) => (
+            <ToggleGroupItem key={item.minutes} value={String(item.minutes)} className="px-2.5 text-xs">
+              {item.label}
+            </ToggleGroupItem>
+          ))}
+        </ToggleGroup>
+      }
+    >
+      {loading && !summary ? (
+        <Skeleton className="h-24 w-full rounded-xl" />
+      ) : (
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-3 xl:grid-cols-6">
+            <StatTile label="进行中" icon={Zap} value={summary?.inFlight ?? "—"}
+              tone={summary?.inFlight ? "positive" : "default"} />
+            <StatTile label="调用" icon={Activity} value={summary?.total ?? "—"}
+              hint={successRate !== null ? `成功率 ${successRate}%，失败 ${summary?.failed ?? 0}` : undefined} />
+            <StatTile label="平均耗时" icon={Timer} value={formatDuration(summary?.avgLatencyMs)}
+              hint={summary?.p95LatencyMs ? `P95 ${formatDuration(summary.p95LatencyMs)}` : undefined} />
+            <StatTile label="平均首字" icon={Gauge} value={formatDuration(summary?.avgFirstTokenMs)} hint="流式调用" />
+            <StatTile label="Token" icon={Waypoints}
+              value={summary ? formatTokens(summary.inputTokens + summary.outputTokens) : "—"}
+              hint={summary ? `输入 ${formatTokens(summary.inputTokens)}，输出 ${formatTokens(summary.outputTokens)}` : undefined} />
+            <StatTile label="扣费（点）" icon={Coins} value={formatPoints(summary?.charged)}
+              hint={summary ? `${summary.users} 位用户，回退 ${summary.retried} 次` : undefined} />
+          </div>
+
+          {summary && summary.upstreams.length > 0 ? (
+            <div className="overflow-hidden rounded-xl border border-border">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>
+                      <span className="flex items-center gap-1.5">
+                        <Route className="size-3.5" />
+                        上游通道
+                      </span>
+                    </TableHead>
+                    <TableHead className="text-right">尝试</TableHead>
+                    <TableHead className="text-right">失败率</TableHead>
+                    <TableHead className="text-right">平均耗时</TableHead>
+                    <TableHead>最近错误</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {summary.upstreams.map((item) => {
+                    const failRate = item.attempts > 0 ? Math.round((item.failed / item.attempts) * 1000) / 10 : 0;
+                    return (
+                      <TableRow
+                        key={`${item.configId}-${item.configName}-${item.provider}`}
+                        className={cn(item.configId ? "cursor-pointer" : undefined)}
+                        onClick={() => item.configId && onPickChannel(item.configId, item.configName || item.provider)}
+                      >
+                        <TableCell className="text-xs">
+                          {item.configName || "—"}
+                          {item.provider ? <span className="ml-1.5 text-muted-foreground">{item.provider}</span> : null}
+                        </TableCell>
+                        <TableCell className="text-right text-xs tabular-nums">{item.attempts}</TableCell>
+                        <TableCell
+                          className={cn(
+                            "text-right text-xs tabular-nums",
+                            failRate >= 20 ? "text-destructive" : failRate > 0 ? "text-amber-600 dark:text-amber-400" : undefined
+                          )}
+                        >
+                          {failRate}%
+                        </TableCell>
+                        <TableCell className="text-right text-xs tabular-nums">{formatDuration(item.avgLatencyMs)}</TableCell>
+                        <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={item.lastError}>
+                          {item.lastError || "—"}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
             </div>
-            <Textarea value={reason} maxLength={200} rows={2} placeholder="退款原因" className="text-xs"
-              onChange={(event) => setReason(event.target.value)} />
-          </div>
-        ) : null}
-
-        <DialogFooter>
-          {refundable && !refunding ? (
-            <Button size="sm" variant="outline" onClick={() => setRefunding(true)}>
-              <RotateCcw className="size-3.5" />
-              整笔退款
-            </Button>
           ) : null}
-          {refunding ? (
-            <>
-              <Button size="sm" variant="outline" onClick={() => setRefunding(false)}>
-                取消
-              </Button>
-              <Button size="sm" variant="destructive" onClick={() => void refund()} disabled={refundMutation.isPending}>
-                {refundMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                退回 {formatPoints(record?.charged)} 点
-              </Button>
-            </>
-          ) : null}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        </div>
+      )}
+    </SectionCard>
   );
 }

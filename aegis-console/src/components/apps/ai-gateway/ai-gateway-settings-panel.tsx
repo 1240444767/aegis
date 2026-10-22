@@ -21,6 +21,7 @@ type Draft = {
   scope: string;
   enabled: boolean;
   allowSessionToken: boolean;
+  redactContent: boolean;
   audience: "all" | "vip";
   order: AIGatewaySourceKey[];
   active: AIGatewaySourceKey[];
@@ -53,6 +54,7 @@ function seedDraft(scope: string, settings: AIGatewaySettings | undefined, allSo
     scope,
     enabled: settings?.enabled ?? false,
     allowSessionToken: settings?.allowSessionToken ?? true,
+    redactContent: settings?.redactContent ?? false,
     audience: settings?.audience ?? "all",
     order: [...active, ...allSources.filter((source) => !active.includes(source))],
     active,
@@ -128,6 +130,7 @@ export function AIGatewaySettingsPanel({ appKey }: { appKey: string }) {
       await saveMutation.mutateAsync({
         enabled: current.enabled,
         allowSessionToken: current.allowSessionToken,
+        redactContent: current.redactContent,
         audience: current.audience,
         sources: enabledSources,
         priceMultiplier: current.priceMultiplier.trim(),
@@ -172,6 +175,8 @@ export function AIGatewaySettingsPanel({ appKey }: { appKey: string }) {
           <SwitchRow label="开启 AI 中转" checked={current.enabled} onChange={(value) => patch({ enabled: value })} />
           <SwitchRow label="允许用登录令牌调用" hint="关闭后只接受用户的 API 密钥"
             checked={current.allowSessionToken} onChange={(value) => patch({ allowSessionToken: value })} />
+          <SwitchRow label="调用记录不留内容" hint="开启后调用详情只记参数与长度，不保存提示词与回复"
+            checked={current.redactContent} onChange={(value) => patch({ redactContent: value })} />
           <FieldGroup label="使用对象">
             <Select value={current.audience} onValueChange={(value) => patch({ audience: value as "all" | "vip" })}>
               <SelectTrigger className="h-8 w-40 text-xs">

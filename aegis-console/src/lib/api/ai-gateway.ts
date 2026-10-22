@@ -1,4 +1,4 @@
-import { apiRequest, buildQuery } from "@/lib/api/client";
+import { apiRequest, buildQuery, joinApiUrl } from "@/lib/api/client";
 
 /**
  * AI 中转网关域 API（docs/ai-gateway.md）。
@@ -56,6 +56,7 @@ export type AIGatewaySettings = {
   maxKeysPerUser: number;
   defaultMaxTokens: number;
   timezone: string;
+  redactContent: boolean;
   updatedBy?: string;
   updatedAt?: string;
 };
@@ -163,12 +164,105 @@ export type AIGatewayRequest = {
   clientIp?: string;
   userAgent?: string;
   latencyMs: number;
+  /** 上游尝试次数；大于 1 表示发生过链路回退。 */
+  attempts: number;
+  firstTokenMs?: number;
+  finishReason?: string;
+  upstreamRequestId?: string;
+  requestBytes?: number;
+  responseBytes?: number;
+  configName?: string;
+  /** 只有单条查询带。 */
+  trace?: AIGatewayTrace | null;
+  /** 只在实时推送里有。 */
+  live?: AIGatewayLiveProgress;
   refundReason?: string;
   refundedBy?: string;
   refundedAt?: string;
   createdAt: string;
   expiresAt: string;
   settledAt?: string;
+};
+
+export type AIGatewayAttemptStatus = "running" | "succeeded" | "failed" | "canceled";
+
+/** 一次上游尝试（链路里的一条通道被调用了一次）。 */
+export type AIGatewayAttempt = {
+  seq: number;
+  configId?: number;
+  configName?: string;
+  provider?: string;
+  protocol?: string;
+  inherited?: boolean;
+  model?: string;
+  url?: string;
+  method?: string;
+  status: AIGatewayAttemptStatus;
+  httpStatus?: number;
+  upstreamRequestId?: string;
+  error?: string;
+  retryable?: boolean;
+  startedAt: string;
+  headersMs?: number;
+  firstTokenMs?: number;
+  latencyMs: number;
+  requestBytes?: number;
+  responseBytes?: number;
+  rateLimit?: Record<string, string>;
+};
+
+export type AIGatewayTrace = {
+  attempts: AIGatewayAttempt[];
+  request: Record<string, unknown>;
+  response: Record<string, unknown>;
+};
+
+export type AIGatewayLiveProgress = {
+  elapsedMs: number;
+  firstTokenMs?: number;
+  outputChars?: number;
+  outputTokens?: number;
+  attempt?: number;
+};
+
+export type AIGatewayUpstreamSummary = {
+  configId: number;
+  configName: string;
+  provider: string;
+  attempts: number;
+  failed: number;
+  avgLatencyMs: number;
+  lastError?: string;
+};
+
+export type AIGatewayLiveSummary = {
+  minutes: number;
+  inFlight: number;
+  total: number;
+  succeeded: number;
+  failed: number;
+  retried: number;
+  users: number;
+  inputTokens: number;
+  outputTokens: number;
+  charged: string;
+  avgLatencyMs: number;
+  p95LatencyMs: number;
+  avgFirstTokenMs: number;
+  upstreams: AIGatewayUpstreamSummary[];
+};
+
+export type AIGatewayLiveEventType = "created" | "attempt" | "progress" | "finished" | "resync";
+
+/** 调用记录实时事件（SSE，见 docs/ai-gateway.md「实时」）。 */
+export type AIGatewayLiveEvent = {
+  type: AIGatewayLiveEventType;
+  appid: number;
+  requestNo?: string;
+  request?: AIGatewayRequest;
+  attempts?: AIGatewayAttempt[];
+  progress?: AIGatewayLiveProgress;
+  at: string;
 };
 
 export type AIGatewayPage<T> = { items: T[]; total: number; page: number; limit: number };
@@ -179,6 +273,9 @@ export type AIGatewayRequestParams = {
   model?: string;
   status?: string;
   endpoint?: string;
+  /** 调用编号或上游请求编号（前缀）。 */
+  keyword?: string;
+  configId?: number;
   start?: string;
   end?: string;
   page?: number;
@@ -318,6 +415,62 @@ export function listAIGatewayRequests(token: string, appKey: string, params: AIG
 
 export function getAIGatewayRequest(token: string, appKey: string, requestNo: string) {
   return apiRequest<AIGatewayRequest>(`${base(appKey)}/requests/${encodeURIComponent(requestNo)}`, { token });
+}
+
+export function getAIGatewayRequestSummary(token: string, appKey: string, minutes: number) {
+  return apiRequest<AIGatewayLiveSummary>(`${base(appKey)}/requests/summary${buildQuery({ minutes })}`, { token });
+}
+
+/** SSE 连接的结局：服务端到点换连接（bye）、断开、或凭据失效（不再重连）。 */
+export type AIGatewayLiveEnd = "bye" | "closed" | "unauthorized";
+
+/**
+ * 读调用记录的实时事件流。浏览器的 EventSource 带不了 Authorization 头，所以用 fetch 读流自己按 SSE 切分。
+ * 连上后先 onOpen；流结束时兑现结局，网络错误抛出（由调用方退避重连）。
+ */
+export async function streamAIGatewayLive(
+  token: string,
+  appKey: string,
+  handlers: { onOpen: () => void; onEvent: (event: AIGatewayLiveEvent) => void },
+  signal: AbortSignal
+): Promise<AIGatewayLiveEnd> {
+  const response = await fetch(joinApiUrl(`${base(appKey)}/requests/live`), {
+    headers: { Accept: "text/event-stream", Authorization: `Bearer ${token}`, "X-Admin-Token": token },
+    cache: "no-store",
+    signal
+  });
+  if (response.status === 401 || response.status === 403) return "unauthorized";
+  if (!response.ok || !response.body) throw new Error(`实时连接失败（${response.status}）`);
+  handlers.onOpen();
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buffer = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return "closed";
+    buffer += value;
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+      let name = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) name = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+      }
+      if (name === "bye") {
+        await reader.cancel().catch(() => undefined);
+        return "bye";
+      }
+      if (name === "ready" || data.length === 0) continue;
+      try {
+        handlers.onEvent(JSON.parse(data.join("\n")) as AIGatewayLiveEvent);
+      } catch {
+        // 单条坏数据不影响后续事件。
+      }
+    }
+  }
 }
 
 export function refundAIGatewayRequest(token: string, appKey: string, requestNo: string, reason: string) {

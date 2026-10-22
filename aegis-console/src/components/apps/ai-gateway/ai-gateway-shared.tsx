@@ -1,7 +1,14 @@
 "use client";
 
 import { Badge } from "@/components/ui/badge";
-import type { AIGatewayCharge, AIGatewayPriceKey, AIGatewayRequestStatus, AIGatewaySourceKey } from "@/lib/api/ai-gateway";
+import type {
+  AIGatewayAttemptStatus,
+  AIGatewayCharge,
+  AIGatewayPriceKey,
+  AIGatewayRequestStatus,
+  AIGatewaySourceKey
+} from "@/lib/api/ai-gateway";
+import { cn } from "@/lib/utils";
 
 /** 1 点 = 1,000,000 微点：调用记录里的 holds / charges 是微点整数。 */
 export const MICRO_PER_POINT = 1_000_000;
@@ -28,6 +35,7 @@ export function RequestStatusBadge({ status }: { status: AIGatewayRequestStatus 
             : "outline";
   return (
     <Badge variant={variant} size="sm">
+      {status === "reserved" ? <PulseDot /> : null}
       {STATUS_LABEL[status] ?? status}
     </Badge>
   );
@@ -105,4 +113,47 @@ export function describeUsage(record: {
   if (record.characters) parts.push(`${record.characters.toLocaleString("zh-CN")} 字`);
   if (record.audioMs) parts.push(`${(record.audioMs / 1000).toFixed(1)} 秒`);
   return parts.join(" · ") || "—";
+}
+
+/** 耗时：1 秒以内按毫秒，以上按秒（一位小数），一分钟以上按分秒。 */
+export function formatDuration(ms?: number | null) {
+  if (ms === null || ms === undefined || ms <= 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const minutes = Math.floor(ms / 60_000);
+  return `${minutes} 分 ${Math.round((ms % 60_000) / 1000)} 秒`;
+}
+
+export function formatBytes(bytes?: number | null) {
+  if (!bytes) return "—";
+  if (bytes >= 1 << 20) return `${(bytes / (1 << 20)).toFixed(1)} MB`;
+  if (bytes >= 1 << 10) return `${(bytes / (1 << 10)).toFixed(1)} KB`;
+  return `${bytes} B`;
+}
+
+export const ATTEMPT_STATUS: Record<AIGatewayAttemptStatus, { label: string; variant: "success" | "danger" | "warning" | "info" }> = {
+  running: { label: "进行中", variant: "info" },
+  succeeded: { label: "成功", variant: "success" },
+  failed: { label: "失败", variant: "danger" },
+  canceled: { label: "客户端断开", variant: "warning" }
+};
+
+export function AttemptStatusBadge({ status }: { status: AIGatewayAttemptStatus }) {
+  const meta = ATTEMPT_STATUS[status] ?? { label: status, variant: "info" as const };
+  return (
+    <Badge variant={meta.variant} size="sm">
+      {status === "running" ? <PulseDot /> : null}
+      {meta.label}
+    </Badge>
+  );
+}
+
+/** 进行中的小圆点（带呼吸）。 */
+export function PulseDot({ className }: { className?: string }) {
+  return (
+    <span className={cn("relative inline-flex size-1.5", className)} aria-hidden="true">
+      <span className="absolute inset-0 animate-ping rounded-full bg-current opacity-60" />
+      <span className="relative inline-flex size-1.5 rounded-full bg-current" />
+    </span>
+  );
 }
