@@ -256,10 +256,107 @@ data class AegisSession(
      * 以及这次是不是首次激活（首次才发随卡权益）。
      */
     val authorization: CardKeyAuthorization? = null,
+    /**
+     * 登录设备数已满、应用设置为让用户选择时出现（`authenticationState = device_limit_required`）。
+     * 此时没有令牌：把 [DeviceLimitChallenge.devices] 列给用户勾选，至少 [DeviceLimitChallenge.mustRemove] 台，
+     * 再调 [AegisAuthApi.resolveDeviceLimit] 完成登录。只有在 Builder 里声明了
+     * [AegisClient.Builder.deviceLimitChoice] 才会收到它，否则服务端按应用的兜底方式处理。
+     */
+    val deviceLimit: DeviceLimitChallenge? = null,
 ) {
     /** 拿到可用令牌才算登录完成。 */
     val isAuthenticated: Boolean get() = accessToken.isNotEmpty()
 }
+
+/** 登录设备数已满时让用户选择下线哪台设备，见 [AegisSession.deviceLimit]。 */
+@Serializable
+data class DeviceLimitChallenge(
+    /** 选择页凭证，5 分钟有效 */
+    val ticket: String = "",
+    val expiresAt: String = "",
+    /** 触发的维度：`total` 总数 / `class` 某一终端类别 */
+    val dimension: String = "",
+    val requirements: List<DeviceLimitRequirement> = emptyList(),
+    /** 至少勾选几台 */
+    val mustRemove: Int = 1,
+    val message: String = "",
+    val devices: List<LoginDevice> = emptyList(),
+)
+
+/** 某个维度超了多少。 */
+@Serializable
+data class DeviceLimitRequirement(
+    /** `total` / `class` / `new_device` */
+    val dimension: String = "",
+    /** 维度为 `class` 时：`mobile` / `desktop` / `web` / `other` */
+    @SerialName("class") val deviceClass: String = "",
+    val limit: Int = 0,
+    val current: Int = 0,
+    val mustRemove: Int = 0,
+)
+
+/**
+ * 一台已登录的设备：同一台设备上的多次登录合成一台。
+ * [key] 用来下线它；[deviceInfo] 是服务端按设备字典给出的展示信息（名称、厂商图标、设备图等）。
+ */
+@Serializable
+data class LoginDevice(
+    val key: String = "",
+    val deviceId: String = "",
+    val platform: String = "",
+    /** 终端类别：`mobile` / `desktop` / `web` / `other` */
+    @SerialName("class") val deviceClass: String = "",
+    val name: String = "",
+    val deviceInfo: JsonElement? = null,
+    val ip: String = "",
+    val provider: String = "",
+    val sessions: Int = 0,
+    val loginAt: String = "",
+    val lastActiveAt: String = "",
+    /** 是不是本机 */
+    val current: Boolean = false,
+    /** 只在选择页有意义：勾它能不能解决超限（例如只超了手机数时，电脑勾了也没用） */
+    val eligible: Boolean = true,
+) {
+    /** [deviceInfo] 里的展示名，没有时退回登录时保存的名称。 */
+    val displayName: String
+        get() = (deviceInfo as? kotlinx.serialization.json.JsonObject)
+            ?.get("name")?.let { (it as? kotlinx.serialization.json.JsonPrimitive)?.content }
+            ?.takeIf { it.isNotBlank() } ?: name
+}
+
+/** 我的登录设备与生效上限，见 [AegisMeApi.devices]。 */
+@Serializable
+data class LoginDeviceStatus(
+    /** 应用是否开启了设备数控制 */
+    val enabled: Boolean = false,
+    val limits: DeviceLimits = DeviceLimits(),
+    val usage: DeviceUsage = DeviceUsage(),
+    val devices: List<LoginDevice> = emptyList(),
+    /** 同一台设备再次登录时：`replace` 顶掉旧登录 / `coexist` 保留 */
+    val sameDevice: String = "",
+    /** 超限时：`kick_oldest` / `kick_idle` / `reject` / `ask` */
+    val overflow: String = "",
+    val newDevicesInWindow: Int = 0,
+)
+
+/** 此刻生效的上限。[maxDevices] 为 0 表示不限总数；[classLimits] 里没有的类别不单独限制。 */
+@Serializable
+data class DeviceLimits(
+    val unlimited: Boolean = true,
+    val maxDevices: Int = 0,
+    val classLimits: Map<String, Int> = emptyMap(),
+    /** `disabled` / `default` / `tier` / `override` / `exempt` */
+    val source: String = "",
+    val sourceLabel: String = "",
+)
+
+/** 已登录设备的占用。 */
+@Serializable
+data class DeviceUsage(
+    val total: Int = 0,
+    val byClass: Map<String, Int> = emptyMap(),
+)
 
 /** 授权卡登录时随会话下发的授权快照。 */
 @Serializable

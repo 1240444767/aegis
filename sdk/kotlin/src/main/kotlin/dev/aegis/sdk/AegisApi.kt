@@ -157,6 +157,17 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
         path = "/auth/2fa/verify",
     )
 
+    /**
+     * 登录设备数已满时完成登录：[ticket] 取自 [AegisSession.deviceLimit]，[deviceKeys] 是用户勾选要下线的
+     * [LoginDevice.key]，至少 `mustRemove` 台。成功返回与登录相同的会话并写进 tokenStore；
+     * 勾得不够时报 40997，凭证过期或已用过报 40496（回登录页重新登录）。
+     */
+    @Throws(IOException::class)
+    fun resolveDeviceLimit(ticket: String, deviceKeys: List<String>): AegisSession = login(
+        mapOf("ticket" to ticket, "deviceKeys" to deviceKeys),
+        path = "/auth/device-limit/resolve",
+    )
+
     @Throws(IOException::class)
     fun logout() {
         client.call("POST", "/auth/logout", requireAuth = true)
@@ -664,6 +675,23 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     fun revokeAllSessions(): JsonElement = client.call("POST", "/me/sessions/revoke-all", requireAuth = true)
+
+    // ── 登录设备 ──
+
+    /**
+     * 我的登录设备：同一台设备上的多次登录合成一台，本机排在最前（[LoginDevice.current]），
+     * 外加此刻生效的设备数上限与各终端类别的占用。
+     */
+    @Throws(IOException::class)
+    fun devices(): LoginDeviceStatus =
+        client.decodeAs(client.call("GET", "/me/devices", requireAuth = true), LoginDeviceStatus.serializer())
+
+    /** 下线我的其他设备（[LoginDevice.key]），返回下线后的状况。本机不能在这里下线，请用 [AegisAuthApi.logout]。 */
+    @Throws(IOException::class)
+    fun removeDevices(deviceKeys: List<String>): LoginDeviceStatus = client.decodeAs(
+        client.call("POST", "/me/devices/remove", mapOf("deviceKeys" to deviceKeys), requireAuth = true),
+        LoginDeviceStatus.serializer(),
+    )
 
     @Throws(IOException::class)
     @JvmOverloads

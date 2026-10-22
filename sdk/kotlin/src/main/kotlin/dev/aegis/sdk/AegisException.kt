@@ -41,6 +41,13 @@ class AegisException private constructor(
     /** 重新拉 /config 后重试一次即可（典型场景：传输密钥刚轮换过）。 */
     val isRetryableAfterConfigRefresh: Boolean get() = recovery == AegisRecovery.REFRESH_CONFIG
 
+    /**
+     * 本机的登录已被服务端收回：账号在别的设备登录、超出登录设备数被挤下线（40130），
+     * 或在设备管理里被移除（40131）。访问令牌与刷新令牌都已失效，SDK 已清掉本地令牌，
+     * 应当把 [message] 告诉用户并回到登录页，不要再尝试刷新。
+     */
+    val isSignedOut: Boolean get() = code in SIGNED_OUT_CODES
+
     override fun toString(): String =
         "AegisException(kind=$kind, code=$code, message=$message" +
             (if (networkReason.isNotEmpty()) ", networkReason=$networkReason" else "") +
@@ -54,6 +61,9 @@ class AegisException private constructor(
             40084, 40174, 40175, 40176, 40970, 42670, 50370, 50372,
         )
         private val AUTH_CODES = setOf(40100, 40110, 40372)
+
+        /** 本机登录被收回，见 [isSignedOut]。 */
+        internal val SIGNED_OUT_CODES = setOf(40130, 40131)
 
         @JvmStatic
         fun transport(message: String, cause: Throwable? = null): AegisException =
@@ -76,7 +86,7 @@ class AegisException private constructor(
         @JvmStatic
         fun fromCode(code: Int, message: String, descriptor: ErrorDescriptor? = null): AegisException {
             val kind = when (code) {
-                in AUTH_CODES -> Kind.AUTH
+                in AUTH_CODES, in SIGNED_OUT_CODES -> Kind.AUTH
                 in TRANSPORT_CODES -> Kind.TRANSPORT
                 else -> Kind.BUSINESS
             }
@@ -84,7 +94,8 @@ class AegisException private constructor(
                 kind = kind,
                 code = code,
                 message = message.ifEmpty { descriptor?.message ?: "请求失败" },
-                recovery = descriptor?.recovery ?: defaultRecovery(kind),
+                recovery = descriptor?.recovery
+                    ?: if (code in SIGNED_OUT_CODES) AegisRecovery.REAUTH else defaultRecovery(kind),
                 hint = descriptor?.hint.orEmpty(),
             )
         }

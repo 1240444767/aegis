@@ -118,6 +118,19 @@ data class AegisDevice @JvmOverloads constructor(
 }
 
 /**
+ * 声明本客户端能让用户选择下线哪台设备（登录设备数已满时），见 [AegisClient.Builder.deviceLimitChoice]。
+ */
+internal object AegisDeviceLimitChoiceInterceptor : Interceptor {
+    const val HEADER = "X-Device-Limit-Challenge"
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        if (request.header(HEADER) != null) return chain.proceed(request)
+        return chain.proceed(request.newBuilder().header(HEADER, "1").build())
+    }
+}
+
+/**
  * 给每个请求附加设备请求头。请求上已经显式带了的同名头不覆盖。
  * [provider] 每次请求调用一次，可以惰性取值（设备 ID 首次解析可能较慢）。
  */

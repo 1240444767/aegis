@@ -71,6 +71,7 @@ class AegisClient private constructor(
     val clock: AegisClock,
     private val configHolder: AtomicReference<AegisConfig?>,
     private val retryPolicy: AegisRetryPolicy,
+    private val signedOutListener: ((AegisException) -> Unit)? = null,
 ) {
 
     private val json = Json { ignoreUnknownKeys = true; explicitNulls = false }
@@ -384,6 +385,12 @@ class AegisClient private constructor(
 
             val descriptor = configHolder.get()?.errors?.firstOrNull { it.code == envelope.code }
             val failure = AegisException.fromCode(envelope.code, envelope.message, descriptor)
+            // 本机登录已被收回（被挤下线 / 被移除）：令牌全部作废，刷新也没用，清掉并通知一次
+            if (failure.isSignedOut) {
+                tokens.clear()
+                signedOutListener?.let { listener -> runCatching { listener(failure) } }
+                throw failure
+            }
             if (!allowRetry) throw failure
 
             when {
@@ -479,6 +486,8 @@ class AegisClient private constructor(
         private var dnsOverHttps = true
         private var retryPolicy = AegisRetryPolicy()
         private var engine: okhttp3.Interceptor? = null
+        private var deviceLimitChoice = false
+        private var signedOutListener: ((AegisException) -> Unit)? = null
         private val clock = AegisClock()
 
         /**
@@ -538,6 +547,20 @@ class AegisClient private constructor(
         /** 同上，惰性取值：每个请求调用一次 [provider]，设备 ID 首次解析较慢时用它。 */
         fun device(provider: () -> AegisDevice?) = apply { this.deviceProvider = provider }
 
+        /**
+         * 声明本客户端能让用户选择下线哪台设备。登录设备数已满、应用设置为「让用户选择」时，
+         * 登录结果里会出现 [AegisSession.deviceLimit]（没有令牌），用户选好后调
+         * [AegisAuthApi.resolveDeviceLimit]。不声明时服务端按应用设置的兜底方式处理（自动下线或拒绝）。
+         */
+        fun deviceLimitChoice(enabled: Boolean = true) = apply { this.deviceLimitChoice = enabled }
+
+        /**
+         * 本机登录被服务端收回时回调一次（[AegisException.isSignedOut]：账号在别的设备登录被挤下线，
+         * 或在设备管理里被移除）。回调前 SDK 已清掉本地令牌；在回调里提示用户并回到登录页。
+         * 回调在发起请求的线程上执行。
+         */
+        fun onSignedOut(listener: ((AegisException) -> Unit)?) = apply { this.signedOutListener = listener }
+
         fun build(): AegisClient {
             val configHolder = AtomicReference<AegisConfig?>(null)
             val base = okHttp ?: OkHttpClient.Builder()
@@ -550,6 +573,7 @@ class AegisClient private constructor(
                 .retryOnConnectionFailure(false)
                 .apply { if (base.pingIntervalMillis == 0) pingInterval(20, java.util.concurrent.TimeUnit.SECONDS) }
                 .apply { deviceProvider?.let { addInterceptor(AegisDeviceInterceptor(it)) } }
+                .apply { if (deviceLimitChoice) addInterceptor(AegisDeviceLimitChoiceInterceptor) }
                 .addInterceptor(
                     AegisTransportInterceptor(
                         appKey = appKey,
@@ -563,7 +587,7 @@ class AegisClient private constructor(
                 )
                 .apply { engine?.let(::addInterceptor) }
                 .build()
-            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy)
+            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy, signedOutListener)
         }
 
         private fun buildDns(base: OkHttpClient): okhttp3.Dns {
