@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
+import okhttp3.Interceptor
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MultipartBody
@@ -435,6 +436,35 @@ class AegisAIRelay internal constructor(
 
         private fun JsonObject.with(key: String, value: JsonElement): JsonObject = JsonObject(this + (key to value))
     }
+}
+
+
+/**
+ * [AegisAIGatewayApi.relayHttpClient] 的鉴权：给每个请求换上凭据；会话令牌被拒（401）时单飞刷新一次，
+ * 换到新令牌才重发，刷新不成就把原来的 401 交给调用方。
+ */
+internal class AegisRelayAuthInterceptor(
+    private val client: AegisClient,
+    private val apiKey: String?,
+) : Interceptor {
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val token = apiKey ?: client.tokens.accessToken()
+            ?: throw AegisException.fromCode(40100, "尚未登录：没有可用的访问令牌")
+        val response = chain.proceed(chain.request().withBearer(token))
+        if (response.code != 401 || apiKey != null) return response
+        val refreshed = try {
+            client.refreshForRelay(token)
+        } catch (failure: IOException) {
+            false
+        }
+        val fresh = client.tokens.accessToken()
+        if (!refreshed || fresh == null || fresh == token) return response
+        response.close()
+        return chain.proceed(chain.request().withBearer(fresh))
+    }
+
+    private fun Request.withBearer(token: String): Request =
+        newBuilder().header("Authorization", "Bearer $token").build()
 }
 
 /**

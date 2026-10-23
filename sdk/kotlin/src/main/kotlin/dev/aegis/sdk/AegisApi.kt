@@ -1925,6 +1925,22 @@ class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
     /** 调用面，用 [createKey] 领到的 `sk-ag-` 密钥（服务端、脚本、不想绑定登录态的场景）。 */
     fun relay(apiKey: String): AegisAIRelay = AegisAIRelay(client, apiKey)
 
+    /** 中转调用面的地址（`{站点}/api/ai/v1`，不带结尾斜杠），给 OpenAI 兼容客户端当 baseURL。 */
+    val relayBaseUrl: String get() = client.relayUrl("").toString().trimEnd('/')
+
+    /**
+     * 给第三方 OpenAI / Anthropic 兼容客户端（Koog、openai-java、LangChain4j 等）用的 HTTP 客户端。
+     *
+     * 连接（多路解析、引擎、设备头）与平台接口共用，读超时放宽到 10 分钟、不设总超时（流式对话可能很长）。
+     * 每个请求的 `Authorization` 换成 [apiKey]，为空时换成当前登录会话的访问令牌（调用方自己带的会被覆盖）；
+     * 会话令牌被拒（401）时单飞刷新一次再重发。只换凭据、不解析响应：网关的错误信封原样交给调用方。
+     */
+    @JvmOverloads
+    fun relayHttpClient(apiKey: String? = null): okhttp3.OkHttpClient =
+        client.relayHttp(AegisAIRelay.SYNC_READ_TIMEOUT_SECONDS).newBuilder()
+            .addInterceptor(AegisRelayAuthInterceptor(client, apiKey))
+            .build()
+
     /** 总览：是否开放、能不能用、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址。 */
     @Throws(IOException::class)
     fun overview(): JsonElement = client.call("GET", "/ai/overview", requireAuth = true)
