@@ -1938,7 +1938,8 @@ class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
     @JvmOverloads
     fun relayHttpClient(apiKey: String? = null): okhttp3.OkHttpClient =
         client.relayHttp(AegisAIRelay.SYNC_READ_TIMEOUT_SECONDS).newBuilder()
-            .addInterceptor(AegisRelayAuthInterceptor(client, apiKey))
+            // 必须排在最前：链尾可能挂着自己发请求、不再往后传的发送层（如 Cronet），追加在它后面的拦截器不会执行。
+            .apply { interceptors().add(0, AegisRelayAuthInterceptor(client, apiKey)) }
             .build()
 
     /** 总览：是否开放、能不能用、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址。 */
