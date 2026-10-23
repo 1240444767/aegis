@@ -1950,6 +1950,22 @@ class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun models(): JsonElement = client.call("GET", "/ai/models", requireAuth = true)
 
+    /**
+     * 公开模型目录（models.dev、OpenRouter、LiteLLM 合并）按名字批量查能力：识图、工具、思考与可选强度、
+     * 上下文与输出上限。免登录，一次最多 200 个；[providers] 是目录里的供应商名（openai、anthropic、google…），
+     * 作为匹配提示。查不到的项 `found = false`，只有「包含」把握的匹配不算查到。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun catalogLookup(models: List<String>, providers: List<String> = emptyList()): JsonElement = client.call(
+        "GET", "/ai/catalog/lookup",
+        query = buildQuery(
+            "models" to models.joinToString(",").takeIf { it.isNotEmpty() },
+            "providers" to providers.joinToString(",").takeIf { it.isNotEmpty() },
+        ),
+        optionalAuth = true,
+    )
+
     /** 我的 API 密钥（只有 `hint`，没有明文）。 */
     @Throws(IOException::class)
     fun keys(): JsonElement = client.call("GET", "/ai/keys", requireAuth = true)

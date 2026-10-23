@@ -35,6 +35,8 @@ type AIGatewayService struct {
 	live *aiGatewayLiveHub
 	// jobs 本实例上正在跑的异步任务（ai_gateway_jobs.go）。
 	jobs *aiGatewayJobRegistry
+	// catalog 公开模型目录的内存索引（ai_model_catalog.go）。
+	catalog *aiModelCatalog
 
 	stop     chan struct{}
 	stopOnce sync.Once
@@ -43,7 +45,7 @@ type AIGatewayService struct {
 // NewAIGatewayService 构造网关服务。
 func NewAIGatewayService(log *zap.Logger, pg *pgrepo.Repository, auth *AuthService, ai *AIProviderService) *AIGatewayService {
 	s := &AIGatewayService{log: log, pg: pg, auth: auth, ai: ai, now: time.Now, live: newAIGatewayLiveHub(log),
-		jobs: newAIGatewayJobRegistry(), stop: make(chan struct{})}
+		jobs: newAIGatewayJobRegistry(), catalog: newAIModelCatalog(), stop: make(chan struct{})}
 	s.live.onCancel = s.jobs.cancel
 	return s
 }
@@ -125,6 +127,7 @@ func mapAIGatewayError(err error) error {
 // Start 起后台循环：每分钟把超时未结算的暂扣放回。多实例同时跑也安全：
 // 放回在锁住调用记录后重查状态，已经被结算或被别的实例放回的直接跳过。
 func (s *AIGatewayService) Start(ctx context.Context) {
+	s.startCatalogLoop(ctx)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

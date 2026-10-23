@@ -516,6 +516,13 @@ func NormalizeCapabilities(in *Capabilities) (Capabilities, error) {
 	if out.ContextLength < 0 || out.ContextLength > 100_000_000 {
 		return out, invalid("上下文长度应在 0-100000000 之间")
 	}
+	if out.MaxOutput < 0 || out.MaxOutput > 100_000_000 {
+		return out, invalid("最大输出应在 0-100000000 之间")
+	}
+	out.CatalogKey = strings.TrimSpace(out.CatalogKey)
+	if len(out.CatalogKey) > 256 {
+		return out, invalid("目录条目名过长")
+	}
 	seen := map[string]bool{}
 	for _, effort := range in.ReasoningEfforts {
 		normalized, ok := aidomain.NormalizeReasoningEffort(effort)

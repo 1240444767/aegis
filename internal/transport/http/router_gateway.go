@@ -22,6 +22,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 	appGateway := router.Group("/api/v1/apps/:appkey")
 	{
 		appGateway.GET("/config", h.AppConfig)
+		// 公开模型目录按名字批量查能力（免登录：用户接自己的 AI 供应商时不一定登录了）
+		appGateway.GET("/ai/catalog/lookup", h.AppAICatalogLookup)
 		appGateway.POST("/captcha", h.AppCaptcha)
 		appGateway.POST("/auth/sms/code", h.AppSMSCode)
 		appGateway.POST("/auth/register", h.AppRegister)

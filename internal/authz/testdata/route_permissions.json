@@ -7303,6 +7303,36 @@
     "appScoped": true
   },
   {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/sync",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/refresh",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/search",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/match",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/ai-gateway/requests",
     "permission": "app:read",

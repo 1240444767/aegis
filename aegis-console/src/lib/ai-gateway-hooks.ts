@@ -12,6 +12,12 @@ import {
   getAIGatewaySettings,
   getAIGatewayStats,
   getAIGatewayUserAccount,
+  getModelCatalog,
+  matchModelCatalog,
+  refreshModelCatalog,
+  searchModelCatalog,
+  syncAIGatewayModels,
+  type ModelCatalogSyncPayload,
   listAIGatewayKeys,
   listAIGatewayModels,
   listAIGatewayRequests,
@@ -49,7 +55,9 @@ const KEY = {
   keys: "admin-ai-gateway-keys",
   stats: "admin-ai-gateway-stats",
   account: "admin-ai-gateway-account",
-  credits: "admin-ai-gateway-credits"
+  credits: "admin-ai-gateway-credits",
+  modelCatalog: "admin-ai-model-catalog",
+  catalogSearch: "admin-ai-model-catalog-search"
 } as const;
 
 function useInvalidateScope() {
@@ -57,7 +65,7 @@ function useInvalidateScope() {
   return async () => {
     await Promise.all(
       Object.values(KEY)
-        .filter((key) => key !== KEY.catalog)
+        .filter((key) => key !== KEY.catalog && key !== KEY.modelCatalog && key !== KEY.catalogSearch)
         .map((key) => queryClient.invalidateQueries({ queryKey: [key] }))
     );
   };
@@ -70,6 +78,58 @@ export function useAIGatewayCatalogQuery(appKey?: string | null) {
     queryFn: () => getAIGatewayCatalog(token as string, appKey as string),
     enabled: Boolean(token && appKey),
     staleTime: Infinity
+  });
+}
+
+/** 公开模型目录的概况（全平台一份，任一应用的入口都能看）。 */
+export function useModelCatalogQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.modelCatalog, token, appKey],
+    queryFn: () => getModelCatalog(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useRefreshModelCatalogMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => refreshModelCatalog(token as string, appKey as string),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: [KEY.modelCatalog] });
+      await queryClient.invalidateQueries({ queryKey: [KEY.catalogSearch] });
+    }
+  });
+}
+
+export function useModelCatalogSearchQuery(appKey: string | null | undefined, query: string, kind?: string) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.catalogSearch, token, appKey, query, kind],
+    queryFn: () => searchModelCatalog(token as string, appKey as string, { q: query, kind, limit: 30 }),
+    enabled: Boolean(token && appKey && query.trim().length >= 2),
+    staleTime: 60_000
+  });
+}
+
+/** 按模型名匹配目录条目：侧栏里点「从目录填充」时调一次。 */
+export function useMatchModelCatalogMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  return useMutation({
+    mutationFn: (params: { model: string; configId?: number }) => matchModelCatalog(token as string, appKey as string, params)
+  });
+}
+
+/** 从目录同步；preview 时不写库，也就不失效列表。 */
+export function useSyncAIGatewayModelsMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateScope();
+  return useMutation({
+    mutationFn: (payload: ModelCatalogSyncPayload) => syncAIGatewayModels(token as string, appKey as string, payload),
+    onSuccess: async (_, payload) => {
+      if (!payload.preview) await invalidate();
+    }
   });
 }
 

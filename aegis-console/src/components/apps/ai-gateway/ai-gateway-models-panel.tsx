@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { Boxes, Crown, Pencil, Plus, Trash2 } from "lucide-react";
+import { BookOpenCheck, Boxes, Brain, Crown, Eye, Pencil, Plus, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { SectionCard } from "@/components/apps/app-config-primitives";
+import { AIGatewayCatalogSheet } from "@/components/apps/ai-gateway/ai-gateway-catalog-sheet";
 import { AIGatewayModelSheet, seedModelDraft, type ModelDraft } from "@/components/apps/ai-gateway/ai-gateway-model-sheet";
 import { PRICE_LABEL, formatPoints } from "@/components/apps/ai-gateway/ai-gateway-shared";
 import {
@@ -46,6 +47,7 @@ export function AIGatewayModelsPanel({ appKey }: { appKey: string }) {
   const deleteMutation = useDeleteAIGatewayModelMutation(appKey);
   const [editing, setEditing] = useState<ModelDraft | null>(null);
   const [deleting, setDeleting] = useState<AIGatewayModel | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const kinds = catalogQuery.data?.kinds ?? [];
   const models = modelsQuery.data?.items ?? [];
@@ -73,10 +75,16 @@ export function AIGatewayModelsPanel({ appKey }: { appKey: string }) {
         icon={<Boxes className="size-4" />}
         title="模型与价格"
         aside={
-          <Button size="sm" onClick={() => setEditing(seedModelDraft())}>
-            <Plus className="size-3.5" />
-            添加模型
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={() => setSyncing(true)} disabled={models.length === 0}>
+              <BookOpenCheck className="size-3.5" />
+              从模型目录同步
+            </Button>
+            <Button size="sm" onClick={() => setEditing(seedModelDraft())}>
+              <Plus className="size-3.5" />
+              添加模型
+            </Button>
+          </div>
         }
       >
         {models.length === 0 ? (
@@ -103,6 +111,16 @@ export function AIGatewayModelsPanel({ appKey }: { appKey: string }) {
                       {model.model}
                       {model.vipOnly ? <Crown className="size-3 text-amber-500" aria-label="会员专享" /> : null}
                     </div>
+                    {model.kind === "chat" && model.capabilities ? (
+                      <div className="mt-1 flex items-center gap-1 text-muted-foreground">
+                        {model.capabilities.vision ? <Eye className="size-3" aria-label="识图" /> : null}
+                        {model.capabilities.tools ? <Wrench className="size-3" aria-label="工具调用" /> : null}
+                        {model.capabilities.reasoning ? <Brain className="size-3" aria-label="思考" /> : null}
+                        {model.capabilities.contextLength ? (
+                          <span className="text-[10px] tabular-nums">{Math.round(model.capabilities.contextLength / 1000)}K</span>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {model.upstreamModel || model.displayName ? (
                       <div className="mt-0.5 text-[11px] text-muted-foreground">
                         {model.displayName}
@@ -141,6 +159,7 @@ export function AIGatewayModelsPanel({ appKey }: { appKey: string }) {
       </SectionCard>
 
       <AIGatewayModelSheet appKey={appKey} kinds={kinds} existing={models} initial={editing} onClose={() => setEditing(null)} />
+      <AIGatewayCatalogSheet appKey={appKey} open={syncing} models={models} onClose={() => setSyncing(false)} />
 
       <AlertDialog open={Boolean(deleting)} onOpenChange={(open) => !open && setDeleting(null)}>
         <AlertDialogContent>

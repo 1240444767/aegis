@@ -43,7 +43,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Textarea } from "@/components/ui/textarea";
-import { useDeleteAIGatewayModelMutation, useSaveAIGatewayModelMutation } from "@/lib/ai-gateway-hooks";
+import {
+  useDeleteAIGatewayModelMutation,
+  useMatchModelCatalogMutation,
+  useSaveAIGatewayModelMutation
+} from "@/lib/ai-gateway-hooks";
 import { useAIChannelQuery, useAIProviderCatalogQuery, useFetchAIDraftModelsMutation } from "@/lib/ai-hooks";
 import { ApiError } from "@/lib/api/client";
 import type { AIResolution } from "@/lib/api/ai";
@@ -105,6 +109,9 @@ export type ModelDraft = {
   reasoning: boolean;
   efforts: AIReasoningEffort[];
   contextLength: string;
+  /** 模型本身的最大输出与对上的目录条目：侧栏里不编辑，但保存时要原样带回，否则会被冲掉。 */
+  capMaxOutput: number;
+  catalogKey: string;
   sortOrder: string;
 };
 
@@ -142,6 +149,8 @@ export function seedModelDraft(model?: AIGatewayModel, kind = "chat"): ModelDraf
     reasoning: model?.capabilities?.reasoning ?? false,
     efforts: model?.capabilities?.reasoningEfforts ?? [],
     contextLength: model?.capabilities?.contextLength ? String(model.capabilities.contextLength) : "",
+    capMaxOutput: model?.capabilities?.maxOutput ?? 0,
+    catalogKey: model?.capabilities?.catalogKey ?? "",
     sortOrder: String(model?.sortOrder ?? 0)
   };
 }
@@ -204,6 +213,8 @@ function ModelSheetBody({
   const providerQuery = useAIProviderCatalogQuery(scope);
   const fetchMutation = useFetchAIDraftModelsMutation(scope);
   const saveMutation = useSaveAIGatewayModelMutation(appKey);
+  const matchMutation = useMatchModelCatalogMutation(appKey);
+
   const deleteMutation = useDeleteAIGatewayModelMutation(appKey);
 
   const [draft, setDraft] = useState<ModelDraft>(initial);
@@ -284,6 +295,40 @@ function ModelSheetBody({
     }
   };
 
+  /** 按上游模型名在公开目录里找最像的一条，把能力、上下文与名称说明填进草稿（名称说明只填空的）。 */
+  const fillFromCatalog = async () => {
+    const name = (draft.upstreamModel || draft.model).trim();
+    if (!name) {
+      toast.error("先填写或选择模型名");
+      return;
+    }
+    try {
+      const result = await matchMutation.mutateAsync({ model: name, configId: draft.configId || undefined });
+      const best = result.items[0];
+      if (!best) {
+        toast.error(`目录里找不到「${name}」`);
+        return;
+      }
+      const entry = best.entry;
+      setDraft((current) => ({
+        ...current,
+        vision: entry.vision,
+        tools: entry.tools,
+        reasoning: entry.reasoning,
+        efforts: entry.reasoning ? entry.reasoningEfforts ?? [] : [],
+        contextLength: entry.contextLength ? String(entry.contextLength) : current.contextLength,
+        capMaxOutput: entry.maxOutput ?? current.capMaxOutput,
+        catalogKey: entry.key,
+        displayName: current.displayName || (entry.name ?? "").slice(0, 128),
+        description: current.description || (entry.description ?? "").slice(0, 500)
+      }));
+      const priceHint = entry.cost?.input !== undefined ? `，参考价 $${entry.cost.input} / $${entry.cost.output ?? 0} 每百万 token` : "";
+      toast.success(`已按 ${entry.key}（${best.match === "exact" ? "精确" : best.match === "normalized" ? "去后缀" : "相近"}）填入${priceHint}`);
+    } catch (error) {
+      toast.error(error instanceof ApiError ? error.message : "查询模型目录失败");
+    }
+  };
+
   const buildPayload = (model: string, upstream: string): AIGatewayModelPayload | string => {
     if (!MODEL_RE.test(model)) return `模型名「${model || "未填写"}」只能包含字母、数字与 . _ : / @ + -`;
     if (upstream && !MODEL_RE.test(upstream)) return `上游模型名「${upstream}」格式无效`;
@@ -325,7 +370,9 @@ function ModelSheetBody({
               tools: draft.tools,
               reasoning: draft.reasoning,
               reasoningEfforts: draft.reasoning ? AI_REASONING_EFFORTS.filter((effort) => draft.efforts.includes(effort)) : [],
-              contextLength: Number(draft.contextLength) || 0
+              contextLength: Number(draft.contextLength) || 0,
+              maxOutput: batch ? 0 : draft.capMaxOutput,
+              catalogKey: batch ? "" : draft.catalogKey
             }
           }
         : {}),
@@ -627,8 +674,17 @@ function ModelSheetBody({
             <SheetBlock
               icon={<Brain className="size-4" />}
               title="能力"
-              aside={<span className="text-xs text-muted-foreground">客户端据此显示图片、工具与思考强度的选项</span>}
+              aside={
+                <Button type="button" size="sm" variant="outline" onClick={() => void fillFromCatalog()} disabled={matchMutation.isPending}>
+                  {matchMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <CloudDownload className="size-3.5" />}
+                  从目录填充
+                </Button>
+              }
             >
+              <p className="-mt-2 mb-4 text-xs text-muted-foreground">
+                客户端据此显示图片、工具与思考强度的选项
+                {draft.catalogKey ? <span className="ml-1 font-mono">（目录条目 {draft.catalogKey}）</span> : null}
+              </p>
               <div className="space-y-4">
                 <div className="grid gap-3 sm:grid-cols-3">
                   <ToggleTile label="识图" checked={draft.vision} onChange={(value) => patch({ vision: value })} />

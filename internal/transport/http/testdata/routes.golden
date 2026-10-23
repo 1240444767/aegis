@@ -136,6 +136,9 @@ GET	/api/admin/apps/:appkey/ad-policy/splash-events	AdminListSplashAdEvents
 GET	/api/admin/apps/:appkey/ad-policy/stats	AdminAdPolicyStats
 GET	/api/admin/apps/:appkey/ai-gateway/catalog	AdminAIGatewayCatalog
 GET	/api/admin/apps/:appkey/ai-gateway/keys	AdminAIGatewayKeys
+GET	/api/admin/apps/:appkey/ai-gateway/model-catalog	AdminAIModelCatalog
+GET	/api/admin/apps/:appkey/ai-gateway/model-catalog/match	AdminMatchAIModelCatalog
+GET	/api/admin/apps/:appkey/ai-gateway/model-catalog/search	AdminSearchAIModelCatalog
 GET	/api/admin/apps/:appkey/ai-gateway/models	AdminAIGatewayModels
 GET	/api/admin/apps/:appkey/ai-gateway/requests	AdminAIGatewayRequests
 GET	/api/admin/apps/:appkey/ai-gateway/requests/:requestNo	AdminAIGatewayRequest
@@ -598,6 +601,7 @@ GET	/api/user/two-factor/recovery-codes	ListRecoveryCodes
 GET	/api/v1/apps/:appkey/ads/policy	AppAdPolicy
 GET	/api/v1/apps/:appkey/ads/rewarded	AppRewardedAdStatus
 GET	/api/v1/apps/:appkey/ads/rewarded/records	AppRewardedAdRecords
+GET	/api/v1/apps/:appkey/ai/catalog/lookup	AppAICatalogLookup
 GET	/api/v1/apps/:appkey/ai/credits	AppAICredits
 GET	/api/v1/apps/:appkey/ai/keys	AppAIKeys
 GET	/api/v1/apps/:appkey/ai/models	AppAIModels
@@ -788,7 +792,9 @@ POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel	AdminCa
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/execute	AdminExecuteAccountDeletion
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reject	AdminRejectAccountDeletion
 POST	/api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule	AdminRescheduleAccountDeletion
+POST	/api/admin/apps/:appkey/ai-gateway/model-catalog/refresh	AdminRefreshAIModelCatalog
 POST	/api/admin/apps/:appkey/ai-gateway/models	AdminCreateAIGatewayModel
+POST	/api/admin/apps/:appkey/ai-gateway/models/sync	AdminSyncAIGatewayModels
 POST	/api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund	AdminRefundAIGatewayRequest
 POST	/api/admin/apps/:appkey/ai-gateway/users/:userId/credits	AdminAdjustAIGatewayCredit
 POST	/api/admin/apps/:appkey/ai/agent/stream	AdminAppAIAgentStream

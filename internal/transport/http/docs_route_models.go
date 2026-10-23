@@ -113,6 +113,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/ad-policy/config"):                                      SaveAdPolicyRequest{},                    // AdminSaveAdPolicy
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/keys/{keyId}/status"):                        AIGatewayKeyStatusRequest{},              // AdminSetAIGatewayKeyStatus
 		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/models"):                                    aigateway.ModelInput{},                   // AdminCreateAIGatewayModel
+		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/models/sync"):                               service.CatalogSyncInput{},               // AdminSyncAIGatewayModels
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/models/{modelId}"):                           aigateway.ModelInput{},                   // AdminUpdateAIGatewayModel
 		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/requests/{requestNo}/refund"):               AIGatewayRefundRequest{},                 // AdminRefundAIGatewayRequest
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/settings"):                                   aigateway.Settings{},                     // AdminSaveAIGatewaySettings

@@ -22,6 +22,7 @@ type Draft = {
   enabled: boolean;
   allowSessionToken: boolean;
   redactContent: boolean;
+  catalogAutoSync: boolean;
   audience: "all" | "vip";
   order: AIGatewaySourceKey[];
   active: AIGatewaySourceKey[];
@@ -55,6 +56,7 @@ function seedDraft(scope: string, settings: AIGatewaySettings | undefined, allSo
     enabled: settings?.enabled ?? false,
     allowSessionToken: settings?.allowSessionToken ?? true,
     redactContent: settings?.redactContent ?? false,
+    catalogAutoSync: settings?.catalogAutoSync ?? false,
     audience: settings?.audience ?? "all",
     order: [...active, ...allSources.filter((source) => !active.includes(source))],
     active,
@@ -131,6 +133,7 @@ export function AIGatewaySettingsPanel({ appKey }: { appKey: string }) {
         enabled: current.enabled,
         allowSessionToken: current.allowSessionToken,
         redactContent: current.redactContent,
+        catalogAutoSync: current.catalogAutoSync,
         audience: current.audience,
         sources: enabledSources,
         priceMultiplier: current.priceMultiplier.trim(),
@@ -177,6 +180,8 @@ export function AIGatewaySettingsPanel({ appKey }: { appKey: string }) {
             checked={current.allowSessionToken} onChange={(value) => patch({ allowSessionToken: value })} />
           <SwitchRow label="调用记录不留内容" hint="开启后调用详情只记参数与长度，不保存提示词与回复"
             checked={current.redactContent} onChange={(value) => patch({ redactContent: value })} />
+          <SwitchRow label="每天从模型目录更新" hint="按 models.dev 等公开目录更新对话模型的能力、上下文与名称说明，不改价格"
+            checked={current.catalogAutoSync} onChange={(value) => patch({ catalogAutoSync: value })} />
           <FieldGroup label="使用对象">
             <Select value={current.audience} onValueChange={(value) => patch({ audience: value as "all" | "vip" })}>
               <SelectTrigger className="h-8 w-40 text-xs">

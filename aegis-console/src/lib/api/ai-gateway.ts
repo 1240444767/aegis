@@ -57,6 +57,8 @@ export type AIGatewaySettings = {
   defaultMaxTokens: number;
   timezone: string;
   redactContent: boolean;
+  /** 每天从公开模型目录更新对话模型的能力声明（不改价格）。 */
+  catalogAutoSync?: boolean;
   updatedBy?: string;
   updatedAt?: string;
 };
@@ -93,6 +95,74 @@ export type AIGatewayCapabilities = {
   reasoningEfforts: AIReasoningEffort[];
   /** 上下文长度（token），0 表示未知。 */
   contextLength: number;
+  /** 模型本身的最大输出（只是声明，不是网关的输出上限）。 */
+  maxOutput?: number;
+  /** 最近一次从模型目录同步时对上的条目。 */
+  catalogKey?: string;
+};
+
+// ── 公开模型目录（models.dev / OpenRouter / LiteLLM）──
+
+export type ModelCatalogSource = { source: string; url: string; count: number; error?: string; fetchedAt: string };
+
+export type ModelCatalogStatus = {
+  fetchedAt: string | null;
+  count: number;
+  sources: ModelCatalogSource[];
+  providers: { provider: string; count: number }[];
+  refreshed: boolean;
+};
+
+export type ModelCatalogEntry = {
+  key: string;
+  provider: string;
+  model: string;
+  name?: string;
+  family?: string;
+  description?: string;
+  kind: string;
+  vision: boolean;
+  tools: boolean;
+  reasoning: boolean;
+  reasoningEfforts?: AIReasoningEffort[];
+  reasoningBudget?: { min?: number; max?: number };
+  inputModalities?: string[];
+  outputModalities?: string[];
+  contextLength?: number;
+  inputLimit?: number;
+  maxOutput?: number;
+  cost?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; image?: number; request?: number };
+  knowledge?: string;
+  releaseDate?: string;
+  status?: string;
+  sources: string[];
+};
+
+export type ModelCatalogMatch = "exact" | "normalized" | "fuzzy";
+export type ModelCatalogCandidate = { entry: ModelCatalogEntry; match: ModelCatalogMatch; score: number };
+
+export type ModelCatalogField = "capabilities" | "info" | "prices";
+
+export type ModelCatalogSyncPayload = {
+  modelIds?: number[];
+  fields: ModelCatalogField[];
+  /** 1 美元折合多少点。 */
+  priceRate?: string;
+  overwrite?: boolean;
+  preview?: boolean;
+  allowFuzzy?: boolean;
+  keys?: Record<number, string>;
+};
+
+export type ModelCatalogSyncResult = {
+  modelId: number;
+  model: string;
+  upstream: string;
+  match?: ModelCatalogCandidate;
+  others?: ModelCatalogCandidate[];
+  changes: { field: string; from: unknown; to: unknown }[];
+  applied: boolean;
+  skipped?: string;
 };
 
 export type AIGatewayModel = AIGatewayPrice & {
@@ -392,6 +462,30 @@ const base = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}/
 
 export function getAIGatewayCatalog(token: string, appKey: string) {
   return apiRequest<AIGatewayCatalog>(`${base(appKey)}/catalog`, { token });
+}
+
+export function getModelCatalog(token: string, appKey: string) {
+  return apiRequest<ModelCatalogStatus>(`${base(appKey)}/model-catalog`, { token });
+}
+
+export function refreshModelCatalog(token: string, appKey: string) {
+  return apiRequest<ModelCatalogStatus>(`${base(appKey)}/model-catalog/refresh`, { method: "POST", token });
+}
+
+export function searchModelCatalog(token: string, appKey: string, params: { q?: string; provider?: string; kind?: string; limit?: number }) {
+  return apiRequest<{ items: ModelCatalogEntry[] }>(`${base(appKey)}/model-catalog/search${buildQuery(params)}`, { token });
+}
+
+export function matchModelCatalog(token: string, appKey: string, params: { model: string; configId?: number; limit?: number }) {
+  return apiRequest<{ items: ModelCatalogCandidate[] }>(`${base(appKey)}/model-catalog/match${buildQuery(params)}`, { token });
+}
+
+export function syncAIGatewayModels(token: string, appKey: string, payload: ModelCatalogSyncPayload) {
+  return apiRequest<{ items: ModelCatalogSyncResult[] }>(`${base(appKey)}/models/sync`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
 }
 
 export function getAIGatewaySettings(token: string, appKey: string) {

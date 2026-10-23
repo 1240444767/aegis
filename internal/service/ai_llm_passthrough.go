@@ -115,6 +115,22 @@ func (s *AIProviderService) pinnedChannel(ctx context.Context, appID, configID i
 }
 
 // ChannelExists 某条通道对这个应用是否可用（应用自有或平台共享）。模型钉通道前校验用。
+// ChannelProvider 一个模型实际会走的通道是哪家供应商：钉了通道看那一条，否则看链路里第一条能用它的。
+// 查不到返回空串（模型目录匹配时就不带供应商提示）。
+func (s *AIProviderService) ChannelProvider(ctx context.Context, appID, configID int64, model string) string {
+	if configID > 0 {
+		if channel, err := s.pinnedChannel(ctx, appID, configID); err == nil {
+			return channel.Config.Provider
+		}
+		return ""
+	}
+	chain, err := s.ResolveChain(ctx, appID, model)
+	if err != nil || len(chain) == 0 {
+		return ""
+	}
+	return chain[0].Config.Provider
+}
+
 func (s *AIProviderService) ChannelExists(ctx context.Context, appID, configID int64) error {
 	_, err := s.pinnedChannel(ctx, appID, configID)
 	return err

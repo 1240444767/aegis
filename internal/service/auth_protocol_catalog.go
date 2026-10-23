@@ -271,6 +271,8 @@ var gatewayOperations = []authprotocol.Operation{
 		Summary: "AI 中转总览：是否开放、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址"},
 	{Key: "aiModels", Method: "GET", Path: "/ai/models", Auth: true,
 		Summary: "可调用的模型与有效单价（已乘上本人的会员与等级倍率），会员专享模型标 available=false"},
+	{Key: "aiCatalogLookup", Method: "GET", Path: "/ai/catalog/lookup", Auth: false,
+		Summary: "公开模型目录按名字批量查能力：识图、工具、思考与可选强度、上下文与输出上限（models、providers 逗号分隔）"},
 	{Key: "aiKeys", Method: "GET", Path: "/ai/keys", Auth: true, Summary: "我的 API 密钥（只含提示，不含明文）"},
 	{Key: "aiKeyCreate", Method: "POST", Path: "/ai/keys", Auth: true,
 		Summary: "新建 API 密钥（名称、可用模型、消费上限、到期时间）；明文 secret 只在这次返回"},

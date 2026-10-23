@@ -448,6 +448,12 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/ai-gateway/models", h.AdminCreateAIGatewayModel)
 		admin.PUT("/apps/:appkey/ai-gateway/models/:modelId", h.AdminUpdateAIGatewayModel)
 		admin.DELETE("/apps/:appkey/ai-gateway/models/:modelId", h.AdminDeleteAIGatewayModel)
+		admin.POST("/apps/:appkey/ai-gateway/models/sync", h.AdminSyncAIGatewayModels)
+		// 公开模型目录：models.dev / OpenRouter / LiteLLM 合并的模型元数据，检索、匹配、刷新
+		admin.GET("/apps/:appkey/ai-gateway/model-catalog", h.AdminAIModelCatalog)
+		admin.POST("/apps/:appkey/ai-gateway/model-catalog/refresh", h.AdminRefreshAIModelCatalog)
+		admin.GET("/apps/:appkey/ai-gateway/model-catalog/search", h.AdminSearchAIModelCatalog)
+		admin.GET("/apps/:appkey/ai-gateway/model-catalog/match", h.AdminMatchAIModelCatalog)
 		admin.GET("/apps/:appkey/ai-gateway/requests", h.AdminAIGatewayRequests)
 		admin.GET("/apps/:appkey/ai-gateway/requests/summary", h.AdminAIGatewayRequestSummary)
 		admin.GET("/apps/:appkey/ai-gateway/requests/live", h.AdminAIGatewayRequestsLive)

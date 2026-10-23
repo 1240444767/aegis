@@ -215,6 +215,8 @@ type Settings struct {
 	Timezone string `json:"timezone"`
 	// RedactContent 调用追踪不留提示词与正文，只留参数与长度。
 	RedactContent bool `json:"redactContent"`
+	// CatalogAutoSync 每天从公开模型目录自动更新对话模型的能力声明（不动价格）。
+	CatalogAutoSync bool `json:"catalogAutoSync"`
 
 	UpdatedBy string     `json:"updatedBy,omitempty"`
 	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
@@ -374,6 +376,11 @@ type Capabilities struct {
 	ReasoningEfforts []string `json:"reasoningEfforts"`
 	// ContextLength 上下文长度（token），0 表示未知。
 	ContextLength int `json:"contextLength"`
+	// MaxOutput 模型本身的最大输出（token），0 表示未知。只是声明：与 Model.MaxOutputTokens 不同，
+	// 后者是网关强加的上限，没带 max_tokens 的请求按它暂扣，把它设成 128K 会让每次调用都暂扣一大笔。
+	MaxOutput int `json:"maxOutput"`
+	// CatalogKey 最近一次从公开模型目录同步时对上的条目（供应商/模型），空表示没同步过。
+	CatalogKey string `json:"catalogKey,omitempty"`
 }
 
 // DefaultCapabilities 没声明能力的模型：只开工具，与此前客户端的推断一致。

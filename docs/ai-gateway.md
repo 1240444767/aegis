@@ -94,6 +94,37 @@ Gemini 不给调用编号时合成的编号带随机段，不会在对话之间�
 `GET /ai/models` 的对话模型带上它，`GET /api/ai/v1/models` 的列表项另带 `capabilities` 与 `context_length`、`max_output_tokens`。
 存量模型默认只开工具；改模型时不传 `capabilities` 沿用原值。
 
+## 模型目录
+
+公开的模型元数据，用来填模型的能力、名称说明与价格（`internal/domain/modelcatalog` 纯函数，
+`service/ai_model_catalog.go` 拉取与同步，迁移 `000128`）。
+
+| 来源 | 地址 | 用途 |
+|---|---|---|
+| models.dev | `https://models.dev/api.json` | 主来源：能力、`reasoning_options`（可选强度 / 开关 / 预算）、上下文与输出上限、美元单价 |
+| OpenRouter | `https://openrouter.ai/api/v1/models` | 建 `openrouter/…` 条目；按厂商前缀给原厂条目补缺 |
+| LiteLLM | `model_prices_and_context_window.json` | 只收主流供应商（OpenAI、Anthropic、Gemini、DeepSeek、Mistral、xAI、Groq、通义、Kimi、智谱、OpenRouter、Cohere、豆包），补缺或新建 |
+
+- 合并：models.dev 有值就不看后面的；能力布尔值以 models.dev 为准，其余来源只补空字段。价格统一成「美元 / 百万 token」，保留 6 位小数。
+- 思考选项折算成强度：`effort` 照抄；`toggle` 记为 `none / high`；`budget_tokens` 记为 `low / medium / high`，预算下限为 0（或 Anthropic 一系）时加 `none`，预算够大时加 `xhigh`。
+- 全平台一份快照（单行表 `ai_model_catalog`），各实例读它建内存索引，`fetched_at` 前进才重读（至多 5 分钟一查）。
+  后台每小时检查一次，快照超过一天就刷新；多实例抢租约 `refreshing_until`，只有一台去拉。models.dev 拉不到时整次失败、旧快照不动；
+  其余来源失败只记在来源状态里。手动刷新两分钟内只做一次。出网走 egress。
+- 匹配（`Index.Match`）：逐字相同 → 去掉日期 / `-latest` / `:free` / 厂商前缀、`.` `_` 统一成 `-` 后相同 → 前缀包含（「相近」，同步时默认跳过）。
+  通道的供应商是第一提示（`CatalogProvidersFor`），其次按模型名前缀认原厂（gpt→OpenAI、claude→Anthropic、qwen→通义 …），
+  原厂条目即使要去后缀才对上也胜过转售商那里逐字相同的一条。
+
+管理端 `…/ai-gateway/model-catalog`（概况）、`/refresh`、`/search?q=&provider=&kind=`、`/match?model=&configId=`，
+以及 `POST …/ai-gateway/models/sync`：`fields` 取 `capabilities`（能力、上下文、最大输出、对上的条目）/ `info`（显示名、说明，
+默认只填空的，`overwrite` 覆盖）/ `prices`（美元单价 × `priceRate` 点，全为 0 时标记免费）；`preview` 只算变化不写；
+`keys` 给某个模型手动指定条目；`allowFuzzy` 允许按「相近」同步。目录的最大输出写进 `capabilities.maxOutput`（声明），
+**不**写 `maxOutputTokens`：后者是网关的输出上限，没带 `max_tokens` 的请求按它暂扣，设成 128K 会让每次调用都暂扣一大笔。
+
+设置 `catalogAutoSync`：每次刷新出新快照后，把这个应用的对话模型按目录更新能力与名称说明（只跟精确与去后缀的匹配，不动价格）。
+
+App 端 `GET /api/v1/apps/{appKey}/ai/catalog/lookup?models=a,b&providers=openai`（免登录，一次 200 个，Kotlin `client.ai.catalogLookup`）：
+用户自己接的供应商拉完模型列表后，用它补全能力；只回能力与上限，不回价格，「相近」不算查到。
+
 ## 长调用：异步任务与保活
 
 生图、改图、转写常要一两分钟，而网关前面的反向代理都有读超时（常见 60–100 秒）。同步调用挂过这个时间，
@@ -292,6 +323,7 @@ Location: /api/ai/v1/jobs/AIG…
 | 40223 | 400 | 请求体不合法 |
 | 40224 / 40225 | 409 | 赠送额度不足以扣减 / 调整的请求编号被挪用 |
 | 40226 / 40227 | 404 / 409 | 异步任务不存在或结果已过期 / 任务还没有完成（取结果原文时） |
+| 40228 / 40229 | 502 / 409 | 模型目录刷新失败（models.dev 拉不到）/ 模型目录还没有拉取过 |
 
 `/api/ai/v1` 的错误按 OpenAI（`{"error":{"message","type","code","aegis_code"}}`）或
 Anthropic（`{"type":"error","error":{"type","message"}}`）形状回：402 是 `insufficient_quota` / `billing_error`，
