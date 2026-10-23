@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   AudioLines,
   Binary,
+  Brain,
   Calculator,
   Check,
   CloudDownload,
@@ -46,7 +47,14 @@ import { useDeleteAIGatewayModelMutation, useSaveAIGatewayModelMutation } from "
 import { useAIChannelQuery, useAIProviderCatalogQuery, useFetchAIDraftModelsMutation } from "@/lib/ai-hooks";
 import { ApiError } from "@/lib/api/client";
 import type { AIResolution } from "@/lib/api/ai";
-import type { AIGatewayKindMeta, AIGatewayModel, AIGatewayModelPayload, AIGatewayPriceKey } from "@/lib/api/ai-gateway";
+import {
+  AI_REASONING_EFFORTS,
+  type AIGatewayKindMeta,
+  type AIGatewayModel,
+  type AIGatewayModelPayload,
+  type AIGatewayPriceKey,
+  type AIReasoningEffort
+} from "@/lib/api/ai-gateway";
 import { cn } from "@/lib/utils";
 
 /** 与后端 aigateway.ValidModelName 同一条规则。 */
@@ -55,6 +63,16 @@ const MODEL_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,127}$/;
 const IMAGE_KEY_RE = /^([a-z0-9]{1,16}:)?[a-z0-9x]{1,16}$/;
 const DECIMAL_RE = /^\d+(\.\d{1,6})?$/;
 const ALL_PRICES: AIGatewayPriceKey[] = ["inputPrice", "outputPrice", "requestPrice", "imagePrice", "charPrice", "minutePrice"];
+
+const EFFORT_LABEL: Record<AIReasoningEffort, string> = {
+  none: "关闭",
+  minimal: "最低",
+  low: "低",
+  medium: "中",
+  high: "高",
+  xhigh: "极高",
+  max: "最高"
+};
 
 const KIND_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   chat: MessageSquare,
@@ -82,6 +100,11 @@ export type ModelDraft = {
   prices: Record<AIGatewayPriceKey, string>;
   tiers: TierDraft[];
   maxOutputTokens: string;
+  vision: boolean;
+  tools: boolean;
+  reasoning: boolean;
+  efforts: AIReasoningEffort[];
+  contextLength: string;
   sortOrder: string;
 };
 
@@ -114,6 +137,11 @@ export function seedModelDraft(model?: AIGatewayModel, kind = "chat"): ModelDraf
       price: trimZero(price)
     })),
     maxOutputTokens: model?.maxOutputTokens ? String(model.maxOutputTokens) : "",
+    vision: model?.capabilities?.vision ?? false,
+    tools: model?.capabilities?.tools ?? true,
+    reasoning: model?.capabilities?.reasoning ?? false,
+    efforts: model?.capabilities?.reasoningEfforts ?? [],
+    contextLength: model?.capabilities?.contextLength ? String(model.capabilities.contextLength) : "",
     sortOrder: String(model?.sortOrder ?? 0)
   };
 }
@@ -290,6 +318,17 @@ function ModelSheetBody({
       ...prices,
       imagePrices,
       maxOutputTokens: draft.kind === "chat" ? Number(draft.maxOutputTokens) || 0 : 0,
+      ...(draft.kind === "chat"
+        ? {
+            capabilities: {
+              vision: draft.vision,
+              tools: draft.tools,
+              reasoning: draft.reasoning,
+              reasoningEfforts: draft.reasoning ? AI_REASONING_EFFORTS.filter((effort) => draft.efforts.includes(effort)) : [],
+              contextLength: Number(draft.contextLength) || 0
+            }
+          }
+        : {}),
       sortOrder: Number(draft.sortOrder) || 0
     };
   };
@@ -583,6 +622,54 @@ function ModelSheetBody({
               <PricePreview draft={draft} usedPrices={usedPrices} />
             </div>
           </SheetBlock>
+
+          {draft.kind === "chat" ? (
+            <SheetBlock
+              icon={<Brain className="size-4" />}
+              title="能力"
+              aside={<span className="text-xs text-muted-foreground">客户端据此显示图片、工具与思考强度的选项</span>}
+            >
+              <div className="space-y-4">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <ToggleTile label="识图" checked={draft.vision} onChange={(value) => patch({ vision: value })} />
+                  <ToggleTile label="工具调用" checked={draft.tools} onChange={(value) => patch({ tools: value })} />
+                  <ToggleTile label="思考" checked={draft.reasoning} onChange={(value) => patch({ reasoning: value })} />
+                </div>
+                {draft.reasoning ? (
+                  <Field label="可选的思考强度" aside="都不选表示低 / 中 / 高；选上「关闭」才能关掉思考">
+                    <div className="flex flex-wrap gap-1.5">
+                      {AI_REASONING_EFFORTS.map((effort) => {
+                        const active = draft.efforts.includes(effort);
+                        return (
+                          <button
+                            key={effort}
+                            type="button"
+                            aria-pressed={active}
+                            onClick={() =>
+                              patch({
+                                efforts: active ? draft.efforts.filter((item) => item !== effort) : [...draft.efforts, effort]
+                              })
+                            }
+                            className={cn(
+                              "rounded-lg border px-3 py-1.5 text-xs transition-colors",
+                              active ? "border-primary/50 bg-primary/10 text-primary" : "text-muted-foreground hover:bg-muted/40"
+                            )}
+                          >
+                            {EFFORT_LABEL[effort]}
+                            <span className="ml-1 font-mono text-[10px] opacity-60">{effort}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </Field>
+                ) : null}
+                <Field label="上下文长度" aside="token，留空表示未知">
+                  <Input className="h-9 font-mono text-xs" inputMode="numeric" placeholder="未知" value={draft.contextLength}
+                    onChange={(event) => patch({ contextLength: event.target.value.trim() })} />
+                </Field>
+              </div>
+            </SheetBlock>
+          ) : null}
 
           <SheetBlock icon={<Crown className="size-4" />} title="选项">
             <div className="grid gap-3 sm:grid-cols-2">

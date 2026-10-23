@@ -320,7 +320,18 @@ func (h *Handler) AIRelayModels(c *gin.Context) {
 	}
 	data := make([]gin.H, 0, len(models))
 	for _, model := range models {
-		data = append(data, gin.H{"id": model.Model, "object": "model", "created": model.CreatedAt.Unix(), "owned_by": "aegis"})
+		item := gin.H{"id": model.Model, "object": "model", "created": model.CreatedAt.Unix(), "owned_by": "aegis"}
+		// 扩展字段：对话模型的能力声明，OpenAI 客户端会忽略，认得的客户端据此配置界面。
+		if model.Kind == aigateway.KindChat {
+			item["capabilities"] = model.Capabilities
+			if model.Capabilities.ContextLength > 0 {
+				item["context_length"] = model.Capabilities.ContextLength
+			}
+		}
+		if model.MaxOutputTokens > 0 {
+			item["max_output_tokens"] = model.MaxOutputTokens
+		}
+		data = append(data, item)
 	}
 	c.JSON(http.StatusOK, gin.H{"object": "list", "data": data})
 }

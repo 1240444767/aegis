@@ -52,6 +52,48 @@ Azure 部署路径与 api-version、附加请求头、错误收敛与对话一�
 转写的客户端要 `response_format=text` 时，网关向上游要 `json`（带用量），再把 `text` 作为纯文本交回 ——
 text 格式不带任何用量，原样转发就只能估算。上游什么用量都没报时，按上传文件大小以 32 kbps 估算时长并标记「估算」。
 
+## 思考
+
+对话接口收三种写法的思考设置，归一后按通道的协议翻译给上游；都不写时什么都不带，交给上游默认。
+
+| 写法 | 例子 |
+|---|---|
+| OpenAI | `"reasoning_effort": "high"`（`none` / `minimal` / `low` / `medium` / `high` / `xhigh` / `max`） |
+| OpenRouter | `"reasoning": {"effort": "low"}`、`{"max_tokens": 4000}`、`{"enabled": false}` |
+| Anthropic 风格 | `"thinking": {"type": "enabled", "budget_tokens": 8000}`、`{"type": "disabled"}` |
+| `/messages` | `thinking` 同上，另收新版的 `output_config.effort` |
+
+| 上游 | 翻译 |
+|---|---|
+| OpenAI / Azure | `reasoning_effort`；输出上限改用 `max_completion_tokens`（推理模型不认 `max_tokens`） |
+| Groq / xAI / Ollama / 聚合站 / 自定义 | `reasoning_effort` |
+| OpenRouter | `reasoning` 对象 |
+| DeepSeek、智谱 GLM | `thinking.type` 开关 |
+| 豆包 | `thinking.type` 开关，另带 `reasoning_effort`（压进 minimal–high） |
+| 通义千问、硅基流动 | `enable_thinking` 与 `thinking_budget` |
+| Kimi | 由型号决定，不带参数 |
+| Anthropic | `thinking.budget_tokens`：强度折算 minimal 1024 / low 2048 / medium 8192 / high 16384 / xhigh 32768 / max 63999；预算必须小于 `max_tokens`，请求带了上限（含余额不足时压低的上限）就在上限里给正文留 1024，留不出最低预算就不开；开着思考时去掉 `temperature`（`top_p` 只留 ≥ 0.95 的）；`tool_choice` 为 any 时不开 |
+| Gemini 2.x | `thinkingBudget`（关闭给 0，Pro 最低 128），`includeThoughts` |
+| Gemini 3 | `thinkingLevel`（关闭取最低一档，Pro 为 LOW），`includeThoughts` |
+
+思考内容回给客户端：OpenAI 形状放在 `reasoning_content`（流式在 delta 里），Anthropic 形状是 `thinking` 块（非流式带 `signature`）。
+思考 token 由上游计入输出 token，按输出单价计费；没带 `max_tokens` 时暂扣把思考预算加进输出估算。
+
+**工具循环里的签名**。开着思考的工具循环，Anthropic 要求发起调用那一轮的 thinking 块连同 `signature` 原样带回，
+Gemini 3 要求每个函数调用的 `thoughtSignature` 带回，DeepSeek、Kimi 等要求带回那一轮的 `reasoning_content`。
+OpenAI 兼容的客户端没有地方放前两种签名，所以网关按工具调用编号在内存里记两小时（`service/ai_llm_reasoning.go`），
+续轮里同一编号的调用缺签名就补回去；`reasoning_content` 由客户端回传（Koog、OpenAI 兼容客户端大多会带），
+网关只转给认这个字段的上游（官方 OpenAI、Azure、Groq、xAI 不转）。多实例下续轮落到另一台时查不到签名：
+Anthropic 这一轮不开思考，Gemini 3 用官方允许的 `skip_thought_signature_validator` 占位，调用照样成功。
+Gemini 不给调用编号时合成的编号带随机段，不会在对话之间撞上。
+
+## 模型能力
+
+对话模型的 `capabilities`（迁移 `000127`，JSONB）：`vision`、`tools`、`reasoning`、`reasoningEfforts`
+（可选强度，空表示 low / medium / high，含 `none` 表示能关闭思考）、`contextLength`。只是声明，网关不据此拒绝请求；
+`GET /ai/models` 的对话模型带上它，`GET /api/ai/v1/models` 的列表项另带 `capabilities` 与 `context_length`、`max_output_tokens`。
+存量模型默认只开工具；改模型时不传 `capabilities` 沿用原值。
+
 ## 长调用：异步任务与保活
 
 生图、改图、转写常要一两分钟，而网关前面的反向代理都有读超时（常见 60–100 秒）。同步调用挂过这个时间，
@@ -280,5 +322,6 @@ go test ./internal/service -run 'LiveHub|AITrace'   # 实时推送的分发与�
 
 - `/v1/responses`、`/v1/completions`（旧版补全）、实时语音（Realtime）、视频生成接口。
 - 调用记录与追踪没有自动清理，量大后需要按 `created_at` 归档或分区。
-- 缓存命中与推理 token 没有单独计量（统一协议的 `Usage` 只有输入、输出与合计）。
+- 缓存命中与推理 token 没有单独计量（统一协议的 `Usage` 只有输入、输出与合计；推理 token 含在输出里）。
+- 思考签名只记在本实例内存，多实例的续轮可能退化为不开思考（见「思考」）。
 - 赠送额度不过期；激励广告发的额度与管理员发的额度不分开记余额。

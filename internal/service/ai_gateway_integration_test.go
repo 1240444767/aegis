@@ -84,6 +84,32 @@ func TestAIGatewayBillingIntegration(t *testing.T) {
 		t.Fatalf("同名模型应返回 40221，得到 %v", err)
 	}
 
+	// 能力声明：建时写入、读回规整；改模型时不传能力沿用原值。
+	thinker := chatPrice("chat-think", "up-ok")
+	thinker.Capabilities = &aigateway.Capabilities{Vision: true, Tools: true, Reasoning: true,
+		ReasoningEfforts: []string{"high", "None", "low"}, ContextLength: 200000}
+	created, err := gw.CreateModel(ctx, appID, thinker)
+	if err != nil {
+		t.Fatalf("建思考模型失败：%v", err)
+	}
+	if got := created.Capabilities; !got.Vision || !got.Reasoning || got.ContextLength != 200000 ||
+		strings.Join(got.ReasoningEfforts, ",") != "none,low,high" {
+		t.Fatalf("能力声明没有按规整写入：%+v", got)
+	}
+	renamed := chatPrice("chat-think", "up-ok")
+	renamed.DisplayName = "思考"
+	updated, err := gw.UpdateModel(ctx, appID, created.ID, renamed)
+	if err != nil {
+		t.Fatalf("改思考模型失败：%v", err)
+	}
+	if !updated.Capabilities.Reasoning || len(updated.Capabilities.ReasoningEfforts) != 3 {
+		t.Fatalf("改模型时不传能力应沿用原值：%+v", updated.Capabilities)
+	}
+	plain, err := pg.GetAIGatewayModelByName(ctx, appID, "chat")
+	if err != nil || !plain.Capabilities.Tools || plain.Capabilities.Reasoning {
+		t.Fatalf("没声明能力的模型应取默认（只开工具）：%+v %v", plain, err)
+	}
+
 	// prompt 1500 字节 → 估 500 + 4 = 504 输入 token；max_tokens 125 → 估算 1.508 点，暂扣 2 积分。
 	prompt := strings.Repeat("a", 1500)
 	newUser := func(account string, integral int64, wallet string) (int64, *AIGatewayPrincipal, string) {

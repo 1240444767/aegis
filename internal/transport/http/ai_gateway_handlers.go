@@ -94,9 +94,9 @@ func aiGatewayErrorText(err error) string {
 // ═══════════════════════ OpenAI Chat Completions 入站 ═══════════════════════
 
 type openAIGatewayMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCalls  []struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	ToolCalls []struct {
 		ID       string `json:"id"`
 		Function struct {
 			Name      string `json:"name"`
@@ -104,12 +104,15 @@ type openAIGatewayMessage struct {
 		} `json:"function"`
 	} `json:"tool_calls"`
 	ToolCallID string `json:"tool_call_id"`
+	// ReasoningContent / Reasoning 上一轮的思考（DeepSeek、OpenRouter 一系的扩展字段）。
+	ReasoningContent string `json:"reasoning_content"`
+	Reasoning        string `json:"reasoning"`
 }
 
 type openAIGatewayRequest struct {
-	Model               string                 `json:"model"`
-	Messages            []openAIGatewayMessage `json:"messages"`
-	Tools               []struct {
+	Model    string                 `json:"model"`
+	Messages []openAIGatewayMessage `json:"messages"`
+	Tools    []struct {
 		Type     string `json:"type"`
 		Function struct {
 			Name        string          `json:"name"`
@@ -127,6 +130,67 @@ type openAIGatewayRequest struct {
 	ResponseFormat      *struct {
 		Type string `json:"type"`
 	} `json:"response_format"`
+	// 思考设置的三种写法：OpenAI 的 reasoning_effort、OpenRouter 的 reasoning 对象、
+	// Anthropic 风格的 thinking 对象（不少 OpenAI 兼容客户端也这样写）。
+	ReasoningEffort string                 `json:"reasoning_effort"`
+	Reasoning       *openAIGatewayThinking `json:"reasoning"`
+	Thinking        *openAIGatewayThinking `json:"thinking"`
+}
+
+// openAIGatewayThinking reasoning / thinking 对象：{effort} / {max_tokens} / {enabled} / {type, budget_tokens}。
+type openAIGatewayThinking struct {
+	Effort       string `json:"effort"`
+	MaxTokens    int    `json:"max_tokens"`
+	Enabled      *bool  `json:"enabled"`
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// gatewayReasoning 把各种写法归一成统一的思考设置；都没写返回 nil（交给上游默认）。
+func gatewayReasoning(effort string, objects ...*openAIGatewayThinking) (*aidomain.ReasoningConfig, error) {
+	var out *aidomain.ReasoningConfig
+	set := func(value string) error {
+		normalized, ok := aidomain.NormalizeReasoningEffort(value)
+		if !ok {
+			return apperrors.New(40223, http.StatusBadRequest,
+				"不支持的思考强度："+value+"（可选 "+strings.Join(aidomain.ReasoningEfforts, " / ")+"）")
+		}
+		if out == nil {
+			out = &aidomain.ReasoningConfig{}
+		}
+		out.Effort = normalized
+		return nil
+	}
+	if strings.TrimSpace(effort) != "" {
+		if err := set(effort); err != nil {
+			return nil, err
+		}
+	}
+	for _, object := range objects {
+		if object == nil {
+			continue
+		}
+		if out == nil {
+			out = &aidomain.ReasoningConfig{}
+		}
+		switch {
+		case object.Enabled != nil && !*object.Enabled, strings.EqualFold(object.Type, "disabled"):
+			out.Effort, out.BudgetTokens = aidomain.ReasoningNone, 0
+			continue
+		}
+		if object.Effort != "" && out.Effort == "" {
+			if err := set(object.Effort); err != nil {
+				return nil, err
+			}
+		}
+		if budget := max(object.BudgetTokens, object.MaxTokens); budget > 0 && out.BudgetTokens == 0 {
+			out.BudgetTokens = budget
+		}
+	}
+	if out != nil && out.BudgetTokens < 0 {
+		return nil, apperrors.New(40223, http.StatusBadRequest, "思考预算不能为负数")
+	}
+	return out, nil
 }
 
 // AppAIChatCompletions POST /api/apps/:appkey/ai/v1/chat/completions
@@ -175,6 +239,11 @@ func openAIGatewayToChatRequest(req openAIGatewayRequest) (aidomain.ChatRequest,
 	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
 		out.JSONMode = true
 	}
+	reasoning, err := gatewayReasoning(req.ReasoningEffort, req.Reasoning, req.Thinking)
+	if err != nil {
+		return out, err
+	}
+	out.Reasoning = reasoning
 	if len(req.Stop) > 0 {
 		var single string
 		var many []string
@@ -220,7 +289,10 @@ func openAIGatewayToChatRequest(req openAIGatewayRequest) (aidomain.ChatRequest,
 				Content: []aidomain.ContentPart{{Type: aidomain.PartText, Text: openAIGatewayContentText(message.Content)}},
 			})
 		case "assistant":
-			item := aidomain.ChatMessage{Role: aidomain.RoleAssistant}
+			item := aidomain.ChatMessage{Role: aidomain.RoleAssistant, Reasoning: message.ReasoningContent}
+			if item.Reasoning == "" {
+				item.Reasoning = message.Reasoning
+			}
 			if text := openAIGatewayContentText(message.Content); text != "" {
 				item.Content = []aidomain.ContentPart{{Type: aidomain.PartText, Text: text}}
 			}
@@ -370,7 +442,7 @@ func streamOpenAIChat(c *gin.Context, model string, run aiStreamRunner, writeErr
 	chunk := func(delta gin.H, finish any) gin.H {
 		return gin.H{
 			"id": id, "object": "chat.completion.chunk", "created": created,
-			"model": model,
+			"model":   model,
 			"choices": []gin.H{{"index": 0, "delta": delta, "finish_reason": finish}},
 		}
 	}
@@ -444,9 +516,9 @@ func streamOpenAIChat(c *gin.Context, model string, run aiStreamRunner, writeErr
 // ═══════════════════════ Anthropic Messages 入站 ═══════════════════════
 
 type anthropicGatewayRequest struct {
-	Model     string          `json:"model"`
-	System    json.RawMessage `json:"system"`
-	Messages  []struct {
+	Model    string          `json:"model"`
+	System   json.RawMessage `json:"system"`
+	Messages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
@@ -463,6 +535,11 @@ type anthropicGatewayRequest struct {
 	TopP          *float64 `json:"top_p"`
 	StopSequences []string `json:"stop_sequences"`
 	Stream        bool     `json:"stream"`
+	// Thinking {type: enabled|disabled|adaptive, budget_tokens}；OutputConfig.Effort 是新版的强度写法。
+	Thinking     *openAIGatewayThinking `json:"thinking"`
+	OutputConfig *struct {
+		Effort string `json:"effort"`
+	} `json:"output_config"`
 }
 
 // AppAIMessages POST /api/apps/:appkey/ai/v1/messages
@@ -543,10 +620,22 @@ func anthropicGatewayToChatRequest(req anthropicGatewayRequest) (aidomain.ChatRe
 	if len(req.Messages) == 0 {
 		return out, apperrors.New(40000, http.StatusBadRequest, "messages 不能为空")
 	}
+	effort := ""
+	if req.OutputConfig != nil {
+		effort = req.OutputConfig.Effort
+	}
+	reasoning, err := gatewayReasoning(effort, req.Thinking)
+	if err != nil {
+		return out, err
+	}
+	out.Reasoning = reasoning
 
 	type anthropicBlock struct {
 		Type      string          `json:"type"`
 		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Signature string          `json:"signature"`
+		Data      string          `json:"data"`
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
 		Input     json.RawMessage `json:"input"`
@@ -602,6 +691,16 @@ func anthropicGatewayToChatRequest(req anthropicGatewayRequest) (aidomain.ChatRe
 					item.ToolCalls = append(item.ToolCalls, aidomain.ToolCall{
 						ID: block.ID, Name: block.Name, Arguments: arguments,
 					})
+				case "thinking":
+					item.Reasoning += block.Thinking
+					// 没签名的思考块上游不认；留给签名回填去补。
+					if block.Signature != "" {
+						item.Thinking = append(item.Thinking, aidomain.ThinkingBlock{Text: block.Thinking, Signature: block.Signature})
+					}
+				case "redacted_thinking":
+					if block.Data != "" {
+						item.Thinking = append(item.Thinking, aidomain.ThinkingBlock{Redacted: block.Data})
+					}
 				}
 			}
 			out.Messages = append(out.Messages, item)
@@ -650,7 +749,19 @@ func anthropicGatewayFinish(reason string) string {
 }
 
 func anthropicGatewayResponse(result *aidomain.ChatResponse) gin.H {
-	content := make([]gin.H, 0, 2)
+	content := make([]gin.H, 0, 2+len(result.Thinking))
+	switch {
+	case len(result.Thinking) > 0:
+		for _, block := range result.Thinking {
+			if block.Redacted != "" {
+				content = append(content, gin.H{"type": "redacted_thinking", "data": block.Redacted})
+			} else {
+				content = append(content, gin.H{"type": "thinking", "thinking": block.Text, "signature": block.Signature})
+			}
+		}
+	case result.Reasoning != "":
+		content = append(content, gin.H{"type": "thinking", "thinking": result.Reasoning, "signature": ""})
+	}
 	if result.Text != "" {
 		content = append(content, gin.H{"type": "text", "text": result.Text})
 	}

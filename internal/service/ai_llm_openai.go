@@ -83,8 +83,9 @@ func (c *aiLLMClient) openAIClient(cfg aidomain.Config, meta aidomain.ProviderMe
 	return openai.NewClient(options...)
 }
 
-// buildOpenAIParams 把统一请求翻成 SDK 的 Chat Completions 参数。
-func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams {
+// buildOpenAIParams 把统一请求翻成 SDK 的 Chat Completions 参数。[provider] 决定思考参数、
+// 输出上限与思考回传的写法（各家兼容端点在这几处各不相同）。
+func buildOpenAIParams(req aidomain.ChatRequest, provider string) openai.ChatCompletionNewParams {
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, openai.SystemMessage(req.System))
@@ -112,6 +113,11 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 						},
 					},
 				})
+			}
+			// 思考模式的工具循环：发起调用那一轮的思考要带回（DeepSeek、Kimi、GLM 等的硬约束）。
+			// 只带有工具调用的那几轮，其余轮次的思考对上游没有用，只会多花输入 token。
+			if key := openAIReasoningEchoKey(provider); key != "" && len(item.ToolCalls) > 0 && item.Reasoning != "" {
+				assistant.SetExtraFields(map[string]any{key: item.Reasoning})
 			}
 			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant})
 		case aidomain.RoleSystem:
@@ -150,7 +156,13 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 		}
 	}
 	if req.MaxTokens > 0 {
-		params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		// OpenAI 的推理模型只认 max_completion_tokens（max_tokens 直接 400），其余新模型两个都认；
+		// 兼容端点大多只认 max_tokens。
+		if openAIOfficial(provider) {
+			params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
+		} else {
+			params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		}
 	}
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
@@ -166,7 +178,98 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
 		}
 	}
+	applyOpenAIReasoning(&params, provider, req.Reasoning)
 	return params
+}
+
+// openAIOfficial OpenAI 自家（含 Azure）：参数按官方最新约定。
+func openAIOfficial(provider string) bool {
+	return provider == aidomain.ProviderOpenAI || provider == aidomain.ProviderAzureOpenAI
+}
+
+// openAIReasoningEchoKey 工具循环里回传上一轮思考用的字段名；空串表示这家不收（官方 OpenAI 会拒绝未知字段）。
+func openAIReasoningEchoKey(provider string) string {
+	switch provider {
+	case aidomain.ProviderOpenAI, aidomain.ProviderAzureOpenAI, aidomain.ProviderGroq, aidomain.ProviderXAI:
+		return ""
+	case aidomain.ProviderOpenRouter:
+		return "reasoning"
+	default:
+		return "reasoning_content"
+	}
+}
+
+// applyOpenAIReasoning 思考设置 → 各家兼容端点的写法。没给思考设置时什么都不带，交给上游默认。
+//
+//   - OpenAI / Azure / Groq / xAI / Ollama / 聚合站：reasoning_effort；
+//   - OpenRouter：reasoning 对象（effort / max_tokens / enabled）；
+//   - DeepSeek、智谱 GLM：thinking.type 开关；
+//   - 豆包（火山方舟）：thinking.type 开关，另带 reasoning_effort（Seed 系列认）；
+//   - 通义千问（百炼兼容模式）、硅基流动：enable_thinking 开关与 thinking_budget；
+//   - Kimi：由型号决定（k2-thinking），没有开关。
+func applyOpenAIReasoning(params *openai.ChatCompletionNewParams, provider string, reasoning *aidomain.ReasoningConfig) {
+	if reasoning == nil {
+		return
+	}
+	effort := reasoning.EffectiveEffort()
+	extras := map[string]any{}
+	thinkingType := "disabled"
+	if reasoning.On() {
+		thinkingType = "enabled"
+	}
+	switch provider {
+	case aidomain.ProviderMoonshot:
+		return
+	case aidomain.ProviderOpenRouter:
+		switch {
+		case reasoning.Off():
+			extras["reasoning"] = map[string]any{"enabled": false}
+		case reasoning.BudgetTokens > 0:
+			extras["reasoning"] = map[string]any{"max_tokens": reasoning.BudgetTokens}
+		case effort != "":
+			extras["reasoning"] = map[string]any{"effort": effort}
+		default:
+			extras["reasoning"] = map[string]any{"enabled": true}
+		}
+	case aidomain.ProviderDeepSeek, aidomain.ProviderZhipu:
+		extras["thinking"] = map[string]any{"type": thinkingType}
+	case aidomain.ProviderDoubao:
+		extras["thinking"] = map[string]any{"type": thinkingType}
+		if reasoning.On() && effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(clampEffort(effort, aidomain.ReasoningMinimal, aidomain.ReasoningHigh))
+		}
+	case aidomain.ProviderQwen, aidomain.ProviderSiliconFlow:
+		extras["enable_thinking"] = reasoning.On()
+		if reasoning.On() && (reasoning.BudgetTokens > 0 || effort != "") {
+			extras["thinking_budget"] = reasoning.Budget()
+		}
+	default:
+		if effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(effort)
+		}
+	}
+	if len(extras) > 0 {
+		params.SetExtraFields(extras)
+	}
+}
+
+// clampEffort 把强度压进 [low, high] 之间（某家只认其中几档时用）。
+func clampEffort(effort, low, high string) string {
+	rank := func(value string) int {
+		for index, item := range aidomain.ReasoningEfforts {
+			if item == value {
+				return index
+			}
+		}
+		return -1
+	}
+	switch {
+	case rank(effort) < rank(low):
+		return low
+	case rank(effort) > rank(high):
+		return high
+	}
+	return effort
 }
 
 // openAIUserMessage 单段纯文本压成字符串（最大兼容面），多模态才用分片数组。
@@ -234,7 +337,7 @@ func mapOpenAISDKError(provider string, err error) error {
 func (c *aiLLMClient) openAIChat(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta,
 	req aidomain.ChatRequest, onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
 	client := c.openAIClient(cfg, meta, req.Model)
-	params := buildOpenAIParams(req)
+	params := buildOpenAIParams(req, meta.Provider)
 
 	if onEvent == nil {
 		completion, err := client.Chat.Completions.New(ctx, params)

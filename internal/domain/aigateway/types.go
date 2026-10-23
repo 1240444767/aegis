@@ -324,10 +324,12 @@ type Model struct {
 	Enabled       bool   `json:"enabled"`
 	VipOnly       bool   `json:"vipOnly"`
 	Price
-	MaxOutputTokens int       `json:"maxOutputTokens"`
-	SortOrder       int       `json:"sortOrder"`
-	CreatedAt       time.Time `json:"createdAt"`
-	UpdatedAt       time.Time `json:"updatedAt"`
+	MaxOutputTokens int `json:"maxOutputTokens"`
+	// Capabilities 对话模型的能力声明（只对 chat 种类有意义）。
+	Capabilities Capabilities `json:"capabilities"`
+	SortOrder    int          `json:"sortOrder"`
+	CreatedAt    time.Time    `json:"createdAt"`
+	UpdatedAt    time.Time    `json:"updatedAt"`
 }
 
 // Upstream 发给上游的模型名。
@@ -357,7 +359,26 @@ type ModelInput struct {
 	CharPrice       decimal.Decimal            `json:"charPrice"`
 	MinutePrice     decimal.Decimal            `json:"minutePrice"`
 	MaxOutputTokens int                        `json:"maxOutputTokens"`
+	Capabilities    *Capabilities              `json:"capabilities"`
 	SortOrder       int                        `json:"sortOrder"`
+}
+
+// Capabilities 对话模型能做什么。客户端据此决定发不发图片、带不带工具、给不给思考强度的选项；
+// 网关不据此拒绝请求。
+type Capabilities struct {
+	Vision    bool `json:"vision"`
+	Tools     bool `json:"tools"`
+	Reasoning bool `json:"reasoning"`
+	// ReasoningEfforts 可选的思考强度（none / minimal / low / medium / high / xhigh / max 的子集），
+	// 空表示 low / medium / high。含 none 表示可以关闭思考。
+	ReasoningEfforts []string `json:"reasoningEfforts"`
+	// ContextLength 上下文长度（token），0 表示未知。
+	ContextLength int `json:"contextLength"`
+}
+
+// DefaultCapabilities 没声明能力的模型：只开工具，与此前客户端的推断一致。
+func DefaultCapabilities() Capabilities {
+	return Capabilities{Tools: true, ReasoningEfforts: []string{}}
 }
 
 // UserModel 用户看到的模型：价格已乘上该用户的倍率。
@@ -371,6 +392,8 @@ type UserModel struct {
 	Available bool `json:"available"`
 	Price
 	MaxOutputTokens int `json:"maxOutputTokens,omitempty"`
+	// Capabilities 只有对话模型带。
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
 }
 
 // ── 密钥 ──

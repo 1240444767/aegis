@@ -179,6 +179,8 @@ func (s *AIGatewayService) RelayChat(ctx context.Context, principal *AIGatewayPr
 	outputEstimate := int64(request.MaxTokens)
 	if outputEstimate <= 0 {
 		outputEstimate = int64(principal.Settings.DefaultMaxTokens)
+		// 开着思考又没给上限：思考 token 也按输出计费，预算一并算进暂扣（宁高勿低）。
+		outputEstimate += int64(request.Reasoning.Budget())
 	}
 	estimate := aigateway.Meters{InputTokens: aigateway.EstimateChatInput(request), OutputTokens: outputEstimate}
 	reserved, err := s.reserve(ctx, principal, model, in.Endpoint, in.Stream, estimate, true, in.IdempotencyKey)

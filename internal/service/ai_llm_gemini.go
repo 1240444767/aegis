@@ -28,6 +28,9 @@ import (
 // 从未见过它们），真实 ID 原样带回。
 const geminiSyntheticIDPrefix = "gemini_call_"
 
+// geminiSkipSignature 拿不到真签名时 Gemini 文档允许的占位：跳过思考签名校验。
+const geminiSkipSignature = "skip_thought_signature_validator"
+
 // geminiClient 按通道配置组装官方 SDK 客户端。
 func (c *aiLLMClient) geminiClient(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta) (*genai.Client, error) {
 	options := genai.HTTPOptions{}
@@ -147,7 +150,14 @@ func buildGeminiContents(req aidomain.ChatRequest) []*genai.Content {
 				if !strings.HasPrefix(call.ID, geminiSyntheticIDPrefix) {
 					functionCall.ID = call.ID
 				}
-				parts = append(parts, &genai.Part{FunctionCall: functionCall})
+				part := &genai.Part{FunctionCall: functionCall}
+				// 思考签名原样带回；Gemini 3 缺签名直接 400，补不回来时用官方给的跳过校验占位。
+				if signature, err := base64.StdEncoding.DecodeString(call.Signature); err == nil && len(signature) > 0 {
+					part.ThoughtSignature = signature
+				} else if isGemini3(req.Model) {
+					part.ThoughtSignature = []byte(geminiSkipSignature)
+				}
+				parts = append(parts, part)
 			}
 			push(genai.RoleModel, parts...)
 		default:
@@ -202,6 +212,7 @@ func buildGeminiConfig(req aidomain.ChatRequest) *genai.GenerateContentConfig {
 	if req.JSONMode {
 		config.ResponseMIMEType = "application/json"
 	}
+	config.ThinkingConfig = geminiThinking(req.Model, req.Reasoning)
 	if len(req.Tools) > 0 {
 		declarations := make([]*genai.FunctionDeclaration, 0, len(req.Tools))
 		for _, tool := range req.Tools {
@@ -227,6 +238,48 @@ func buildGeminiConfig(req aidomain.ChatRequest) *genai.GenerateContentConfig {
 				Mode: genai.FunctionCallingConfigModeAny,
 			}}
 		}
+	}
+	return config
+}
+
+// geminiThinking 思考设置 → thinkingConfig。
+//
+// Gemini 3 用档位（thinkingLevel），2.x 用预算（thinkingBudget），两者不能同时出现。
+// 关闭：2.x 预算给 0（Pro 不能关，最低 128）；3.x 不能关，取最低一档。开着时一律要思考摘要，客户端才看得到思考过程。
+func geminiThinking(model string, reasoning *aidomain.ReasoningConfig) *genai.ThinkingConfig {
+	if reasoning == nil {
+		return nil
+	}
+	pro := strings.Contains(strings.ToLower(model), "pro")
+	if isGemini3(model) {
+		config := &genai.ThinkingConfig{IncludeThoughts: reasoning.On()}
+		switch reasoning.EffectiveEffort() {
+		case aidomain.ReasoningNone, aidomain.ReasoningMinimal:
+			if pro {
+				config.ThinkingLevel = genai.ThinkingLevelLow
+			} else {
+				config.ThinkingLevel = genai.ThinkingLevelMinimal
+			}
+		case aidomain.ReasoningLow:
+			config.ThinkingLevel = genai.ThinkingLevelLow
+		case aidomain.ReasoningMedium:
+			config.ThinkingLevel = genai.ThinkingLevelMedium
+		case aidomain.ReasoningHigh, aidomain.ReasoningXHigh, aidomain.ReasoningMax:
+			config.ThinkingLevel = genai.ThinkingLevelHigh
+		}
+		return config
+	}
+	if reasoning.Off() {
+		budget := int32(0)
+		if pro {
+			budget = 128
+		}
+		return &genai.ThinkingConfig{IncludeThoughts: false, ThinkingBudget: &budget}
+	}
+	config := &genai.ThinkingConfig{IncludeThoughts: true}
+	if reasoning.Effort != "" || reasoning.BudgetTokens > 0 {
+		budget := int32(min(reasoning.Budget(), 32768))
+		config.ThinkingBudget = &budget
 	}
 	return config
 }
@@ -363,13 +416,17 @@ func aggregateGeminiChunk(result *aidomain.ChatResponse, chunk *genai.GenerateCo
 				call := part.FunctionCall
 				id := call.ID
 				if id == "" {
-					id = fmt.Sprintf("%s%d", geminiSyntheticIDPrefix, len(result.ToolCalls)+1)
+					// 带随机段：签名按调用编号记（ai_llm_reasoning.go），序号会在不同对话之间撞上。
+					id = fmt.Sprintf("%s%s_%d", geminiSyntheticIDPrefix, randomCallSuffix(), len(result.ToolCalls)+1)
 				}
 				arguments, err := json.Marshal(call.Args)
 				if err != nil || len(arguments) == 0 || string(arguments) == "null" {
 					arguments = json.RawMessage("{}")
 				}
 				toolCall := aidomain.ToolCall{ID: id, Name: call.Name, Arguments: arguments}
+				if len(part.ThoughtSignature) > 0 {
+					toolCall.Signature = base64.StdEncoding.EncodeToString(part.ThoughtSignature)
+				}
 				index := len(result.ToolCalls)
 				result.ToolCalls = append(result.ToolCalls, toolCall)
 				if onToolCall != nil {

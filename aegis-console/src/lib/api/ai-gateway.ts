@@ -80,6 +80,21 @@ export type AIGatewayPrice = {
   free: boolean;
 };
 
+/** 思考强度，与 OpenAI 的 reasoning_effort 同一组取值，由低到高。 */
+export const AI_REASONING_EFFORTS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type AIReasoningEffort = (typeof AI_REASONING_EFFORTS)[number];
+
+/** 对话模型的能力声明：客户端据此决定发不发图片、带不带工具、给不给思考强度的选项。 */
+export type AIGatewayCapabilities = {
+  vision: boolean;
+  tools: boolean;
+  reasoning: boolean;
+  /** 空表示 low / medium / high；含 none 表示可以关闭思考。 */
+  reasoningEfforts: AIReasoningEffort[];
+  /** 上下文长度（token），0 表示未知。 */
+  contextLength: number;
+};
+
 export type AIGatewayModel = AIGatewayPrice & {
   id: number;
   appid: number;
@@ -92,6 +107,7 @@ export type AIGatewayModel = AIGatewayPrice & {
   enabled: boolean;
   vipOnly: boolean;
   maxOutputTokens: number;
+  capabilities?: AIGatewayCapabilities;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
@@ -115,6 +131,7 @@ export type AIGatewayModelPayload = {
   charPrice: string;
   minutePrice: string;
   maxOutputTokens: number;
+  capabilities?: AIGatewayCapabilities;
   sortOrder: number;
 };
 

@@ -248,6 +248,17 @@ type ToolCall struct {
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Arguments json.RawMessage `json:"arguments"`
+	// Signature Gemini 的 thoughtSignature（base64）：思考模型的函数调用要原样带回，否则 Gemini 3 拒绝。
+	Signature string `json:"signature,omitempty"`
+}
+
+// ThinkingBlock 一段带签名的思考（Anthropic 的 thinking / redacted_thinking）。
+// 开着思考的工具循环里，上一轮的思考块必须连同签名原样带回。
+type ThinkingBlock struct {
+	Text      string `json:"text,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	// Redacted 非空时是一段被加密的思考（redacted_thinking 的 data）。
+	Redacted string `json:"redacted,omitempty"`
 }
 
 // ChatMessage 统一格式的一条消息。
@@ -260,6 +271,11 @@ type ChatMessage struct {
 	ToolCalls []ToolCall    `json:"toolCalls,omitempty"`
 	// ToolCallID 仅 role=tool 时使用。
 	ToolCallID string `json:"toolCallId,omitempty"`
+	// Reasoning assistant 上一轮的思考文本（OpenAI 兼容扩展 reasoning_content）。
+	// DeepSeek、Kimi 等的思考模式在工具循环里要求原样带回。
+	Reasoning string `json:"reasoning,omitempty"`
+	// Thinking assistant 上一轮带签名的思考块（Anthropic）。
+	Thinking []ThinkingBlock `json:"thinking,omitempty"`
 }
 
 // TextMessage 便捷构造：单段纯文本消息。
@@ -308,6 +324,106 @@ type ChatRequest struct {
 	// JSONMode 强制 JSON 输出（OpenAI response_format json_object；
 	// Anthropic 无原生开关，由客户端在 system 里追加硬约束）。
 	JSONMode bool `json:"jsonMode,omitempty"`
+	// Reasoning 思考设置；nil 表示交给上游的默认行为。
+	Reasoning *ReasoningConfig `json:"reasoning,omitempty"`
+}
+
+// 思考强度。取值与 OpenAI 的 reasoning_effort 一致，其余协议在适配器里翻译。
+const (
+	ReasoningNone    = "none"
+	ReasoningMinimal = "minimal"
+	ReasoningLow     = "low"
+	ReasoningMedium  = "medium"
+	ReasoningHigh    = "high"
+	ReasoningXHigh   = "xhigh"
+	ReasoningMax     = "max"
+)
+
+// ReasoningEfforts 全部合法的思考强度，由低到高。
+var ReasoningEfforts = []string{ReasoningNone, ReasoningMinimal, ReasoningLow, ReasoningMedium, ReasoningHigh, ReasoningXHigh, ReasoningMax}
+
+// NormalizeReasoningEffort 规整强度写法（大小写、x-high、extra_high）；不认识的返回 false。
+func NormalizeReasoningEffort(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "x-high", "x_high", "extra-high", "extra_high", "extrahigh":
+		value = ReasoningXHigh
+	case "off", "disabled", "disable":
+		value = ReasoningNone
+	}
+	for _, effort := range ReasoningEfforts {
+		if effort == value {
+			return value, true
+		}
+	}
+	return "", false
+}
+
+// ReasoningConfig 一次请求的思考设置。
+//
+//   - Effort 为 none：关闭思考（上游不能关的取最低一档）；
+//   - Effort 为空、BudgetTokens 为 0：只表示「要思考」，强度交给上游；
+//   - BudgetTokens > 0：显式思考预算（Anthropic budget_tokens、Gemini thinkingBudget），
+//     其余协议按预算折算成强度。
+type ReasoningConfig struct {
+	Effort       string `json:"effort,omitempty"`
+	BudgetTokens int    `json:"budgetTokens,omitempty"`
+}
+
+// Off 明确关闭思考。
+func (r *ReasoningConfig) Off() bool {
+	return r != nil && r.Effort == ReasoningNone
+}
+
+// On 明确要求思考。
+func (r *ReasoningConfig) On() bool {
+	return r != nil && r.Effort != ReasoningNone
+}
+
+// Budget 思考预算（token）：显式给了用显式值，否则按强度折算。
+func (r *ReasoningConfig) Budget() int {
+	if r == nil || r.Effort == ReasoningNone {
+		return 0
+	}
+	if r.BudgetTokens > 0 {
+		return r.BudgetTokens
+	}
+	switch r.Effort {
+	case ReasoningMinimal:
+		return 1024
+	case ReasoningLow:
+		return 2048
+	case ReasoningHigh:
+		return 16384
+	case ReasoningXHigh:
+		return 32768
+	case ReasoningMax:
+		return 63999
+	default:
+		return 8192
+	}
+}
+
+// EffectiveEffort 强度：显式给了用显式值，只给了预算时按预算折算。
+func (r *ReasoningConfig) EffectiveEffort() string {
+	if r == nil {
+		return ""
+	}
+	if r.Effort != "" || r.BudgetTokens <= 0 {
+		return r.Effort
+	}
+	switch budget := r.BudgetTokens; {
+	case budget <= 1024:
+		return ReasoningMinimal
+	case budget <= 4096:
+		return ReasoningLow
+	case budget <= 12288:
+		return ReasoningMedium
+	case budget <= 24576:
+		return ReasoningHigh
+	default:
+		return ReasoningXHigh
+	}
 }
 
 // Usage 一次调用的用量。
@@ -338,11 +454,13 @@ type ChatResponse struct {
 	ID    string `json:"id"`
 	Model string `json:"model"`
 	// Text 正文；Reasoning 思考块（供应商支持时才有）。
-	Text         string     `json:"text"`
-	Reasoning    string     `json:"reasoning,omitempty"`
-	ToolCalls    []ToolCall `json:"toolCalls,omitempty"`
-	FinishReason string     `json:"finishReason"`
-	Usage        Usage      `json:"usage"`
+	Text      string `json:"text"`
+	Reasoning string `json:"reasoning,omitempty"`
+	// Thinking 带签名的思考块（Anthropic）；Reasoning 是它们的文字拼接。
+	Thinking     []ThinkingBlock `json:"thinking,omitempty"`
+	ToolCalls    []ToolCall      `json:"toolCalls,omitempty"`
+	FinishReason string          `json:"finishReason"`
+	Usage        Usage           `json:"usage"`
 }
 
 // ── 流式事件 ──

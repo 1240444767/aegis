@@ -148,6 +148,16 @@ func chatTraceRequest(request aidomain.ChatRequest, endpoint string, hide bool) 
 	if request.ToolChoice != "" {
 		out["toolChoice"] = request.ToolChoice
 	}
+	if request.Reasoning != nil {
+		reasoning := map[string]any{}
+		if request.Reasoning.Effort != "" {
+			reasoning["effort"] = request.Reasoning.Effort
+		}
+		if request.Reasoning.BudgetTokens > 0 {
+			reasoning["budgetTokens"] = request.Reasoning.BudgetTokens
+		}
+		out["reasoning"] = reasoning
+	}
 	if request.System != "" {
 		out["system"] = text(request.System)
 	}

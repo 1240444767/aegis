@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/shopspring/decimal"
+
+	aidomain "aegis/internal/domain/ai"
 )
 
 // Price 一个模型的价格（单位：点）。
@@ -334,6 +336,11 @@ func NormalizeModel(in ModelInput) (Model, error) {
 	if out.MaxOutputTokens < 0 || out.MaxOutputTokens > 10_000_000 {
 		return out, invalid("最大输出 token 应在 0-10000000 之间")
 	}
+	capabilities, err := NormalizeCapabilities(in.Capabilities)
+	if err != nil {
+		return out, err
+	}
+	out.Capabilities = capabilities
 	checks := []struct {
 		label string
 		value decimal.Decimal
@@ -496,6 +503,35 @@ func NormalizeSettings(in Settings) (Settings, error) {
 	}
 	if _, err := loadLocation(out.Timezone); err != nil {
 		return out, invalid("无效的时区：%s", out.Timezone)
+	}
+	return out, nil
+}
+
+// NormalizeCapabilities 校验能力声明：强度去重并按由低到高排好；没给时取默认。
+func NormalizeCapabilities(in *Capabilities) (Capabilities, error) {
+	if in == nil {
+		return DefaultCapabilities(), nil
+	}
+	out := *in
+	if out.ContextLength < 0 || out.ContextLength > 100_000_000 {
+		return out, invalid("上下文长度应在 0-100000000 之间")
+	}
+	seen := map[string]bool{}
+	for _, effort := range in.ReasoningEfforts {
+		normalized, ok := aidomain.NormalizeReasoningEffort(effort)
+		if !ok {
+			return out, invalid("不支持的思考强度：%s", effort)
+		}
+		seen[normalized] = true
+	}
+	out.ReasoningEfforts = make([]string, 0, len(seen))
+	for _, effort := range aidomain.ReasoningEfforts {
+		if seen[effort] {
+			out.ReasoningEfforts = append(out.ReasoningEfforts, effort)
+		}
+	}
+	if !out.Reasoning {
+		out.ReasoningEfforts = []string{}
 	}
 	return out, nil
 }

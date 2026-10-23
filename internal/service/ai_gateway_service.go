@@ -253,6 +253,13 @@ func (s *AIGatewayService) CreateModel(ctx context.Context, appID int64, in aiga
 
 // UpdateModel 修改模型。进行中的调用按暂扣时的价格结算。
 func (s *AIGatewayService) UpdateModel(ctx context.Context, appID, modelID int64, in aigateway.ModelInput) (*aigateway.Model, error) {
+	// 没传能力声明的（旧版控制台、脚本）沿用原来的，不把已配好的能力冲成默认值。
+	if in.Capabilities == nil {
+		if current, err := s.pg.GetAIGatewayModel(ctx, appID, modelID); err == nil {
+			capabilities := current.Capabilities
+			in.Capabilities = &capabilities
+		}
+	}
 	model, err := s.normalizeModel(ctx, appID, in)
 	if err != nil {
 		return nil, err
@@ -501,11 +508,16 @@ func (s *AIGatewayService) Models(ctx context.Context, session *authdomain.Sessi
 	factor := settings.Factor(facts.Profile)
 	out := make([]aigateway.UserModel, 0, len(models))
 	for _, model := range models {
-		out = append(out, aigateway.UserModel{
+		item := aigateway.UserModel{
 			Model: model.Model, Kind: model.Kind, DisplayName: model.DisplayName, Description: model.Description,
 			VipOnly: model.VipOnly, Available: !model.VipOnly || facts.Profile.IsVip,
 			Price: model.Price.Scaled(factor), MaxOutputTokens: model.MaxOutputTokens,
-		})
+		}
+		if model.Kind == aigateway.KindChat {
+			capabilities := model.Capabilities
+			item.Capabilities = &capabilities
+		}
+		out = append(out, item)
 	}
 	return out, nil
 }

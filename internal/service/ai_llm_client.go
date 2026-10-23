@@ -29,10 +29,12 @@ import (
 // 支付、OAuth 走同一张路由表，不必单独给 AI 配代理。
 type aiLLMClient struct {
 	log *zap.Logger
+	// thinking 工具调用的思考签名，续轮时补回（ai_llm_reasoning.go）。
+	thinking *aiThinkingMemo
 }
 
 func newAILLMClient(log *zap.Logger) *aiLLMClient {
-	return &aiLLMClient{log: log}
+	return &aiLLMClient{log: log, thinking: newAIThinkingMemo()}
 }
 
 // aiUpstreamError 供应商侧的失败。Retryable 决定链路要不要试下一条通道。
@@ -71,14 +73,27 @@ func (c *aiLLMClient) Chat(ctx context.Context, cfg aidomain.Config, req aidomai
 	if !ok {
 		return nil, &aiUpstreamError{Provider: cfg.Provider, Message: "未知的供应商"}
 	}
+	return c.dispatch(ctx, cfg, meta, req, nil)
+}
+
+// dispatch 按协议分到适配器；前后补回与记下思考签名。
+func (c *aiLLMClient) dispatch(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta,
+	req aidomain.ChatRequest, onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+	req = c.thinking.restore(req)
+	var response *aidomain.ChatResponse
+	var err error
 	switch meta.Protocol {
 	case aidomain.ProtocolAnthropic:
-		return c.anthropicChat(ctx, cfg, meta, req, nil)
+		response, err = c.anthropicChat(ctx, cfg, meta, req, onEvent)
 	case aidomain.ProtocolGemini:
-		return c.geminiChat(ctx, cfg, meta, req, nil)
+		response, err = c.geminiChat(ctx, cfg, meta, req, onEvent)
 	default:
-		return c.openAIChat(ctx, cfg, meta, req, nil)
+		response, err = c.openAIChat(ctx, cfg, meta, req, onEvent)
 	}
+	if err == nil {
+		c.thinking.remember(response)
+	}
+	return response, err
 }
 
 // ChatStream 流式调用：增量经 onEvent 回调，返回聚合好的完整结论。
@@ -91,14 +106,7 @@ func (c *aiLLMClient) ChatStream(ctx context.Context, cfg aidomain.Config, req a
 	if onEvent == nil {
 		onEvent = func(aidomain.StreamEvent) error { return nil }
 	}
-	switch meta.Protocol {
-	case aidomain.ProtocolAnthropic:
-		return c.anthropicChat(ctx, cfg, meta, req, onEvent)
-	case aidomain.ProtocolGemini:
-		return c.geminiChat(ctx, cfg, meta, req, onEvent)
-	default:
-		return c.openAIChat(ctx, cfg, meta, req, onEvent)
-	}
+	return c.dispatch(ctx, cfg, meta, req, onEvent)
 }
 
 // ── 公共 ──

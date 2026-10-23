@@ -73,15 +73,16 @@ ON CONFLICT (appid) DO UPDATE SET settings = EXCLUDED.settings, updated_by = EXC
 
 const aiGatewayModelColumns = `id, appid, model, upstream_model, kind, display_name, description, config_id, enabled, vip_only,
 free, input_price::text, output_price::text, request_price::text, image_price::text, image_prices, char_price::text,
-minute_price::text, max_output_tokens, sort_order, created_at, updated_at`
+minute_price::text, max_output_tokens, capabilities, sort_order, created_at, updated_at`
 
 func scanAIGatewayModel(row interface{ Scan(dest ...any) error }) (*aigateway.Model, error) {
 	var item aigateway.Model
 	var input, output, request, image, char, minute string
-	var imagePrices []byte
+	var imagePrices, capabilities []byte
 	if err := row.Scan(&item.ID, &item.AppID, &item.Model, &item.UpstreamModel, &item.Kind, &item.DisplayName,
 		&item.Description, &item.ConfigID, &item.Enabled, &item.VipOnly, &item.Free, &input, &output, &request, &image,
-		&imagePrices, &char, &minute, &item.MaxOutputTokens, &item.SortOrder, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&imagePrices, &char, &minute, &item.MaxOutputTokens, &capabilities, &item.SortOrder, &item.CreatedAt,
+		&item.UpdatedAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrAIGatewayModelNotFound
 		}
@@ -93,6 +94,15 @@ func scanAIGatewayModel(row interface{ Scan(dest ...any) error }) (*aigateway.Mo
 	item.ImagePrice = decimal.RequireFromString(image)
 	item.CharPrice = decimal.RequireFromString(char)
 	item.MinutePrice = decimal.RequireFromString(minute)
+	item.Capabilities = aigateway.DefaultCapabilities()
+	if len(capabilities) > 0 {
+		if err := json.Unmarshal(capabilities, &item.Capabilities); err != nil {
+			return nil, fmt.Errorf("decode model capabilities: %w", err)
+		}
+		if item.Capabilities.ReasoningEfforts == nil {
+			item.Capabilities.ReasoningEfforts = []string{}
+		}
+	}
 	if len(imagePrices) > 0 {
 		if err := json.Unmarshal(imagePrices, &item.ImagePrices); err != nil {
 			return nil, fmt.Errorf("decode image prices: %w", err)
@@ -147,9 +157,13 @@ func aiGatewayModelArgs(m aigateway.Model) ([]any, error) {
 		}
 		imagePrices = encoded
 	}
+	capabilities, err := json.Marshal(m.Capabilities)
+	if err != nil {
+		return nil, err
+	}
 	return []any{m.Model, m.UpstreamModel, m.Kind, m.DisplayName, m.Description, m.ConfigID, m.Enabled, m.VipOnly,
 		m.Free, m.InputPrice.String(), m.OutputPrice.String(), m.RequestPrice.String(), m.ImagePrice.String(),
-		imagePrices, m.CharPrice.String(), m.MinutePrice.String(), m.MaxOutputTokens, m.SortOrder}, nil
+		imagePrices, m.CharPrice.String(), m.MinutePrice.String(), m.MaxOutputTokens, m.SortOrder, capabilities}, nil
 }
 
 func mapAIGatewayModelWriteError(err error) error {
@@ -168,8 +182,8 @@ func (r *Repository) CreateAIGatewayModel(ctx context.Context, appID int64, m ai
 	}
 	item, err := scanAIGatewayModel(r.pool.QueryRow(ctx, `INSERT INTO ai_gateway_models
 (model, upstream_model, kind, display_name, description, config_id, enabled, vip_only, free, input_price, output_price,
- request_price, image_price, image_prices, char_price, minute_price, max_output_tokens, sort_order, appid)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+ request_price, image_price, image_prices, char_price, minute_price, max_output_tokens, sort_order, capabilities, appid)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 RETURNING `+aiGatewayModelColumns, append(args, appID)...))
 	if err != nil {
 		return nil, mapAIGatewayModelWriteError(err)
@@ -186,8 +200,9 @@ func (r *Repository) UpdateAIGatewayModel(ctx context.Context, appID, modelID in
 	item, err := scanAIGatewayModel(r.pool.QueryRow(ctx, `UPDATE ai_gateway_models SET
 model = $1, upstream_model = $2, kind = $3, display_name = $4, description = $5, config_id = $6, enabled = $7,
 vip_only = $8, free = $9, input_price = $10, output_price = $11, request_price = $12, image_price = $13,
-image_prices = $14, char_price = $15, minute_price = $16, max_output_tokens = $17, sort_order = $18, updated_at = NOW()
-WHERE appid = $19 AND id = $20
+image_prices = $14, char_price = $15, minute_price = $16, max_output_tokens = $17, sort_order = $18,
+capabilities = $19, updated_at = NOW()
+WHERE appid = $20 AND id = $21
 RETURNING `+aiGatewayModelColumns, append(args, appID, modelID)...))
 	if err != nil {
 		return nil, mapAIGatewayModelWriteError(err)
