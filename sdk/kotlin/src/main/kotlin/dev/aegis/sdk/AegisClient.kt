@@ -71,6 +71,11 @@ class AegisClient private constructor(
     val clock: AegisClock,
     private val configHolder: AtomicReference<AegisConfig?>,
     private val retryPolicy: AegisRetryPolicy,
+    /**
+     * 多线路选择器。请求按 [baseUrl] 构造，发出前由选择器换到当前线路；响应里指向其他线路的地址
+     * 换成当前线路。没配多条线路时只有 [baseUrl] 这一条，行为与单地址相同。见 [AegisLineSelector]。
+     */
+    val lines: AegisLineSelector,
     private val signedOutListener: ((AegisException) -> Unit)? = null,
 ) {
 
@@ -380,6 +385,7 @@ class AegisClient private constructor(
         var clockSynced = false
         var nonceRenewed = false
         var tokenRefreshed = false
+        var lineSwitches = 0
 
         while (true) {
             val token = when {
@@ -391,14 +397,24 @@ class AegisClient private constructor(
             // 免登录接口：已登录就带上令牌，服务端据此按用户定向；令牌失效时服务端按未登录处理
             val prepared = token?.let { request.newBuilder().header("Authorization", "Bearer $it").build() } ?: request
 
+            val lineBefore = lines.active()
             val exchange = try {
                 exchange(prepared, httpClient)
             } catch (failure: AegisException) {
-                networkAttempts++
                 val cause = failure.cause as? IOException
+                // 选择器已把刚才那条线路判为故障并换了线路时，证书错误也值得在新线路上再试：
+                // 被劫持的线路回的正是对不上的证书，而握手没完成说明请求没有发出去。
+                val switched = lines.active().id != lineBefore.id
                 val resendable = failure.kind == AegisException.Kind.NETWORK &&
-                    cause?.isPermanent() != true &&
-                    (canResend || cause?.failedBeforeSending() == true)
+                    (switched || cause?.isPermanent() != true) &&
+                    (canResend || cause?.failedBeforeSending() == true || (switched && cause is javax.net.ssl.SSLPeerUnverifiedException))
+                // 选择器刚把这条线路判为故障并换了线路：在新线路上立即重发，不计入重试次数，也不等待。
+                // 每次调用最多把每条线路试一遍，防止全部不通时来回打转。
+                if (resendable && switched && lineSwitches < lines.lines.size - 1) {
+                    lineSwitches++
+                    continue
+                }
+                networkAttempts++
                 if (!resendable || networkAttempts >= retryPolicy.maxAttempts) throw failure
                 pause(retryPolicy.delayBefore(networkAttempts))
                 continue
@@ -406,7 +422,8 @@ class AegisClient private constructor(
 
             val envelope = exchange.envelope
             if (envelope.code == 200) {
-                return Outcome(envelope.data ?: JsonNull, exchange.ageSeconds)
+                // 服务端按收到请求的域名或自己的配置拼绝对地址；换线路后统一指向当前线路。
+                return Outcome(envelope.data?.let { lines.rewrite(it) } ?: JsonNull, exchange.ageSeconds)
             }
 
             val descriptor = configHolder.get()?.errors?.firstOrNull { it.code == envelope.code }
@@ -514,6 +531,7 @@ class AegisClient private constructor(
         private var engine: okhttp3.Interceptor? = null
         private var deviceLimitChoice = false
         private var signedOutListener: ((AegisException) -> Unit)? = null
+        private var lineSelector: AegisLineSelector? = null
         private val clock = AegisClock()
 
         /**
@@ -587,6 +605,13 @@ class AegisClient private constructor(
          */
         fun onSignedOut(listener: ((AegisException) -> Unit)?) = apply { this.signedOutListener = listener }
 
+        /**
+         * 多线路。[selector] 的线路里必须有一条与 baseUrl 同源（通常是第一条）：请求按 baseUrl 构造，
+         * 再换到当前线路。同一个选择器可以交给多个客户端共用，线路状态随之共享。
+         * 不设置时只有 baseUrl 一条线路。
+         */
+        fun lines(selector: AegisLineSelector?) = apply { this.lineSelector = selector }
+
         fun build(): AegisClient {
             val configHolder = AtomicReference<AegisConfig?>(null)
             val base = okHttp ?: OkHttpClient.Builder()
@@ -594,9 +619,17 @@ class AegisClient private constructor(
                 .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
                 .writeTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
                 .build()
+            val lines = lineSelector ?: AegisLineSelector(listOf(AegisLine("default", normalizedBase.host, normalizedBase.toString())))
+            require(lines.lineOf(normalizedBase) != null) { "线路里没有与 baseUrl（$normalizedBase）同源的一条" }
+            // 自己的连接池：选择器在直连与非直连之间切换时要清掉它的空闲连接，不能连带清掉调用方共用的池。
+            val pool = okhttp3.ConnectionPool()
+            val resolver = buildDns(base)
             val client = base.newBuilder()
-                .dns(buildDns(base))
+                .dns(lines.dns(resolver))
+                .connectionPool(pool)
                 .retryOnConnectionFailure(false)
+                // 排在最前：之后的签名、加密、发送层看到的都是已经换到当前线路的请求。
+                .addInterceptor(lines.interceptor(reportOutcome = true))
                 .apply { if (base.pingIntervalMillis == 0) pingInterval(20, java.util.concurrent.TimeUnit.SECONDS) }
                 .apply { deviceProvider?.let { addInterceptor(AegisDeviceInterceptor(it)) } }
                 .apply { if (deviceLimitChoice) addInterceptor(AegisDeviceLimitChoiceInterceptor) }
@@ -613,11 +646,12 @@ class AegisClient private constructor(
                 )
                 .apply { engine?.let(::addInterceptor) }
                 .build()
-            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy, signedOutListener)
+            lines.attach(AegisLineProber(base, buildDns(base, withFallback = false)), pool)
+            return AegisClient(normalizedBase, appKey, client, tokenStore, clock, configHolder, retryPolicy, lines, signedOutListener)
         }
 
-        private fun buildDns(base: OkHttpClient): okhttp3.Dns {
-            if (fallbackAddresses.isEmpty() && !dnsOverHttps) return base.dns
+        private fun buildDns(base: OkHttpClient, withFallback: Boolean = true): okhttp3.Dns {
+            if ((fallbackAddresses.isEmpty() || !withFallback) && !dnsOverHttps) return base.dns
             // DoH 请求自己走系统解析与短超时，不能绕回这个 Dns，否则查不到时会递归。
             val bootstrap = base.newBuilder()
                 .dns(okhttp3.Dns.SYSTEM)
@@ -629,7 +663,8 @@ class AegisClient private constructor(
                 system = base.dns,
                 primaryHosts = setOf(normalizedBase.host.lowercase()),
                 // 只接受 IP 字面量：这里填域名就又回到了「先得解析它」的问题。
-                fallbackAddresses = fallbackAddresses
+                // 测速用的解析器不带它们：测的是这条线路本身通不通。
+                fallbackAddresses = if (!withFallback) emptyList() else fallbackAddresses
                     .filter { IP_LITERAL.matches(it) }
                     .mapNotNull { runCatching { java.net.InetAddress.getByName(it) }.getOrNull() },
                 doh = if (dnsOverHttps) AegisDns.publicResolvers(bootstrap) else emptyList(),

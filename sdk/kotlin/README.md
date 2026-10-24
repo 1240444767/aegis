@@ -159,6 +159,27 @@ val client = AegisClient.builder(baseUrl, appKey)
 - 含中文等非 ASCII 字符的值自动按 UTF-8 百分号编码（OkHttp 不接受非 ASCII 的请求头）。
 - 请求上已经显式带了的同名头不会被覆盖。字段说明见 `docs/app-integration.md` 的「设备信息」。
 
+## 多线路（AegisLineSelector）
+
+同一个服务有多个入口时（CDN 域名、另一家 CDN 回源的域名、源站 IP 直连），交给选择器：
+
+```kotlin
+val lines = AegisLineSelector(
+    listOf(
+        AegisLine("cdn", "默认线路", "https://aegis.example.com"),
+        AegisLine("cf", "Cloudflare 线路", "https://alt.example.com"),
+        AegisLine("origin", "源站直连", "https://aegis.example.com", addresses = listOf("203.0.113.10")),
+    ),
+)
+val client = AegisClient.builder("https://aegis.example.com", "demo_app").lines(lines).build()
+```
+
+- 请求按 baseUrl 构造，发出前换到当前线路的源；线路只换协议、主机、端口与直连 IP，路径不变（签名覆盖路径）。
+- 自动模式：当前线路出现连接级失败（解析、建连、握手、超时、CDN 回 502/504/52x）时记为故障并冷却（15 秒起指数增长，最长 5 分钟），立刻换到最好的另一条，SDK 在新线路上立即重发（仍受「请求能否重发」约束，每条线路每次调用最多试一次）。`lines.probeAll()` 对每条线路测 `/healthz`，明显更快（快 30% 且至少 60 ms）才换。
+- 手动模式：`lines.pin(id)` 固定线路，不自动切换；`lines.useAuto()` 回到自动。
+- 响应信封 `data` 里以任意线路的源开头的字符串（含 ws/wss）换成当前线路；`lines.rewrite(url)` 给调用方存下来的地址用，`lines.interceptor()` 与 `lines.dns(…)` 可以装到图片加载等别的 OkHttpClient 上。
+- 状态（`lines.state`）不可变，`addListener` 订阅变化；持久化由调用方做（构造参数 `restoredActiveId` / `restoredHealth`）。
+
 ## 线程模型
 
 所有方法都是**同步**的，SDK 不替调用方决定并发模型。
