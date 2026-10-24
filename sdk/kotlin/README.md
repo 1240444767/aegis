@@ -168,12 +168,12 @@ val lines = AegisLineSelector(
     listOf(
         AegisLine("cdn", "默认线路", "https://aegis.example.com"),
         AegisLine("cf", "Cloudflare 线路", "https://alt.example.com"),
-        AegisLine("origin", "源站直连", "https://aegis.example.com", addresses = listOf("203.0.113.10")),
     ),
 )
 val client = AegisClient.builder("https://aegis.example.com", "demo_app").lines(lines).build()
 ```
 
+- **客户端（App、前端）只放经 CDN 的域名，不要放源站 IP（`AegisLine.addresses`、`fallbackAddresses`）**：打进安装包等于公开，攻击者可以绕过 CDN 直接打源站。这两项只适合跑在自己机房里的服务端调用方。
 - 请求按 baseUrl 构造，发出前换到当前线路的源；线路只换协议、主机、端口与直连 IP，路径不变（签名覆盖路径）。
 - 自动模式：当前线路出现连接级失败（解析、建连、握手、超时、CDN 回 502/504/52x）时记为故障并冷却（15 秒起指数增长，最长 5 分钟），立刻换到最好的另一条，SDK 在新线路上立即重发（仍受「请求能否重发」约束，每条线路每次调用最多试一次）。`lines.probeAll()` 对每条线路测 `/healthz`，明显更快（快 30% 且至少 60 ms）才换。
 - 手动模式：`lines.pin(id)` 固定线路，不自动切换；`lines.useAuto()` 回到自动。
