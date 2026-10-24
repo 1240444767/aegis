@@ -31,7 +31,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { ApiError } from "@/lib/api/client";
 import type { CardKeyReward, CardKeyRewardSpec } from "@/lib/api/card-key";
-import type { RewardedAdConfig, RewardedAdScene, RewardedAdVerifyMode } from "@/lib/api/rewarded-ad";
+import type {
+  RewardedAdConfig,
+  RewardedAdLifetime,
+  RewardedAdLifetimePolicy,
+  RewardedAdLifetimePolicySpec,
+  RewardedAdScene,
+  RewardedAdVerifyMode
+} from "@/lib/api/rewarded-ad";
 import type { VipFeature } from "@/lib/api/vip";
 import { useRewardedAdConfigQuery, useSaveRewardedAdConfigMutation } from "@/lib/rewarded-ad-hooks";
 import { cn } from "@/lib/utils";
@@ -69,11 +76,68 @@ type SceneDraft = {
   /** 会员权益：「会员天数」带的功能标识，以及送出的会员是否免广告 */
   features: string[];
   adFree: boolean;
+  lifetime: LifetimeDraft;
+};
+
+/** 已拥有权益的处理方式。数字同样按字符串存；replace 的改发按档位存数量。 */
+type LifetimeDraft = {
+  policy: RewardedAdLifetimePolicy;
+  target: string;
+  perVipDay: string;
+  perFeatureHour: string;
+  rewards: Record<string, string>;
 };
 
 /** 送会员的两档：会员权益只在场景勾了其中一档时才有意义。 */
 const VIP_DAYS = "vip_days";
 const VIP_PLAN = "vip_plan";
+
+/** 「功能时长」：永久会员使用时免扣，也算可能已拥有的一档 */
+const FEATURE_MINUTES = "feature_minutes";
+const OWNABLE = [VIP_DAYS, VIP_PLAN, FEATURE_MINUTES];
+
+/** 后端没下发目录时的兜底（与服务端 rewardedad.LifetimePolicyCatalog 一致） */
+const FALLBACK_LIFETIME_POLICIES: RewardedAdLifetimePolicySpec[] = [
+  { key: "convert", label: "按价值折算", hint: "会员按天、功能时长按小时折成积分、AI 额度、经验或抽奖次数，其余权益照发" },
+  { key: "replace", label: "改发固定权益", hint: "已拥有的权益不再发放，改发一组固定的积分、经验、抽奖次数或 AI 额度" },
+  { key: "hide", label: "不展示该场景", hint: "对已拥有的用户隐藏这个场景；仍有观看到达时按价值折算" },
+  { key: "grant", label: "照常发放", hint: "仍记一段会员或功能时长（永久会员实际拿不到新东西）" }
+];
+const FALLBACK_CONVERT_TARGETS = ["integral", "ai_credit", "experience", "lottery_draws"];
+
+function lifetimeToDraft(rule?: RewardedAdLifetime): LifetimeDraft {
+  const rewards: Record<string, string> = {};
+  (rule?.rewards ?? []).forEach((reward) => {
+    rewards[reward.type] = String(reward.amount ?? 1);
+  });
+  const unset = !rule?.perVipDay && !rule?.perFeatureHour;
+  return {
+    policy: rule?.policy || "convert",
+    target: rule?.target || "integral",
+    perVipDay: String(unset ? 10 : rule?.perVipDay ?? 0),
+    perFeatureHour: String(unset ? 10 : rule?.perFeatureHour ?? 0),
+    rewards
+  };
+}
+
+function lifetimeToPayload(draft: LifetimeDraft): RewardedAdLifetime {
+  switch (draft.policy) {
+    case "replace":
+      return {
+        policy: "replace",
+        rewards: Object.entries(draft.rewards).map(([type, amount]) => ({ type, amount: Number(amount) || 0 }))
+      };
+    case "grant":
+      return { policy: "grant" };
+    default:
+      return {
+        policy: draft.policy,
+        target: draft.target,
+        perVipDay: Number(draft.perVipDay) || 0,
+        perFeatureHour: Number(draft.perFeatureHour) || 0
+      };
+  }
+}
 
 /** 功能时长新勾选时的默认分钟数，再夹到目录给的上下界内 */
 const DEFAULT_FEATURE_MINUTES = 60;
@@ -113,7 +177,8 @@ function sceneToDraft(scene: RewardedAdScene, index: number): SceneDraft {
     rewards,
     features: scene.membership?.features ?? [],
     // 没设置过的场景按免广告（与服务端默认一致）
-    adFree: scene.membership?.adFree ?? true
+    adFree: scene.membership?.adFree ?? true,
+    lifetime: lifetimeToDraft(scene.lifetime)
   };
 }
 
@@ -140,7 +205,8 @@ function blankScene(index: number, placementId: string): SceneDraft {
     cooldownSeconds: "60",
     rewards: { vip_days: { amount: "1", refId: 0, feature: "" } },
     features: [],
-    adFree: true
+    adFree: true,
+    lifetime: lifetimeToDraft()
   };
 }
 
@@ -223,6 +289,14 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
         toast.error(`场景「${scene.name || scene.key}」的${featureless.label}未选择功能`);
         return;
       }
+      if (
+        OWNABLE.some((type) => scene.rewards[type]) &&
+        scene.lifetime.policy === "replace" &&
+        Object.keys(scene.lifetime.rewards).length === 0
+      ) {
+        toast.error(`场景「${scene.name || scene.key}」改发固定权益时至少选择一项`);
+        return;
+      }
     }
     try {
       await saveMutation.mutateAsync({
@@ -244,7 +318,8 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
           membership: {
             features: scene.rewards[VIP_DAYS] ? scene.features : [],
             adFree: scene.adFree
-          }
+          },
+          lifetime: lifetimeToPayload(scene.lifetime)
         }))
       });
       toast.success("激励广告配置已保存");
@@ -628,6 +703,17 @@ export function RewardedAdConfigPanel({ appKey }: { appKey: string }) {
                     </div>
                   </FieldGroup>
                 ) : null}
+
+                {OWNABLE.some((type) => scene.rewards[type]) ? (
+                  <LifetimeField
+                    value={scene.lifetime}
+                    policies={config?.lifetimePolicies?.length ? config.lifetimePolicies : FALLBACK_LIFETIME_POLICIES}
+                    targets={(config?.convertTargets?.length ? config.convertTargets : FALLBACK_CONVERT_TARGETS)
+                      .map((type) => catalog.find((spec) => spec.type === type))
+                      .filter((spec): spec is CardKeyRewardSpec => Boolean(spec))}
+                    onChange={(next) => patchScene(scene.uid, { lifetime: { ...scene.lifetime, ...next } })}
+                  />
+                ) : null}
               </div>
             ))}
           </div>
@@ -695,5 +781,123 @@ function FeatureAmountField({
         <span className="text-xs text-muted-foreground">{spec.unit}</span>
       </div>
     </div>
+  );
+}
+
+/**
+ * 永久会员（或已永久拥有某功能的人）看这个场景时，已拥有的会员、套餐、功能时长怎么办。
+ * 只在场景配了这几档时出现；判定与折算都在服务端结算事务里。
+ */
+function LifetimeField({
+  value,
+  policies,
+  targets,
+  onChange
+}: {
+  value: LifetimeDraft;
+  policies: RewardedAdLifetimePolicySpec[];
+  targets: CardKeyRewardSpec[];
+  onChange: (next: Partial<LifetimeDraft>) => void;
+}) {
+  const active = policies.find((policy) => policy.key === value.policy);
+  const target = targets.find((spec) => spec.type === value.target);
+  return (
+    <FieldGroup label="已拥有的权益" hint="永久会员或已永久解锁功能的用户">
+      <div className="space-y-3 rounded-xl border border-border p-3">
+        <div className="space-y-1.5">
+          <Select value={value.policy} onValueChange={(next) => onChange({ policy: next as RewardedAdLifetimePolicy })}>
+            <SelectTrigger className="h-8 w-full text-xs sm:w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {policies.map((policy) => (
+                <SelectItem key={policy.key} value={policy.key}>
+                  {policy.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {active ? <p className="text-[11px] text-muted-foreground">{active.hint}</p> : null}
+        </div>
+
+        {value.policy === "convert" || value.policy === "hide" ? (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-medium">折算为</Label>
+              <Select value={value.target} onValueChange={(next) => onChange({ target: next })}>
+                <SelectTrigger className="h-8 w-full text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {targets.map((spec) => (
+                    <SelectItem key={spec.type} value={spec.type}>
+                      {spec.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <NumberField
+              label="会员每天"
+              unit={target?.unit ?? ""}
+              min={0}
+              max={100000}
+              hint="会员天数与套餐天数"
+              value={value.perVipDay}
+              onChange={(next) => onChange({ perVipDay: next })}
+            />
+            <NumberField
+              label="功能时长每小时"
+              unit={target?.unit ?? ""}
+              min={0}
+              max={100000}
+              hint="不足一小时按比例向上取整"
+              value={value.perFeatureHour}
+              onChange={(next) => onChange({ perFeatureHour: next })}
+            />
+          </div>
+        ) : null}
+
+        {value.policy === "replace" ? (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {targets.map((spec) => {
+              const amount = value.rewards[spec.type];
+              return (
+                <div key={spec.type} className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2">
+                  <Checkbox
+                    checked={amount !== undefined}
+                    onCheckedChange={(checked) => {
+                      const rewards = { ...value.rewards };
+                      if (checked) {
+                        rewards[spec.type] = String(spec.min ?? 1);
+                      } else {
+                        delete rewards[spec.type];
+                      }
+                      onChange({ rewards });
+                    }}
+                  />
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium">{spec.label}</span>
+                  {amount !== undefined ? (
+                    <>
+                      <Input
+                        type="number"
+                        className="h-7 w-24 font-mono text-xs"
+                        value={amount}
+                        min={spec.min}
+                        max={spec.max}
+                        onChange={(event) =>
+                          onChange({ rewards: { ...value.rewards, [spec.type]: event.target.value } })
+                        }
+                      />
+                      <span className="text-xs text-muted-foreground">{spec.unit}</span>
+                    </>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </FieldGroup>
   );
 }
