@@ -202,6 +202,7 @@ func NormalizeScene(scene Scene) Scene {
 	scene.PlacementID = strings.TrimSpace(scene.PlacementID)
 	scene.Rewards = NormalizeRewards(scene.Rewards)
 	scene.Membership.Features = vipdomain.NormalizeFeatureTags(scene.Membership.Features)
+	scene.Lifetime = normalizeLifetime(scene.Lifetime)
 	return scene
 }
 
@@ -257,6 +258,9 @@ func ValidateScenes(scenes []Scene) error {
 			return fmt.Errorf("%s：%w", label, err)
 		}
 		if err := validateMembership(scene); err != nil {
+			return fmt.Errorf("%s：%w", label, err)
+		}
+		if err := validateLifetime(scene.Lifetime); err != nil {
 			return fmt.Errorf("%s：%w", label, err)
 		}
 	}

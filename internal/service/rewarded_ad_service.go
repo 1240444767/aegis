@@ -19,6 +19,7 @@ import (
 	"aegis/internal/config"
 	cardkeydomain "aegis/internal/domain/cardkey"
 	rewardedad "aegis/internal/domain/rewardedad"
+	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
@@ -275,6 +276,8 @@ func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *re
 		Catalog:          rewardedad.RewardCatalog(),
 		VerifyModes:      rewardedad.VerifyModes(),
 		Providers:        rewardedad.Providers(),
+		LifetimePolicies: rewardedad.LifetimePolicyCatalog(),
+		ConvertTargets:   rewardedad.ConvertTargets(),
 	}
 	if cfg == nil {
 		return view
@@ -468,14 +471,58 @@ func (s *RewardedAdService) ClientStatus(ctx context.Context, appID, userID int6
 		status.Remaining = max(cfg.DailyLimit-usage.TodayTotal, 0)
 	}
 
-	names := &rewardNames{plans: s.planNames(ctx, appID, cfg.Scenes), features: s.featureNames(ctx, appID, cfg.Scenes)}
+	plans, err := s.pg.RewardedAdScenePlans(ctx, appID, cfg.Scenes)
+	if err != nil {
+		return nil, err
+	}
+	coverage, err := s.pg.RewardedAdCoverage(ctx, appID, userID)
+	if err != nil {
+		return nil, err
+	}
+	names := &rewardNames{plans: make(map[int64]string, len(plans)), features: s.featureNames(ctx, appID, cfg.Scenes)}
+	for id, plan := range plans {
+		names.plans[id] = plan.Name
+	}
 	for _, scene := range cfg.Scenes {
 		if !scene.Enabled {
 			continue
 		}
-		status.Scenes = append(status.Scenes, buildClientScene(scene, usage, status.Remaining, names, now))
+		item, ok := buildPersonalScene(scene, coverage, plans, usage, status.Remaining, names, now)
+		if ok {
+			status.Scenes = append(status.Scenes, item)
+		}
 	}
 	return status, nil
+}
+
+// buildPersonalScene 这个人眼里的一个场景：已拥有的权益按场景的 lifetime 换成折算后实际会发的，
+// 摘要随之改写，并附上提示。hide 且有已拥有的权益时不展示（ok=false）。结算用的是同一个 rewardedad.Resolve。
+func buildPersonalScene(scene rewardedad.Scene, coverage rewardedad.Coverage, plans map[int64]vipdomain.Plan,
+	usage *rewardedad.Usage, appRemaining int, names *rewardNames, now time.Time) (rewardedad.ClientScene, bool) {
+	if names == nil {
+		names = &rewardNames{}
+	}
+	outcome := rewardedad.Resolve(scene, coverage, plans,
+		rewardedad.Labels{Plans: names.plans, Features: names.features})
+	if outcome.Hidden {
+		return rewardedad.ClientScene{}, false
+	}
+	if outcome.Conversion == nil {
+		return buildClientScene(scene, usage, appRemaining, names, now), true
+	}
+	shown := scene
+	shown.Rewards = outcome.GrantedRewards()
+	item := buildClientScene(shown, usage, appRemaining, names, now)
+	// rewards 与 membership 仍是场景配置的原样：已发布的客户端拿 rewards 找「发听歌时长」的场景、
+	// 判断领完要不要刷新会员缓存，改成折算后的会让这些判断落空。折算只体现在摘要与 lifetime 提示里。
+	item.Rewards = scene.Rewards
+	item.Membership = scene.Membership
+	hint := outcome.ClientHint()
+	item.Lifetime = hint
+	if item.RewardSummary == "" {
+		item.RewardSummary = hint.Message
+	}
+	return item, true
 }
 
 // rewardNames 权益摘要里要用到的展示名：套餐名、功能名（只含启用中的功能）。
@@ -568,14 +615,18 @@ func (s *RewardedAdService) Claim(ctx context.Context, input RewardedAdClaimInpu
 	}
 
 	result := &rewardedad.ClaimResult{
-		TransID:   view.TransID,
-		Scene:     view.Scene,
-		Status:    view.Status,
-		Reason:    view.Reason,
-		Message:   rewardedad.ReasonMessage(view.Status, view.Reason),
-		Results:   view.Results,
-		GrantedAt: view.GrantedAt,
-		Remaining: -1,
+		TransID:    view.TransID,
+		Scene:      view.Scene,
+		Status:     view.Status,
+		Reason:     view.Reason,
+		Message:    rewardedad.ReasonMessage(view.Status, view.Reason),
+		Results:    view.Results,
+		Conversion: view.Conversion,
+		GrantedAt:  view.GrantedAt,
+		Remaining:  -1,
+	}
+	if view.Status == rewardedad.StatusGranted && view.Conversion != nil {
+		result.Message = view.Conversion.Message
 	}
 	// 剩余次数是展示用的，查不出来不影响这次结算的结论。
 	if usage, err := s.pg.RewardedAdUsage(ctx, input.AppID, input.UserID, s.policy(cfg, now).DayStart); err == nil {
@@ -704,28 +755,6 @@ func rewardedAdDayStart(now time.Time, loc *time.Location) time.Time {
 	}
 	local := now.In(loc)
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
-}
-
-func (s *RewardedAdService) planNames(ctx context.Context, appID int64, scenes []rewardedad.Scene) map[int64]string {
-	names := map[int64]string{}
-	for _, scene := range scenes {
-		for _, reward := range scene.Rewards {
-			if reward.Type != cardkeydomain.RewardVipPlan {
-				continue
-			}
-			if len(names) == 0 {
-				plans, err := s.pg.ListVipPlans(ctx, appID, false)
-				if err != nil {
-					return names
-				}
-				for _, plan := range plans {
-					names[plan.ID] = plan.Name
-				}
-			}
-			return names
-		}
-	}
-	return names
 }
 
 // featureNames 场景会员权益与「功能时长」里用到的功能的展示名，只取启用中的：停用的功能不会落到会员头上，

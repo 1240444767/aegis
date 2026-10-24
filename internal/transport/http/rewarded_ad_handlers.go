@@ -30,6 +30,21 @@ type RewardedAdSceneRequest struct {
 	CooldownSeconds int                       `json:"cooldownSeconds"`
 	// Membership 这个场景送出的会员带什么权益，跟随当前配置（对已领到的会员同样生效）。
 	Membership RewardedAdMembershipRequest `json:"membership"`
+	// Lifetime 永久会员（或已永久拥有某功能的人）看这个场景时，已拥有的权益怎么办。不传按「按价值折算」默认值。
+	Lifetime RewardedAdLifetimeRequest `json:"lifetime"`
+}
+
+// RewardedAdLifetimeRequest 已拥有权益的处理方式。
+//
+// policy：convert（按价值折算，默认）/ replace（改发 rewards）/ hide（不展示，仍有观看到达时按价值折算）/ grant（照常发放）。
+// convert / hide 用 target（integral / ai_credit / experience / lottery_draws）、perVipDay（会员每天折多少）、
+// perFeatureHour（功能时长每 60 分钟折多少）；两项折算都不填时用默认值 10 / 10。
+type RewardedAdLifetimeRequest struct {
+	Policy         string                    `json:"policy"`
+	Target         string                    `json:"target"`
+	PerVipDay      int64                     `json:"perVipDay"`
+	PerFeatureHour int64                     `json:"perFeatureHour"`
+	Rewards        []RewardedAdRewardRequest `json:"rewards"`
 }
 
 // RewardedAdRewardRequest 场景的一项权益：卡密的权益形态，加上「功能时长」要的功能标识。
@@ -46,6 +61,16 @@ func (req RewardedAdRewardRequest) toDomain() rewardedad.Reward {
 	reward := CardKeyRewardRequest{Type: req.Type, Amount: req.Amount, Money: req.Money, RefID: req.RefID}.toDomain()
 	reward.Feature = req.Feature
 	return reward
+}
+
+func (req RewardedAdLifetimeRequest) toDomain() rewardedad.SceneLifetime {
+	rule := rewardedad.SceneLifetime{
+		Policy: req.Policy, Target: req.Target, PerVipDay: req.PerVipDay, PerFeatureHour: req.PerFeatureHour,
+	}
+	for _, reward := range req.Rewards {
+		rule.Rewards = append(rule.Rewards, reward.toDomain())
+	}
+	return rule
 }
 
 // RewardedAdMembershipRequest 看广告赠送的会员的权益。
@@ -105,6 +130,7 @@ func (req SaveRewardedAdConfigRequest) toInput(appID int64, operator string) rew
 				Features: item.Membership.Features,
 				AdFree:   item.Membership.AdFree,
 			},
+			Lifetime: item.Lifetime.toDomain(),
 		})
 	}
 	return rewardedad.SaveConfigInput{

@@ -91,7 +91,7 @@ GET /api/apps/{appKey}/ads/apex/callback?userId={{USER_ID}}&transId={{TRANS_ID}}
 权益复用卡密的权益目录与数据形态，但只开放 `vip_plan` / `vip_days` / `integral` / `experience` / `lottery_draws`
 （余额是真钱、设备位挂在授权卡上，都不该由广告发），另加广告独有的 `feature_minutes`（功能时长，带 `feature`，
 按实际使用扣，见 [功能时长](feature-time.md)）。目录与发放分支由 `TestRewardedAdCatalogHasGrantBranch` 双向钉死。
-会员发放走同一套账本，渠道为 `ad_reward`。`vip_plan` 不能选永久套餐：广告可以每天反复看，
+会员发放走同一套账本，渠道为 `ad_reward`。永久会员看到的已拥有权益按场景配置折算，见下文「永久会员与已拥有的权益」。`vip_plan` 不能选永久套餐：广告可以每天反复看，
 永久会员看一次就到头了，之后每次观看只是白发套餐附赠的积分。
 
 ## 看广告赠送的会员权益
@@ -111,6 +111,39 @@ GET /api/apps/{appKey}/ads/apex/callback?userId={{USER_ID}}&transId={{TRANS_ID}}
 
 客户端的场景列表带 `membership`，`rewardSummary` 也会补上一句会员权益（如「会员天数 1 天（会员可用 AI 对话，会员期间免广告）」，
 只列启用中的功能）。
+
+## 永久会员与已拥有的权益
+
+永久会员看一次「领 1 天会员」的广告，照常记一段限时会员什么也没给他（功能取两条线的并集，永久那条已经全包了）。
+每个场景有一份 `scene.lifetime`，决定**已拥有**的权益怎么办。判定在结算事务里、锁住用户行之后做（与购买 / 兑换会员串行），
+客户端列表与结算用同一个纯函数 `rewardedad.Resolve`，两边说的一定一样。
+
+什么算已拥有（`rewardedad.Coverage.Owned`，与抽奖同一套数据）：
+
+| 权益 | 已拥有的条件 |
+|---|---|
+| `vip_days` | 永久会员，且场景会员权益里的功能都已在永久开通里（多出来的功能是升级，照发） |
+| `vip_plan` | `vip.LifetimeIncludes`：与购买入口同一个判据 |
+| `feature_minutes` | 永久会员（会员使用时免扣，余额永远用不上），或已永久解锁该功能 |
+
+积分、经验、抽奖次数、AI 额度从来不算已拥有；场景里不是已拥有的那几项照常发放。
+
+| `policy` | 处理 |
+|---|---|
+| `convert`（默认，不填即此） | 按价值折算：会员每天 `perVipDay`（会员天数按天数、套餐按套餐天数）、功能时长每 60 分钟 `perFeatureHour`（按比例向上取整），折成 `target`（`integral` / `ai_credit` / `experience` / `lottery_draws`）；两项都不填时为 10 / 10、折成积分。套餐附赠的积分照发。各档不超过该档的单次上限 |
+| `replace` | 改发一组固定权益 `rewards`（只能是上面四档） |
+| `hide` | 对已拥有的用户不出现在 `/ads/rewarded` 列表里；仍有观看到达（列表是旧的、抽奖视频场景等直接上报）时按 `convert` 折算，不拒发 |
+| `grant` | 照常发放（这项配置出现之前的行为） |
+
+结果：观看记录多一列 `conversion`（迁移 000129）记「配的是 A、发的是 B」，`claim` 返回体带 `conversion`，`message` 换成它的说明；
+`/ads/rewarded` 的场景对这个人带 `lifetime` 提示，`rewardSummary` 改写成折算后实际会发的。统计多了 `converted`（按天、按场景）、
+`totalConverted` 与 `convertedIntegral`。
+
+**不需要升级客户端。** 已发布的 App 只认原有字段，所以：
+
+- 场景的 `rewards` / `membership` 仍按配置原样下发（老 App 拿 `rewards` 找「发听歌时长」的场景、判断领完要不要刷新会员缓存），折算只体现在 `rewardSummary` 里；
+- 折算说明作为 `results` 的第一行（`type: "conversion"`，`detail` 即说明）：老 App 的领取弹窗与观看记录只逐行展示 `results`，不读 `message`；
+- 新字段（`lifetime`、`conversion`）都是可选的，老 App 解析时忽略。
 
 ## Apex 后台怎么配
 

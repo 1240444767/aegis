@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
-	cardkeydomain "aegis/internal/domain/cardkey"
 	"aegis/internal/domain/aigateway"
+	cardkeydomain "aegis/internal/domain/cardkey"
 	"aegis/internal/domain/featuretime"
 	rewardedad "aegis/internal/domain/rewardedad"
 	vipdomain "aegis/internal/domain/vip"
@@ -103,16 +104,22 @@ FROM app_rewarded_ad_views v WHERE v.appid = $1 AND v.trans_id = $2 FOR UPDATE`,
 	if err != nil {
 		return nil, err
 	}
+	var conversion []byte
+	if view.Conversion != nil {
+		if conversion, err = json.Marshal(view.Conversion); err != nil {
+			return nil, err
+		}
+	}
 	if _, err := tx.Exec(ctx, `UPDATE app_rewarded_ad_views SET
   user_id = $2, scene = $3, placement_id = $4, status = $5, reason = $6,
   server_verified_at = $7, reward_name = $8, reward_amount = $9, network_id = $10, extra = $11,
   client_reported_at = $12, client_verified = $13, client_error = $14, device_id = $15, client_ip = $16,
-  rewards = $17, granted_at = $18, operator = $19, updated_at = NOW()
+  rewards = $17, granted_at = $18, operator = $19, conversion = $20, updated_at = NOW()
 WHERE id = $1`,
 		view.ID, nullableInt64(view.UserID), view.Scene, view.PlacementID, view.Status, view.Reason,
 		view.ServerVerifiedAt, view.RewardName, view.RewardAmount, view.NetworkID, view.Extra,
 		view.ClientReportedAt, view.ClientVerified, view.ClientError, view.DeviceID, view.ClientIP,
-		results, view.GrantedAt, view.Operator); err != nil {
+		results, view.GrantedAt, view.Operator, conversion); err != nil {
 		return nil, err
 	}
 
@@ -230,43 +237,147 @@ func (r *Repository) settleRewardedAdViewTx(ctx context.Context, tx pgx.Tx, view
 		}
 	}
 
-	results, err := r.grantAdRewardsTx(ctx, tx, view, scene)
+	// 已拥有判定在锁用户行之后取：同一把锁下，看广告与购买 / 兑换会员是串行的
+	outcome, plans, err := resolveRewardedAdSceneTx(ctx, tx, view.AppID, view.UserID, scene)
+	if err != nil {
+		return err
+	}
+	results, err := r.grantAdRewardsTx(ctx, tx, view, scene, outcome, plans)
 	if err != nil {
 		return err
 	}
 	view.Status = rewardedad.StatusGranted
 	view.Reason = ""
 	view.Results = results
+	view.Conversion = outcome.Conversion
 	view.GrantedAt = &now
 	return nil
 }
 
-// grantAdRewardsTx 在同一事务里发放一个场景的全部权益。
+// resolveRewardedAdSceneTx 这个场景对这个人发什么：已拥有的部分按场景的 lifetime 折算（见 rewardedad.Resolve）。
+// 顺带返回场景引用的套餐，发放时不必再查一遍。
+func resolveRewardedAdSceneTx(ctx context.Context, tx pgx.Tx, appID, userID int64,
+	scene rewardedad.Scene) (rewardedad.Outcome, map[int64]vipdomain.Plan, error) {
+	plans, err := rewardedAdScenePlans(ctx, tx, appID, []rewardedad.Scene{scene})
+	if err != nil {
+		return rewardedad.Outcome{}, nil, err
+	}
+	coverage, err := rewardedAdCoverage(ctx, tx, appID, userID)
+	if err != nil {
+		return rewardedad.Outcome{}, nil, err
+	}
+	labels := rewardedad.Labels{Plans: map[int64]string{}, Features: map[string]string{}}
+	for id, plan := range plans {
+		labels.Plans[id] = plan.Name
+	}
+	for _, tag := range scene.FeatureMinutesTags() {
+		name, err := featureNameTx(ctx, tx, appID, tag)
+		if err != nil {
+			return rewardedad.Outcome{}, nil, err
+		}
+		labels.Features[tag] = name
+	}
+	return rewardedad.Resolve(scene, coverage, plans, labels), plans, nil
+}
+
+// rewardedAdCoverage 这个人已经永久拥有什么：永久会员与其功能、已永久解锁的功能（与抽奖同一个判据）。
+func rewardedAdCoverage(ctx context.Context, q queryExecutor, appID, userID int64) (rewardedad.Coverage, error) {
+	coverage, err := lotteryMemberCoverage(ctx, q, appID, userID)
+	if err != nil {
+		return rewardedad.Coverage{}, err
+	}
+	return rewardedad.Coverage{
+		Lifetime: coverage.Lifetime, LifetimeFeatures: coverage.LifetimeFeatures,
+		PermanentUnlocks: coverage.PermanentUnlocks,
+	}, nil
+}
+
+// RewardedAdCoverage 见 rewardedAdCoverage（客户端列表据此说明「对你来说这个场景会怎样」）。
+func (r *Repository) RewardedAdCoverage(ctx context.Context, appID, userID int64) (rewardedad.Coverage, error) {
+	return rewardedAdCoverage(ctx, r.pool, appID, userID)
+}
+
+// rewardedAdScenePlans 场景里「会员套餐」引用的套餐（含停用的：已配进场景的照发）。
+func rewardedAdScenePlans(ctx context.Context, q queryExecutor, appID int64,
+	scenes []rewardedad.Scene) (map[int64]vipdomain.Plan, error) {
+	ids := make([]int64, 0, 2)
+	for _, scene := range scenes {
+		for _, reward := range scene.Rewards {
+			if reward.Type == cardkeydomain.RewardVipPlan && reward.RefID > 0 {
+				ids = append(ids, reward.RefID)
+			}
+		}
+	}
+	plans := make(map[int64]vipdomain.Plan, len(ids))
+	if len(ids) == 0 {
+		return plans, nil
+	}
+	rows, err := q.Query(ctx, `SELECT `+vipPlanColumns+` FROM vip_plans WHERE appid = $1 AND id = ANY($2)`, appID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		plan, err := scanVipPlan(rows)
+		if err != nil {
+			return nil, err
+		}
+		plans[plan.ID] = *plan
+	}
+	return plans, rows.Err()
+}
+
+// RewardedAdScenePlans 见 rewardedAdScenePlans。
+func (r *Repository) RewardedAdScenePlans(ctx context.Context, appID int64,
+	scenes []rewardedad.Scene) (map[int64]vipdomain.Plan, error) {
+	return rewardedAdScenePlans(ctx, r.pool, appID, scenes)
+}
+
+// grantAdRewardsTx 在同一事务里发放一个场景对这个人的全部权益（已拥有的部分已由 outcome 折算好）。
 //
 // 这里的 switch 与 rewardedad 的权益目录**双向钉死**（TestRewardedAdCatalogHasGrantBranch）：
 // 目录多一档 → 配得上却发不出来；这里多一档 → 控制台配不出来。
 func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewardedad.View,
-	scene rewardedad.Scene) ([]rewardedad.RewardResult, error) {
-	out := make([]rewardedad.RewardResult, 0, len(scene.Rewards))
+	scene rewardedad.Scene, outcome rewardedad.Outcome, plans map[int64]vipdomain.Plan) ([]rewardedad.RewardResult, error) {
+	out := make([]rewardedad.RewardResult, 0, len(outcome.Grants))
 	source := "激励广告 " + scene.Name
 	viewID := view.ID
-	meta := map[string]any{"transId": view.TransID, "scene": scene.Key, "rewardedAdViewId": view.ID}
+	baseMeta := map[string]any{"transId": view.TransID, "scene": scene.Key, "rewardedAdViewId": view.ID}
 	// 场景的会员权益在判定时按场景的当前配置实时取（见 vip.Segment.AdTerms），
 	// 这里只留开通那一刻的快照，供场景被删除后兜底。
 	if scene.GrantsMembership() {
-		meta["adFree"] = scene.Membership.AdFreeOrDefault()
+		baseMeta["adFree"] = scene.Membership.AdFreeOrDefault()
+	}
+	convertedMeta := maps.Clone(baseMeta)
+	convertedMeta["converted"] = true
+	if outcome.Conversion != nil {
+		convertedMeta["conversionReason"] = outcome.Conversion.Reason
 	}
 
-	for _, reward := range rewardedad.NormalizeRewards(scene.Rewards) {
+	// 折算说明放进结果的第一行：已发布的客户端只把 results 逐行展示（领取弹窗、观看记录），
+	// 不读 conversion 与 message，不升级也能看到「为什么发的是积分」。
+	if outcome.Conversion != nil {
+		out = append(out, rewardedad.RewardResult{
+			Type: rewardedad.ResultConversion, Label: rewardedad.ConversionResultLabel(outcome.Conversion),
+			Detail: outcome.Conversion.Message,
+		})
+	}
+
+	for _, grant := range outcome.Grants {
+		reward := grant.Reward
 		spec, _ := rewardedad.FindRewardSpec(reward.Type)
 		result := rewardedad.RewardResult{Type: reward.Type, Label: spec.Label}
+		meta, integralRemark, experienceRemark := baseMeta, "看广告赠送积分", "看广告赠送经验"
+		if grant.Converted {
+			meta, integralRemark, experienceRemark = convertedMeta, "看广告奖励折算积分", "看广告奖励折算经验"
+			result.Label += "（折算）"
+		}
 
 		switch reward.Type {
 		case cardkeydomain.RewardVipPlan:
-			plan, err := scanVipPlan(tx.QueryRow(ctx,
-				`SELECT `+vipPlanColumns+` FROM vip_plans WHERE appid = $1 AND id = $2`, view.AppID, reward.RefID))
-			if err != nil {
-				return nil, err
+			plan, ok := plans[reward.RefID]
+			if !ok {
+				return nil, errors.New("rewarded ad: vip plan " + strconv.FormatInt(reward.RefID, 10) + " not found")
 			}
 			planID := plan.ID
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
@@ -309,7 +420,7 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 
 		case cardkeydomain.RewardIntegral:
 			_, after, txnNo, err := applyIntegralChangeTx(ctx, tx, view.UserID, view.AppID, reward.Amount,
-				"earn", "rewarded_ad", "看广告赠送积分", source, "rewarded_ad", &viewID, meta)
+				"earn", "rewarded_ad", integralRemark, source, "rewarded_ad", &viewID, meta)
 			if err != nil {
 				return nil, err
 			}
@@ -318,7 +429,7 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 
 		case cardkeydomain.RewardExperience:
 			expResult, err := r.applyExperienceChangeTx(ctx, tx, view.UserID, view.AppID, reward.Amount,
-				"rewarded_ad", "看广告赠送经验", source, "rewarded_ad", &viewID, meta)
+				"rewarded_ad", experienceRemark, source, "rewarded_ad", &viewID, meta)
 			if err != nil {
 				return nil, err
 			}
