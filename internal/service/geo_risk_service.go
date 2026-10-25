@@ -39,7 +39,7 @@ const (
 // GeoRiskService 登录地理风控（近线，Worker 消费 NATS 登录事件驱动）。
 //
 // 数据流：
-//  1. 解析登录事件 → LocationService（mmdb + 缓存）取坐标
+//  1. 解析登录事件 → LocationService（宝塔归属地接口 + 缓存）取坐标
 //  2. 读用户地理画像（Redis 读主，miss 回源 PG）
 //  3. 纯内存判定：不可能旅行 / 新国家 / 远离常驻地
 //  4. 命中 → 写 risk_assessments（复用风控体系）+ 高危用户通知

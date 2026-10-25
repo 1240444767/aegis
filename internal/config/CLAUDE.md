@@ -61,7 +61,6 @@ Config
 | REDIS_KEY_PREFIX | "aegis" |
 | NATS_STREAM_NAME | "AEGIS_EVENTS" |
 | TEMPORAL_TASK_QUEUE | "aegis-workflow" |
-| GEOIP_DATABASE_DIR | ".runtime/geoip" |
 | AUTO_SIGN_TICK_INTERVAL | 1m |
 | AUTO_SIGN_REBUILD_INTERVAL | 15m |
 | BANNER_STYLE | auto（跟随终端能力） |

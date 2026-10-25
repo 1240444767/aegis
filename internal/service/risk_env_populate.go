@@ -225,8 +225,8 @@ func (s *RiskService) populateNetworkEnv(ctx context.Context, env *RiskEvalEnv) 
 	}
 	rt := s.runtime()
 
-	// 归属地优先走本地 mmdb：离线、免费、零配额。
-	// 外部情报源只补充「是不是代理 / 信誉分多少」这类 mmdb 给不出的判断。
+	// 归属地走 LocationService（宝塔归属地接口 + 缓存），免费、零配额。
+	// 外部情报源只补充「是不是代理 / 信誉分多少」这类归属地给不出的判断。
 	if rt.location != nil {
 		loc := rt.location.Resolve(ctx, env.IP)
 		env.GeoCountry = firstNonEmptyString(loc.CountryCode, loc.Country)

@@ -1,13 +1,6 @@
 package chinageo
 
-import (
-	"io"
-	"net/netip"
-	"os"
-	"path/filepath"
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestResolve(t *testing.T) {
 	cases := []struct {
@@ -41,57 +34,28 @@ func TestResolve(t *testing.T) {
 	}
 }
 
-func TestOperators(t *testing.T) {
-	lists := map[string]string{
-		"china":    "1.0.1.0/24\n36.96.0.0/11\n240e::/20\n",
-		"chinanet": "36.96.0.0/11\n240e::/20\n",
-	}
-	ops, err := LoadOperators(func(name string) (io.ReadCloser, error) {
-		body, ok := lists[name]
-		if !ok {
-			return nil, nil
-		}
-		return io.NopCloser(strings.NewReader(body)), nil
-	})
-	if err != nil || ops == nil {
-		t.Fatalf("load: %v", err)
-	}
-	cases := map[string]struct {
-		mainland bool
-		operator string
+func TestResolveCode(t *testing.T) {
+	cases := []struct {
+		code string
+		want Place
+		ok   bool
 	}{
-		"36.110.0.1":     {true, "电信"},
-		"36.127.255.255": {true, "电信"},
-		"36.128.0.0":     {false, ""},
-		"1.0.1.9":        {true, ""},
-		"240e:3b0::1":    {true, "电信"},
-		"2001:db8::1":    {false, ""},
-		"8.8.8.8":        {false, ""},
+		{"420984", Place{Province: "湖北省", City: "孝感市", District: "汉川市"}, true},
+		{"440100", Place{Province: "广东省", City: "广州市"}, true},
+		{"310104", Place{Province: "上海市", City: "上海市", District: "徐汇区"}, true},
+		{"110000", Place{Province: "北京市", City: "北京市"}, true},
+		{"420000", Place{Province: "湖北省"}, true},
+		{"810000", Place{}, false},
+		{"", Place{}, false},
+		{"999999", Place{}, false},
 	}
-	for ip, want := range cases {
-		mainland, operator := ops.Lookup(netip.MustParseAddr(ip))
-		if mainland != want.mainland || operator != want.operator {
-			t.Fatalf("%s = %v %q, want %v %q", ip, mainland, operator, want.mainland, want.operator)
+	for _, tc := range cases {
+		got, ok := ResolveCode(tc.code)
+		if ok != tc.ok {
+			t.Fatalf("ResolveCode(%q) ok=%v", tc.code, ok)
 		}
-	}
-}
-
-// 真实数据校验：GEOIP_TEST_DIR 指向含 qqwry.dat 的目录时运行。
-func TestQQWryRealData(t *testing.T) {
-	dir := os.Getenv("GEOIP_TEST_DIR")
-	if dir == "" {
-		t.Skip("GEOIP_TEST_DIR not set")
-	}
-	db, err := OpenQQWry(filepath.Join(dir, "qqwry.dat"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Log(db)
-	place, ok := db.LookupPlace(netip.MustParseAddr("120.229.0.1"))
-	if !ok || place.Province != "广东省" || place.City != "深圳市" || place.ISP != "移动" {
-		t.Fatalf("120.229.0.1 = %+v %v", place, ok)
-	}
-	if _, ok := db.LookupPlace(netip.MustParseAddr("8.8.8.8")); ok {
-		t.Fatal("8.8.8.8 should not be mainland")
+		if ok && (got.Province != tc.want.Province || got.City != tc.want.City || got.District != tc.want.District) {
+			t.Fatalf("ResolveCode(%q) = %+v", tc.code, got)
+		}
 	}
 }

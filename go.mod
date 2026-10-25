@@ -72,7 +72,6 @@ require (
 	github.com/mozillazg/go-pinyin v0.21.0
 	github.com/nats-io/nats.go v1.52.0
 	github.com/openai/openai-go/v3 v3.54.0
-	github.com/oschwald/geoip2-golang v1.13.0
 	github.com/osteele/liquid v1.9.2
 	github.com/panjf2000/ants/v2 v2.12.1
 	github.com/paulmach/orb v0.13.0
@@ -281,7 +280,6 @@ require (
 	github.com/olekukonko/errors v1.1.0 // indirect
 	github.com/olekukonko/ll v0.0.9 // indirect
 	github.com/olekukonko/tablewriter v1.0.7 // indirect
-	github.com/oschwald/maxminddb-golang v1.13.1 // indirect
 	github.com/osteele/tuesday v1.1.1 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/pelletier/go-toml/v2 v2.3.1 // indirect

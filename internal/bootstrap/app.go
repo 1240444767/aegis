@@ -531,7 +531,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	userMasterService := service.NewUserMasterService(log, pg)
 	reportService := service.NewReportService(log, pg)
 	riskService := service.NewRiskService(cfg.Risk, log, pg, redisClient, cfg.Redis.KeyPrefix)
-	// 归属地走本地 mmdb：未采购外部 IP 情报源时，geo_* 系列变量若恒为空，
+	// 归属地走 LocationService：未采购外部 IP 情报源时，geo_* 系列变量若恒为空，
 	// 「归属地异常」这类规则配了也永不命中 —— 那是最典型的"看起来防住了"。
 	riskService.SetLocationService(locationService)
 	authService.SetRiskService(riskService)

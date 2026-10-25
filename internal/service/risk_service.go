@@ -67,7 +67,7 @@ func NewRiskService(cfg config.RiskConfig, log *zap.Logger, pg *pgrepo.Repositor
 
 // SetLocationService 注入地理定位服务。
 // 归属地此前只能从外部 IP 情报源拿，未采购情报源时 geo_* 系列变量恒为空 ——
-// 那意味着「归属地异常」这类规则配了也永不命中。本地 mmdb 是免费且离线的兜底。
+// 那意味着「归属地异常」这类规则配了也永不命中。LocationService 是免费的兜底。
 func (s *RiskService) SetLocationService(location *LocationService) {
 	s.mu.Lock()
 	s.location = location

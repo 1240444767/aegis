@@ -563,7 +563,7 @@ func capabilitySection(rt BannerRuntime) banner.Section {
 		Key:   "GeoIP",
 		Value: geo,
 		State: geoState,
-		Note:  banner.Join(cfg.GeoIP.DatabaseDir, "自动更新 "+cfg.GeoIP.UpdateInterval.String()),
+		Note:  "宝塔 IP 归属地接口",
 	})
 
 	risk, riskState := banner.Toggle(cfg.GeoRisk.Enabled)

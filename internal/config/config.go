@@ -606,21 +606,10 @@ type RiskRateLimitConfig struct {
 	AccountDevicePerMinute int
 }
 
+// GeoIPConfig IP 归属地。数据全部来自宝塔面板的归属地接口（service/location_btcn.go），
+// 不再下载本地库。
 type GeoIPConfig struct {
-	Enabled             bool
-	DatabaseDir         string
-	CityDBURL           string
-	ASNDBURL            string
-	UpdateInterval      time.Duration
-	DownloadTimeout     time.Duration
-	GitHubMirror        string
-	ChinaOptimized      bool
-	AllowRemoteFallback bool
-	// 国内补充数据层：纯真 IP 库（每周更新）给省市区与运营商，
-	// china-operator-ip（每日更新）判定大陆归属与运营商。全球库仍是兜底。
-	ChinaEnabled         bool
-	QQWryURL             string
-	ChinaOperatorBaseURL string
+	Enabled bool
 }
 
 // GeoRiskConfig 地理风控 / 地理分析配置。
@@ -965,18 +954,7 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			},
 		},
 		GeoIP: GeoIPConfig{
-			Enabled:              getBool(v, "GEOIP_ENABLED", true),
-			DatabaseDir:          v.GetString("GEOIP_DATABASE_DIR"),
-			CityDBURL:            v.GetString("GEOIP_CITY_DB_URL"),
-			ASNDBURL:             v.GetString("GEOIP_ASN_DB_URL"),
-			UpdateInterval:       v.GetDuration("GEOIP_UPDATE_INTERVAL"),
-			DownloadTimeout:      v.GetDuration("GEOIP_DOWNLOAD_TIMEOUT"),
-			GitHubMirror:         v.GetString("GEOIP_GITHUB_MIRROR"),
-			ChinaOptimized:       getBool(v, "GEOIP_CHINA_OPTIMIZED", true),
-			AllowRemoteFallback:  getBool(v, "GEOIP_ALLOW_REMOTE_FALLBACK", true),
-			ChinaEnabled:         getBool(v, "GEOIP_CN_ENABLED", true),
-			QQWryURL:             v.GetString("GEOIP_QQWRY_URL"),
-			ChinaOperatorBaseURL: v.GetString("GEOIP_CN_OPERATOR_BASE_URL"),
+			Enabled: getBool(v, "GEOIP_ENABLED", true),
 		},
 		GeoRisk: GeoRiskConfig{
 			Enabled:              getBool(v, "GEORISK_ENABLED", true),
@@ -1532,30 +1510,6 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Risk.RateLimit.IPPerMinute <= 0 {
 		cfg.Risk.RateLimit.IPPerMinute = 120
-	}
-	if strings.TrimSpace(cfg.GeoIP.DatabaseDir) == "" {
-		cfg.GeoIP.DatabaseDir = ".runtime/geoip"
-	}
-	if strings.TrimSpace(cfg.GeoIP.CityDBURL) == "" {
-		cfg.GeoIP.CityDBURL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb"
-	}
-	if strings.TrimSpace(cfg.GeoIP.ASNDBURL) == "" {
-		cfg.GeoIP.ASNDBURL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb"
-	}
-	if cfg.GeoIP.UpdateInterval == 0 {
-		cfg.GeoIP.UpdateInterval = 24 * time.Hour
-	}
-	if cfg.GeoIP.DownloadTimeout == 0 {
-		cfg.GeoIP.DownloadTimeout = 2 * time.Minute
-	}
-	if strings.TrimSpace(cfg.GeoIP.GitHubMirror) == "" {
-		cfg.GeoIP.GitHubMirror = "https://ghfast.top/"
-	}
-	if strings.TrimSpace(cfg.GeoIP.QQWryURL) == "" {
-		cfg.GeoIP.QQWryURL = "https://github.com/metowolf/qqwry.dat/releases/latest/download/qqwry.dat"
-	}
-	if strings.TrimSpace(cfg.GeoIP.ChinaOperatorBaseURL) == "" {
-		cfg.GeoIP.ChinaOperatorBaseURL = "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/"
 	}
 	if cfg.NATS.StreamName == "" {
 		cfg.NATS.StreamName = "AEGIS_EVENTS"

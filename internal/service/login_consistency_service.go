@@ -164,7 +164,7 @@ func (s *LoginConsistencyService) commit(ctx context.Context, appID, userID int6
 
 // resolveRegion 归一化属地标识（国家码/省）。
 // 取不到属地时返回空串，由调用方按「不判定」处理 —— 内网 IP、
-// mmdb 未覆盖的地址都会走到这里，把它们当成「属地变更」会造成大面积误拦。
+// 归属地接口查不到的地址（如 IPv6）都会走到这里，把它们当成「属地变更」会造成大面积误拦。
 func (s *LoginConsistencyService) resolveRegion(ctx context.Context, ip string) string {
 	if s.location == nil || ip == "" {
 		return ""

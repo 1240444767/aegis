@@ -61,7 +61,7 @@ func bannerTestConfig() config.Config {
 		Redis:       config.RedisConfig{Addr: "redis.internal:6379", Password: "redispass-must-not-leak", DB: 3, KeyPrefix: "aegis"},
 		NATS:        config.NATSConfig{URL: "nats://aegis:natspass-must-not-leak@nats.internal:4222", StreamName: "AEGIS_EVENTS"},
 		Temporal:    config.TemporalConfig{HostPort: "temporal.internal:7233", Namespace: "default", TaskQueue: "aegis-workflow"},
-		GeoIP:       config.GeoIPConfig{Enabled: true, DatabaseDir: ".runtime/geoip", UpdateInterval: 168 * time.Hour},
+		GeoIP:       config.GeoIPConfig{Enabled: true},
 		GeoRisk:     config.GeoRiskConfig{Enabled: true, MaxSpeedKMH: 900},
 		AutoSign:    config.AutoSignConfig{Enabled: true, TickInterval: time.Minute, RebuildInterval: 15 * time.Minute},
 		Memory:      config.MemoryConfig{GCAutoTune: true, MonitorInterval: 15 * time.Second, LeakDetection: true},

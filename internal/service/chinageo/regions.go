@@ -1,5 +1,5 @@
-// Package chinageo 是国内 IP 定位的补充数据层：纯真 IP 库给省市区与运营商，
-// china-operator-ip 网段表判定大陆归属与运营商，内置行政区表把简称换成全称并给出中心点坐标。
+// Package chinageo 是内置的国内行政区表：把归属地接口给的行政区划代码或省市区简称
+// 换成官方全称，并给出政府驻地坐标。
 package chinageo
 
 import (
@@ -72,10 +72,10 @@ func regions() *regionIndex {
 
 const countryCode = 100000
 
-// 港澳台不在大陆补充数据的范围内，交给全球库。
+// 港澳台不在大陆行政区表的范围内，由调用方单独处理。
 var nonMainland = map[int]bool{710000: true, 810000: true, 820000: true}
 
-// matchName 把纯真里的简称（「广东」「深圳」「南山区」）对上全称（「广东省」「深圳市」「南山区」）。
+// matchName 把归属地里的简称（「广东」「深圳」「南山区」）对上全称（「广东省」「深圳市」「南山区」）。
 func matchName(candidates []*Region, short string, level string) *Region {
 	short = strings.TrimSpace(short)
 	if short == "" {
@@ -113,7 +113,7 @@ func Resolve(province, city, district string) (Place, bool) {
 		place.Lat, place.Lng = cityRegion.Lat, cityRegion.Lng
 		districtParent = cityRegion.Code
 	case isMunicipality(idx, prov):
-		// 直辖市下面直接是区，纯真写成「上海–上海–徐汇区」
+		// 直辖市下面直接是区，城市一栏写省级名称
 		place.City = prov.Name
 	}
 
@@ -135,4 +135,40 @@ func isMunicipality(idx *regionIndex, prov *Region) bool {
 		}
 	}
 	return true
+}
+
+// ResolveCode 按行政区划代码（省、地、县任一级）取全称与坐标。港澳台、未知代码返回 false。
+func ResolveCode(code string) (Place, bool) {
+	value, err := strconv.Atoi(strings.TrimSpace(code))
+	if err != nil {
+		return Place{}, false
+	}
+	idx := regions()
+	region := idx.byCode[value]
+	if region == nil {
+		return Place{}, false
+	}
+	place := Place{Lat: region.Lat, Lng: region.Lng}
+	var prov *Region
+	for current := region; current != nil && current.Code != countryCode; current = idx.byCode[current.Parent] {
+		switch current.Level {
+		case "province":
+			if nonMainland[current.Code] {
+				return Place{}, false
+			}
+			place.Province, prov = current.Name, current
+		case "city":
+			place.City = current.Name
+		case "district":
+			place.District = current.Name
+		}
+	}
+	if prov == nil {
+		return Place{}, false
+	}
+	if place.City == "" && isMunicipality(idx, prov) {
+		// 直辖市下面直接是区，城市一栏与 Resolve 一致取省级全称
+		place.City = place.Province
+	}
+	return place, true
 }
