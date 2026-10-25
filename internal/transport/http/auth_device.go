@@ -39,6 +39,10 @@ func resolveClientDevice(c *gin.Context, bodyDeviceID, bodyDevice, legacyMarkCod
 	if deviceID == "" {
 		deviceID = devicedomain.NormalizeID(legacyMarkCode)
 	}
+	// 客户端换过设备码生成方式时带上的旧码，签发与刷新据此把旧码下的绑定迁过来
+	if previous := deviceHeader(c, devicedomain.HeaderPreviousID); previous != "" && deviceID != "" {
+		c.Request = c.Request.WithContext(devicedomain.WithPreviousID(c.Request.Context(), previous, deviceID))
+	}
 
 	device = strings.TrimSpace(bodyDevice)
 	if device == "" {

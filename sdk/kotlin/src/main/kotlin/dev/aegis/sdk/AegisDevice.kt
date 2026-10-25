@@ -45,6 +45,12 @@ data class AegisDevice @JvmOverloads constructor(
     val versionCode: Long? = null,
     /** 签名证书 SHA-256（64 位十六进制）→ `X-App-Cert` */
     val certSha256: String? = null,
+    /**
+     * 本机以前用过的设备码 → `X-Device-Id-Previous`。客户端换了设备码的生成方式时带上，
+     * 服务端据此把旧码下的刷新令牌绑定、登录设备检查、设备登录数、卡密绑定迁到 [id]；
+     * 不带的话旧会话刷新会因设备绑定不符被拒（40104）。与 [id] 相同时不发。
+     */
+    val previousId: String? = null,
 ) {
 
     /** 要附加的请求头。空值不发；非 ASCII 的值按 UTF-8 百分号编码（HTTP 头只能放 ASCII）。 */
@@ -61,6 +67,7 @@ data class AegisDevice @JvmOverloads constructor(
         HEADER_APP_PACKAGE to packageName,
         HEADER_APP_VERSION_CODE to versionCode?.takeIf { it > 0 }?.toString(),
         HEADER_APP_CERT to certSha256?.let { AegisClientControlApi.normalizeCert(it) },
+        HEADER_PREVIOUS_ID to previousId?.takeIf { it.trim() != id?.trim() },
     ).mapNotNull { (name, value) ->
         value?.trim()?.takeIf { it.isNotEmpty() }?.let { name to headerSafe(it) }
     }.toMap()
@@ -78,6 +85,7 @@ data class AegisDevice @JvmOverloads constructor(
         const val HEADER_APP_PACKAGE = "X-App-Package"
         const val HEADER_APP_VERSION_CODE = "X-App-Version-Code"
         const val HEADER_APP_CERT = "X-App-Cert"
+        const val HEADER_PREVIOUS_ID = "X-Device-Id-Previous"
 
         /**
          * 从 `android.os.Build` 读出本机信息。

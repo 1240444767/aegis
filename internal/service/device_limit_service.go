@@ -418,12 +418,21 @@ func (s *DeviceLimitService) Admit(ctx context.Context, app *appdomain.App, user
 		s.log.Warn("device limit: list devices failed, allowing login", zap.Int64("appid", user.AppID), zap.Int64("userId", user.ID), zap.Error(err))
 		return admission, nil, nil
 	}
+	// 客户端换了设备码生成方式：旧码下还活着的会话就是这台设备，不能让它挤掉自己
+	previous := devicedomain.PreviousIDFrom(ctx)
+	if previous != "" {
+		devices = devicelimit.RenameKey(devices, previous, admission.key)
+	}
 	limits, _, _ := s.limitsFor(ctx, policy, user.AppID, user.ID)
 	admission.limits = limits
 	candidate := devicelimit.Candidate{Key: admission.key, Class: devicelimit.ClassOf(platform), Platform: platform}
 	newCount := 0
 	if limits.NewDevice.Enabled && !limits.Unlimited && devicelimit.Ledgerable(candidate.Key) {
 		known, err := s.pg.LoginDeviceKnown(ctx, user.AppID, user.ID, candidate.Key)
+		if err == nil && !known && previous != "" {
+			// 台账里只有旧码：同一台设备，不算新设备
+			known, err = s.pg.LoginDeviceKnown(ctx, user.AppID, user.ID, previous)
+		}
 		if err != nil {
 			s.log.Warn("device limit: ledger lookup failed", zap.Int64("appid", user.AppID), zap.Int64("userId", user.ID), zap.Error(err))
 			known = true

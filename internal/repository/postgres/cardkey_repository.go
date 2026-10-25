@@ -972,6 +972,29 @@ VALUES ($1, $2, $3, $4, $5, $6)`, input.AppID, card.ID, input.DeviceID, deviceNa
 	return tx.Commit(ctx)
 }
 
+// MigrateCardKeyDevices 用户名下各卡在旧设备码下的绑定改记新码：同一台设备换了标识，不该多占一个名额，
+// 也不该让用户为此去解绑。卡上已有新码的，删掉旧码那条（合并）。返回改记的绑定条数。
+func (r *Repository) MigrateCardKeyDevices(ctx context.Context, appID int64, userID int64, from string, to string) (int64, error) {
+	if from == "" || to == "" || from == to {
+		return 0, nil
+	}
+	tag, err := r.pool.Exec(ctx, `WITH cards AS (
+    SELECT id FROM card_keys WHERE appid = $1 AND bound_user_id = $2
+), merged AS (
+    DELETE FROM card_key_devices d
+    WHERE d.appid = $1 AND d.device_id = $3 AND d.card_key_id IN (SELECT id FROM cards)
+      AND EXISTS (SELECT 1 FROM card_key_devices n WHERE n.card_key_id = d.card_key_id AND n.device_id = $4)
+    RETURNING d.id
+)
+UPDATE card_key_devices SET device_id = $4, last_seen_at = NOW()
+WHERE appid = $1 AND device_id = $3 AND card_key_id IN (SELECT id FROM cards)
+  AND id NOT IN (SELECT id FROM merged)`, appID, userID, from, to)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // ResetCardKeyDevices 清空一张卡的全部设备（管理员）。
 func (r *Repository) ResetCardKeyDevices(ctx context.Context, appID int64, cardID int64, operator string) (int64, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})

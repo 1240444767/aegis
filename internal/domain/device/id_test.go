@@ -1,6 +1,7 @@
 package device
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -28,5 +29,25 @@ func TestNormalizeID(t *testing.T) {
 	}
 	if !IsPlaceholderID(strings.Repeat("0", 64)) || IsPlaceholderID("") || IsPlaceholderID("abc") {
 		t.Fatal("IsPlaceholderID")
+	}
+}
+
+func TestPreviousIDAndContinues(t *testing.T) {
+	ctx := WithPreviousID(context.Background(), " old-id ", "new-id")
+	if PreviousIDFrom(ctx) != "old-id" {
+		t.Fatalf("previous = %q", PreviousIDFrom(ctx))
+	}
+	if PreviousIDFrom(WithPreviousID(context.Background(), strings.Repeat("0", 64), "new-id")) != "" {
+		t.Fatal("placeholder previous id should be ignored")
+	}
+	if PreviousIDFrom(WithPreviousID(context.Background(), "same", "same")) != "" {
+		t.Fatal("previous equal to current should be ignored")
+	}
+	if !Continues(ctx, "old-id", "new-id") || !Continues(ctx, "new-id", "new-id") ||
+		!Continues(ctx, strings.Repeat("0", 64), "new-id") || Continues(ctx, "other", "new-id") {
+		t.Fatal("Continues")
+	}
+	if Continues(context.Background(), "old-id", "new-id") {
+		t.Fatal("without a previous id a changed device must not continue")
 	}
 }

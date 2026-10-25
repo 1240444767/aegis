@@ -86,6 +86,10 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 		// 客户端换成真实标识后直接重新绑定，不触发换绑冷却
 		current.DeviceID = ""
 	}
+	if current != nil && deviceID != "" && current.DeviceID != "" && current.DeviceID == devicedomain.PreviousIDFrom(ctx) {
+		// 绑定的是这台设备以前的设备码（客户端换了生成方式）：仍是同一台，改记新码，不算换绑
+		current.DeviceID = deviceID
+	}
 
 	now := timeutil.NowUTC()
 	next := appdomain.LoginBaseline{DeviceID: deviceID, IP: ip, UpdatedAt: now}
@@ -161,6 +165,19 @@ func (s *LoginConsistencyService) Reset(ctx context.Context, appID, userID int64
 
 // commit 写入基线。写失败只告警：本次登录已经通过校验，
 // 因为一次写失败把用户挡在外面是更坏的结果。
+// MigrateDevice 客户端换了设备码生成方式：基线绑定的若是旧码，改记新码，换绑时间不变。
+func (s *LoginConsistencyService) MigrateDevice(ctx context.Context, appID, userID int64, from, to string) {
+	if s == nil || s.baseline == nil || appID <= 0 || userID <= 0 || from == "" || to == "" || from == to {
+		return
+	}
+	current, err := s.baseline.Get(ctx, appID, userID)
+	if err != nil || current == nil || current.DeviceID != from {
+		return
+	}
+	current.DeviceID = to
+	s.commit(ctx, appID, userID, *current)
+}
+
 func (s *LoginConsistencyService) commit(ctx context.Context, appID, userID int64, baseline appdomain.LoginBaseline) {
 	if err := s.baseline.Set(ctx, appID, userID, baseline, loginBaselineTTL); err != nil {
 		s.log.Warn("登录基线写入失败",

@@ -1129,6 +1129,15 @@ func (s *CardKeyService) SelfUnbind(ctx context.Context, appID int64, userID int
 //
 // 只读：建号发生在认证服务里（那里才有资料、邀请码、搜索同步这些东西），
 // 绑定与设备校验发生在 Activate 的事务里。登录前没有用户，防爆破只按 IP 计。
+// MigrateUserDevice 用户名下各卡在旧设备码 from 下的设备绑定改记到新码 to（客户端换了设备码生成方式）。
+// 返回改记的绑定条数（合并掉的不计）。
+func (s *CardKeyService) MigrateUserDevice(ctx context.Context, appID int64, userID int64, from string, to string) (int64, error) {
+	if s == nil || s.pg == nil {
+		return 0, nil
+	}
+	return s.pg.MigrateCardKeyDevices(ctx, appID, userID, from, to)
+}
+
 func (s *CardKeyService) PrepareLogin(ctx context.Context, appID int64, code string, clientIP string) (*cardkeydomain.Card, error) {
 	normalized := NormalizeCardKeyCode(code)
 	if normalized == "" {

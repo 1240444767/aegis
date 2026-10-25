@@ -1365,6 +1365,7 @@ func setDefaults(cfg *Config) {
 			// 设备上报（见 docs/app-integration.md「设备信息」）。浏览器客户端跨域时少了它们，
 			// 预检直接失败，登录请求根本发不出去
 			"X-Device-Id",
+			"X-Device-Id-Previous",
 			"X-Device-Name",
 			"X-Device-Platform",
 			"X-Device-Manufacturer",

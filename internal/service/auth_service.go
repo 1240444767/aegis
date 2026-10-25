@@ -833,11 +833,18 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 		}
 	}
 	if deviceID == "" {
-		deviceID = refreshSession.DeviceID
+		deviceID = devicedomain.NormalizeID(refreshSession.DeviceID)
 	}
-	if refreshSession.DeviceID != "" && deviceID != "" && refreshSession.DeviceID != deviceID {
+	// 设备绑定：会话里存的设备码要与这次上报的一致。两种情况不算换设备 ——
+	// 存的是占位值（全零 OAID 等，修复前的客户端会发），或者存的正是客户端声明的旧设备码
+	// （客户端换了设备码生成方式，见 devicedomain.HeaderPreviousID）。后者顺带迁移旧码下的绑定。
+	if !devicedomain.Continues(ctx, refreshSession.DeviceID, deviceID) {
 		s.handleRefreshReuse(ctx, refreshSession)
 		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌设备绑定校验失败")
+	}
+	migrateFrom := ""
+	if stored := devicedomain.NormalizeID(refreshSession.DeviceID); stored != "" && stored != deviceID {
+		migrateFrom = stored
 	}
 	if refreshSession.UsedAt != nil || strings.TrimSpace(refreshSession.ReplacedByToken) != "" {
 		s.handleRefreshReuse(ctx, refreshSession)
@@ -873,6 +880,9 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 	bundle, err := s.issueSessionBundle(ctx, app, user, refreshSession.Provider, "refresh", deviceID, refreshSession.Device, ip, userAgent, refreshSession.FamilyID)
 	if err != nil {
 		return nil, err
+	}
+	if migrateFrom != "" {
+		s.migrateDeviceID(refreshSession.AppID, refreshSession.UserID, migrateFrom, deviceID)
 	}
 	if s.deviceLimit != nil {
 		appID, userID, familyID := refreshSession.AppID, refreshSession.UserID, refreshSession.FamilyID
@@ -1299,6 +1309,9 @@ func (s *AuthService) issueSessionChecked(ctx context.Context, app *appdomain.Ap
 	}
 	if admission != nil {
 		s.deviceLimit.Commit(ctx, admission, IssuedLogin{FamilyID: bundle.RefreshSession.FamilyID})
+	}
+	if previous := devicedomain.PreviousIDFrom(ctx); previous != "" && deviceID != "" {
+		s.migrateDeviceID(user.AppID, user.ID, previous, deviceID)
 	}
 	return bundle.Result, nil
 }

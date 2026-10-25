@@ -587,6 +587,7 @@ POST /api/v1/apps/{appKey}/auth/login
 | 字段 | 请求体 | 请求头 | 说明 |
 |---|---|---|---|
 | 设备唯一码 | `deviceId` | `X-Device-Id` | 开启「登录设备检查」时必填 |
+| 旧设备码 | — | `X-Device-Id-Previous` | 可选。客户端换了设备码生成方式时带上本机以前的设备码，见下文 |
 | 原始型号 | `device` | `X-Device-Name` | **报原始型号而不是营销名**：Android 用 `Build.MODEL`（如 `SM-G998B`），iOS 用机器标识（如 `iPhone14,3`） |
 | 平台 | — | `X-Device-Platform` | `android` / `ios` / `harmonyos` / `windows` / `macos` / `linux` / `web`；不报时按 UA 推断 |
 | 厂商 | — | `X-Device-Manufacturer` | Android `Build.MANUFACTURER`；字典未命中时展示名为「厂商 型号」 |
@@ -600,6 +601,11 @@ POST /api/v1/apps/{appKey}/auth/login
 `unknown`、`null` 这类占位值所有设备都一样，服务端一律按**没有上报**处理：设备登录数退回按 UA 区分，
 开启「登录设备检查」时返回 `40024`（提示设备标识无效）；之前已绑定成占位值的用户，下次带上真实标识登录时直接重新绑定，
 不触发换绑冷却。客户端拿到占位值时应改用 ANDROID_ID 或本机生成并持久化的随机 ID。
+
+设备码要在卸载重装后保持不变（只在恢复出厂设置后变化）：Android 8 起的 ANDROID_ID 按签名密钥区分、重装不变，
+是首选；MediaDRM（Widevine）设备码可作备选。换设备码生成方式时，客户端在 `X-Device-Id-Previous` 带上以前的码，
+服务端在当前用户自己的数据里把旧码迁到新码：刷新令牌的设备绑定放行（否则返回 `40104` 并撤销该登录）、
+登录设备检查的基线改记新码、设备登录数把旧码下的会话与新登录算作同一台、卡密的设备绑定改记新码。
 
 后六项都可选、只用于展示，单项超过 64 字节截断，不参与任何安全判定。HTTP 头只能放 ASCII：
 带中文等字符的值（部分国产机型的型号与品牌）按 UTF-8 百分号编码后发送，服务端会解码。它们默认在 CORS 允许的请求头里，

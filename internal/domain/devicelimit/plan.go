@@ -62,6 +62,40 @@ func DeviceKey(deviceID, userAgent, familyID string) string {
 	return sessionKeyPrefix + familyID
 }
 
+// RenameKey 把 Key 为 from 的设备改记为 to；已有 to 的设备时合并成一台（登录族、会话数、最早登录、最近活动）。
+// 客户端换了设备码生成方式时用：旧码下还活着的会话与这次登录是同一台设备。
+func RenameKey(devices []Device, from, to string) []Device {
+	if from == "" || to == "" || from == to {
+		return devices
+	}
+	out := make([]Device, 0, len(devices))
+	at := -1
+	for _, device := range devices {
+		if device.Key == from {
+			device.Key = to
+		}
+		if device.Key != to {
+			out = append(out, device)
+			continue
+		}
+		if at < 0 {
+			at = len(out)
+			out = append(out, device)
+			continue
+		}
+		merged := &out[at]
+		merged.Families = append(append([]string(nil), merged.Families...), device.Families...)
+		merged.Sessions += device.Sessions
+		if device.LoginAt.Before(merged.LoginAt) {
+			merged.LoginAt = device.LoginAt
+		}
+		if device.LastActiveAt.After(merged.LastActiveAt) {
+			merged.LastActiveAt = device.LastActiveAt
+		}
+	}
+	return out
+}
+
 // KindOf 设备 Key 的来源。
 func KindOf(key string) string {
 	switch {

@@ -270,3 +270,32 @@ func TestDeviceKeyIgnoresPlaceholderIDs(t *testing.T) {
 		t.Fatalf("real id should be kept, got %q", got)
 	}
 }
+
+func TestRenameKeyMergesPreviousDevice(t *testing.T) {
+	old := device("old-id", "android", 3*time.Hour, time.Hour)
+	old.Families = []string{"f-old"}
+	old.Sessions = 1
+	fresh := device("new-id", "android", time.Hour, time.Minute)
+	fresh.Families = []string{"f-new"}
+	fresh.Sessions = 1
+	other := device("other", "ios", time.Hour, time.Hour)
+
+	got := RenameKey([]Device{old, other, fresh}, "old-id", "new-id")
+	if len(got) != 2 {
+		t.Fatalf("want 2 devices, got %d", len(got))
+	}
+	merged := got[0]
+	if merged.Key != "new-id" || merged.Sessions != 2 || len(merged.Families) != 2 ||
+		!merged.LoginAt.Equal(old.LoginAt) || !merged.LastActiveAt.Equal(fresh.LastActiveAt) {
+		t.Fatalf("merged = %+v", merged)
+	}
+	if got[1].Key != "other" {
+		t.Fatalf("other device moved: %+v", got[1])
+	}
+	if renamed := RenameKey([]Device{old}, "old-id", "new-id"); renamed[0].Key != "new-id" {
+		t.Fatalf("rename without merge: %+v", renamed)
+	}
+	if old.Key != "old-id" {
+		t.Fatal("input slice must not be modified")
+	}
+}
