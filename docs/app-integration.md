@@ -596,6 +596,11 @@ POST /api/v1/apps/{appKey}/auth/login
 | 系统版本 | — | `X-Device-OS-Version` | Android `Build.VERSION.RELEASE`，iOS `UIDevice.systemVersion` |
 | 应用版本 | — | `X-App-Version` | 客户端自己的版本号 |
 
+设备唯一码要是本机自己的值。全零（关闭广告追踪后的 OAID，64 位、32 位、UUID 形式都有）、`9774d56d682e549c`、
+`unknown`、`null` 这类占位值所有设备都一样，服务端一律按**没有上报**处理：设备登录数退回按 UA 区分，
+开启「登录设备检查」时返回 `40024`（提示设备标识无效）；之前已绑定成占位值的用户，下次带上真实标识登录时直接重新绑定，
+不触发换绑冷却。客户端拿到占位值时应改用 ANDROID_ID 或本机生成并持久化的随机 ID。
+
 后六项都可选、只用于展示，单项超过 64 字节截断，不参与任何安全判定。HTTP 头只能放 ASCII：
 带中文等字符的值（部分国产机型的型号与品牌）按 UTF-8 百分号编码后发送，服务端会解码。它们默认在 CORS 允许的请求头里，
 浏览器客户端跨域也能发送。官方 Kotlin SDK 用 `AegisClient.builder(…).device(AegisDevice(…))` 统一附加

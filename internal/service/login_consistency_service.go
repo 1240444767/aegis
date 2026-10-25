@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appdomain "aegis/internal/domain/app"
+	devicedomain "aegis/internal/domain/device"
 	redisrepo "aegis/internal/repository/redis"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
@@ -71,7 +72,7 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 		return nil
 	}
 
-	deviceID = strings.TrimSpace(deviceID)
+	deviceID = devicedomain.NormalizeID(deviceID)
 	ip = strings.TrimSpace(ip)
 
 	current, err := s.baseline.Get(ctx, appID, userID)
@@ -79,6 +80,11 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 		s.log.Warn("登录基线读取失败（fail-open）",
 			zap.Int64("app_id", appID), zap.Int64("user_id", userID), zap.Error(err))
 		return nil
+	}
+	if current != nil && devicedomain.IsPlaceholderID(current.DeviceID) {
+		// 修复前绑下的全零等占位设备码：所有这类设备都一样，算没绑定，
+		// 客户端换成真实标识后直接重新绑定，不触发换绑冷却
+		current.DeviceID = ""
 	}
 
 	now := timeutil.NowUTC()

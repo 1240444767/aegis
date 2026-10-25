@@ -1,6 +1,7 @@
 package devicelimit
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -253,5 +254,19 @@ func TestTrimBringsDevicesWithinLimits(t *testing.T) {
 	got := keys(victims)
 	if len(got) != 2 || got[0] != "pc1" || got[1] != "pc2" {
 		t.Fatalf("先按类别收回 pc1，再按总数收回最早的 pc2，得到 %v", got)
+	}
+}
+
+func TestDeviceKeyIgnoresPlaceholderIDs(t *testing.T) {
+	ua := "Mozilla/5.0 (Linux; Android 16) Voyage/1.0"
+	zero := strings.Repeat("0", 64)
+	if got := DeviceKey(zero, ua, "f1"); KindOf(got) != KeyKindAgent {
+		t.Fatalf("all-zero id should fall back to the UA key, got %q", got)
+	}
+	if got := DeviceKey("9774d56d682e549c", "", "f1"); got != "s:f1" {
+		t.Fatalf("placeholder without UA should be a session key, got %q", got)
+	}
+	if got := DeviceKey(" real-id ", ua, "f1"); got != "real-id" {
+		t.Fatalf("real id should be kept, got %q", got)
 	}
 }

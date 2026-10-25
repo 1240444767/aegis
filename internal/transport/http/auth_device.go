@@ -29,13 +29,15 @@ import (
 
 // resolveClientDevice 只读取客户端显式提供的设备字段（body + header + legacy markcode）
 // 不做 UA 回退，用于策略校验
+//
+// 全零等占位设备码按没提供处理（devicedomain.NormalizeID），并继续看下一个来源。
 func resolveClientDevice(c *gin.Context, bodyDeviceID, bodyDevice, legacyMarkCode string) (deviceID, device string) {
-	deviceID = strings.TrimSpace(bodyDeviceID)
+	deviceID = devicedomain.NormalizeID(bodyDeviceID)
 	if deviceID == "" {
-		deviceID = deviceHeader(c, "X-Device-Id")
+		deviceID = devicedomain.NormalizeID(deviceHeader(c, "X-Device-Id"))
 	}
 	if deviceID == "" {
-		deviceID = strings.TrimSpace(legacyMarkCode)
+		deviceID = devicedomain.NormalizeID(legacyMarkCode)
 	}
 
 	device = strings.TrimSpace(bodyDevice)
@@ -81,8 +83,7 @@ func (h *Handler) enforceDevicePolicy(c *gin.Context, appID int64, bodyDeviceID,
 	}
 	deviceID, device := resolveClientDevice(c, bodyDeviceID, bodyDevice, legacyMarkCode)
 	if deviceID == "" {
-		response.Error(c, http.StatusBadRequest, 40024,
-			"当前应用开启登录设备检查，必须提供 deviceId（请求体 deviceId 或 Header X-Device-Id）")
+		rejectMissingDeviceID(c, bodyDeviceID, legacyMarkCode)
 		return false
 	}
 	if device == "" {
@@ -194,11 +195,23 @@ func (h *Handler) enforceDevicePolicyIDOnly(c *gin.Context, appID int64, bodyDev
 	}
 	deviceID, _ := resolveClientDevice(c, bodyDeviceID, "", legacyMarkCode)
 	if deviceID == "" {
-		response.Error(c, http.StatusBadRequest, 40024,
-			"当前应用开启登录设备检查，必须提供 deviceId（请求体 deviceId 或 Header X-Device-Id）")
+		rejectMissingDeviceID(c, bodyDeviceID, legacyMarkCode)
 		return false
 	}
 	return true
+}
+
+// rejectMissingDeviceID 登录设备检查要求的设备码缺失。上报了但只是占位值（全零等）时单独说明：
+// 这类值所有设备都一样，起不到绑定作用，客户端要换一个本机生成的标识。
+func rejectMissingDeviceID(c *gin.Context, bodyDeviceID, legacyMarkCode string) {
+	if devicedomain.IsPlaceholderID(bodyDeviceID) || devicedomain.IsPlaceholderID(deviceHeader(c, "X-Device-Id")) ||
+		devicedomain.IsPlaceholderID(legacyMarkCode) {
+		response.Error(c, http.StatusBadRequest, 40024,
+			"当前应用开启登录设备检查，设备标识无效（全零等占位值），请更新客户端后重试")
+		return
+	}
+	response.Error(c, http.StatusBadRequest, 40024,
+		"当前应用开启登录设备检查，必须提供 deviceId（请求体 deviceId 或 Header X-Device-Id）")
 }
 
 // guessDeviceFromUA 从 UA 粗略推断设备描述，实现在 devicedomain（服务层展示兜底也用它）。

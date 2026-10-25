@@ -49,8 +49,10 @@ const (
 )
 
 // DeviceKey 设备 Key：有设备标识用设备标识；没有时用 UA 摘要；都没有就按这一次登录算一台。
+// 全零等占位标识不算设备标识（devicedomain.NormalizeID），否则这些设备会合成一台互相挤下线；
+// 修复前已存下占位值的会话也在这里一并退回 UA 摘要。
 func DeviceKey(deviceID, userAgent, familyID string) string {
-	if id := strings.TrimSpace(deviceID); id != "" {
+	if id := devicedomain.NormalizeID(deviceID); id != "" {
 		return id
 	}
 	if ua := strings.TrimSpace(userAgent); ua != "" {

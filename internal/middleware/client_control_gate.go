@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	appdomain "aegis/internal/domain/app"
+	devicedomain "aegis/internal/domain/device"
 	"aegis/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -90,7 +91,7 @@ func ClientControlGate(service ClientControlGateService) gin.HandlerFunc {
 			VersionName: gateHeader(c, headerAppVersionName),
 			Platform:    gateHeader(c, headerDevicePlatform),
 			CertSHA256:  gateHeader(c, headerAppCert),
-			DeviceID:    gateHeader(c, headerDeviceID),
+			DeviceID:    devicedomain.NormalizeID(gateHeader(c, headerDeviceID)),
 			IP:          c.ClientIP(),
 		}
 		report.VersionCode, _ = strconv.ParseInt(gateHeader(c, headerAppVersionCode), 10, 64)
