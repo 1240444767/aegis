@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuthStore } from "@/lib/auth-store";
 import { useAdminAccountsQuery } from "@/lib/admin-hooks";
 import {
@@ -124,6 +124,24 @@ export function useTicketsQuery(params: TicketListParams = {}, enabled = true) {
     enabled: Boolean(token) && enabled,
     // 工单状态变化频繁，但也不至于秒级；15s 内复用缓存，切页回来仍然即时
     staleTime: 15_000
+  });
+}
+
+/**
+ * 工作台列表：按页累加，滚到底自动续页。
+ * key 仍以 "tickets" 开头，写操作统一失效时一并刷新；筛选变化时保留上一屏数据防闪。
+ */
+export function useTicketsInfiniteQuery(params: Omit<TicketListParams, "page"> = {}, enabled = true) {
+  const token = useToken();
+  return useInfiniteQuery({
+    queryKey: ["tickets", token, "infinite", params],
+    initialPageParam: 1,
+    enabled: Boolean(token) && enabled,
+    placeholderData: keepPreviousData,
+    staleTime: 15_000,
+    queryFn: ({ pageParam }) =>
+      listTickets(token as string, { ...params, page: pageParam as number, limit: params.limit ?? 30 }),
+    getNextPageParam: (last) => (last.page < last.totalPages ? last.page + 1 : undefined)
   });
 }
 

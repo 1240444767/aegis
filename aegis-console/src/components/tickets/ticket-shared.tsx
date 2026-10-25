@@ -1,13 +1,14 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { joinApiUrl } from "@/lib/api/client";
 import type {
   TicketAttachment,
   TicketClientInfo,
+  TicketItem,
   TicketKind,
   TicketPriority,
   TicketSLAState,
@@ -254,36 +255,87 @@ export function attachmentUrl(file: TicketAttachment): string {
   return joinApiUrl(file.downloadUrl);
 }
 
-/** 页头计数卡片，工单中心与意见反馈共用 */
-export function MetricTile({
-  label,
-  value,
-  icon,
-  highlight,
-  danger
+// ─────────────── 工作台共用 ───────────────
+
+/** 列表行与状态选择器里的状态色点，和 STATUS_VARIANT 同一色系 */
+export const STATUS_DOT: Record<TicketStatus, string> = {
+  open: "bg-amber-500",
+  processing: "bg-sky-500",
+  pending_user: "bg-violet-500",
+  pending_third_party: "bg-slate-400",
+  resolved: "bg-emerald-500",
+  closed: "bg-muted-foreground/40",
+  cancelled: "bg-muted-foreground/40"
+};
+
+export function StatusDot({ status, className }: { status: TicketStatus; className?: string }) {
+  return <span aria-hidden className={cn("inline-block size-2 shrink-0 rounded-full", STATUS_DOT[status], className)} />;
+}
+
+const TERMINAL_STATUSES: TicketStatus[] = ["resolved", "closed", "cancelled"];
+
+export function isTerminalStatus(status: TicketStatus) {
+  return TERMINAL_STATUSES.includes(status);
+}
+
+/** 最后一条是用户发的、且还没结单：说明在等我们回 */
+export function isAwaitingReply(item: Pick<TicketItem, "lastMessageRole" | "status">) {
+  return item.lastMessageRole === "requester" && !isTerminalStatus(item.status);
+}
+
+// 头像底色按名字散列，同一个人在列表、会话、属性栏里颜色一致
+const AVATAR_TONES = [
+  "bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300",
+  "bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300",
+  "bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300",
+  "bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300",
+  "bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300",
+  "bg-teal-100 text-teal-700 dark:bg-teal-950 dark:text-teal-300",
+  "bg-orange-100 text-orange-700 dark:bg-orange-950 dark:text-orange-300",
+  "bg-indigo-100 text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+];
+
+function avatarTone(seed: string) {
+  let hash = 0;
+  for (let i = 0; i < seed.length; i += 1) hash = (hash * 31 + seed.charCodeAt(i)) | 0;
+  return AVATAR_TONES[Math.abs(hash) % AVATAR_TONES.length];
+}
+
+/** 取名字的首字（中文）或前两个字母（英文），qq_ 这类前缀跳过 */
+export function nameInitials(name?: string) {
+  const text = (name || "").replace(/^(qq|wx|wechat|google|github)_/i, "").trim();
+  if (!text) return "?";
+  const first = Array.from(text)[0];
+  if (/[一-鿿]/.test(first)) return first;
+  return text.slice(0, 2).toUpperCase();
+}
+
+export function PersonAvatar({
+  name,
+  size = "default",
+  className
 }: {
-  label: string;
-  value: number;
-  icon: ReactNode;
-  highlight?: boolean;
-  danger?: boolean;
+  name?: string;
+  size?: "sm" | "default" | "lg";
+  className?: string;
 }) {
   return (
-    <Card className={cn(highlight && "border-primary/40")}>
-      <CardContent className="flex items-center gap-3 p-4">
-        <span
-          className={cn(
-            "flex size-8 items-center justify-center rounded-lg bg-muted text-muted-foreground",
-            danger && "bg-destructive/10 text-destructive"
-          )}
-        >
-          {icon}
-        </span>
-        <div>
-          <p className="text-xs text-muted-foreground">{label}</p>
-          <p className={cn("text-lg font-semibold", danger ? "text-destructive" : "text-foreground")}>{value}</p>
-        </div>
-      </CardContent>
-    </Card>
+    <Avatar size={size} preview={false} className={className}>
+      <AvatarFallback className={cn("font-medium", avatarTone(name || "?"))}>{nameInitials(name)}</AvatarFallback>
+    </Avatar>
+  );
+}
+
+/** 键盘提示，工作台的快捷键说明与工具提示共用 */
+export function Kbd({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <kbd
+      className={cn(
+        "inline-flex h-5 min-w-5 items-center justify-center rounded border bg-muted px-1 font-mono text-[10px] font-medium text-muted-foreground",
+        className
+      )}
+    >
+      {children}
+    </kbd>
   );
 }
