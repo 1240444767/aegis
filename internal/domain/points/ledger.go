@@ -72,3 +72,68 @@ type LedgerSummary struct {
 	BalanceBefore int64       `json:"balanceBefore"`
 	Daily         []LedgerDay `json:"daily"`
 }
+
+// ── 全应用视图：不限定用户 ──
+//
+// 按用户一个个点过去无法对账，所以另有一套以应用为范围的流水与汇总。
+// 查询条件复用 LedgerQuery，UserID 为 0 即全应用；关键词额外匹配账号与昵称。
+
+// AppLedgerItem 全应用流水的一行：流水本身加上用户的账号与昵称。
+type AppLedgerItem struct {
+	Transaction
+	Account  string `json:"account,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+}
+
+// AppLedgerPage 全应用流水分页，附带当前筛选下的入账、出账合计与涉及人数。
+type AppLedgerPage struct {
+	Items  []AppLedgerItem `json:"items"`
+	Total  int64           `json:"total"`
+	Page   int             `json:"page"`
+	Limit  int             `json:"limit"`
+	SumIn  int64           `json:"sumIn"`
+	SumOut int64           `json:"sumOut"`
+	Users  int64           `json:"users"`
+	Kind   Kind            `json:"kind"`
+}
+
+// AppLedgerDay 某一天（按请求时区）的全应用入账、出账、笔数与涉及人数。
+type AppLedgerDay struct {
+	Date  string `json:"date"`
+	In    int64  `json:"in"`
+	Out   int64  `json:"out"`
+	Count int64  `json:"count"`
+	Users int64  `json:"users"`
+}
+
+// AppLedgerHolder 余额排行里的一位用户。
+type AppLedgerHolder struct {
+	UserID   int64  `json:"userId"`
+	Account  string `json:"account,omitempty"`
+	Nickname string `json:"nickname,omitempty"`
+	Balance  int64  `json:"balance"`
+}
+
+// AppLedgerSummary 应用某一类数值的整体画像。
+//
+// Holders / Outstanding / TopHolders 是当前值（users 表上的余额），其余都是 Days 天窗口内的口径，
+// 每日走势缺失的日期由前端补零。
+type AppLedgerSummary struct {
+	Kind        Kind              `json:"kind"`
+	Days        int               `json:"days"`
+	TimeZone    string            `json:"timeZone"`
+	Users       int64             `json:"users"`
+	Holders     int64             `json:"holders"`
+	Outstanding int64             `json:"outstanding"`
+	TotalIn     int64             `json:"totalIn"`
+	TotalOut    int64             `json:"totalOut"`
+	Count       int64             `json:"count"`
+	ActiveUsers int64             `json:"activeUsers"`
+	AdminIn     int64             `json:"adminIn"`
+	AdminOut    int64             `json:"adminOut"`
+	TodayIn     int64             `json:"todayIn"`
+	TodayOut    int64             `json:"todayOut"`
+	Categories  []LedgerCategory  `json:"categories"`
+	Daily       []AppLedgerDay    `json:"daily"`
+	TopHolders  []AppLedgerHolder `json:"topHolders"`
+}

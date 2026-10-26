@@ -27,15 +27,23 @@ func ledgerTable(kind pointdomain.Kind) (string, error) {
 }
 
 func ledgerColumns(kind pointdomain.Kind) string {
+	return ledgerColumnsAs(kind, "")
+}
+
+// ledgerColumnsAs 同 ledgerColumns，列名带表别名前缀（与 users 等表联查时避免列名歧义）。
+func ledgerColumnsAs(kind pointdomain.Kind, alias string) string {
+	t := alias
 	levels := "0 AS level_before, 0 AS level_after"
 	levelUp := "false AS is_level_up"
 	if kind == pointdomain.KindExperience {
-		levels = "level_before, level_after"
-		levelUp = "is_level_up"
+		levels = t + "level_before, " + t + "level_after"
+		levelUp = t + "is_level_up"
 	}
-	return `id, transaction_no, user_id, appid, type, category, amount, balance_before, balance_after, ` + levels +
-		`, status, title, COALESCE(description, ''), source_id, COALESCE(source_type, ''), multiplier, ` + levelUp +
-		`, COALESCE(client_ip, ''), COALESCE(user_agent, ''), COALESCE(extra_data, '{}'::jsonb), created_at`
+	return t + `id, ` + t + `transaction_no, ` + t + `user_id, ` + t + `appid, ` + t + `type, ` + t + `category, ` +
+		t + `amount, ` + t + `balance_before, ` + t + `balance_after, ` + levels +
+		`, ` + t + `status, ` + t + `title, COALESCE(` + t + `description, ''), ` + t + `source_id, COALESCE(` + t + `source_type, ''), ` +
+		t + `multiplier, ` + levelUp +
+		`, COALESCE(` + t + `client_ip, ''), COALESCE(` + t + `user_agent, ''), COALESCE(` + t + `extra_data, '{}'::jsonb), ` + t + `created_at`
 }
 
 // ledgerWhere 拼出筛选条件；返回的条件串只引用占位符，参数按序追加在 args 里。
