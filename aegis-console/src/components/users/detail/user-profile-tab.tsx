@@ -1,24 +1,34 @@
 "use client";
 
-import { useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type DragEvent, type ReactNode } from "react";
 import {
   AtSign,
+  Braces,
   Cake,
-  Camera,
   Check,
+  ClipboardCopy,
+  Contact,
+  FileText,
+  Fingerprint,
+  Hash,
   ImageUp,
   Link2,
+  List,
   Loader2,
   Mail,
   MapPin,
+  Network,
+  Pencil,
   Phone,
-  Quote,
   Shapes,
+  ShieldUser,
+  Smartphone,
+  Ticket,
   Trash2,
   Undo2,
   UserPlus,
   UserRound,
-  X
+  CalendarClock
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -35,16 +45,12 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { BrandIcon, getBrandIcon } from "@/components/ui/brand-icon";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "@/components/ui/dropdown-menu";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { JsonViewer } from "@/components/ui/json-viewer";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useNow } from "@/components/users/ban-form";
 import { ApiError } from "@/lib/api-client";
 import {
@@ -53,24 +59,26 @@ import {
   useUploadAdminAppUserAvatarMutation
 } from "@/lib/admin-hooks";
 import type { AdminAppUserDetail } from "@/lib/api/types";
+import { formatDateTime, formatRelative, localDateKey } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
-import { formatDate, inputValue, relativeTime } from "./user-detail-shared";
-import { UserPreferences, humanizeKey, readableValue } from "./user-preferences";
+import { CopyButton, InfoGrid, SearchField, Section, StateBlock, ToneIcon, copyToClipboard, type InfoItem } from "./kit";
+import { inputValue } from "./user-detail-shared";
+import { UserPreferences, humanizeKey, readableValue, updatedText } from "./user-preferences";
 
 /**
- * 资料：这个人是谁、怎么联系、喜欢怎么用。
+ * 资料页签：这个人是谁、怎么联系、从哪来、喜欢怎么用。
  *
- * 账号层面的事实（自定义 ID、邀请码、标识码、注册 IP）在「概览」里已经列过，
- * 这里不再摆一张「字段名：值」的明细表，而是：
- *
- *   资料卡     头像、称呼、简介、联系方式、生日与年龄，以及一句话的来历
- *              （何时从哪注册、由谁邀请）
- *   编辑资料   分成「称呼与生日」「联系方式」「简介」三组，改过的字段带标记，
- *              邮箱与手机号当场校验，底部固定显示未保存的改动
- *   自定义资料 应用写进 extra 的字段，按值的类型显示
+ *   基本资料   头像（上传 / 图片地址 / 移除，即时生效）+ 只读字段网格；
+ *              右上「编辑」进入编辑态：分组表单 + 底部固定的保存条（显示未保存改动数）
+ *   联系方式   邮箱、手机号（可编辑）与用户在客户端维护的第三方账号
+ *   个人简介   全文，可复制、可编辑
+ *   注册来源   注册时间、IP、归属地、运营商、设备标识码、邀请码、上级邀请人（只读，可复制）
+ *   附加字段   应用写进 extra 的数据，键值卡片或 JSON 两种看法
  *   偏好设置   用户端设置翻译成人话（见 user-preferences）
  *
  * 保存走按字段 PATCH：只发**改过的**字段；改过且为空 = 清空（生日走 clearBirthday）。
+ * 管理端可写的只有昵称、邮箱、手机号、生日、简介、头像（后端 AdminUserProfilePatch），
+ * 自定义 ID、第三方联系方式、附加字段与偏好设置没有管理端写接口，这里只读。
  */
 
 /** 头像上传的入口限制：超过 8MB 的原图先在这里拦下，别等后端报错。 */
@@ -79,8 +87,10 @@ const AVATAR_MAX_BYTES = 8 * 1024 * 1024;
 const NICKNAME_MAX = 128;
 const EMAIL_MAX = 255;
 const PHONE_MAX = 32;
+const AVATAR_URL_MAX = 1024;
 const BIO_MAX = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PHONE_RE = /^\+?[0-9\s\-()]+$/;
 
 const CONTACT_META: Record<string, { label: string; icon?: ComponentType<{ className?: string }> }> = {
   wechat: { label: "微信" },
@@ -105,14 +115,7 @@ function birthdayInputValue(raw?: string | null) {
   return `${date.getUTCFullYear()}-${pad(date.getUTCMonth() + 1)}-${pad(date.getUTCDate())}`;
 }
 
-/** 本地日期 YYYY-MM-DD，用作生日输入的上限 */
-function todayKey(now: number) {
-  const d = new Date(now);
-  const pad = (v: number) => String(v).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-/** 「3 月 14 日，28 岁，还有 12 天过生日」 */
+/** 「1998 年 3 月 14 日」「28 岁」「还有 12 天过生日」 */
 function describeBirthday(value: string, now: number) {
   const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return null;
@@ -125,29 +128,70 @@ function describeBirthday(value: string, now: number) {
   let next = thisYear;
   if (next < todayStart) next = new Date(today.getFullYear() + 1, month - 1, day);
   const days = Math.round((next.getTime() - todayStart.getTime()) / 86_400_000);
-  const countdown = days === 0 ? "今天生日" : days <= 30 ? `还有 ${days} 天过生日` : "";
   return {
-    date: `${month} 月 ${day} 日`,
+    date: `${year} 年 ${month} 月 ${day} 日`,
     age: age >= 0 && age < 150 ? `${age} 岁` : "",
-    countdown
+    countdown: days === 0 ? "今天生日" : days <= 30 ? `还有 ${days} 天过生日` : ""
   };
+}
+
+function charCount(value: string) {
+  return Array.from(value.trim()).length;
+}
+
+function str(value: unknown) {
+  return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
 }
 
 type ProfileForm = {
   nickname: string;
+  birthday: string;
   email: string;
   phone: string;
-  birthday: string;
   bio: string;
 };
 
-const FIELD_LABEL: Record<keyof ProfileForm, string> = {
+type FieldKey = keyof ProfileForm;
+
+const FIELD_ORDER: FieldKey[] = ["nickname", "birthday", "email", "phone", "bio"];
+
+const FIELD_LABEL: Record<FieldKey, string> = {
   nickname: "昵称",
+  birthday: "生日",
   email: "邮箱",
   phone: "手机号",
-  birthday: "生日",
   bio: "简介"
 };
+
+/** 规则与后端 validateAdminUserProfilePatch 相同（手机号格式是前端多拦的一道），当场提示，省一次往返。 */
+function validate(form: ProfileForm, today: string) {
+  const errors: Partial<Record<FieldKey, string>> = {};
+  if (charCount(form.nickname) > NICKNAME_MAX) errors.nickname = `昵称最多 ${NICKNAME_MAX} 个字符`;
+
+  const email = form.email.trim();
+  if (charCount(email) > EMAIL_MAX) errors.email = `邮箱最多 ${EMAIL_MAX} 个字符`;
+  else if (email && !EMAIL_RE.test(email)) errors.email = "邮箱格式不正确";
+
+  const phone = form.phone.trim();
+  if (charCount(phone) > PHONE_MAX) errors.phone = `手机号最多 ${PHONE_MAX} 个字符`;
+  else if (phone && !PHONE_RE.test(phone)) errors.phone = "手机号只能包含数字、空格、+、- 和括号";
+  else if (phone) {
+    const digits = phone.replace(/\D/g, "").length;
+    if (digits < 5 || digits > 20) errors.phone = "手机号位数不正确";
+  }
+
+  if (charCount(form.bio) > BIO_MAX) errors.bio = `简介最多 ${BIO_MAX} 个字符`;
+
+  if (form.birthday) {
+    if (form.birthday > today) errors.birthday = "生日不能是未来的日期";
+    else if (form.birthday < "1900-01-01") errors.birthday = "生日不能早于 1900 年";
+  }
+  return errors;
+}
+
+function apiError(error: unknown, fallback: string) {
+  return error instanceof ApiError ? error.message : fallback;
+}
 
 export function UserProfileTab({
   appKey,
@@ -162,42 +206,75 @@ export function UserProfileTab({
   const mutation = useUpdateAdminAppUserProfileMutation(appKey, userId);
   const scope = `${appKey}:${userId}`;
   const now = useNow(60 * 60_000);
+  const today = localDateKey(new Date(now));
 
   const original: ProfileForm = useMemo(
     () => ({
       nickname: inputValue(user.nickname ?? profile?.nickname),
+      birthday: birthdayInputValue(profile?.birthday),
       email: inputValue(user.email ?? profile?.email),
       phone: inputValue(user.phone ?? profile?.phone),
-      birthday: birthdayInputValue(profile?.birthday),
       bio: inputValue(profile?.bio)
     }),
     [profile, user]
   );
 
-  // 草稿按 scope 绑定：换个用户时上一个人的未保存改动不会串过来，
-  // 也不需要一个 useEffect 去同步（与配置面板同一约束）。
+  // 编辑态与草稿都按 scope 绑定：换个用户时上一个人的未保存改动不会串过来，
+  // 也不需要一个 useEffect 去同步。
+  const [editScope, setEditScope] = useState<string | null>(null);
   const [draft, setDraft] = useState<{ scope: string; value: ProfileForm } | null>(null);
+  const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [focusRequest, setFocusRequest] = useState<{ field: FieldKey; seq: number } | null>(null);
+  const editing = editScope === scope;
   const form = draft?.scope === scope ? draft.value : original;
 
-  const changedKeys = (Object.keys(original) as Array<keyof ProfileForm>).filter((key) => form[key] !== original[key]);
+  const changedKeys = FIELD_ORDER.filter((key) => form[key] !== original[key]);
   const dirty = changedKeys.length > 0;
+  const errors = validate(form, today);
+  const errorCount = Object.keys(errors).length;
+  const invalid = errorCount > 0;
 
-  // 规则与后端 validateAdminUserProfilePatch 相同，当场提示，省一次往返
-  const errors: Partial<Record<keyof ProfileForm, string>> = {};
-  const length = (value: string) => Array.from(value.trim()).length;
-  if (length(form.nickname) > NICKNAME_MAX) errors.nickname = `昵称最多 ${NICKNAME_MAX} 个字符`;
-  if (form.email.trim() && !EMAIL_RE.test(form.email.trim())) errors.email = "邮箱格式不正确";
-  else if (length(form.email) > EMAIL_MAX) errors.email = `邮箱最多 ${EMAIL_MAX} 个字符`;
-  if (length(form.phone) > PHONE_MAX) errors.phone = `手机号最多 ${PHONE_MAX} 个字符`;
-  if (length(form.bio) > BIO_MAX) errors.bio = `简介最多 ${BIO_MAX} 个字符`;
-  if (form.birthday && form.birthday > todayKey(now)) errors.birthday = "生日不能是未来的日期";
-  const invalid = Object.keys(errors).length > 0;
+  // 从「联系方式」「个人简介」点编辑时，把光标送到对应输入框
+  useEffect(() => {
+    if (!editing || !focusRequest) return;
+    const el = document.getElementById(`profile-field-${focusRequest.field}`);
+    if (el) {
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+      (el as HTMLInputElement).focus({ preventScroll: true });
+    }
+  }, [editing, focusRequest]);
 
-  const patch = (key: keyof ProfileForm, value: string) => setDraft({ scope, value: { ...form, [key]: value } });
-  const revert = (key: keyof ProfileForm) => patch(key, original[key]);
+  // 有未保存改动时离开页面先提醒
+  useEffect(() => {
+    if (!editing || !dirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [editing, dirty]);
+
+  const patch = (key: FieldKey, value: string) => setDraft({ scope, value: { ...form, [key]: value } });
+  const revert = (key: FieldKey) => patch(key, original[key]);
+
+  function startEdit(field?: FieldKey) {
+    setEditScope(scope);
+    if (field) setFocusRequest((prev) => ({ field, seq: (prev?.seq ?? 0) + 1 }));
+  }
+
+  function finishEdit() {
+    setDraft(null);
+    setEditScope(null);
+    setConfirmDiscard(false);
+  }
+
+  function requestCancel() {
+    if (dirty) setConfirmDiscard(true);
+    else finishEdit();
+  }
 
   async function handleSave() {
-    if (invalid) return;
+    if (!dirty || invalid || mutation.isPending) return;
     // 只发改过的字段：没动过的字段连键都不出现，后端一概不碰。
     const payload: Record<string, unknown> = {};
     for (const key of changedKeys) {
@@ -211,267 +288,273 @@ export function UserProfileTab({
     }
     try {
       await mutation.mutateAsync(payload);
-      setDraft(null);
-      toast.success("资料已更新");
+      finishEdit();
+      toast.success(`资料已更新（${changedKeys.map((k) => FIELD_LABEL[k]).join("、")}）`);
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "更新失败");
+      toast.error(apiError(error, "更新失败"));
     }
   }
 
-  const extra = profile?.extra ?? {};
-
   return (
-    <div className="space-y-6">
-      <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <ProfileCard appKey={appKey} userId={userId} user={user} />
+    <div className="flex flex-col gap-5">
+      <BasicSection
+        appKey={appKey}
+        userId={userId}
+        user={user}
+        now={now}
+        editing={editing}
+        onEdit={() => startEdit("nickname")}
+      >
+        {editing ? (
+          <ProfileEditForm
+            form={form}
+            original={original}
+            errors={errors}
+            today={today}
+            disabled={mutation.isPending}
+            onChange={patch}
+            onRevert={revert}
+            onSubmit={handleSave}
+          />
+        ) : null}
+      </BasicSection>
 
-        <Card className="gap-0 overflow-hidden py-0">
-          <div className="flex items-center justify-between gap-3 border-b px-4 py-3.5 sm:px-5">
-            <div className="flex items-center gap-2 text-sm font-semibold">
-              <UserRound className="size-4 text-muted-foreground" />
-              编辑资料
-            </div>
-            <span className="text-[11px] text-muted-foreground">只提交改过的字段，留空即清除</span>
-          </div>
+      {editing ? (
+        <SaveBar
+          changedKeys={changedKeys}
+          errorCount={errorCount}
+          pending={mutation.isPending}
+          onRevertAll={() => setDraft(null)}
+          onCancel={requestCancel}
+        />
+      ) : null}
 
-          <div className="space-y-5 px-4 py-5 sm:px-5">
-            <FieldGroup title="称呼与生日">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="昵称" changed={form.nickname !== original.nickname} error={errors.nickname} onRevert={() => revert("nickname")}>
-                  <Input value={form.nickname} placeholder="未填写" onChange={(e) => patch("nickname", e.target.value)} />
-                </Field>
-                <Field label="生日" changed={form.birthday !== original.birthday} error={errors.birthday} onRevert={() => revert("birthday")}>
-                  <Input type="date" value={form.birthday} max={todayKey(now)} onChange={(e) => patch("birthday", e.target.value)} />
-                </Field>
-              </div>
-            </FieldGroup>
-
-            <FieldGroup title="联系方式">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="邮箱" changed={form.email !== original.email} error={errors.email} onRevert={() => revert("email")}>
-                  <Input type="email" value={form.email} placeholder="未填写" onChange={(e) => patch("email", e.target.value)} />
-                </Field>
-                <Field label="手机号" changed={form.phone !== original.phone} error={errors.phone} onRevert={() => revert("phone")}>
-                  <Input inputMode="tel" value={form.phone} placeholder="未填写" onChange={(e) => patch("phone", e.target.value)} />
-                </Field>
-              </div>
-            </FieldGroup>
-
-            <FieldGroup title="简介">
-              <Field
-                label="个人简介"
-                changed={form.bio !== original.bio}
-                error={errors.bio}
-                onRevert={() => revert("bio")}
-                hint={<span className={cn("tabular-nums", errors.bio && "text-destructive")}>{Array.from(form.bio.trim()).length} / {BIO_MAX}</span>}
-              >
-                <Textarea value={form.bio} rows={4} placeholder="未填写" className="resize-none" onChange={(e) => patch("bio", e.target.value)} />
-              </Field>
-            </FieldGroup>
-          </div>
-
-          <div
-            className={cn(
-              "flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3 transition-colors sm:px-5",
-              dirty ? "bg-amber-500/[0.06]" : "bg-muted/20"
-            )}
-          >
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
-              {dirty ? `未保存：${changedKeys.map((k) => FIELD_LABEL[k]).join("、")}` : "资料与线上一致"}
-            </span>
-            <div className="flex shrink-0 items-center gap-2">
-              <Button size="sm" variant="ghost" className="h-8" disabled={!dirty || mutation.isPending} onClick={() => setDraft(null)}>
-                放弃改动
-              </Button>
-              <Button size="sm" className="h-8" disabled={!dirty || invalid || mutation.isPending} onClick={handleSave}>
-                {mutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                保存
-              </Button>
-            </div>
-          </div>
-        </Card>
+      <div className="grid items-start gap-5 xl:grid-cols-2">
+        <ContactsSection user={user} onEdit={() => startEdit("email")} />
+        <BioSection bio={(profile?.bio ?? "").trim()} onEdit={() => startEdit("bio")} />
       </div>
 
-      {Object.keys(extra).length ? <CustomFields extra={extra} /> : null}
+      <RegistrationSection user={user} />
+
+      <ExtraFieldsSection user={user} />
 
       <UserPreferences user={user} />
+
+      <AlertDialog open={confirmDiscard} onOpenChange={setConfirmDiscard}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>放弃未保存的改动</AlertDialogTitle>
+            <AlertDialogDescription>
+              {changedKeys.map((k) => FIELD_LABEL[k]).join("、")} 的修改尚未保存，退出编辑后将丢失。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>继续编辑</AlertDialogCancel>
+            <AlertDialogAction variant="destructive" onClick={finishEdit}>
+              放弃改动
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-// ── 资料卡 ──────────────────────────
+// ── 基本资料 ──────────────────────────
 
-function ProfileCard({ appKey, userId, user }: { appKey: string; userId: number; user: AdminAppUserDetail }) {
-  const profile = user.profile;
-  const now = useNow(60 * 60_000);
-  const name = user.nickname || profile?.nickname || user.account || `用户 ${userId}`;
-  const bio = (profile?.bio ?? "").trim();
-  const email = user.email || profile?.email;
-  const phone = user.phone || profile?.phone;
-  const birthday = describeBirthday(birthdayInputValue(profile?.birthday), now);
-  const contacts = (profile?.contacts ?? []).filter((c) => c.value?.trim());
-
-  const place = [user.registerProvince || profile?.registerProvince, user.registerCity || profile?.registerCity]
-    .filter((v, i, arr) => v && arr.indexOf(v) === i)
-    .join(" ");
-  const registeredAt = user.registerTime || profile?.registerTime || user.createdAt;
-  const inviter = profile?.parentInviteAccount;
-
-  return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <div className="flex gap-4 px-4 pt-5 pb-4 sm:px-5">
-        <AvatarEditor appKey={appKey} userId={userId} user={user} />
-        <div className="min-w-0 flex-1 pt-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <h3 className="truncate text-lg font-semibold tracking-tight">{name}</h3>
-            {profile?.role ? (
-              <Badge variant="secondary" size="sm">
-                {profile.role}
-              </Badge>
-            ) : null}
-          </div>
-          <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            {user.account ? <span className="truncate font-mono">@{user.account}</span> : null}
-            {profile?.customId ? (
-              <span className="truncate" title={typeof profile.customIdCount === "number" ? `已修改 ${profile.customIdCount} 次` : undefined}>
-                ID <span className="font-mono text-foreground/80">{profile.customId}</span>
-              </span>
-            ) : null}
-          </div>
-        </div>
-      </div>
-
-      <div className="px-4 pb-4 sm:px-5">
-        {bio ? (
-          <blockquote className="relative rounded-xl bg-muted/40 px-4 py-3 text-sm leading-6 text-foreground/90">
-            <Quote className="absolute top-2.5 left-2.5 size-3 text-muted-foreground/50" />
-            <p className="pl-3 whitespace-pre-wrap break-words">{bio}</p>
-          </blockquote>
-        ) : (
-          <p className="rounded-xl border border-dashed px-4 py-3 text-sm text-muted-foreground">还没有写个人简介</p>
-        )}
-      </div>
-
-      <ul className="space-y-1 border-t px-2 py-2 sm:px-3">
-        <ContactLine icon={Mail} label="邮箱" value={email} href={email ? `mailto:${email}` : undefined} />
-        <ContactLine icon={Phone} label="手机" value={phone} href={phone ? `tel:${phone.replace(/\s/g, "")}` : undefined} mono />
-        <ContactLine
-          icon={Cake}
-          label="生日"
-          value={birthday ? [birthday.date, birthday.age].filter(Boolean).join("，") : undefined}
-          trailing={birthday?.countdown ? <Badge variant="info" size="sm">{birthday.countdown}</Badge> : null}
-        />
-        {contacts.map((contact, i) => {
-          const key = contact.platform?.toLowerCase() ?? "other";
-          const meta = CONTACT_META[key] ?? { label: contact.label || humanizeKey(key) };
-          const brand = getBrandIcon(key);
-          return (
-            <ContactLine
-              key={`${key}-${i}`}
-              icon={meta.icon ?? AtSign}
-              brand={brand ? key : undefined}
-              label={contact.label || meta.label}
-              value={contact.value}
-              copyable
-            />
-          );
-        })}
-      </ul>
-
-      <div className="space-y-1.5 border-t bg-muted/20 px-4 py-3 text-xs text-muted-foreground sm:px-5">
-        <div className="flex items-center gap-2">
-          <MapPin className="size-3.5 shrink-0" />
-          <span className="min-w-0 truncate">
-            {registeredAt ? `${formatDate(registeredAt)} ` : ""}
-            {place ? `在 ${place} 注册` : "注册"}
-            {registeredAt ? `，距今 ${relativeTime(registeredAt).replace(/前$/, "")}` : ""}
-          </span>
-        </div>
-        {inviter ? (
-          <div className="flex items-center gap-2">
-            <UserPlus className="size-3.5 shrink-0" />
-            <span className="min-w-0 truncate">
-              由 <span className="font-medium text-foreground">{inviter}</span> 邀请加入
-            </span>
-          </div>
-        ) : null}
-        {profile?.updatedAt ? (
-          <div className="flex items-center gap-2">
-            <UserRound className="size-3.5 shrink-0" />
-            资料{relativeTime(profile.updatedAt)}更新
-          </div>
-        ) : null}
-      </div>
-    </Card>
-  );
-}
-
-function ContactLine({
-  icon: Icon,
-  brand,
-  label,
-  value,
-  href,
-  mono,
-  copyable,
-  trailing
+function BasicSection({
+  appKey,
+  userId,
+  user,
+  now,
+  editing,
+  onEdit,
+  children
 }: {
-  icon: ComponentType<{ className?: string }>;
-  brand?: string;
-  label: string;
-  value?: string | null;
-  href?: string;
-  mono?: boolean;
-  copyable?: boolean;
-  trailing?: ReactNode;
+  appKey: string;
+  userId: number;
+  user: AdminAppUserDetail;
+  now: number;
+  editing: boolean;
+  onEdit: () => void;
+  children?: ReactNode;
 }) {
-  const text = (value ?? "").trim();
-  const content = (
-    <span className={cn("min-w-0 truncate text-sm", mono && "font-mono text-[13px]", !text && "text-muted-foreground")}>{text || "未填写"}</span>
-  );
+  const profile = user.profile;
+  const nickname = (user.nickname || profile?.nickname || "").trim();
+  const birthday = describeBirthday(birthdayInputValue(profile?.birthday), now);
+  const publicId = user.publicId ? String(user.publicId) : "";
+  const customId = (profile?.customId ?? "").trim();
+  const customIdCount = typeof profile?.customIdCount === "number" ? profile.customIdCount : null;
+
+  const items: InfoItem[] = [
+    { label: "昵称", icon: UserRound, value: nickname, copy: nickname || null },
+    { label: "账号", icon: AtSign, value: user.account, mono: true, copy: user.account || null },
+    { label: "用户 ID", icon: Hash, value: publicId, mono: true, copy: publicId || null, hint: publicId ? "用户在客户端看到的编号" : undefined },
+    {
+      label: "自定义 ID",
+      icon: Fingerprint,
+      value: customId,
+      mono: true,
+      copy: customId || null,
+      hint: customIdCount !== null ? `已修改 ${customIdCount} 次，由用户在客户端设置` : undefined
+    },
+    {
+      label: "角色",
+      icon: ShieldUser,
+      value: profile?.role ? (
+        <Badge variant="secondary" size="sm">
+          {profile.role}
+        </Badge>
+      ) : undefined
+    },
+    {
+      label: "生日",
+      icon: Cake,
+      value: birthday ? [birthday.date, birthday.age].filter(Boolean).join("，") : undefined,
+      hint: birthday?.countdown ? (
+        <Badge variant="info" size="sm">
+          {birthday.countdown}
+        </Badge>
+      ) : undefined
+    },
+    { label: "内部编号", icon: Hash, value: String(userId), mono: true, copy: String(userId) },
+    {
+      label: "资料更新",
+      icon: CalendarClock,
+      value: profile?.updatedAt ? formatDateTime(profile.updatedAt) : undefined,
+      hint: profile?.updatedAt ? formatRelative(profile.updatedAt) : undefined
+    }
+  ];
+
   return (
-    <li className="group flex items-center gap-3 rounded-lg px-2 py-1.5 hover:bg-muted/40">
-      <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
-        {brand ? <BrandIcon slug={brand} className="size-3.5" /> : <Icon className="size-3.5" />}
-      </span>
-      <span className="w-10 shrink-0 text-xs text-muted-foreground">{label}</span>
-      {text && href ? (
-        <a href={href} className="min-w-0 truncate underline-offset-2 hover:underline">
-          {content}
-        </a>
-      ) : (
-        content
-      )}
-      <span className="ml-auto flex shrink-0 items-center gap-1">
-        {trailing}
-        {text && (copyable || href) ? (
-          <button
-            type="button"
-            className="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100"
-            onClick={() => {
-              void navigator.clipboard?.writeText(text).then(() => toast.success(`已复制${label}`));
-            }}
-          >
-            复制
-          </button>
-        ) : null}
-      </span>
-    </li>
+    <Section
+      title="基本资料"
+      icon={UserRound}
+      tone="primary"
+      description={
+        editing
+          ? "只提交改过的字段，清空后保存即删除该项。头像修改即时生效。"
+          : profile?.updatedAt
+            ? `资料${updatedText(profile.updatedAt)}`
+            : "称呼、身份标识与生日"
+      }
+      actions={
+        editing ? (
+          <Badge variant="warning" size="sm">
+            编辑中
+          </Badge>
+        ) : (
+          <Button size="sm" variant="outline" onClick={onEdit}>
+            <Pencil />
+            编辑
+          </Button>
+        )
+      }
+    >
+      <div className="flex flex-col gap-6 md:flex-row md:items-start">
+        <AvatarPanel appKey={appKey} userId={userId} user={user} />
+        <div className="min-w-0 flex-1">{editing ? children : <InfoGrid items={items} columns={2} />}</div>
+      </div>
+    </Section>
   );
 }
 
 // ── 编辑表单 ──────────────────────────
 
-function FieldGroup({ title, children }: { title: string; children: ReactNode }) {
+function ProfileEditForm({
+  form,
+  original,
+  errors,
+  today,
+  disabled,
+  onChange,
+  onRevert,
+  onSubmit
+}: {
+  form: ProfileForm;
+  original: ProfileForm;
+  errors: Partial<Record<FieldKey, string>>;
+  today: string;
+  disabled: boolean;
+  onChange: (key: FieldKey, value: string) => void;
+  onRevert: (key: FieldKey) => void;
+  onSubmit: () => void;
+}) {
+  const field = (key: FieldKey) => ({
+    id: `profile-field-${key}`,
+    label: FIELD_LABEL[key],
+    changed: form[key] !== original[key],
+    error: errors[key],
+    onRevert: () => onRevert(key)
+  });
+  const input = (key: FieldKey) => ({
+    id: `profile-field-${key}`,
+    value: form[key],
+    disabled,
+    "aria-invalid": errors[key] ? true : undefined,
+    "aria-describedby": errors[key] ? `profile-field-${key}-error` : undefined,
+    onChange: (event: { target: { value: string } }) => onChange(key, event.target.value)
+  });
+  const bioCount = charCount(form.bio);
+
   return (
-    <fieldset className="space-y-3">
-      <legend className="mb-3 text-[11px] font-medium tracking-wide text-muted-foreground">{title}</legend>
-      {children}
+    <form
+      id="profile-edit-form"
+      className="flex flex-col gap-6"
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSubmit();
+      }}
+    >
+      <FieldGroup title="称呼与生日">
+        <Field {...field("nickname")} hint={<Counter value={charCount(form.nickname)} max={NICKNAME_MAX} />}>
+          <Input {...input("nickname")} placeholder="未填写" autoComplete="off" />
+        </Field>
+        <Field {...field("birthday")}>
+          <Input {...input("birthday")} type="date" min="1900-01-01" max={today} />
+        </Field>
+      </FieldGroup>
+
+      <FieldGroup title="联系方式">
+        <Field {...field("email")}>
+          <Input {...input("email")} type="email" placeholder="未填写" autoComplete="off" />
+        </Field>
+        <Field {...field("phone")}>
+          <Input {...input("phone")} inputMode="tel" placeholder="未填写，可带国家区号如 +86" autoComplete="off" />
+        </Field>
+      </FieldGroup>
+
+      <FieldGroup title="个人简介" single>
+        <Field {...field("bio")} label="简介" hint={<Counter value={bioCount} max={BIO_MAX} />}>
+          <Textarea {...input("bio")} rows={5} placeholder="未填写" className="resize-y" />
+        </Field>
+      </FieldGroup>
+
+      <p className="text-xs leading-5 text-muted-foreground">
+        账号、自定义 ID、第三方联系方式、附加字段与偏好设置由用户在客户端维护，管理端只读。
+      </p>
+      {/* 让回车提交表单；可见的保存按钮在底部固定条里 */}
+      <button type="submit" className="hidden" aria-hidden tabIndex={-1} />
+    </form>
+  );
+}
+
+function Counter({ value, max }: { value: number; max: number }) {
+  return <span className={cn("tabular-nums", value > max && "text-destructive")}>{value} / {max}</span>;
+}
+
+function FieldGroup({ title, single, children }: { title: string; single?: boolean; children: ReactNode }) {
+  return (
+    <fieldset className="flex min-w-0 flex-col gap-3">
+      <legend className="mb-3 text-xs font-medium text-muted-foreground">{title}</legend>
+      <div className={cn("grid gap-4", !single && "sm:grid-cols-2")}>{children}</div>
     </fieldset>
   );
 }
 
 function Field({
+  id,
   label,
   changed,
   error,
@@ -479,6 +562,7 @@ function Field({
   onRevert,
   children
 }: {
+  id: string;
   label: string;
   changed: boolean;
   error?: string;
@@ -487,76 +571,115 @@ function Field({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
-      <div className="flex h-5 items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-xs font-medium">
+    <div className="flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-h-5 items-center justify-between gap-2">
+        <Label htmlFor={id} className="gap-1.5 text-xs">
           {label}
           {changed ? <span className="size-1.5 rounded-full bg-amber-500" aria-label="已修改" /> : null}
-        </span>
-        <span className="flex items-center gap-2 text-[11px] text-muted-foreground">
+        </Label>
+        <span className="flex items-center gap-2 text-xs text-muted-foreground">
           {hint}
           {changed ? (
-            <button type="button" className="inline-flex items-center gap-0.5 hover:text-foreground" onClick={onRevert}>
+            <button type="button" className="inline-flex items-center gap-0.5 transition-colors hover:text-foreground" onClick={onRevert}>
               <Undo2 className="size-3" />
               还原
             </button>
           ) : null}
         </span>
       </div>
-      <div className={cn("[&_input]:h-9", error && "[&_input]:border-destructive [&_textarea]:border-destructive")}>{children}</div>
-      {error ? <p className="text-[11px] text-destructive">{error}</p> : null}
+      {children}
+      {error ? (
+        <p id={`${id}-error`} className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 }
 
-// ── 自定义资料 ──────────────────────────
-
-function CustomFields({ extra }: { extra: Record<string, unknown> }) {
-  const entries = Object.entries(extra);
+function SaveBar({
+  changedKeys,
+  errorCount,
+  pending,
+  onRevertAll,
+  onCancel
+}: {
+  changedKeys: FieldKey[];
+  errorCount: number;
+  pending: boolean;
+  onRevertAll: () => void;
+  onCancel: () => void;
+}) {
+  const dirty = changedKeys.length > 0;
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-1">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Shapes className="size-4 text-muted-foreground" />
-          自定义资料
-        </h3>
-        <span className="text-xs text-muted-foreground">应用自行写入的 {entries.length} 个字段</span>
+    <div className="sticky bottom-3 z-20">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background/95 px-4 py-2.5 shadow-lg backdrop-blur supports-[backdrop-filter]:bg-background/80">
+        <div className="flex min-w-0 flex-1 items-center gap-2 text-xs">
+          {dirty ? (
+            <>
+              <Badge variant="warning" size="sm" className="tabular-nums">
+                {changedKeys.length} 项未保存
+              </Badge>
+              <span className="min-w-0 truncate text-muted-foreground">{changedKeys.map((k) => FIELD_LABEL[k]).join("、")}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground">尚未修改任何字段</span>
+          )}
+          {errorCount ? (
+            <Badge variant="danger" size="sm" className="tabular-nums">
+              {errorCount} 项需修正
+            </Badge>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button size="sm" variant="ghost" disabled={pending} onClick={onCancel}>
+            取消
+          </Button>
+          <Button size="sm" variant="outline" disabled={!dirty || pending} onClick={onRevertAll}>
+            <Undo2 />
+            全部还原
+          </Button>
+          <Button size="sm" type="submit" form="profile-edit-form" disabled={!dirty || errorCount > 0 || pending}>
+            {pending ? <Loader2 className="animate-spin" /> : <Check />}
+            保存
+          </Button>
+        </div>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        {entries.map(([key, value]) => (
-          <div key={key} className="min-w-0 rounded-2xl border bg-card px-4 py-3">
-            <div className="truncate text-[11px] text-muted-foreground" title={key}>
-              {humanizeKey(key)}
-            </div>
-            <div className="mt-1 min-w-0 text-sm">{readableValue(value)}</div>
-          </div>
-        ))}
-      </div>
-    </section>
+    </div>
   );
 }
 
 // ── 头像 ──────────────────────────
 
 /**
- * 头像编辑：上传文件 / 填外链 / 移除，从头像角上的相机按钮进入。
+ * 头像：上传文件（按钮或拖入）/ 填外链 / 移除，点头像看大图。
  *
  * 三个动作即时生效，不进「保存」的草稿 —— 上传本身就是一次落库，
  * 让它再等一次保存按钮只会造出「预览换了、刷新又回去了」的错觉。
  * 外链走资料 PATCH 的 avatar 字段（后端只收 http(s)，storage:// 会被拒绝）。
  */
-function AvatarEditor({ appKey, userId, user }: { appKey: string; userId: number; user: AdminAppUserDetail }) {
+function AvatarPanel({ appKey, userId, user }: { appKey: string; userId: number; user: AdminAppUserDetail }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const uploadMutation = useUploadAdminAppUserAvatarMutation(appKey, userId);
   const removeMutation = useRemoveAdminAppUserAvatarMutation(appKey, userId);
   const profileMutation = useUpdateAdminAppUserProfileMutation(appKey, userId);
   const [confirmRemove, setConfirmRemove] = useState(false);
-  const [linkEditing, setLinkEditing] = useState(false);
+  const [linkOpen, setLinkOpen] = useState(false);
   const [link, setLink] = useState("");
+  const [dragging, setDragging] = useState(false);
 
-  const avatar = user.avatar || user.profile?.avatar || "";
+  const avatar = (user.avatar || user.profile?.avatar || "").trim();
   const fallback = String(user.nickname || user.account || "U").trim().slice(0, 2).toUpperCase();
   const busy = uploadMutation.isPending || removeMutation.isPending || profileMutation.isPending;
+
+  const linkValue = link.trim();
+  const linkError = !linkValue
+    ? ""
+    : !/^https?:\/\/\S+$/i.test(linkValue)
+      ? "请填写以 http:// 或 https:// 开头的图片地址"
+      : linkValue.length > AVATAR_URL_MAX
+        ? `地址最多 ${AVATAR_URL_MAX} 个字符`
+        : "";
 
   async function handleFile(file: File | undefined) {
     if (!file) return;
@@ -572,73 +695,98 @@ function AvatarEditor({ appKey, userId, user }: { appKey: string; userId: number
       await uploadMutation.mutateAsync(file);
       toast.success("头像已更新");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "上传失败");
+      toast.error(apiError(error, "上传失败"));
     } finally {
       if (fileRef.current) fileRef.current.value = "";
     }
   }
 
   async function handleLinkSave() {
-    const value = link.trim();
-    if (!/^https?:\/\//i.test(value)) {
-      toast.error("请填写以 http:// 或 https:// 开头的图片地址");
-      return;
-    }
+    if (!linkValue || linkError) return;
     try {
-      await profileMutation.mutateAsync({ avatar: value });
+      await profileMutation.mutateAsync({ avatar: linkValue });
       toast.success("头像已更新");
-      setLinkEditing(false);
+      setLinkOpen(false);
       setLink("");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "设置失败");
+      toast.error(apiError(error, "设置失败"));
     }
   }
 
+  async function handleRemove() {
+    try {
+      await removeMutation.mutateAsync();
+      toast.success("已移除头像");
+      setConfirmRemove(false);
+    } catch (error) {
+      toast.error(apiError(error, "移除失败"));
+    }
+  }
+
+  const dragProps = {
+    onDragOver: (event: DragEvent) => {
+      if (busy || !event.dataTransfer.types.includes("Files")) return;
+      event.preventDefault();
+      setDragging(true);
+    },
+    onDragLeave: () => setDragging(false),
+    onDrop: (event: DragEvent) => {
+      event.preventDefault();
+      setDragging(false);
+      if (!busy) void handleFile(event.dataTransfer.files?.[0]);
+    }
+  };
+
   return (
-    <div className="shrink-0">
-      <div className="relative">
-        <Avatar className="size-20 rounded-2xl border shadow-sm">
-          <AvatarImage src={avatar} className="object-cover" />
-          <AvatarFallback className="rounded-2xl text-lg font-medium">{fallback}</AvatarFallback>
+    <div className="flex shrink-0 flex-col items-center gap-3 md:w-44">
+      <div className="relative" {...dragProps}>
+        <Avatar className="size-28 rounded-2xl border">
+          <AvatarImage src={avatar || undefined} alt="用户头像" className="object-cover" />
+          <AvatarFallback className="rounded-2xl text-2xl font-medium">{fallback}</AvatarFallback>
         </Avatar>
-        {busy ? (
-          <span className="absolute inset-0 grid place-items-center rounded-2xl bg-background/60">
-            <Loader2 className="size-5 animate-spin text-muted-foreground" />
+        {busy || dragging ? (
+          <span
+            className={cn(
+              "pointer-events-none absolute inset-0 grid place-items-center rounded-2xl",
+              dragging ? "border-2 border-dashed border-primary bg-primary/10" : "bg-background/60"
+            )}
+          >
+            {dragging ? <ImageUp className="size-6 text-primary" /> : <Loader2 className="size-6 animate-spin text-muted-foreground" />}
           </span>
         ) : null}
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="icon"
-              variant="outline"
-              className="absolute -right-1.5 -bottom-1.5 size-7 rounded-full bg-background shadow-sm"
-              aria-label="更换头像"
-              disabled={busy}
-            >
-              <Camera className="size-3.5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-40">
-            <DropdownMenuItem onClick={() => fileRef.current?.click()}>
-              <ImageUp />
-              上传图片
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setLinkEditing(true)}>
-              <Link2 />
-              使用图片地址
-            </DropdownMenuItem>
-            {avatar ? (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem variant="destructive" onClick={() => setConfirmRemove(true)}>
-                  <Trash2 />
-                  移除头像
-                </DropdownMenuItem>
-              </>
-            ) : null}
-          </DropdownMenuContent>
-        </DropdownMenu>
       </div>
+
+      <div className="flex flex-wrap justify-center gap-2">
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => fileRef.current?.click()}>
+          <ImageUp />
+          上传
+        </Button>
+        <Button size="sm" variant="outline" disabled={busy} onClick={() => setLinkOpen(true)}>
+          <Link2 />
+          图片地址
+        </Button>
+        {avatar ? (
+          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setConfirmRemove(true)}>
+            <Trash2 />
+            移除
+          </Button>
+        ) : null}
+      </div>
+      <div className="flex flex-col items-center gap-1 text-center text-xs leading-5 text-muted-foreground">
+        <span>点击头像查看大图，可直接拖入图片</span>
+        <span>图片最大 8MB，修改即时生效</span>
+        {avatar ? (
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+            onClick={() => void copyToClipboard(avatar, "头像地址")}
+          >
+            <ClipboardCopy className="size-3" />
+            复制头像地址
+          </button>
+        ) : null}
+      </div>
+
       <input
         ref={fileRef}
         type="file"
@@ -648,51 +796,390 @@ function AvatarEditor({ appKey, userId, user }: { appKey: string; userId: number
         onChange={(event) => handleFile(event.target.files?.[0])}
       />
 
-      {linkEditing ? (
-        <div className="mt-3 flex w-64 max-w-[calc(100vw-4rem)] items-center gap-1.5">
-          <Input
-            autoFocus
-            value={link}
-            placeholder="https://"
-            className="h-8 flex-1 text-xs"
-            onChange={(event) => setLink(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void handleLinkSave();
-              if (event.key === "Escape") setLinkEditing(false);
+      <Dialog
+        open={linkOpen}
+        onOpenChange={(open) => {
+          setLinkOpen(open);
+          if (!open) setLink("");
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>使用图片地址</DialogTitle>
+            <DialogDescription>填写外部图片的 http(s) 地址作为头像，保存后立即生效。</DialogDescription>
+          </DialogHeader>
+          <form
+            className="flex flex-col gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleLinkSave();
             }}
-          />
-          <Button size="icon" className="size-8" aria-label="确定" disabled={!link.trim() || profileMutation.isPending} onClick={handleLinkSave}>
-            <Check className="size-3.5" />
-          </Button>
-          <Button size="icon" variant="ghost" className="size-8" aria-label="取消" onClick={() => setLinkEditing(false)}>
-            <X className="size-3.5" />
-          </Button>
-        </div>
-      ) : null}
+          >
+            <div className="flex items-center gap-3">
+              <Avatar className="size-14 rounded-xl border" preview={false}>
+                <AvatarImage src={linkValue && !linkError ? linkValue : undefined} alt="预览" className="object-cover" />
+                <AvatarFallback className="rounded-xl text-xs text-muted-foreground">预览</AvatarFallback>
+              </Avatar>
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <Label htmlFor="avatar-link" className="text-xs">
+                  图片地址
+                </Label>
+                <Input
+                  id="avatar-link"
+                  autoFocus
+                  value={link}
+                  placeholder="https://"
+                  aria-invalid={linkError ? true : undefined}
+                  onChange={(event) => setLink(event.target.value)}
+                />
+              </div>
+            </div>
+            {linkError ? <p className="text-xs text-destructive">{linkError}</p> : null}
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setLinkOpen(false)}>
+                取消
+              </Button>
+              <Button type="submit" disabled={!linkValue || Boolean(linkError) || profileMutation.isPending}>
+                {profileMutation.isPending ? <Loader2 className="animate-spin" /> : <Check />}
+                设为头像
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog open={confirmRemove} onOpenChange={setConfirmRemove}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>移除头像</AlertDialogTitle>
-            <AlertDialogDescription>移除后恢复为默认头像。</AlertDialogDescription>
+            <AlertDialogDescription>移除后恢复为默认头像，用户可在客户端重新上传。</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogCancel disabled={removeMutation.isPending}>取消</AlertDialogCancel>
             <AlertDialogAction
-              onClick={async () => {
-                try {
-                  await removeMutation.mutateAsync();
-                  toast.success("已移除头像");
-                } catch (error) {
-                  toast.error(error instanceof ApiError ? error.message : "移除失败");
-                }
+              variant="destructive"
+              disabled={removeMutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                void handleRemove();
               }}
             >
+              {removeMutation.isPending ? <Loader2 className="animate-spin" /> : null}
               移除
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  );
+}
+
+// ── 联系方式 ──────────────────────────
+
+type ContactRowData = {
+  key: string;
+  icon: ComponentType<{ className?: string }>;
+  brand?: string;
+  label: string;
+  value: string;
+  href?: string;
+  mono?: boolean;
+  tag?: string;
+};
+
+function ContactsSection({ user, onEdit }: { user: AdminAppUserDetail; onEdit: () => void }) {
+  const profile = user.profile;
+  const email = (user.email || profile?.email || "").trim();
+  const phone = (user.phone || profile?.phone || "").trim();
+  const contacts = (profile?.contacts ?? []).filter((c) => c.value?.trim());
+
+  const rows: ContactRowData[] = [
+    { key: "email", icon: Mail, label: "邮箱", value: email, href: email ? `mailto:${email}` : undefined },
+    { key: "phone", icon: Smartphone, label: "手机号", value: phone, href: phone ? `tel:${phone.replace(/[\s()-]/g, "")}` : undefined, mono: true },
+    ...contacts.map((contact, i): ContactRowData => {
+      const key = contact.platform?.toLowerCase() || "other";
+      const meta = CONTACT_META[key] ?? { label: humanizeKey(key) };
+      return {
+        key: `${key}-${i}`,
+        icon: meta.icon ?? AtSign,
+        brand: getBrandIcon(key) ? key : undefined,
+        label: contact.label || meta.label,
+        value: contact.value.trim(),
+        tag: "客户端"
+      };
+    })
+  ];
+
+  return (
+    <Section
+      title="联系方式"
+      icon={Contact}
+      tone="info"
+      description={
+        contacts.length
+          ? `邮箱与手机号可编辑，另有 ${contacts.length} 个由用户维护的第三方账号`
+          : "邮箱与手机号可编辑，第三方账号由用户在客户端维护"
+      }
+      actions={
+        <Button size="sm" variant="ghost" onClick={onEdit}>
+          <Pencil />
+          编辑
+        </Button>
+      }
+      flush
+    >
+      <ul className="divide-y">
+        {rows.map((row) => (
+          <ContactRow key={row.key} row={row} />
+        ))}
+      </ul>
+    </Section>
+  );
+}
+
+function ContactRow({ row }: { row: ContactRowData }) {
+  const text = row.value;
+  const content = (
+    <span className={cn("min-w-0 truncate text-sm", row.mono && "font-mono text-[13px] tabular-nums", !text && "text-muted-foreground")}>
+      {text || "未填写"}
+    </span>
+  );
+  return (
+    <li className="flex min-w-0 items-center gap-3 px-4 py-2.5 sm:px-5">
+      {row.brand ? (
+        <span className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
+          <BrandIcon slug={row.brand} className="size-3.5" />
+        </span>
+      ) : (
+        <ToneIcon icon={row.icon} tone={text ? "info" : "neutral"} size="sm" />
+      )}
+      <span className="w-14 shrink-0 truncate text-xs text-muted-foreground" title={row.label}>
+        {row.label}
+      </span>
+      {text && row.href ? (
+        <a href={row.href} className="flex min-w-0 underline-offset-2 hover:underline">
+          {content}
+        </a>
+      ) : (
+        content
+      )}
+      <span className="ml-auto flex shrink-0 items-center gap-1.5">
+        {row.tag ? (
+          <Badge variant="outline" size="sm">
+            {row.tag}
+          </Badge>
+        ) : null}
+        {text ? <CopyButton value={text} label={row.label} /> : null}
+      </span>
+    </li>
+  );
+}
+
+// ── 个人简介 ──────────────────────────
+
+function BioSection({ bio, onEdit }: { bio: string; onEdit: () => void }) {
+  const count = Array.from(bio).length;
+  return (
+    <Section
+      title="个人简介"
+      icon={FileText}
+      tone="neutral"
+      description={bio ? `${count} / ${BIO_MAX} 字` : "用户还没有填写个人简介"}
+      actions={
+        <>
+          {bio ? (
+            <Button size="sm" variant="ghost" onClick={() => void copyToClipboard(bio, "个人简介")}>
+              <ClipboardCopy />
+              复制
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" onClick={onEdit}>
+            <Pencil />
+            编辑
+          </Button>
+        </>
+      }
+    >
+      {bio ? (
+        <p className="max-h-72 overflow-y-auto text-sm leading-6 break-words whitespace-pre-wrap text-foreground/90">{bio}</p>
+      ) : (
+        <StateBlock
+          compact
+          icon={FileText}
+          title="未填写个人简介"
+          description="管理员可代为填写，保存后在客户端资料页展示。"
+          action={
+            <Button size="sm" variant="outline" onClick={onEdit}>
+              <Pencil />
+              填写简介
+            </Button>
+          }
+        />
+      )}
+    </Section>
+  );
+}
+
+// ── 注册来源 ──────────────────────────
+
+function RegistrationSection({ user }: { user: AdminAppUserDetail }) {
+  const profile = user.profile;
+  const registeredAt = str(user.registerTime) || str(profile?.registerTime) || str(user.createdAt);
+  const ip = str(user.registerIp) || str(profile?.registerIp);
+  const place = [str(user.registerProvince) || str(profile?.registerProvince), str(user.registerCity) || str(profile?.registerCity)]
+    .filter((v, i, arr) => v && arr.indexOf(v) === i)
+    .join(" ");
+  const isp = str(user.registerIsp) || str(profile?.registerIsp);
+  const markcode = str(user.markcode) || str(profile?.markcode);
+  const inviteCode = str(user.inviteCode) || str(profile?.inviteCode);
+  const inviter = str(profile?.parentInviteAccount);
+
+  const items: InfoItem[] = [
+    {
+      label: "注册时间",
+      icon: CalendarClock,
+      value: registeredAt ? formatDateTime(registeredAt) : undefined,
+      hint: registeredAt ? formatRelative(registeredAt) : undefined
+    },
+    { label: "注册 IP", icon: Network, value: ip, mono: true, copy: ip || null },
+    { label: "归属地", icon: MapPin, value: place, copy: place || null },
+    { label: "运营商", icon: Network, value: isp },
+    { label: "设备标识码", icon: Fingerprint, value: markcode, mono: true, copy: markcode || null },
+    { label: "邀请码", icon: Ticket, value: inviteCode, mono: true, copy: inviteCode || null, hint: inviteCode ? "该用户自己的邀请码" : undefined },
+    {
+      label: "上级邀请人",
+      icon: UserPlus,
+      value: inviter,
+      copy: inviter || null,
+      hint: inviter ? "注册时填写的邀请人账号" : "自然注册，无邀请人"
+    }
+  ];
+
+  const summary = [
+    ["注册时间", registeredAt ? formatDateTime(registeredAt) : ""],
+    ["注册 IP", ip],
+    ["归属地", place],
+    ["运营商", isp],
+    ["设备标识码", markcode],
+    ["邀请码", inviteCode],
+    ["上级邀请人", inviter]
+  ]
+    .filter(([, value]) => value)
+    .map(([label, value]) => `${label}：${value}`)
+    .join("\n");
+
+  return (
+    <Section
+      title="注册来源"
+      icon={MapPin}
+      tone="success"
+      description="账号创建时记录的来源信息，只读"
+      actions={
+        summary ? (
+          <Button size="sm" variant="outline" onClick={() => void copyToClipboard(summary, "注册来源")}>
+            <ClipboardCopy />
+            复制全部
+          </Button>
+        ) : null
+      }
+    >
+      <InfoGrid items={items} columns={3} />
+    </Section>
+  );
+}
+
+// ── 附加字段 ──────────────────────────
+
+function valueText(value: unknown) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function ExtraFieldsSection({ user }: { user: AdminAppUserDetail }) {
+  // 用户主表与资料表各有一份 extra，资料表优先
+  const extra = useMemo<Record<string, unknown>>(
+    () => ({ ...(user.extra ?? {}), ...(user.profile?.extra ?? {}) }),
+    [user.extra, user.profile?.extra]
+  );
+  const entries = Object.entries(extra);
+  const [mode, setMode] = useState<"list" | "json">("list");
+  const [query, setQuery] = useState("");
+  const json = useMemo(() => JSON.stringify(extra, null, 2), [extra]);
+
+  const keyword = query.trim().toLowerCase();
+  const filtered = keyword
+    ? entries.filter(([key, value]) => key.toLowerCase().includes(keyword) || humanizeKey(key).toLowerCase().includes(keyword) || valueText(value).toLowerCase().includes(keyword))
+    : entries;
+
+  return (
+    <Section
+      title="附加字段"
+      icon={Shapes}
+      tone="violet"
+      description={entries.length ? `应用自行写入的 ${entries.length} 个字段，只读` : "应用通过接口写入的自定义数据"}
+      actions={
+        entries.length ? (
+          <>
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              size="sm"
+              value={mode}
+              onValueChange={(value) => value && setMode(value as "list" | "json")}
+              aria-label="显示方式"
+            >
+              <ToggleGroupItem value="list" aria-label="键值">
+                <List />
+                键值
+              </ToggleGroupItem>
+              <ToggleGroupItem value="json" aria-label="JSON">
+                <Braces />
+                JSON
+              </ToggleGroupItem>
+            </ToggleGroup>
+            <Button size="sm" variant="ghost" onClick={() => void copyToClipboard(json, " JSON")}>
+              <ClipboardCopy />
+              复制 JSON
+            </Button>
+          </>
+        ) : null
+      }
+      toolbar={
+        entries.length > 6 && mode === "list" ? (
+          <SearchField value={query} onChange={setQuery} placeholder="搜索字段名或值" />
+        ) : undefined
+      }
+    >
+      {!entries.length ? (
+        <StateBlock compact icon={Shapes} title="没有附加字段" description="应用写入用户 extra 的自定义数据会显示在这里。" />
+      ) : mode === "json" ? (
+        <JsonViewer value={json} height={Math.min(480, Math.max(160, json.split("\n").length * 19 + 24))} />
+      ) : filtered.length ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {filtered.map(([key, value]) => (
+            <div key={key} className="flex min-w-0 flex-col gap-1 rounded-xl border bg-card px-4 py-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate text-xs font-medium" title={humanizeKey(key)}>
+                    {humanizeKey(key)}
+                  </span>
+                  <span className="truncate font-mono text-xs text-muted-foreground" title={key}>
+                    {key}
+                  </span>
+                </div>
+                <CopyButton value={valueText(value)} label={humanizeKey(key)} />
+              </div>
+              <div className="mt-1 min-w-0 text-sm">{readableValue(value)}</div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <StateBlock compact title="没有匹配的字段" description="换个关键词试试。" />
+      )}
+    </Section>
   );
 }

@@ -197,7 +197,6 @@ export function BanDurationField({ draft, now }: { draft: BanDraft; now: number 
           value={draft.customEnd}
           min={toLocalInput(new Date(now))}
           onChange={(event) => draft.setCustomEnd(event.target.value)}
-          className="h-9"
         />
       ) : null}
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -216,7 +215,7 @@ export function BanDurationField({ draft, now }: { draft: BanDraft; now: number 
         ) : (
           <>
             <CalendarClock className="size-3.5" />
-            <span className="text-destructive">解除时间必须晚于现在</span>
+            <span className="text-red-600 dark:text-red-400">解除时间必须晚于现在</span>
           </>
         )}
       </div>
@@ -275,7 +274,7 @@ export function BanReasonField({ draft, rows = 4 }: { draft: BanDraft; rows?: nu
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
         <FieldLabel>封禁原因</FieldLabel>
-        <span className="text-[11px] tabular-nums text-muted-foreground">
+        <span className="text-xs tabular-nums text-muted-foreground">
           {length}/{BAN_REASON_MAX}
         </span>
       </div>

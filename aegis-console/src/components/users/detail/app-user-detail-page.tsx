@@ -9,18 +9,21 @@ import {
   ArrowLeft,
   ArrowUpRight,
   Ban,
-  Check,
   ChevronRight,
   Cloud,
+  Coins,
   Copy,
   Crown,
   Gavel,
   Layers,
   Link2,
+  ListChecks,
   MoreHorizontal,
   PencilLine,
+  Receipt,
   ShieldCheck,
   ShieldHalf,
+  Sparkles,
   Trash2,
   UserRound,
   Wallet
@@ -37,7 +40,7 @@ import {
   BreadcrumbSeparator
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -46,17 +49,14 @@ import {
   DropdownMenuTrigger
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ApiError } from "@/lib/api-client";
-import {
-  useAdminAppUserQuery,
-  useAdminAppsQuery,
-  useDeleteAdminAppUserMutation
-} from "@/lib/admin-hooks";
+import { useAdminAppUserQuery, useAdminAppsQuery, useDeleteAdminAppUserMutation } from "@/lib/admin-hooks";
 import { useAdminUserActiveBanQuery, useAdminUserWalletQuery } from "@/lib/app-user-hooks";
 import type { AdminAppUserDetail } from "@/lib/api/types";
+import { formatDateTime, formatRelative } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import { UserDeleteDialog } from "../user-delete-dialog";
+import { CopyButton, StateBlock, ToneIcon, copyToClipboard, formatInt, type Tone } from "./kit";
 import { UserActivityTab } from "./user-activity-tab";
 import { UserAdPolicyTab } from "./user-ad-policy-tab";
 import { UserAssetsTab } from "./user-assets-tab";
@@ -64,19 +64,19 @@ import { UserCloudTab } from "./user-cloud-tab";
 import {
   BAN_SCOPE_LABEL,
   deriveUserSignals,
-  formatDate,
-  formatTime,
+  formatMoney,
+  hasWallet,
   isPast,
   joinText,
-  relativeTime,
   textValue,
   userInitials,
-  type SignalTone,
   type UserSignal
 } from "./user-detail-shared";
 import { UserGovernanceTab } from "./user-governance-tab";
+import { UserLedgerTab } from "./user-ledger-tab";
 import { UserOverviewTab } from "./user-overview-tab";
 import { UserProfileTab } from "./user-profile-tab";
+import { UserRecordsTab } from "./user-records-tab";
 import { UserSecurityTab } from "./user-security-tab";
 
 type Props = {
@@ -85,47 +85,55 @@ type Props = {
   fromHref?: string;
 };
 
-const TABS = [
-  { value: "overview", label: "概览", icon: Layers },
-  { value: "profile", label: "资料", icon: UserRound },
-  { value: "security", label: "安全", icon: ShieldCheck },
-  { value: "assets", label: "资产", icon: Wallet },
-  { value: "cloud", label: "云存储", icon: Cloud },
-  { value: "ad-policy", label: "广告", icon: ShieldHalf },
-  { value: "activity", label: "活动", icon: Activity },
-  { value: "governance", label: "处置", icon: Gavel }
+type TabDef = { value: string; label: string; icon: React.ComponentType<{ className?: string }> };
+
+/** 页签按工作面分组；宽屏是左侧分组导航，窄屏是横向滑动的一条。 */
+const TAB_GROUPS: Array<{ label: string; tabs: TabDef[] }> = [
+  {
+    label: "账户",
+    tabs: [
+      { value: "overview", label: "概览", icon: Layers },
+      { value: "profile", label: "资料", icon: UserRound },
+      { value: "security", label: "安全", icon: ShieldCheck },
+      { value: "activity", label: "活动", icon: Activity }
+    ]
+  },
+  {
+    label: "资产",
+    tabs: [
+      { value: "assets", label: "资产与权益", icon: Wallet },
+      { value: "ledger", label: "流水", icon: Receipt },
+      { value: "records", label: "互动记录", icon: ListChecks }
+    ]
+  },
+  {
+    label: "服务",
+    tabs: [
+      { value: "cloud", label: "云存储", icon: Cloud },
+      { value: "ad-policy", label: "广告", icon: ShieldHalf }
+    ]
+  },
+  {
+    label: "管理",
+    tabs: [{ value: "governance", label: "处置", icon: Gavel }]
+  }
 ];
 
+const TABS = TAB_GROUPS.flatMap((group) => group.tabs);
 const TAB_VALUES = new Set(TABS.map((item) => item.value));
 
-/** 顶栏高度（console-topbar 的 h-14），页签条吸附在它下面 */
+/** 顶栏高度（console-topbar 的 h-14） */
 const TOPBAR_HEIGHT = 56;
-
-async function copyText(value: string, label: string) {
-  try {
-    await navigator.clipboard.writeText(value);
-    toast.success(`已复制${label}`);
-    return true;
-  } catch {
-    toast.error("复制失败");
-    return false;
-  }
-}
 
 /**
  * 应用用户详情。
  *
- * 自上而下回答三个递进的问题：
+ * 宽屏两栏：左侧是常驻的身份栏（这是谁、状态、四个余额、分组导航、来源信息），
+ * 右侧是当前工作面；身份栏吸顶，长页面滚到底也能直接换页签。
+ * 窄屏单栏：身份卡在上，页签条吸顶横向滑动。
  *
- *   身份卡   这是谁（账号、ID、状态、来源），以及最常用的两个入口：编辑资料、处置
- *   信号带   现在有什么问题（从散落字段里推导出来的结论，整行可点进去处理）
- *   页签区   我要做的那件事（七个互不重叠的工作面）
- *
- * 页签条吸附在顶栏下方，长页面滚到底也能直接换页签；换页签时若已滚过页签条，
- * 视口回到页签条位置，避免停在新内容的半中间。移动端页签横向滑动，当前项自动居中。
- *
- * 页签同步到 `?tab=`，深链能直接落到「处置」页。`from` 参数原样保留，
- * 返回时回到来源列表的筛选态与页码。
+ * 页签同步到 `?tab=`（流水等页签的子页再用 `?sub=`），深链能直接落到「处置」或「积分流水」。
+ * `from` 参数原样保留，返回时回到来源列表的筛选态与页码。
  */
 export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
   const router = useRouter();
@@ -138,46 +146,34 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
   const deleteMutation = useDeleteAdminAppUserMutation(appKey);
 
   const [showDelete, setShowDelete] = useState(false);
-  const tabAnchorRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
 
   const user = userQuery.data as AdminAppUserDetail | undefined;
   const activeBan = activeBanQuery.data ?? null;
-  const app = useMemo(
-    () => appsQuery.data?.find((item) => item.appKey === appKey) ?? null,
-    [appKey, appsQuery.data]
-  );
+  const app = useMemo(() => appsQuery.data?.find((item) => item.appKey === appKey) ?? null, [appKey, appsQuery.data]);
 
   const rawTab = searchParams.get("tab");
   const tab = rawTab && TAB_VALUES.has(rawTab) ? rawTab : "overview";
   const backHref = fromHref || `/app-users?app=${encodeURIComponent(appKey)}`;
-
   const signals = useMemo(() => deriveUserSignals(user, activeBan), [user, activeBan]);
 
-  /**
-   * 换页签。`reveal` 用于页签条以外的入口（身份卡按钮、信号带、概览里的跳转）：
-   * 窄屏上这些入口离内容很远，只换页签不滚动，点了像没反应，所以把页签条滚到顶栏下方。
-   * 直接点页签条时只在已经滚过页签条时回拉，页签条还在视口里就别动。
-   */
-  function goTab(next: string, reveal = false) {
+  /** 换页签；内容区顶部已滚出视口时拉回来，避免停在新内容的半中间。子页参数只在显式给出时保留。 */
+  function goTab(next: string, sub?: string) {
     const params = new URLSearchParams(searchParams.toString());
     params.set("tab", next);
+    if (sub) params.set("sub", sub);
+    else params.delete("sub");
     router.replace(`?${params.toString()}`, { scroll: false });
 
-    const anchor = tabAnchorRef.current;
+    const anchor = contentRef.current;
     if (!anchor) return;
     const top = anchor.getBoundingClientRect().top;
-    const offscreen = top > window.innerHeight * 0.6;
-    if (top < TOPBAR_HEIGHT || (reveal && offscreen)) {
-      window.scrollTo({ top: window.scrollY + top - TOPBAR_HEIGHT, behavior: "smooth" });
+    if (top < TOPBAR_HEIGHT || top > window.innerHeight * 0.7) {
+      window.scrollTo({ top: window.scrollY + top - TOPBAR_HEIGHT - 12, behavior: "smooth" });
     }
   }
 
-  const revealTab = (next: string) => goTab(next, true);
-
-  const title = textValue(
-    user?.nickname || user?.profile?.nickname,
-    textValue(user?.account, `用户 #${userId}`)
-  );
+  const title = textValue(user?.nickname || user?.profile?.nickname, textValue(user?.account, `用户 #${userId}`));
 
   async function handleDelete() {
     try {
@@ -189,13 +185,15 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
     }
   }
 
+  const activeTab = TABS.find((item) => item.value === tab) ?? TABS[0];
+
   return (
     <>
       <div className="page-stack">
         <div className="flex min-w-0 items-center gap-1.5">
-          <Button asChild variant="ghost" size="sm" className="-ml-2 h-9 shrink-0 text-muted-foreground hover:text-foreground sm:h-8">
+          <Button asChild variant="ghost" size="sm" className="-ml-2 shrink-0 text-muted-foreground hover:text-foreground">
             <Link href={backHref}>
-              <ArrowLeft className="size-4" />
+              <ArrowLeft />
               <span className="sm:hidden">返回</span>
               <span className="hidden sm:inline">返回列表</span>
             </Link>
@@ -225,60 +223,69 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
         {userQuery.isLoading ? (
           <DetailSkeleton />
         ) : !user ? (
-          <Card>
-            <CardContent className="flex min-h-64 flex-col items-center justify-center gap-2 px-6 py-14 text-center">
-              <div className="flex size-11 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
-                <UserRound className="size-5" />
-              </div>
-              <div className="mt-1 text-base font-semibold">未找到该用户</div>
-              <p className="max-w-sm text-sm leading-6 text-muted-foreground">
-                应用 {app?.name || appKey} 中不存在用户 #{userId}，可能已被删除。
-              </p>
-              <Button asChild size="sm" variant="outline" className="mt-2">
-                <Link href={backHref}>返回列表</Link>
-              </Button>
-            </CardContent>
+          <Card className="py-0">
+            <StateBlock
+              icon={UserRound}
+              kind={userQuery.isError ? "error" : "empty"}
+              title={userQuery.isError ? "用户信息加载失败" : "未找到该用户"}
+              description={
+                userQuery.isError
+                  ? undefined
+                  : `应用 ${app?.name || appKey} 中不存在用户 #${userId}，可能已被删除。`
+              }
+              onRetry={() => userQuery.refetch()}
+              action={
+                <Button asChild size="sm" variant="outline">
+                  <Link href={backHref}>返回列表</Link>
+                </Button>
+              }
+            />
           </Card>
         ) : (
-          <>
-            <IdentityCard
-              user={user}
-              appKey={appKey}
-              appName={app?.name}
-              activeBanScope={activeBan?.banScope}
-              onNavigate={revealTab}
-              onDelete={() => setShowDelete(true)}
-            />
+          <div className="grid gap-5 xl:grid-cols-[296px_minmax(0,1fr)] xl:items-start">
+            <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-[72px]">
+              <IdentityCard
+                user={user}
+                appKey={appKey}
+                walletBalance={hasWallet(walletQuery.data) ? walletQuery.data?.balance : undefined}
+                activeBanScope={activeBan?.banScope}
+                onNavigate={goTab}
+                onDelete={() => setShowDelete(true)}
+              />
+              <SideNav tab={tab} hasActiveBan={Boolean(activeBan)} onSelect={goTab} />
+              <SourceCard user={user} appKey={appKey} appName={app?.name} />
+            </aside>
 
-            {signals.length ? <SignalRail signals={signals} onNavigate={revealTab} /> : null}
+            <div ref={contentRef} className="flex min-w-0 flex-col gap-4">
+              <MobileTabBar tab={tab} hasActiveBan={Boolean(activeBan)} onSelect={goTab} />
 
-            <Tabs value={tab} onValueChange={(next) => goTab(next)} className="gap-0">
-              <div ref={tabAnchorRef} aria-hidden />
-              <TabBar tab={tab} hasActiveBan={Boolean(activeBan)} />
+              <div className="hidden items-center gap-3 xl:flex">
+                <ToneIcon icon={activeTab.icon} tone="primary" />
+                <h2 className="text-lg font-semibold tracking-tight">{activeTab.label}</h2>
+              </div>
 
-              <div className="pt-4 sm:pt-5">
-                <TabsContent value="overview">
-                  <UserOverviewTab user={user} wallet={walletQuery.data} onNavigate={revealTab} />
-                </TabsContent>
-                <TabsContent value="profile">
+              {signals.length ? <SignalRail signals={signals} onNavigate={(next) => goTab(next)} /> : null}
+
+              <div key={tab} className="animate-in fade-in-0 duration-200 motion-reduce:animate-none">
+                {tab === "overview" ? (
+                  <UserOverviewTab appKey={appKey} userId={userId} user={user} wallet={walletQuery.data} onNavigate={goTab} />
+                ) : tab === "profile" ? (
                   <UserProfileTab appKey={appKey} userId={userId} user={user} />
-                </TabsContent>
-                <TabsContent value="security">
+                ) : tab === "security" ? (
                   <UserSecurityTab appKey={appKey} userId={userId} user={user} />
-                </TabsContent>
-                <TabsContent value="assets">
-                  <UserAssetsTab appKey={appKey} userId={userId} user={user} />
-                </TabsContent>
-                <TabsContent value="cloud">
-                  <UserCloudTab appKey={appKey} userId={userId} />
-                </TabsContent>
-                <TabsContent value="ad-policy">
-                  <UserAdPolicyTab appKey={appKey} userId={userId} />
-                </TabsContent>
-                <TabsContent value="activity">
+                ) : tab === "activity" ? (
                   <UserActivityTab appKey={appKey} userId={userId} user={user} />
-                </TabsContent>
-                <TabsContent value="governance">
+                ) : tab === "assets" ? (
+                  <UserAssetsTab appKey={appKey} userId={userId} user={user} onNavigate={goTab} />
+                ) : tab === "ledger" ? (
+                  <UserLedgerTab appKey={appKey} userId={userId} user={user} onNavigate={goTab} />
+                ) : tab === "records" ? (
+                  <UserRecordsTab appKey={appKey} userId={userId} user={user} />
+                ) : tab === "cloud" ? (
+                  <UserCloudTab appKey={appKey} userId={userId} />
+                ) : tab === "ad-policy" ? (
+                  <UserAdPolicyTab appKey={appKey} userId={userId} />
+                ) : (
                   <UserGovernanceTab
                     appKey={appKey}
                     userId={userId}
@@ -288,10 +295,10 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
                     deletePending={deleteMutation.isPending}
                     onUserDeleted={() => router.push(backHref)}
                   />
-                </TabsContent>
+                )}
               </div>
-            </Tabs>
-          </>
+            </div>
+          </div>
         )}
       </div>
 
@@ -311,160 +318,218 @@ export function AppUserDetailPage({ appKey, userId, fromHref }: Props) {
 function IdentityCard({
   user,
   appKey,
-  appName,
+  walletBalance,
   activeBanScope,
   onNavigate,
   onDelete
 }: {
   user: AdminAppUserDetail;
   appKey: string;
-  appName?: string;
+  walletBalance?: string;
   activeBanScope?: string;
-  onNavigate: (tab: string) => void;
+  onNavigate: (tab: string, sub?: string) => void;
   onDelete: () => void;
 }) {
   const enabled = user.enabled !== false;
-  // 永久会员与限时会员并列：永久的那条线没有到期时间，徽标优先说「永久」
   const vipLifetime = Boolean(user.vipLifetimeAt);
   const vipActive = Boolean(user.vipExpireAt) && !isPast(user.vipExpireAt);
   const avatar = user.avatar || user.profile?.avatar || "";
   const name = textValue(user.nickname || user.profile?.nickname, textValue(user.account));
   const account = textValue(user.account, "");
-  const region = joinText(
-    [user.registerProvince || user.profile?.registerProvince, user.registerCity || user.profile?.registerCity],
-    textValue(user.registerIp || user.profile?.registerIp)
-  );
-  const registerTime = user.registerTime || user.profile?.registerTime;
+  const restricted = Boolean(activeBanScope) || !enabled;
 
   function copyLink() {
     // 分享出去的链接不带 `from`：对方没有你的列表筛选态，返回时落到该应用的列表即可
     const url = new URL(window.location.href);
     url.searchParams.delete("from");
-    void copyText(url.toString(), "页面链接");
+    void copyToClipboard(url.toString(), "页面链接");
   }
+
+  const ids: Array<{ label: string; value: string }> = [
+    ...(user.publicId ? [{ label: "对外 ID", value: String(user.publicId) }] : []),
+    { label: "用户 ID", value: String(user.id) },
+    ...(account ? [{ label: "账号", value: account }] : [])
+  ];
+
+  const balances: Array<{ label: string; value: string; icon: React.ComponentType<{ className?: string }>; tone: Tone; tab: string; sub: string }> = [
+    { label: "积分", value: formatInt(user.integral), icon: Coins, tone: "warning", tab: "ledger", sub: "integral" },
+    { label: "经验", value: formatInt(user.experience), icon: Sparkles, tone: "violet", tab: "ledger", sub: "experience" },
+    { label: "余额", value: walletBalance !== undefined ? `¥${formatMoney(walletBalance)}` : "—", icon: Wallet, tone: "success", tab: "ledger", sub: "wallet" },
+    {
+      label: "会员",
+      value: vipLifetime ? "永久" : vipActive ? formatRelative(user.vipExpireAt).replace("后", "") : user.vipExpireAt ? "已过期" : "无",
+      icon: Crown,
+      tone: vipLifetime || vipActive ? "primary" : "neutral",
+      tab: "ledger",
+      sub: "vip"
+    }
+  ];
 
   return (
     <Card className="gap-0 overflow-hidden py-0">
-      <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
-        <div className="flex min-w-0 items-center gap-3.5 sm:gap-4">
-          <Avatar className="size-14 shrink-0 rounded-2xl sm:size-16">
-            <AvatarImage src={avatar} alt={name} />
-            <AvatarFallback className="rounded-2xl text-base font-medium">
-              {userInitials(user.nickname || user.profile?.nickname, user.account)}
-            </AvatarFallback>
-          </Avatar>
-
-          <div className="min-w-0 space-y-1.5">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-              <h1 className="min-w-0 truncate text-lg font-semibold tracking-tight sm:text-xl" title={name}>
-                {name}
-              </h1>
-              {activeBanScope ? (
-                <Badge variant="danger" size="sm">
-                  <Ban />
-                  封禁中（{BAN_SCOPE_LABEL[activeBanScope] ?? activeBanScope}）
-                </Badge>
-              ) : (
-                <Badge variant={enabled ? "success" : "danger"} size="sm">
-                  {enabled ? "正常" : "已限制"}
-                </Badge>
-              )}
-              {vipLifetime ? (
-                <Badge variant="warning" size="sm" title={`开通于 ${formatTime(user.vipLifetimeAt)}`}>
-                  <Crown />
-                  永久会员
-                </Badge>
-              ) : vipActive ? (
-                <Badge variant="warning" size="sm" title={`到期 ${formatTime(user.vipExpireAt)}`}>
-                  <Crown />
-                  会员至 {formatDate(user.vipExpireAt)}
-                </Badge>
-              ) : null}
-            </div>
-
-            <div className="-ml-1.5 flex flex-wrap items-center gap-x-1 gap-y-0.5 text-xs text-muted-foreground">
-              {user.publicId ? <CopyChip label="对外 ID" value={String(user.publicId)} /> : null}
-              <CopyChip label="ID" value={String(user.id)} />
-              {account && account !== name ? <CopyChip label="账号" value={account} /> : null}
-              {account && account === name ? <CopyChip label="账号" value={account} hideValue /> : null}
-            </div>
+      <div className="flex items-start gap-3.5 p-4 xl:flex-col xl:items-center xl:gap-3 xl:px-5 xl:pt-6 xl:text-center">
+        <Avatar className="size-14 shrink-0 rounded-2xl xl:size-20">
+          <AvatarImage src={avatar} alt={name} className="object-cover" />
+          <AvatarFallback className="rounded-2xl text-base font-medium xl:text-xl">
+            {userInitials(user.nickname || user.profile?.nickname, user.account)}
+          </AvatarFallback>
+        </Avatar>
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5 xl:items-center">
+          <h1 className="truncate text-lg font-semibold tracking-tight xl:max-w-full" title={name}>
+            {name}
+          </h1>
+          <div className="flex flex-wrap items-center gap-1.5 xl:justify-center">
+            {activeBanScope ? (
+              <Badge variant="danger" size="sm">
+                <Ban />
+                封禁中（{BAN_SCOPE_LABEL[activeBanScope] ?? activeBanScope}）
+              </Badge>
+            ) : (
+              <Badge variant={enabled ? "success" : "danger"} size="sm">
+                {enabled ? "正常" : "已限制"}
+              </Badge>
+            )}
+            {vipLifetime ? (
+              <Badge variant="warning" size="sm">
+                <Crown />
+                永久会员
+              </Badge>
+            ) : vipActive ? (
+              <Badge variant="warning" size="sm">
+                <Crown />
+                会员
+              </Badge>
+            ) : null}
           </div>
         </div>
+      </div>
 
-        <div className="grid shrink-0 grid-cols-[1fr_1fr_auto] gap-2 sm:flex sm:items-center">
-          <Button variant="outline" size="sm" className="h-10 sm:h-8" onClick={() => onNavigate("profile")}>
-            <PencilLine />
-            编辑资料
-          </Button>
-          <Button
-            variant={activeBanScope || !enabled ? "default" : "outline"}
-            size="sm"
-            className="h-10 sm:h-8"
-            onClick={() => onNavigate("governance")}
+      <dl className="flex flex-col gap-1 border-t px-4 py-3 xl:px-5">
+        {ids.map((item) => (
+          <div key={item.label} className="flex min-w-0 items-center justify-between gap-3 text-xs">
+            <dt className="shrink-0 text-muted-foreground">{item.label}</dt>
+            <dd className="flex min-w-0 items-center gap-0.5">
+              <span className="truncate font-mono text-foreground/90" title={item.value}>
+                {item.value}
+              </span>
+              <CopyButton value={item.value} label={item.label} />
+            </dd>
+          </div>
+        ))}
+      </dl>
+
+      <div className="grid grid-cols-4 border-t xl:grid-cols-2">
+        {balances.map((item, index) => (
+          <button
+            key={item.label}
+            type="button"
+            onClick={() => onNavigate(item.tab, item.sub)}
+            className={cn(
+              "flex min-w-0 flex-col items-start gap-1 px-3 py-2.5 text-left transition-colors hover:bg-muted/50 xl:px-4",
+              index > 0 && "border-l",
+              "xl:[&:nth-child(3)]:border-l-0 xl:[&:nth-child(n+3)]:border-t"
+            )}
           >
-            <Gavel />
-            {activeBanScope || !enabled ? "处置记录" : "封禁或限制"}
-          </Button>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" className="size-10 sm:size-8" aria-label="更多操作">
-                <MoreHorizontal />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-48">
-              {user.publicId ? (
-                <DropdownMenuItem onSelect={() => void copyText(String(user.publicId), "对外 ID")}>
-                  <Copy />
-                  复制对外 ID
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onSelect={() => void copyText(String(user.id), "用户 ID")}>
-                <Copy />
-                复制用户 ID
-              </DropdownMenuItem>
-              {account ? (
-                <DropdownMenuItem onSelect={() => void copyText(account, "账号")}>
-                  <UserRound />
-                  复制账号
-                </DropdownMenuItem>
-              ) : null}
-              <DropdownMenuItem onSelect={copyLink}>
-                <Link2 />
-                复制页面链接
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link href={`/apps/${encodeURIComponent(appKey)}`}>
-                  <AppWindow />
-                  查看所属应用
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem variant="destructive" onSelect={onDelete}>
-                <Trash2 />
-                删除用户
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </div>
-      </CardContent>
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              <item.icon className="size-3.5" />
+              {item.label}
+            </span>
+            <span className="max-w-full truncate text-sm font-semibold tabular-nums">{item.value}</span>
+          </button>
+        ))}
+      </div>
 
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-3 border-t bg-muted/30 px-4 py-3.5 sm:grid-cols-4 sm:px-5">
-        <HeaderStat label="注册时间" value={formatDate(registerTime)} hint={relativeTime(registerTime)} title={formatTime(registerTime)} />
-        <HeaderStat label="最近更新" value={formatDate(user.updatedAt)} hint={relativeTime(user.updatedAt)} title={formatTime(user.updatedAt)} />
-        <HeaderStat label="注册归属地" value={region} hint={textValue(user.registerIsp || user.profile?.registerIsp, "")} />
-        <div className="min-w-0">
-          <dt className="text-[11px] text-muted-foreground">所属应用</dt>
-          <dd className="mt-0.5 min-w-0">
+      <div className="grid grid-cols-[1fr_1fr_auto] gap-2 border-t p-3 xl:px-4">
+        <Button variant="outline" size="sm" onClick={() => onNavigate("profile")}>
+          <PencilLine />
+          编辑资料
+        </Button>
+        <Button variant={restricted ? "default" : "outline"} size="sm" onClick={() => onNavigate("governance")}>
+          <Gavel />
+          {restricted ? "处置记录" : "封禁限制"}
+        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="outline" size="icon-sm" aria-label="更多操作">
+              <MoreHorizontal />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-48">
+            {user.publicId ? (
+              <DropdownMenuItem onSelect={() => void copyToClipboard(String(user.publicId), "对外 ID")}>
+                <Copy />
+                复制对外 ID
+              </DropdownMenuItem>
+            ) : null}
+            <DropdownMenuItem onSelect={() => void copyToClipboard(String(user.id), "用户 ID")}>
+              <Copy />
+              复制用户 ID
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={copyLink}>
+              <Link2 />
+              复制页面链接
+            </DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onNavigate("ledger", "integral")}>
+              <Receipt />
+              查看积分流水
+            </DropdownMenuItem>
+            <DropdownMenuItem asChild>
+              <Link href={`/apps/${encodeURIComponent(appKey)}`}>
+                <AppWindow />
+                查看所属应用
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <Trash2 />
+              删除用户
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </Card>
+  );
+}
+
+// ── 来源信息 ──────────────────────────
+
+function SourceCard({ user, appKey, appName }: { user: AdminAppUserDetail; appKey: string; appName?: string }) {
+  const profile = user.profile;
+  const registerTime = user.registerTime || profile?.registerTime;
+  const region = joinText(
+    [user.registerProvince || profile?.registerProvince, user.registerCity || profile?.registerCity],
+    textValue(user.registerIp || profile?.registerIp)
+  );
+  const rows: Array<{ label: string; value: React.ReactNode; hint?: string; title?: string }> = [
+    { label: "注册时间", value: formatDateTime(registerTime), hint: registerTime ? formatRelative(registerTime) : undefined },
+    { label: "最近更新", value: formatDateTime(user.updatedAt), hint: user.updatedAt ? formatRelative(user.updatedAt) : undefined },
+    { label: "注册归属地", value: region, hint: textValue(user.registerIsp || profile?.registerIsp, "") || undefined, title: region }
+  ];
+  return (
+    <Card className="hidden gap-0 py-0 xl:flex">
+      <dl className="flex flex-col divide-y">
+        {rows.map((row) => (
+          <div key={row.label} className="flex flex-col gap-0.5 px-4 py-2.5">
+            <dt className="text-xs text-muted-foreground">{row.label}</dt>
+            <dd className="truncate text-sm tabular-nums" title={row.title}>
+              {row.value}
+            </dd>
+            {row.hint ? <dd className="text-xs text-muted-foreground">{row.hint}</dd> : null}
+          </div>
+        ))}
+        <div className="flex flex-col gap-0.5 px-4 py-2.5">
+          <dt className="text-xs text-muted-foreground">所属应用</dt>
+          <dd>
             <Link
               href={`/apps/${encodeURIComponent(appKey)}`}
-              className="inline-flex max-w-full items-center gap-1 text-sm font-medium hover:underline hover:underline-offset-2"
+              className="inline-flex max-w-full items-center gap-1 text-sm font-medium transition-colors hover:text-primary"
             >
               <span className="truncate">{appName || appKey}</span>
               <ArrowUpRight className="size-3.5 shrink-0 text-muted-foreground" />
             </Link>
-            <div className="truncate font-mono text-[11px] text-muted-foreground" title={appKey}>
-              {appKey}
-            </div>
+          </dd>
+          <dd className="truncate font-mono text-xs text-muted-foreground" title={appKey}>
+            {appKey}
           </dd>
         </div>
       </dl>
@@ -472,104 +537,127 @@ function IdentityCard({
   );
 }
 
-function HeaderStat({
-  label,
-  value,
-  hint,
-  title
+// ── 导航 ──────────────────────────
+
+function SideNav({
+  tab,
+  hasActiveBan,
+  onSelect
 }: {
-  label: string;
-  value: string;
-  hint?: string;
-  title?: string;
+  tab: string;
+  hasActiveBan: boolean;
+  onSelect: (tab: string) => void;
 }) {
   return (
-    <div className="min-w-0">
-      <dt className="text-[11px] text-muted-foreground">{label}</dt>
-      <dd className="mt-0.5 min-w-0">
-        <div className="truncate text-sm font-medium tabular-nums" title={title ?? value}>
-          {value}
-        </div>
-        {hint && hint !== "—" ? (
-          <div className="truncate text-[11px] text-muted-foreground">{hint}</div>
-        ) : null}
-      </dd>
-    </div>
+    <Card className="hidden gap-0 py-2 xl:flex">
+      <nav aria-label="用户详情" className="flex flex-col gap-2">
+        {TAB_GROUPS.map((group) => (
+          <div key={group.label} className="flex flex-col gap-0.5 px-2">
+            <div className="px-2 pt-1 pb-0.5 text-xs text-muted-foreground">{group.label}</div>
+            {group.tabs.map(({ value, label, icon: Icon }) => {
+              const active = tab === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  aria-current={active ? "page" : undefined}
+                  onClick={() => onSelect(value)}
+                  className={cn(
+                    "flex h-9 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors",
+                    active ? "bg-primary/10 font-medium text-primary" : "text-foreground/80 hover:bg-muted hover:text-foreground"
+                  )}
+                >
+                  <Icon className="size-4 shrink-0" />
+                  <span className="flex-1 truncate text-left">{label}</span>
+                  {value === "governance" && hasActiveBan ? (
+                    <span className="size-1.5 rounded-full bg-red-500" aria-label="有生效中的封禁" />
+                  ) : null}
+                  {active ? <ChevronRight className="size-3.5 opacity-60" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+    </Card>
   );
 }
 
-/** 点一下就复制。账号与 ID 是排查时最常被粘进别处的两个值。 */
-function CopyChip({ label, value, hideValue }: { label: string; value: string; hideValue?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  if (!value) return null;
-
-  async function copy() {
-    if (await copyText(value, label)) {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1200);
-    }
-  }
+/** 窄屏页签条：吸顶、横向滑动，当前项自动滚到中间。 */
+function MobileTabBar({
+  tab,
+  hasActiveBan,
+  onSelect
+}: {
+  tab: string;
+  hasActiveBan: boolean;
+  onSelect: (tab: string) => void;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    const active = scroller?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!scroller || !active || scroller.scrollWidth <= scroller.clientWidth) return;
+    const left = active.offsetLeft - (scroller.clientWidth - active.offsetWidth) / 2;
+    scroller.scrollTo({ left: Math.max(left, 0), behavior: "smooth" });
+  }, [tab]);
 
   return (
-    <button
-      type="button"
-      onClick={copy}
-      title={`复制${label}`}
-      className="group inline-flex h-7 max-w-full items-center gap-1 rounded-md px-1.5 transition-colors hover:bg-accent hover:text-foreground sm:h-6"
-    >
-      <span>{label}</span>
-      {hideValue ? null : <span className="truncate font-mono text-foreground/80">{value}</span>}
-      {copied ? (
-        <Check className="size-3 shrink-0 text-emerald-500" />
-      ) : (
-        <Copy className="size-3 shrink-0 opacity-50 transition-opacity group-hover:opacity-100 sm:opacity-0" />
+    <div
+      className={cn(
+        "sticky top-14 z-20 -mx-4 border-b bg-background px-4 lg:-mx-6 lg:px-6 xl:hidden",
+        "dark:bg-[color-mix(in_srgb,var(--card)_35%,var(--sidebar))]"
       )}
-    </button>
+    >
+      <div ref={scrollerRef} className="-mx-1 flex overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {TABS.map(({ value, label, icon: Icon }) => {
+          const active = tab === value;
+          return (
+            <button
+              key={value}
+              type="button"
+              aria-current={active ? "page" : undefined}
+              onClick={() => onSelect(value)}
+              className={cn(
+                "relative flex h-11 shrink-0 items-center gap-1.5 px-3 text-sm transition-colors",
+                active ? "font-medium text-foreground" : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              <Icon className="size-4" />
+              {label}
+              {value === "governance" && hasActiveBan ? <span className="size-1.5 rounded-full bg-red-500" /> : null}
+              {active ? <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" /> : null}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
 // ── 信号带 ──────────────────────────
 
-const TONE_STYLES: Record<SignalTone, string> = {
-  danger:
-    "border-red-200 bg-red-50 text-red-900 hover:bg-red-100/70 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-100 dark:hover:bg-red-950/60",
-  warning:
-    "border-amber-200 bg-amber-50 text-amber-900 hover:bg-amber-100/70 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100 dark:hover:bg-amber-950/60"
-};
-
-const TONE_ICON: Record<SignalTone, string> = {
-  danger: "bg-red-100 text-red-600 dark:bg-red-900/50 dark:text-red-300",
-  warning: "bg-amber-100 text-amber-600 dark:bg-amber-900/50 dark:text-amber-300"
-};
-
-function SignalRail({
-  signals,
-  onNavigate
-}: {
-  signals: UserSignal[];
-  onNavigate: (tab: string) => void;
-}) {
+function SignalRail({ signals, onNavigate }: { signals: UserSignal[]; onNavigate: (tab: string) => void }) {
   return (
     <div className={cn("grid gap-2", signals.length > 1 && "lg:grid-cols-2")}>
       {signals.map((signal) => {
+        const danger = signal.tone === "danger";
         const body = (
           <>
             <span
               className={cn(
-                "flex size-8 shrink-0 items-center justify-center rounded-lg",
-                TONE_ICON[signal.tone]
+                "flex size-8 shrink-0 items-center justify-center rounded-[10px]",
+                danger ? "bg-red-500/10 text-red-600 dark:text-red-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400"
               )}
             >
               {signal.icon}
             </span>
-            <span className="min-w-0 flex-1">
-              <span className="block text-sm font-medium">{signal.title}</span>
-              {signal.detail ? (
-                <span className="mt-0.5 block text-xs leading-5 opacity-80">{signal.detail}</span>
-              ) : null}
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-sm font-medium">{signal.title}</span>
+              {signal.detail ? <span className="text-xs leading-5 text-muted-foreground">{signal.detail}</span> : null}
             </span>
             {signal.tab ? (
-              <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium opacity-80">
+              <span className="flex shrink-0 items-center gap-0.5 text-xs font-medium text-muted-foreground">
                 <span className="hidden sm:inline">{signal.tabLabel ?? "处理"}</span>
                 <ChevronRight className="size-4" />
               </span>
@@ -577,16 +665,12 @@ function SignalRail({
           </>
         );
         const className = cn(
-          "flex w-full items-center gap-3 rounded-2xl border px-3.5 py-3 text-left transition-colors",
-          TONE_STYLES[signal.tone]
+          "flex w-full items-center gap-3 rounded-xl border bg-card px-3.5 py-3 text-left transition-colors",
+          danger ? "border-red-200 dark:border-red-900/60" : "border-amber-200 dark:border-amber-900/60",
+          signal.tab && "hover:bg-muted/40"
         );
         return signal.tab ? (
-          <button
-            key={signal.id}
-            type="button"
-            className={className}
-            onClick={() => onNavigate(signal.tab as string)}
-          >
+          <button key={signal.id} type="button" className={className} onClick={() => onNavigate(signal.tab as string)}>
             {body}
           </button>
         ) : (
@@ -599,95 +683,44 @@ function SignalRail({
   );
 }
 
-// ── 页签条 ──────────────────────────
-
-function TabBar({ tab, hasActiveBan }: { tab: string; hasActiveBan: boolean }) {
-  const scrollerRef = useRef<HTMLDivElement>(null);
-
-  // 窄屏下页签横向滑动：当前页签滚到可视区中央，深链进来时也能看见自己在哪
-  useEffect(() => {
-    const scroller = scrollerRef.current;
-    const active = scroller?.querySelector<HTMLElement>('[data-state="active"]');
-    if (!scroller || !active || scroller.scrollWidth <= scroller.clientWidth) return;
-    const left = active.offsetLeft - (scroller.clientWidth - active.offsetWidth) / 2;
-    scroller.scrollTo({ left: Math.max(left, 0), behavior: "smooth" });
-  }, [tab]);
-
-  return (
-    <div
-      className={cn(
-        "sticky top-14 z-20 -mx-4 border-b bg-background px-4 lg:-mx-6 lg:px-6",
-        // 深色下内容区是 sidebar 底色叠 35% card，吸顶条用同样的实色混合，避免露出色差
-        "dark:bg-[color-mix(in_srgb,var(--card)_35%,var(--sidebar))]"
-      )}
-    >
-      <div
-        ref={scrollerRef}
-        className="-mx-1 overflow-x-auto px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-      >
-        <TabsList variant="line" className="h-11 w-max min-w-full justify-start gap-0.5 p-0 sm:gap-1">
-          {TABS.map(({ value, label, icon: Icon }) => (
-            <TabsTrigger
-              key={value}
-              value={value}
-              className="h-full flex-none px-3 after:!bottom-[-1px] hover:bg-transparent sm:px-3.5"
-            >
-              <Icon className="size-4" />
-              {label}
-              {value === "governance" && hasActiveBan ? (
-                <span className="size-1.5 rounded-full bg-red-500" aria-label="有生效中的封禁" />
-              ) : null}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </div>
-    </div>
-  );
-}
-
 // ── 骨架 ──────────────────────────
 
 function DetailSkeleton() {
   return (
-    <div className="space-y-5">
-      <Card className="gap-0 overflow-hidden py-0">
-        <CardContent className="flex flex-col gap-4 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
-          <div className="flex items-center gap-3.5 sm:gap-4">
-            <Skeleton className="size-14 rounded-2xl sm:size-16" />
-            <div className="space-y-2">
-              <Skeleton className="h-6 w-40" />
-              <Skeleton className="h-4 w-56" />
+    <div className="grid gap-5 xl:grid-cols-[296px_minmax(0,1fr)]">
+      <div className="flex flex-col gap-4">
+        <Card className="gap-0 py-0">
+          <div className="flex items-center gap-3.5 p-4 xl:flex-col xl:pt-6">
+            <Skeleton className="size-14 rounded-2xl xl:size-20" />
+            <div className="flex flex-col gap-2 xl:items-center">
+              <Skeleton className="h-6 w-36" />
+              <Skeleton className="h-4 w-20" />
             </div>
           </div>
-          <div className="grid grid-cols-[1fr_1fr_auto] gap-2 sm:flex">
-            <Skeleton className="h-10 rounded-md sm:h-8 sm:w-24" />
-            <Skeleton className="h-10 rounded-md sm:h-8 sm:w-28" />
-            <Skeleton className="size-10 rounded-md sm:size-8" />
+          <div className="flex flex-col gap-2 border-t p-4">
+            {[0, 1, 2].map((i) => (
+              <Skeleton key={i} className="h-4 w-full" />
+            ))}
           </div>
-        </CardContent>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-3 border-t bg-muted/30 px-4 py-3.5 sm:grid-cols-4 sm:px-5">
+          <div className="grid grid-cols-4 gap-2 border-t p-3 xl:grid-cols-2">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-10" />
+            ))}
+          </div>
+        </Card>
+        <Skeleton className="hidden h-80 rounded-xl xl:block" />
+      </div>
+      <div className="flex flex-col gap-5">
+        <Skeleton className="h-8 w-40" />
+        <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="space-y-1.5">
-              <Skeleton className="h-3 w-14" />
-              <Skeleton className="h-4 w-24" />
-              <Skeleton className="h-3 w-12" />
-            </div>
+            <Skeleton key={i} className="h-[104px] rounded-xl" />
           ))}
         </div>
-      </Card>
-      <div className="-mx-4 flex h-11 items-center gap-2 overflow-hidden border-b px-4 lg:-mx-6 lg:px-6">
-        {TABS.map((item) => (
-          <Skeleton key={item.value} className="h-5 w-14 shrink-0 rounded-md" />
-        ))}
-      </div>
-      <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
-        {[0, 1, 2, 3].map((i) => (
-          <Skeleton key={i} className="h-[86px] rounded-2xl" />
-        ))}
-      </div>
-      <div className="grid gap-5 xl:grid-cols-2">
-        <Skeleton className="h-72 rounded-xl" />
-        <Skeleton className="h-72 rounded-xl" />
+        <div className="grid gap-5 xl:grid-cols-2">
+          <Skeleton className="h-72 rounded-xl" />
+          <Skeleton className="h-72 rounded-xl" />
+        </div>
       </div>
     </div>
   );

@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, type ComponentType } from "react";
+import { useState, type ComponentType, type ReactNode } from "react";
 import {
+  Ban,
+  Download,
   Gavel,
   History,
   Hourglass,
@@ -10,9 +12,20 @@ import {
   ShieldBan,
   ShieldCheck,
   Trash2,
+  TriangleAlert,
   Undo2
 } from "lucide-react";
 import { toast } from "sonner";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -27,64 +40,63 @@ import {
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import {
   BanDurationField,
   BanReasonField,
   BanScopeField,
   describeBanDraft,
+  formatBanTime,
   useBanDraft,
   useNow
 } from "@/components/users/ban-form";
-import { ApiError } from "@/lib/api-client";
-import { useUpdateAdminAppUserStatusMutation } from "@/lib/admin-hooks";
+import { useAdminToken, useUpdateAdminAppUserStatusMutation } from "@/lib/admin-hooks";
+import { getAdminUserBans } from "@/lib/api/app-users";
+import type { AccountBanCounts, AdminAppUserDetail, AdminUserBan } from "@/lib/api/types";
 import {
   useAdminUserBansQuery,
   useCreateAdminUserBanMutation,
   useRevokeAdminUserBanMutation
 } from "@/lib/app-user-hooks";
-import type {
-  AccountBanCounts,
-  AdminAppUserDetail,
-  AdminUserBan
-} from "@/lib/api/types";
+import { formatDateTime, formatRelative, parseInstant } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import {
-  BAN_SCOPE_LABEL,
-  BAN_TYPE_LABEL,
-  BanStatusBadge,
-  Panel,
-  ValueTree,
-  formatShortTime,
-  formatTime,
-  isPast,
-  relativeTime,
-  textValue
-} from "./user-detail-shared";
+  FilterBar,
+  FilterSelect,
+  MetricCard,
+  Pager,
+  RecordSheet,
+  ResetButton,
+  Section,
+  StateBlock,
+  ToneIcon,
+  collectPages,
+  downloadCsv,
+  errorMessage,
+  type InfoItem,
+  type Tone
+} from "./kit";
 import { UserAccountDeletionCard } from "./user-account-deletion-card";
+import { BAN_SCOPE_LABEL, BAN_STATUS_LABEL, BAN_TYPE_LABEL, BanStatusBadge, ValueTree, textValue } from "./user-detail-shared";
 
 /** 被新封禁顶替时后端写在旧记录上的撤销原因，与 pgrepo.AccountBanSupersededReason 一致。 */
 const SUPERSEDED_REASON = "已被新的封禁替代";
 
-const HISTORY_PAGE_SIZE = 10;
+type HistoryFilter = "" | "active" | "expired" | "revoked";
 
-type HistoryFilter = "all" | "active" | "expired" | "revoked";
-
-const HISTORY_FILTERS: Array<{ value: HistoryFilter; label: string; count: keyof AccountBanCounts }> = [
-  { value: "all", label: "全部", count: "total" },
-  { value: "active", label: "生效中", count: "active" },
-  { value: "expired", label: "已到期", count: "expired" },
-  { value: "revoked", label: "已解除", count: "revoked" }
-];
+const banTypeLabel = (ban: AdminUserBan) => BAN_TYPE_LABEL[ban.banType] ?? ban.banType;
+const banScopeLabel = (ban: AdminUserBan) => BAN_SCOPE_LABEL[ban.banScope] ?? ban.banScope;
 
 /**
  * 处置：这个账号现在被怎么处置着、要怎么处置、以前被怎么处置过。
  *
- * 一切处置都落成封禁记录（app_user_bans）：有类型、范围、起止、操作人，可解除、留痕、到期自动失效。
- * 旧版另有一张「账号开关」卡片直接翻 users.enabled，后端早已把它映射成封禁记录，
- * 两个入口做的是同一件事却长得不一样，这里只留一个。
+ *   当前状态     正常 / 受限（迁移来的老数据）/ 封禁中，含原因、起止、剩余、操作人
+ *   封禁或限制   时长、范围、原因；已有封禁时提交即替换
+ *   处置历史     封禁记录时间线：状态筛选、分页、详情、解除、导出
+ *   账号注销     进行中申请的审核 / 撤销 / 改期 / 执行，或代用户发起
+ *   危险区       删除用户（交给外壳的确认框）
  *
- * 只有迁移来的老数据可能「受限却没有封禁记录」，状态卡为它单独留了解除入口。
+ * 一切处置都落成封禁记录（app_user_bans）：有类型、范围、起止、操作人，可解除、留痕、到期自动失效。
+ * 只有迁移来的老数据可能「受限却没有封禁记录」，状态横幅为它单独留了解除入口。
  */
 export function UserGovernanceTab({
   appKey,
@@ -105,229 +117,179 @@ export function UserGovernanceTab({
   onUserDeleted: () => void;
 }) {
   const now = useNow();
-  const [filter, setFilter] = useState<HistoryFilter>("all");
+  const [filter, setFilter] = useState<HistoryFilter>("");
   const [page, setPage] = useState(1);
-  const bansQuery = useAdminUserBansQuery(appKey, userId, {
-    status: filter === "all" ? undefined : filter,
-    page,
-    limit: HISTORY_PAGE_SIZE
-  });
+  const [limit, setLimit] = useState(10);
+  const bansQuery = useAdminUserBansQuery(appKey, userId, { status: filter || undefined, page, limit });
   const counts = bansQuery.data?.counts;
   const [revoking, setRevoking] = useState<AdminUserBan | null>(null);
   const [revokeOpen, setRevokeOpen] = useState(false);
+  const [detail, setDetail] = useState<AdminUserBan | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+
   const openRevoke = (ban: AdminUserBan) => {
     setRevoking(ban);
     setRevokeOpen(true);
   };
+  const pickFilter = (value: HistoryFilter) => {
+    setFilter(value);
+    setPage(1);
+  };
 
   return (
-    <div className="space-y-5">
-      <StatusCard
+    <div className="flex flex-col gap-5">
+      <StatusBanner
         appKey={appKey}
         userId={userId}
         user={user}
         activeBan={activeBan ?? null}
-        counts={counts}
         now={now}
         onRevoke={openRevoke}
       />
 
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <CountCard label="历史封禁" value={counts?.total} icon={History} tone="neutral" loading={bansQuery.isLoading} onClick={() => pickFilter("")} />
+        <CountCard label="生效中" value={counts?.active} icon={ShieldBan} tone={counts?.active ? "danger" : "neutral"} loading={bansQuery.isLoading} onClick={() => pickFilter("active")} />
+        <CountCard label="已到期" value={counts?.expired} icon={Hourglass} tone="neutral" loading={bansQuery.isLoading} onClick={() => pickFilter("expired")} />
+        <CountCard label="已解除" value={counts?.revoked} icon={Undo2} tone="info" loading={bansQuery.isLoading} onClick={() => pickFilter("revoked")} />
+      </div>
+
       <BanComposer appKey={appKey} userId={userId} activeBan={activeBan ?? null} now={now} />
 
-      <Panel
-        title="封禁记录"
-        icon={<History className="size-4" />}
-        action={
-          <ToggleGroup
-            type="single"
-            value={filter}
-            onValueChange={(value) => {
-              if (!value) return;
-              setFilter(value as HistoryFilter);
-              setPage(1);
-            }}
-            className="rounded-lg border bg-muted/40 p-0.5"
-          >
-            {HISTORY_FILTERS.map((item) => (
-              <ToggleGroupItem
-                key={item.value}
-                value={item.value}
-                className="h-7 gap-1 rounded-md px-2.5 text-xs data-[state=on]:bg-background data-[state=on]:shadow-sm"
-              >
-                {item.label}
-                {counts ? (
-                  <span className="tabular-nums text-muted-foreground">{counts[item.count]}</span>
-                ) : null}
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        }
-        bodyClassName="px-0 py-0 sm:px-0"
-      >
-        <BanTimeline
-          loading={bansQuery.isLoading}
-          bans={bansQuery.data?.items ?? []}
-          emptyText={filter === "all" ? "这个账号没有被封禁过" : "没有符合条件的记录"}
-          onRevoke={openRevoke}
-        />
-        {(bansQuery.data?.totalPages ?? 0) > 1 ? (
-          <div className="flex items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
-            <span className="tabular-nums">
-              第 {page} / {bansQuery.data?.totalPages} 页，共 {bansQuery.data?.total} 条
+      <HistorySection
+        appKey={appKey}
+        userId={userId}
+        filter={filter}
+        onFilter={pickFilter}
+        page={page}
+        onPage={setPage}
+        limit={limit}
+        onLimit={(value) => {
+          setLimit(value);
+          setPage(1);
+        }}
+        counts={counts}
+        query={bansQuery}
+        onOpen={(ban) => {
+          setDetail(ban);
+          setDetailOpen(true);
+        }}
+        onRevoke={openRevoke}
+      />
+
+      <UserAccountDeletionCard appKey={appKey} userId={userId} account={user.account ?? ""} onUserDeleted={onUserDeleted} />
+
+      <Section title="危险区" description="以下操作不可撤销" icon={TriangleAlert} tone="danger" className="border-red-200 dark:border-red-900/60">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm font-medium">删除用户</span>
+            <span className="text-xs leading-5 text-muted-foreground">
+              账号与其资产、会话、记录一并删除，无法恢复。需要保留注销流程与墓碑记录时，请改用上方「账号注销」。
             </span>
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                disabled={page <= 1 || bansQuery.isFetching}
-                onClick={() => setPage((value) => value - 1)}
-              >
-                上一页
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 text-xs"
-                disabled={page >= (bansQuery.data?.totalPages ?? 1) || bansQuery.isFetching}
-                onClick={() => setPage((value) => value + 1)}
-              >
-                下一页
-              </Button>
-            </div>
           </div>
-        ) : null}
-      </Panel>
-
-      <UserAccountDeletionCard
-        appKey={appKey}
-        userId={userId}
-        account={user.account ?? ""}
-        onUserDeleted={onUserDeleted}
-      />
-
-      <Card className="flex flex-col gap-3 border-destructive/30 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <div className="flex items-center gap-3">
-          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-destructive/10 text-destructive">
-            <Trash2 className="size-4" />
-          </span>
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">删除用户</div>
-            <div className="text-xs text-muted-foreground">账号与其资产、会话、记录一并删除，无法恢复</div>
-          </div>
+          <Button size="sm" variant="destructive" disabled={deletePending} onClick={onDelete} className="self-start sm:self-auto">
+            {deletePending ? <Loader2 className="animate-spin" /> : <Trash2 />}
+            删除用户
+          </Button>
         </div>
-        <Button size="sm" variant="destructive" disabled={deletePending} onClick={onDelete} className="self-start sm:self-auto">
-          {deletePending ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-          删除用户
-        </Button>
-      </Card>
+      </Section>
 
-      <RevokeBanDialog
-        appKey={appKey}
-        userId={userId}
-        ban={revoking}
-        open={revokeOpen}
-        onOpenChange={setRevokeOpen}
+      <BanDetailSheet
+        ban={detail}
+        open={detailOpen}
+        onOpenChange={setDetailOpen}
+        onRevoke={(ban) => {
+          setDetailOpen(false);
+          openRevoke(ban);
+        }}
       />
+      <RevokeBanDialog appKey={appKey} userId={userId} ban={revoking} open={revokeOpen} onOpenChange={setRevokeOpen} />
     </div>
+  );
+}
+
+function CountCard({
+  label,
+  value,
+  icon,
+  tone,
+  loading,
+  onClick
+}: {
+  label: string;
+  value?: number;
+  icon: ComponentType<{ className?: string }>;
+  tone: Tone;
+  loading: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <MetricCard
+      label={label}
+      value={typeof value === "number" ? value.toLocaleString("zh-CN") : "—"}
+      sub="点击筛选记录"
+      icon={icon}
+      tone={tone}
+      loading={loading}
+      onClick={onClick}
+    />
   );
 }
 
 // ── 当前状态 ──────────────────────────
 
-function StatusCard({
-  appKey,
-  userId,
-  user,
-  activeBan,
-  counts,
-  now,
-  onRevoke
+const BANNER_TONE: Record<"success" | "warning" | "danger", string> = {
+  success: "border-emerald-200 dark:border-emerald-900/60",
+  warning: "border-amber-200 dark:border-amber-900/60",
+  danger: "border-red-200 dark:border-red-900/60"
+};
+
+function BannerShell({
+  tone,
+  icon,
+  title,
+  badges,
+  description,
+  action,
+  facts,
+  progress
 }: {
-  appKey: string;
-  userId: number;
-  user: AdminAppUserDetail;
-  activeBan: AdminUserBan | null;
-  counts?: AccountBanCounts;
-  now: number;
-  onRevoke: (ban: AdminUserBan) => void;
+  tone: "success" | "warning" | "danger";
+  icon: ComponentType<{ className?: string }>;
+  title: string;
+  badges?: ReactNode;
+  description: ReactNode;
+  action?: ReactNode;
+  facts?: Array<{ label: string; value: string; title?: string }>;
+  progress?: number | null;
 }) {
-  if (activeBan) {
-    return <ActiveBanCard ban={activeBan} now={now} onRevoke={() => onRevoke(activeBan)} />;
-  }
-  const legacyRestricted =
-    user.enabled === false || (Boolean(user.disabledEndTime) && !isPast(user.disabledEndTime));
-  if (legacyRestricted) {
-    return <LegacyRestrictionCard appKey={appKey} userId={userId} user={user} />;
-  }
-
-  const total = counts?.total ?? 0;
   return (
-    <Card className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-      <div className="flex items-center gap-3">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-emerald-500/10 text-emerald-600 ring-1 ring-inset ring-emerald-500/20 dark:text-emerald-400">
-          <ShieldCheck className="size-5" />
-        </span>
-        <div className="min-w-0">
-          <div className="text-base font-semibold">账号状态正常</div>
-          <div className="text-xs text-muted-foreground">没有生效中的封禁，可正常登录与访问</div>
-        </div>
-      </div>
-      <div className="flex gap-6 sm:text-right">
-        <Stat label="历史封禁" value={counts ? `${total} 次` : "—"} />
-        <Stat label="其中已解除" value={counts ? `${counts.revoked} 次` : "—"} />
-      </div>
-    </Card>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold tabular-nums">{value}</div>
-    </div>
-  );
-}
-
-function ActiveBanCard({ ban, now, onRevoke }: { ban: AdminUserBan; now: number; onRevoke: () => void }) {
-  const permanent = ban.banType === "permanent";
-  const start = new Date(ban.startAt).getTime();
-  const end = ban.endAt ? new Date(ban.endAt).getTime() : null;
-  const progress =
-    end && end > start ? Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100)) : null;
-
-  return (
-    <Card className="gap-0 overflow-hidden border-red-200 py-0 dark:border-red-900/60">
-      <div className="flex flex-col gap-4 bg-red-500/[0.04] px-4 py-4 sm:flex-row sm:items-start sm:px-5 sm:py-5">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-red-500/10 text-red-600 ring-1 ring-inset ring-red-500/20 dark:text-red-400">
-          <ShieldBan className="size-5" />
-        </span>
-        <div className="min-w-0 flex-1 space-y-1.5">
+    <Card className={cn("gap-0 overflow-hidden py-0", BANNER_TONE[tone])}>
+      <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-start sm:px-5">
+        <ToneIcon icon={icon} tone={tone} size="lg" />
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-base font-semibold">
-              {BAN_TYPE_LABEL[ban.banType] ?? ban.banType}封禁中
-            </span>
-            <Badge variant="danger" size="sm">
-              {BAN_SCOPE_LABEL[ban.banScope] ?? ban.banScope}
-            </Badge>
+            <span className="text-base font-semibold">{title}</span>
+            {badges}
           </div>
-          <p className="break-words text-sm leading-6 text-foreground/90">{textValue(ban.reason, "未填写原因")}</p>
+          <div className="text-sm leading-6 break-words text-muted-foreground">{description}</div>
         </div>
-        <Button size="sm" variant="outline" className="shrink-0 self-start bg-background" onClick={onRevoke}>
-          <Undo2 className="size-3.5" />
-          解除封禁
-        </Button>
+        {action ? <div className="flex shrink-0 flex-wrap gap-2 self-start">{action}</div> : null}
       </div>
-
-      <div className="grid grid-cols-2 gap-x-6 gap-y-3 border-t border-red-200/70 px-4 py-3.5 sm:grid-cols-4 sm:px-5 dark:border-red-900/40">
-        <Fact label="开始" value={formatTime(ban.startAt)} />
-        <Fact label="解除" value={permanent ? "永久，需手动解除" : formatTime(ban.endAt)} />
-        <Fact label="剩余" value={permanent ? "—" : relativeTime(ban.endAt).replace(/后$/, "")} />
-        <Fact label="操作人" value={textValue(ban.bannedByAdminName, "系统")} />
-      </div>
-      {progress !== null ? (
-        <div className="h-1 w-full bg-red-500/10">
+      {facts?.length ? (
+        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 border-t px-4 py-3.5 sm:grid-cols-4 sm:px-5">
+          {facts.map((fact) => (
+            <div key={fact.label} className="flex min-w-0 flex-col gap-0.5">
+              <dt className="text-xs text-muted-foreground">{fact.label}</dt>
+              <dd className="truncate text-sm tabular-nums" title={fact.title ?? fact.value}>
+                {fact.value}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {typeof progress === "number" ? (
+        <div className="h-1 w-full bg-red-500/10" role="progressbar" aria-valuenow={Math.round(progress)} aria-valuemin={0} aria-valuemax={100}>
           <div className="h-full bg-red-500/70 transition-[width] duration-500" style={{ width: `${progress}%` }} />
         </div>
       ) : null}
@@ -335,27 +297,82 @@ function ActiveBanCard({ ban, now, onRevoke }: { ban: AdminUserBan; now: number;
   );
 }
 
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[11px] text-muted-foreground">{label}</div>
-      <div className="truncate text-sm tabular-nums" title={value}>
-        {value}
-      </div>
-    </div>
-  );
-}
-
-/** 迁移来的老数据：users 上标着受限，却没有对应的封禁记录。 */
-function LegacyRestrictionCard({
+function StatusBanner({
   appKey,
   userId,
-  user
+  user,
+  activeBan,
+  now,
+  onRevoke
 }: {
   appKey: string;
   userId: number;
   user: AdminAppUserDetail;
+  activeBan: AdminUserBan | null;
+  now: number;
+  onRevoke: (ban: AdminUserBan) => void;
 }) {
+  if (activeBan) {
+    const permanent = activeBan.banType === "permanent";
+    const start = parseInstant(activeBan.startAt)?.getTime() ?? 0;
+    const end = parseInstant(activeBan.endAt)?.getTime() ?? null;
+    const progress = end && end > start ? Math.min(100, Math.max(0, ((now - start) / (end - start)) * 100)) : null;
+    return (
+      <BannerShell
+        tone="danger"
+        icon={ShieldBan}
+        title={`${banTypeLabel(activeBan)}封禁中`}
+        badges={
+          <>
+            <Badge variant="danger" size="sm">
+              {banScopeLabel(activeBan)}
+            </Badge>
+            {activeBan.banScope === "login" ? (
+              <span className="text-xs text-muted-foreground">已登录的设备不受影响</span>
+            ) : null}
+          </>
+        }
+        description={<span className="text-foreground/90">{textValue(activeBan.reason, "未填写原因")}</span>}
+        action={
+          <Button size="sm" variant="outline" onClick={() => onRevoke(activeBan)}>
+            <Undo2 />
+            解除封禁
+          </Button>
+        }
+        facts={[
+          { label: "开始", value: formatDateTime(activeBan.startAt) },
+          { label: "到期", value: permanent ? "永久，需手动解除" : formatDateTime(activeBan.endAt) },
+          { label: "剩余", value: permanent || !end ? "—" : formatRelative(activeBan.endAt, "—", now).replace(/后$/, "") },
+          { label: "操作人", value: textValue(activeBan.bannedByAdminName, "系统") }
+        ]}
+        progress={progress}
+      />
+    );
+  }
+
+  const endMs = parseInstant(user.disabledEndTime)?.getTime() ?? null;
+  const legacyRestricted = user.enabled === false || (endMs !== null && endMs > now);
+  if (legacyRestricted) {
+    return <LegacyRestrictionBanner appKey={appKey} userId={userId} user={user} />;
+  }
+
+  return (
+    <BannerShell
+      tone="success"
+      icon={ShieldCheck}
+      title="账号状态正常"
+      badges={
+        <Badge variant="success" size="sm">
+          正常
+        </Badge>
+      }
+      description="没有生效中的封禁，可正常登录与访问"
+    />
+  );
+}
+
+/** 迁移来的老数据：users 上标着受限，却没有对应的封禁记录。 */
+function LegacyRestrictionBanner({ appKey, userId, user }: { appKey: string; userId: number; user: AdminAppUserDetail }) {
   const mutation = useUpdateAdminAppUserStatusMutation(appKey, userId);
 
   async function lift() {
@@ -363,27 +380,34 @@ function LegacyRestrictionCard({
       await mutation.mutateAsync({ enabled: true, clearDisabledEndTime: true });
       toast.success("已解除限制");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "解除失败");
+      toast.error(errorMessage(error, "解除失败"));
     }
   }
 
   return (
-    <Card className="flex flex-col gap-4 border-amber-200 bg-amber-500/[0.04] px-4 py-4 sm:flex-row sm:items-center sm:px-5 dark:border-amber-900/60">
-      <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-amber-500/10 text-amber-600 ring-1 ring-inset ring-amber-500/20 dark:text-amber-400">
-        <ShieldAlert className="size-5" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="text-base font-semibold">账号受限，无封禁记录</div>
-        <div className="text-xs leading-5 text-muted-foreground">
-          {textValue(user.disabledReason, "未填写原因")}
-          {user.disabledEndTime ? `，${formatTime(user.disabledEndTime)} 解除` : ""}
-        </div>
-      </div>
-      <Button size="sm" variant="outline" className="shrink-0 self-start bg-background sm:self-auto" disabled={mutation.isPending} onClick={lift}>
-        {mutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
-        解除限制
-      </Button>
-    </Card>
+    <BannerShell
+      tone="warning"
+      icon={ShieldAlert}
+      title="账号受限"
+      badges={
+        <Badge variant="warning" size="sm">
+          无封禁记录
+        </Badge>
+      }
+      description={textValue(user.disabledReason, "未填写原因")}
+      action={
+        <Button size="sm" variant="outline" disabled={mutation.isPending} onClick={() => void lift()}>
+          {mutation.isPending ? <Loader2 className="animate-spin" /> : <Undo2 />}
+          解除限制
+        </Button>
+      }
+      facts={[
+        { label: "状态", value: user.enabled === false ? "已停用" : "限时受限" },
+        { label: "到期", value: user.disabledEndTime ? formatDateTime(user.disabledEndTime) : "未设置" },
+        { label: "来源", value: "历史数据迁移" },
+        { label: "操作人", value: "—" }
+      ]}
+    />
   );
 }
 
@@ -403,6 +427,8 @@ function BanComposer({
   const mutation = useCreateAdminUserBanMutation(appKey, userId);
   const draft = useBanDraft();
   const problem = draft.validate(now);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const end = draft.resolveEnd(now);
 
   async function submit() {
     const submitAt = Date.now();
@@ -414,163 +440,367 @@ function BanComposer({
     try {
       await mutation.mutateAsync(draft.toPayload(submitAt));
       draft.reset();
+      setConfirmOpen(false);
       toast.success(activeBan ? "已替换为新的封禁" : "封禁已生效");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "封禁失败");
+      toast.error(errorMessage(error, "封禁失败"));
     }
   }
 
   return (
-    <Panel
-      title={activeBan ? "替换当前封禁" : "新建封禁"}
-      description={activeBan ? "提交后当前封禁立即失效，以新的封禁为准" : undefined}
-      icon={<Gavel className="size-4" />}
-      bodyClassName="p-0 sm:px-0"
+    <Section
+      title={activeBan ? "替换当前封禁" : "封禁或限制"}
+      description={
+        activeBan
+          ? "提交后当前封禁立即失效，以新的封禁为准"
+          : "选择「仅登录」可只拦截新的登录，已登录设备照常使用"
+      }
+      icon={Gavel}
+      tone="danger"
+      footer={
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <span className={cn("text-xs", problem ? "text-muted-foreground" : "text-foreground/80")}>
+            {problem ?? describeBanDraft(draft)}
+          </span>
+          <Button
+            size="sm"
+            variant="destructive"
+            disabled={Boolean(problem) || mutation.isPending}
+            onClick={() => setConfirmOpen(true)}
+            className="self-end sm:self-auto"
+          >
+            <Gavel />
+            {activeBan ? "替换封禁" : "执行封禁"}
+          </Button>
+        </div>
+      }
     >
-      <div className="grid gap-6 px-4 py-5 sm:px-5 lg:grid-cols-2">
-        <div className="space-y-5">
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="flex flex-col gap-5">
           <BanDurationField draft={draft} now={now} />
           <BanScopeField draft={draft} />
         </div>
-        <BanReasonField draft={draft} rows={5} />
+        <BanReasonField draft={draft} rows={6} />
       </div>
-      <div className="flex flex-col gap-3 border-t bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-        <span className="text-xs text-muted-foreground">{problem ?? describeBanDraft(draft)}</span>
-        <Button
-          size="sm"
-          variant="destructive"
-          disabled={Boolean(problem) || mutation.isPending}
-          onClick={submit}
-          className="self-end sm:self-auto"
-        >
-          {mutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Gavel className="size-3.5" />}
-          {activeBan ? "替换封禁" : "执行封禁"}
-        </Button>
-      </div>
-    </Panel>
+
+      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{activeBan ? "替换当前封禁" : "确认封禁"}</AlertDialogTitle>
+            <AlertDialogDescription>
+              {describeBanDraft(draft)}。
+              {end ? `将于 ${formatBanTime(end)} 自动解除。` : end === null ? "永久有效，只能手动解除。" : ""}
+              {activeBan ? "当前生效的封禁会被立即替代。" : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <div className="rounded-xl border bg-muted/30 px-3 py-2.5 text-sm leading-6 break-words">{draft.reason.trim() || "—"}</div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={mutation.isPending}
+              onClick={(event) => {
+                event.preventDefault();
+                void submit();
+              }}
+            >
+              {mutation.isPending ? <Loader2 className="animate-spin" /> : <Gavel />}
+              {activeBan ? "替换封禁" : "执行封禁"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </Section>
   );
 }
 
-// ── 记录 ──────────────────────────
+// ── 处置历史 ──────────────────────────
 
-const STATUS_DOT: Record<string, { icon: ComponentType<{ className?: string }>; className: string }> = {
-  active: { icon: ShieldBan, className: "bg-red-500/10 text-red-600 dark:text-red-400" },
-  expired: { icon: Hourglass, className: "bg-muted text-muted-foreground" },
-  revoked: { icon: Undo2, className: "bg-sky-500/10 text-sky-600 dark:text-sky-400" }
-};
-
-function BanTimeline({
-  loading,
-  bans,
-  emptyText,
+function HistorySection({
+  appKey,
+  userId,
+  filter,
+  onFilter,
+  page,
+  onPage,
+  limit,
+  onLimit,
+  counts,
+  query,
+  onOpen,
   onRevoke
 }: {
-  loading: boolean;
-  bans: AdminUserBan[];
-  emptyText: string;
+  appKey: string;
+  userId: number;
+  filter: HistoryFilter;
+  onFilter: (value: HistoryFilter) => void;
+  page: number;
+  onPage: (page: number) => void;
+  limit: number;
+  onLimit: (limit: number) => void;
+  counts?: AccountBanCounts;
+  query: ReturnType<typeof useAdminUserBansQuery>;
+  onOpen: (ban: AdminUserBan) => void;
   onRevoke: (ban: AdminUserBan) => void;
 }) {
-  if (loading) {
-    return (
-      <div className="space-y-5 px-4 py-5 sm:px-5">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="flex gap-3">
-            <Skeleton className="size-7 shrink-0 rounded-full" />
-            <div className="flex-1 space-y-2">
-              <Skeleton className="h-4 w-48" />
-              <Skeleton className="h-4 w-full max-w-md" />
-              <Skeleton className="h-3 w-64" />
-            </div>
-          </div>
-        ))}
-      </div>
-    );
-  }
-  if (!bans.length) {
-    return (
-      <div className="flex flex-col items-center justify-center gap-2 px-4 py-12 text-center">
-        <span className="grid size-10 place-items-center rounded-xl bg-muted text-muted-foreground">
-          <History className="size-4" />
-        </span>
-        <p className="text-sm text-muted-foreground">{emptyText}</p>
-      </div>
-    );
-  }
+  const token = useAdminToken();
+  const [exporting, setExporting] = useState(false);
+  const bans = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const countText = (key: keyof AccountBanCounts) => (counts ? `（${counts[key]}）` : "");
+
+  const exportCsv = async () => {
+    if (!token) return;
+    setExporting(true);
+    try {
+      const result = await collectPages(async (p, l) => {
+        const data = await getAdminUserBans(token, appKey, userId, { status: filter || undefined, page: p, limit: l });
+        return { items: data.items ?? [], total: data.total };
+      });
+      downloadCsv(
+        `user-bans-${userId}`,
+        [
+          { header: "ID", value: (row) => row.id },
+          { header: "类型", value: (row) => banTypeLabel(row) },
+          { header: "范围", value: (row) => banScopeLabel(row) },
+          { header: "状态", value: (row) => BAN_STATUS_LABEL[row.status] ?? row.status },
+          { header: "原因", value: (row) => row.reason },
+          { header: "开始", value: (row) => formatDateTime(row.startAt) },
+          { header: "到期", value: (row) => (row.endAt ? formatDateTime(row.endAt) : "永久") },
+          { header: "操作人", value: (row) => row.bannedByAdminName ?? "" },
+          { header: "解除时间", value: (row) => (row.revokedAt ? formatDateTime(row.revokedAt) : "") },
+          { header: "解除人", value: (row) => row.revokedByAdminName ?? "" },
+          { header: "解除原因", value: (row) => row.revokeReason ?? "" },
+          { header: "创建时间", value: (row) => formatDateTime(row.createdAt) }
+        ],
+        result.rows
+      );
+      if (result.truncated) toast.warning(`共 ${result.total} 条，仅导出前 ${result.rows.length} 条`);
+      else toast.success(`已导出 ${result.rows.length} 条`);
+    } catch (error) {
+      toast.error(errorMessage(error, "导出失败"));
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
-    <ol className="px-4 py-5 sm:px-5">
-      {bans.map((ban, index) => (
-        <BanEntry key={ban.id} ban={ban} last={index === bans.length - 1} onRevoke={() => onRevoke(ban)} />
-      ))}
-    </ol>
+    <Section
+      title="处置历史"
+      description="全部封禁记录，含被替代与已解除的"
+      icon={History}
+      tone="violet"
+      flush
+      actions={
+        <Button size="sm" variant="outline" onClick={() => void exportCsv()} disabled={exporting || total === 0}>
+          {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+          导出 CSV
+        </Button>
+      }
+      toolbar={
+        <FilterBar>
+          <FilterSelect
+            label="状态"
+            value={filter}
+            allLabel={`全部${countText("total")}`}
+            options={[
+              { value: "active", label: `生效中${countText("active")}` },
+              { value: "expired", label: `已到期${countText("expired")}` },
+              { value: "revoked", label: `已解除${countText("revoked")}` }
+            ]}
+            onChange={(value) => onFilter(value as HistoryFilter)}
+          />
+          <ResetButton visible={Boolean(filter)} onClick={() => onFilter("")} />
+        </FilterBar>
+      }
+      footer={
+        total > 0 ? <Pager page={page} limit={limit} total={total} onPage={onPage} onLimit={onLimit} limits={[10, 20, 50]} /> : undefined
+      }
+    >
+      {query.isLoading ? (
+        <div className="flex flex-col gap-5 px-4 py-5 sm:px-5">
+          {[0, 1, 2].map((index) => (
+            <div key={index} className="flex gap-3">
+              <Skeleton className="size-7 shrink-0 rounded-full" />
+              <div className="flex flex-1 flex-col gap-2">
+                <Skeleton className="h-4 w-48" />
+                <Skeleton className="h-4 w-full max-w-md" />
+                <Skeleton className="h-3 w-64" />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : query.error && !bans.length ? (
+        <StateBlock kind="error" description={errorMessage(query.error)} onRetry={() => void query.refetch()} />
+      ) : !bans.length ? (
+        <StateBlock
+          icon={ShieldCheck}
+          title={filter ? "没有符合条件的记录" : "这个账号没有被封禁过"}
+          description={filter ? "换一个状态筛选看看" : undefined}
+        />
+      ) : (
+        <ol className={cn("px-4 py-5 transition-opacity sm:px-5", query.isFetching && "opacity-60")}>
+          {bans.map((ban, index) => (
+            <BanEntry
+              key={ban.id}
+              ban={ban}
+              last={index === bans.length - 1}
+              onOpen={() => onOpen(ban)}
+              onRevoke={() => onRevoke(ban)}
+            />
+          ))}
+        </ol>
+      )}
+    </Section>
   );
 }
 
-function BanEntry({ ban, last, onRevoke }: { ban: AdminUserBan; last: boolean; onRevoke: () => void }) {
+const STATUS_DOT: Record<string, { icon: ComponentType<{ className?: string }>; tone: Tone }> = {
+  active: { icon: ShieldBan, tone: "danger" },
+  expired: { icon: Hourglass, tone: "neutral" },
+  revoked: { icon: Undo2, tone: "info" }
+};
+
+function revokeText(ban: AdminUserBan) {
+  if (ban.status !== "revoked") return null;
+  if (ban.revokeReason === SUPERSEDED_REASON) return `于 ${formatDateTime(ban.revokedAt)} 被新的封禁替代`;
+  return `${textValue(ban.revokedByAdminName, "系统")} 于 ${formatDateTime(ban.revokedAt)} 解除${ban.revokeReason ? `：${ban.revokeReason}` : ""}`;
+}
+
+function BanEntry({
+  ban,
+  last,
+  onOpen,
+  onRevoke
+}: {
+  ban: AdminUserBan;
+  last: boolean;
+  onOpen: () => void;
+  onRevoke: () => void;
+}) {
   const dot = STATUS_DOT[ban.status] ?? STATUS_DOT.expired;
-  const Icon = dot.icon;
-  const hasEvidence = ban.evidence && Object.keys(ban.evidence).length > 0;
-  const superseded = ban.status === "revoked" && ban.revokeReason === SUPERSEDED_REASON;
+  const revoked = revokeText(ban);
 
   return (
     <li className={cn("relative flex gap-3", !last && "pb-6")}>
-      {!last ? <span aria-hidden className="absolute bottom-0 left-3.5 top-8 w-px bg-border" /> : null}
-      <span className={cn("relative grid size-7 shrink-0 place-items-center rounded-full", dot.className)}>
-        <Icon className="size-3.5" />
-      </span>
+      {!last ? <span aria-hidden className="absolute top-9 bottom-0 left-4 w-px bg-border" /> : null}
+      <ToneIcon icon={dot.icon} tone={dot.tone} className="relative rounded-full" />
 
-      <div className="min-w-0 flex-1 space-y-1.5 pt-0.5">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5 pt-0.5">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <span className="text-sm font-medium">{BAN_TYPE_LABEL[ban.banType] ?? ban.banType}封禁</span>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="text-sm font-medium underline-offset-4 transition-colors hover:text-primary hover:underline"
+          >
+            {banTypeLabel(ban)}封禁
+          </button>
           <Badge variant="outline" size="sm">
-            {BAN_SCOPE_LABEL[ban.banScope] ?? ban.banScope}
+            {banScopeLabel(ban)}
           </Badge>
           <BanStatusBadge status={ban.status} />
-          <span className="ml-auto text-xs tabular-nums text-muted-foreground" title={formatTime(ban.createdAt)}>
-            {relativeTime(ban.createdAt)}
+          <span className="ml-auto text-xs text-muted-foreground tabular-nums" title={formatDateTime(ban.createdAt)}>
+            {formatRelative(ban.createdAt)}
           </span>
         </div>
 
-        <p className="break-words text-sm leading-6">{textValue(ban.reason, "未填写原因")}</p>
+        <p className="text-sm leading-6 break-words">{textValue(ban.reason, "未填写原因")}</p>
 
         <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
-          <span className="tabular-nums" title={`${formatTime(ban.startAt)} 至 ${ban.endAt ? formatTime(ban.endAt) : "永久"}`}>
-            {formatShortTime(ban.startAt)} 至 {ban.endAt ? formatShortTime(ban.endAt) : "永久"}
+          <span className="tabular-nums">
+            {formatDateTime(ban.startAt)} 至 {ban.endAt ? formatDateTime(ban.endAt) : "永久"}
           </span>
           <span>操作人 {textValue(ban.bannedByAdminName, "系统")}</span>
         </div>
 
-        {ban.status === "revoked" ? (
-          <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">
-            {superseded ? (
-              <>于 {formatShortTime(ban.revokedAt)} 被新的封禁替代</>
-            ) : (
-              <>
-                {textValue(ban.revokedByAdminName, "系统")} 于 {formatShortTime(ban.revokedAt)} 解除
-                {ban.revokeReason ? `：${ban.revokeReason}` : ""}
-              </>
-            )}
-          </div>
-        ) : null}
+        {revoked ? <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs leading-5 text-muted-foreground">{revoked}</div> : null}
 
-        {hasEvidence ? (
-          <details className="group text-xs">
-            <summary className="cursor-pointer select-none text-muted-foreground transition-colors hover:text-foreground">
-              查看证据
-            </summary>
-            <div className="mt-1.5 rounded-lg bg-muted/40 px-3 py-2">
-              <ValueTree value={ban.evidence} />
-            </div>
-          </details>
-        ) : null}
+        <div className="flex flex-wrap gap-1">
+          <Button size="xs" variant="ghost" onClick={onOpen}>
+            查看详情
+          </Button>
+          {ban.status === "active" ? (
+            <Button size="xs" variant="ghost" onClick={onRevoke}>
+              <Undo2 />
+              解除
+            </Button>
+          ) : null}
+        </div>
       </div>
-
-      {ban.status === "active" ? (
-        <Button size="sm" variant="ghost" className="h-7 shrink-0 gap-1 px-2 text-xs" onClick={onRevoke}>
-          <Undo2 className="size-3" />
-          解除
-        </Button>
-      ) : null}
     </li>
+  );
+}
+
+function BanDetailSheet({
+  ban,
+  open,
+  onOpenChange,
+  onRevoke
+}: {
+  ban: AdminUserBan | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onRevoke: (ban: AdminUserBan) => void;
+}) {
+  const hasEvidence = Boolean(ban?.evidence && Object.keys(ban.evidence).length > 0);
+  const fields: InfoItem[] = ban
+    ? [
+        { label: "类型", value: banTypeLabel(ban) },
+        { label: "范围", value: banScopeLabel(ban) },
+        { label: "开始", value: formatDateTime(ban.startAt) },
+        { label: "到期", value: ban.endAt ? formatDateTime(ban.endAt) : "永久" },
+        { label: "操作人", value: textValue(ban.bannedByAdminName, "系统") },
+        { label: "创建时间", value: formatDateTime(ban.createdAt) },
+        ...(ban.status === "revoked"
+          ? [
+              { label: "解除时间", value: formatDateTime(ban.revokedAt) },
+              { label: "解除人", value: textValue(ban.revokedByAdminName, "系统") },
+              { label: "解除原因", value: ban.revokeReason || null, wide: true }
+            ]
+          : []),
+        { label: "记录 ID", value: String(ban.id), mono: true }
+      ]
+    : [];
+
+  return (
+    <RecordSheet
+      open={open && Boolean(ban)}
+      onOpenChange={onOpenChange}
+      title={ban ? `${banTypeLabel(ban)}封禁` : "封禁记录"}
+      description={ban ? `#${ban.id}` : undefined}
+      hero={
+        ban ? (
+          <div className="flex flex-col gap-2 rounded-xl border bg-muted/30 px-3.5 py-3">
+            <div className="flex items-center gap-2">
+              <BanStatusBadge status={ban.status} />
+              <Badge variant="outline" size="sm">
+                {banScopeLabel(ban)}
+              </Badge>
+            </div>
+            <p className="text-sm leading-6 break-words">{textValue(ban.reason, "未填写原因")}</p>
+          </div>
+        ) : null
+      }
+      fields={fields}
+      raw={ban}
+      actions={
+        ban?.status === "active" ? (
+          <Button size="sm" variant="outline" onClick={() => onRevoke(ban)}>
+            <Undo2 />
+            解除封禁
+          </Button>
+        ) : null
+      }
+    >
+      {hasEvidence ? (
+        <div className="flex flex-col gap-2">
+          <div className="text-xs font-medium text-muted-foreground">证据</div>
+          <div className="rounded-xl border bg-muted/30 px-3 py-2.5 text-xs">
+            <ValueTree value={ban?.evidence} />
+          </div>
+        </div>
+      ) : null}
+    </RecordSheet>
   );
 }
 
@@ -601,28 +831,34 @@ function RevokeBanDialog({
       onOpenChange(false);
       toast.success("封禁已解除");
     } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "解除失败");
+      toast.error(errorMessage(error, "解除失败"));
     }
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>解除封禁</DialogTitle>
           <DialogDescription>解除后立即生效，用户可以重新登录。</DialogDescription>
         </DialogHeader>
         {ban ? (
-          <div className="rounded-xl border bg-muted/30 px-3 py-2.5 text-xs leading-5">
-            <div className="font-medium">
-              {BAN_TYPE_LABEL[ban.banType] ?? ban.banType}封禁，{BAN_SCOPE_LABEL[ban.banScope] ?? ban.banScope}
+          <div className="flex items-start gap-3 rounded-xl border bg-muted/30 px-3 py-2.5">
+            <ToneIcon icon={Ban} tone="danger" size="sm" />
+            <div className="flex min-w-0 flex-col gap-0.5 text-xs leading-5">
+              <span className="font-medium">
+                {banTypeLabel(ban)}封禁，{banScopeLabel(ban)}
+              </span>
+              <span className="break-words text-muted-foreground">{textValue(ban.reason, "未填写原因")}</span>
             </div>
-            <div className="text-muted-foreground">{textValue(ban.reason, "未填写原因")}</div>
           </div>
         ) : null}
-        <div className="space-y-1.5">
-          <Label className="text-xs text-muted-foreground">解除原因（可选）</Label>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="revoke-ban-reason" className="text-xs text-muted-foreground">
+            解除原因（可选）
+          </Label>
           <Textarea
+            id="revoke-ban-reason"
             rows={3}
             value={reason}
             maxLength={500}
@@ -635,8 +871,8 @@ function RevokeBanDialog({
           <Button size="sm" variant="ghost" onClick={() => onOpenChange(false)}>
             取消
           </Button>
-          <Button size="sm" disabled={revoke.isPending} onClick={submit}>
-            {revoke.isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Undo2 className="size-3.5" />}
+          <Button size="sm" disabled={revoke.isPending} onClick={() => void submit()}>
+            {revoke.isPending ? <Loader2 className="animate-spin" /> : <Undo2 />}
             确认解除
           </Button>
         </DialogFooter>

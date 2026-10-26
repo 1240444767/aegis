@@ -25,8 +25,9 @@ import type { Layer, PickingInfo } from "@deck.gl/core";
 import { useTheme } from "next-themes";
 import { Gauge, Loader2, MapPinned, Route, Server, Settings2 } from "lucide-react";
 
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Skeleton } from "@/components/ui/skeleton";
 import { MapLibreMap as BaseMap } from "@/components/maps/maplibre-map";
 import { ServerLocationDialog } from "@/components/maps/server-location-dialog";
@@ -639,55 +640,59 @@ export function UserActivityMap({ appKey, userId }: { appKey: string; userId: nu
   const totalEvents = events.length;
 
   if (loading) {
-    return <Skeleton className="h-[380px] w-full rounded-xl" />;
+    return (
+      <div className="flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2">
+          <Skeleton className="h-8 w-56" />
+          <Skeleton className="h-8 w-24" />
+        </div>
+        <Skeleton className="h-[380px] w-full rounded-xl xl:h-[440px]" />
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-3">
+    <div className="flex flex-col gap-3">
       {/* 控制行 */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <div className="flex items-center gap-1 rounded-lg border bg-muted/50 p-0.5">
-            {(["points", "heat"] as LayerStyle[]).map((v) => (
-              <button
-                key={v}
-                type="button"
-                onClick={() => switchStyle(v)}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors",
-                  layerStyle === v
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-              >
-                {v === "points" ? <MapPinned className="size-3.5" /> : <Gauge className="size-3.5" />}
-                {v === "points" ? "活动点" : "密度热力"}
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
+          <ToggleGroup
+            type="single"
+            variant="outline"
+            size="sm"
+            value={layerStyle}
+            onValueChange={(v) => {
+              if (v) switchStyle(v as LayerStyle);
+            }}
+          >
+            <ToggleGroupItem value="points" className="px-2.5 text-xs">
+              <MapPinned className="size-3.5" />
+              活动点
+            </ToggleGroupItem>
+            <ToggleGroupItem value="heat" className="px-2.5 text-xs">
+              <Gauge className="size-3.5" />
+              密度热力
+            </ToggleGroupItem>
+          </ToggleGroup>
+          <Button
+            size="sm"
+            variant={showTrail && layerStyle === "points" ? "secondary" : "outline"}
             onClick={toggleTrail}
             disabled={layerStyle !== "points"}
-            className={cn(
-              "flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-40",
-              showTrail && layerStyle === "points"
-                ? "border-indigo-500/40 bg-indigo-500/10 text-indigo-600 dark:text-indigo-400"
-                : "bg-muted/50 text-muted-foreground hover:text-foreground"
-            )}
+            aria-pressed={showTrail && layerStyle === "points"}
           >
-            <Route className="size-3.5" />
+            <Route />
             位移轨迹
-            {trail.length > 0 && <span className="tabular-nums opacity-70">{trail.length}</span>}
-          </button>
+            {trail.length > 0 && <span className="text-muted-foreground tabular-nums">{trail.length}</span>}
+          </Button>
           {impossibleCount > 0 && (
-            <span className="flex items-center gap-1 rounded-lg border border-destructive/40 bg-destructive/10 px-2.5 py-1.5 text-xs font-medium text-destructive">
+            <Badge variant="danger">
               {impossibleCount} 段不可能位移
-            </span>
+            </Badge>
           )}
         </div>
-        <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => setShowSettings(true)}>
-          <Settings2 className="size-3.5" />
+        <Button size="sm" variant="outline" onClick={() => setShowSettings(true)}>
+          <Settings2 />
           端点位置
         </Button>
       </div>
@@ -696,14 +701,14 @@ export function UserActivityMap({ appKey, userId }: { appKey: string; userId: nu
       <BaseMap className="h-[380px] xl:h-[440px]" zoom={1.5} onMapReady={handleMapReady}>
         {isEmpty && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center">
-            <span className="rounded-full border border-border bg-card px-4 py-1.5 text-xs text-muted-foreground">
+            <span className="rounded-full border bg-card px-4 py-1.5 text-xs text-muted-foreground">
               {totalEvents > 0 ? "暂无可用坐标" : "暂无活动"}
             </span>
           </div>
         )}
         {loginsQuery.isFetching && !loading && (
           <div className="absolute inset-x-0 top-3 z-10 flex justify-center">
-            <span className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-[11px] text-muted-foreground">
+            <span className="flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1 text-xs text-muted-foreground">
               <Loader2 className="size-3 animate-spin" />
               正在刷新
             </span>
@@ -712,12 +717,12 @@ export function UserActivityMap({ appKey, userId }: { appKey: string; userId: nu
         {/* 图例 */}
         <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-lg border border-border bg-card px-2.5 py-1.5">
           {DOMINANCE.map((s) => (
-            <span key={s} className="flex items-center gap-1 text-[10.5px] text-muted-foreground">
+            <span key={s} className="flex items-center gap-1 text-xs text-muted-foreground">
               <span className="size-2 rounded-full" style={{ backgroundColor: STATUS_META[s].css }} />
               {STATUS_META[s].label}
             </span>
           ))}
-          <span className="flex items-center gap-1 border-l border-border pl-2 text-[10.5px] text-muted-foreground">
+          <span className="flex items-center gap-1 border-l border-border pl-2 text-xs text-muted-foreground">
             <span className="size-2 rounded-full" style={{ backgroundColor: SERVER_CSS }} />
             服务器地址
           </span>
@@ -725,7 +730,7 @@ export function UserActivityMap({ appKey, userId }: { appKey: string; userId: nu
       </BaseMap>
 
       {/* 汇总：地图上看不见的那部分事实（内网收敛、无法定位）必须写出来 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground tabular-nums">
         <span>
           {fmtCount(nodes.length)} 个位置，{fmtCount(totalEvents)} 次活动
         </span>

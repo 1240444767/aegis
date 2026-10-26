@@ -1,55 +1,22 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Coins, Crown, Receipt, Sparkles, Wallet } from "lucide-react";
+import { useState, type ComponentType, type ReactNode } from "react";
+import { Coins, Crown, Infinity as InfinityIcon, Receipt, SlidersHorizontal, Sparkles, Wallet } from "lucide-react";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from "@/components/ui/table";
-import { formatVipTerm, isLifetimeGrant, vipSourceLabel } from "@/components/apps/vip/vip-shared";
+import { useNow } from "@/components/users/ban-form";
 import { ApiError } from "@/lib/api-client";
-import {
-  useAdjustUserExperienceMutation,
-  useAdjustUserIntegralMutation
-} from "@/lib/admin-hooks";
+import { useAdjustUserExperienceMutation, useAdjustUserIntegralMutation } from "@/lib/admin-hooks";
 import {
   useAdjustAdminUserWalletMutation,
-  useAdminUserVipTransactionsQuery,
-  useAdminUserWalletQuery,
-  useAdminUserWalletTransactionsQuery,
-  useAdminVipFeaturesQuery
+  useAdminUserVipEntitlementQuery,
+  useAdminUserWalletQuery
 } from "@/lib/app-user-hooks";
-import type { AdminAppUserDetail, UserWallet } from "@/lib/api/types";
-import { cn } from "@/lib/utils";
-import { AdjustCard, Segmented, formatIntegerString } from "./user-assets-adjust";
-import {
-  EMPTY,
-  EmptyRow,
-  Panel,
-  WALLET_TXN_LABEL,
-  formatMoney,
-  formatShortTime,
-  formatTime,
-  hasWallet,
-  isNegativeAmount,
-  isZeroTime,
-  textValue
-} from "./user-detail-shared";
+import type { AdminAppUserDetail, UserWallet, VipEntitlement } from "@/lib/api/types";
+import { useUserPointSummaryQuery } from "@/lib/user-ledger-hooks";
+import { InfoGrid, MetricCard, Section, StateBlock, type Tone } from "./kit";
+import { AdjustForm, Segmented, formatIntegerString, type AdjustFormProps, type SegmentOption } from "./user-assets-adjust";
+import { EMPTY, formatMoney, formatTime, hasWallet, isNegativeAmount, isZeroTime } from "./user-detail-shared";
 import { UserFeatureUnlocksPanel } from "./user-feature-unlocks-panel";
 import { UserVipPanel } from "./user-vip-panel";
 
@@ -61,61 +28,90 @@ const EXPERIENCE_REASONS = ["活动奖励", "客诉补偿", "签到补发", "错
 const POINT_MAX_ADJUST = "100000000";
 const POINT_MAX_BALANCE = "9007199254740991";
 const MONEY_REASONS = ["客诉补偿", "线下充值", "退款补录", "错误更正"];
+/** 与后端 wallet maxAdjustAmount 一致 */
+const WALLET_MAX_ADJUST = "100000000";
+const DAY = 86_400_000;
 
-const LEDGER_PAGE_SIZE = 10;
+type AssetKind = "integral" | "experience" | "wallet";
+/** 「流水」页签的子类目 */
+type LedgerSub = AssetKind | "vip";
+
+const KIND_OPTIONS: Array<SegmentOption<AssetKind>> = [
+  { value: "integral", label: "积分", icon: Coins },
+  { value: "experience", label: "经验", icon: Sparkles },
+  { value: "wallet", label: "钱包余额", icon: Wallet }
+];
+
+const numberString = (value: unknown) => (typeof value === "number" && Number.isFinite(value) ? String(value) : undefined);
+const formatCount = (value: string) => formatIntegerString(value);
 
 /**
- * 资产：这个用户在平台上拥有的一切可计价的东西，以及改动它们的入口。
+ * 资产：这个用户在平台上拥有的一切可计价的东西，以及改动它们的入口。流水在独立的「流水」页签。
  *
  * 四种资产分属四条完全不同的账：
- *   积分 / 经验  —— points_service，整数，无小数
- *   钱包余额     —— wallet，decimal 字符串，带流水与幂等
+ *   积分 / 经验  —— points_service，整数，无小数，带请求编号幂等
+ *   钱包余额     —— wallet，decimal 字符串
  *   会员          —— vip，套餐 / 天数发放，功能权益跟随套餐当前配置
  *   功能解锁      —— 积分兑换或管理员授予的单项功能，不让人成为会员
  * 放在一页是因为管理员的问题是"这人有什么"，而不是"平台有几张表"；
- * 但调整入口各自独立，绝不做成一个统一的"调整资产"表单 —— 那会掩盖它们不同的结算语义。
+ * 调整表单共用一套交互，但请求各走各的接口 —— 统一请求会掩盖它们不同的结算语义。
  *
- * 自上而下：三张调整卡（当前值、方向、数量、调整后预览一屏看完）→ 会员 → 功能解锁 →
- * 账目记录（钱包流水与会员记录合在一处，按类型筛选、分页）。
+ * 自上而下：四张指标卡 → 资产调整（分段切换积分 / 经验 / 余额）→ 会员与会员记录 → 功能解锁。
  */
 export function UserAssetsTab({
   appKey,
   userId,
-  user
+  user,
+  onNavigate
 }: {
   appKey: string;
   userId: number;
   user: AdminAppUserDetail;
+  /** 切换到其它页签；给出时各区块出现「查看流水」 */
+  onNavigate?: (tab: string, sub?: string) => void;
 }) {
   const appId = user.appid;
   const walletQuery = useAdminUserWalletQuery(appKey, userId);
   const wallet = walletQuery.data as UserWallet | undefined;
   const walletReady = hasWallet(wallet);
+  const entitlementQuery = useAdminUserVipEntitlementQuery(appKey, userId);
+  const integralSummary = useUserPointSummaryQuery(appKey, userId, "integral", 30);
+  const experienceSummary = useUserPointSummaryQuery(appKey, userId, "experience", 30);
 
   const integralMutation = useAdjustUserIntegralMutation();
   const experienceMutation = useAdjustUserExperienceMutation();
   const walletMutation = useAdjustAdminUserWalletMutation(appKey, userId);
 
-  async function adjustPoints(kind: "integral" | "experience", signed: string, reason: string, requestId: string) {
+  const [kind, setKind] = useState<AssetKind>("integral");
+
+  const viewLedger = onNavigate ? (sub: LedgerSub) => () => onNavigate("ledger", sub) : undefined;
+
+  async function adjustPoints(target: "integral" | "experience", signed: string, reason: string, requestId: string) {
     if (!appId) {
       toast.error("缺少应用标识");
       return false;
     }
-    // 卡片已把数量限制在单次上限内，远小于 2^53，转 Number 不丢精度
+    // 表单已把数量限制在单次上限内，远小于 2^53，转 Number 不丢精度
     const amount = Number.parseInt(signed, 10);
     if (!Number.isSafeInteger(amount) || amount === 0) {
       toast.error("调整数量无效");
       return false;
     }
-    const label = kind === "integral" ? "积分" : "经验";
-    const mutation = kind === "integral" ? integralMutation : experienceMutation;
+    const label = target === "integral" ? "积分" : "经验";
+    const mutation = target === "integral" ? integralMutation : experienceMutation;
     try {
       const result = await mutation.mutateAsync({ userId, appid: appId, amount, reason: reason || undefined, requestId });
       const after = typeof result?.afterAmount === "number" ? `，当前 ${formatIntegerString(String(result.afterAmount))}` : "";
+      const level =
+        result?.levelChanged && typeof result.newLevel === "number"
+          ? `等级 ${result.oldLevel ?? "—"} → ${result.newLevel}`
+          : undefined;
       if (result?.replayed) {
         toast.info(`该笔调整已处理过，未重复${amount > 0 ? "增加" : "扣减"}${after}`);
       } else {
-        toast.success(`${label}已${amount > 0 ? "增加" : "扣减"} ${formatIntegerString(String(Math.abs(amount)))}${after}`);
+        toast.success(`${label}已${amount > 0 ? "增加" : "扣减"} ${formatIntegerString(String(Math.abs(amount)))}${after}`, {
+          description: [level, result?.transactionNo ? `流水号 ${result.transactionNo}` : ""].filter(Boolean).join("，") || undefined
+        });
       }
       return true;
     } catch (error) {
@@ -137,408 +133,257 @@ export function UserAssetsTab({
     }
   }
 
-  const numberString = (value: unknown) =>
-    typeof value === "number" && Number.isFinite(value) ? String(value) : undefined;
-  const formatCount = (value: string) => formatIntegerString(value);
+  const walletUnavailable =
+    !walletQuery.isLoading && !walletReady ? (
+      <span className="inline-flex flex-wrap items-center gap-1.5">
+        {walletQuery.isError ? "钱包数据加载失败" : "钱包数据不可用"}
+        <button
+          type="button"
+          className="text-foreground underline-offset-2 hover:underline"
+          onClick={() => void walletQuery.refetch()}
+        >
+          重试
+        </button>
+      </span>
+    ) : undefined;
+
+  const forms: Record<AssetKind, AdjustFormProps> = {
+    integral: {
+      title: "积分",
+      unit: "积分",
+      current: numberString(user.integral),
+      format: formatCount,
+      hint: "扣减不能超过当前积分",
+      quick: POINT_QUICK,
+      reasons: POINT_REASONS,
+      shortageText: "积分不足",
+      maxAmount: POINT_MAX_ADJUST,
+      maxBalance: POINT_MAX_BALANCE,
+      pending: integralMutation.isPending,
+      onSubmit: (signed, reason, requestId) => adjustPoints("integral", signed, reason, requestId)
+    },
+    experience: {
+      title: "经验",
+      unit: "经验",
+      current: numberString(user.experience),
+      format: formatCount,
+      hint: "经验只增不减，等级随之重算",
+      quick: POINT_QUICK,
+      reasons: EXPERIENCE_REASONS,
+      shortageText: "经验不足",
+      addOnly: true,
+      maxAmount: POINT_MAX_ADJUST,
+      maxBalance: POINT_MAX_BALANCE,
+      pending: experienceMutation.isPending,
+      onSubmit: (signed, reason, requestId) => adjustPoints("experience", signed, reason, requestId)
+    },
+    wallet: {
+      title: "余额",
+      unit: "元",
+      decimal: true,
+      loading: walletQuery.isLoading,
+      current: walletReady ? wallet?.balance : undefined,
+      format: (value) => `¥${formatMoney(value)}`,
+      hint: walletReady ? `冻结 ¥${formatMoney(wallet?.frozen)}` : undefined,
+      unavailable: walletUnavailable,
+      quick: MONEY_QUICK,
+      reasons: MONEY_REASONS,
+      shortageText: "余额不足",
+      maxAmount: WALLET_MAX_ADJUST,
+      pending: walletMutation.isPending,
+      onSubmit: (signed, reason) => adjustWallet(signed, reason)
+    }
+  };
+
+  const summaryFor = (target: AssetKind) =>
+    target === "integral" ? integralSummary.data : target === "experience" ? experienceSummary.data : undefined;
 
   return (
-    <div className="space-y-5">
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-        <AdjustCard
-          title="积分"
-          icon={<Coins className="size-4" />}
-          unit="积分"
-          current={numberString(user.integral)}
-          format={formatCount}
-          quick={POINT_QUICK}
-          reasons={POINT_REASONS}
-          shortageText="积分不足"
-          maxAmount={POINT_MAX_ADJUST}
-          maxBalance={POINT_MAX_BALANCE}
-          pending={integralMutation.isPending}
-          onSubmit={(signed, reason, requestId) => adjustPoints("integral", signed, reason, requestId)}
+    <div className="flex flex-col gap-5">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <PointMetric
+          label="积分"
+          icon={Coins}
+          tone="warning"
+          value={user.integral}
+          summary={integralSummary.data}
+          onClick={viewLedger?.("integral")}
         />
-        <AdjustCard
-          title="经验"
-          icon={<Sparkles className="size-4" />}
-          unit="经验"
-          current={numberString(user.experience)}
-          format={formatCount}
-          hint="经验只增不减，等级随之重算"
-          quick={POINT_QUICK}
-          reasons={EXPERIENCE_REASONS}
-          shortageText="经验不足"
-          addOnly
-          maxAmount={POINT_MAX_ADJUST}
-          maxBalance={POINT_MAX_BALANCE}
-          pending={experienceMutation.isPending}
-          onSubmit={(signed, reason, requestId) => adjustPoints("experience", signed, reason, requestId)}
+        <PointMetric
+          label="经验"
+          icon={Sparkles}
+          tone="info"
+          value={user.experience}
+          summary={experienceSummary.data}
+          onClick={viewLedger?.("experience")}
         />
-        <AdjustCard
-          title="钱包余额"
-          icon={<Wallet className="size-4" />}
-          unit="元"
-          decimal
+        <MetricCard
+          label="钱包余额"
+          icon={Wallet}
+          tone="success"
           loading={walletQuery.isLoading}
-          current={walletReady ? wallet?.balance : undefined}
-          format={(value) => `¥${formatMoney(value)}`}
-          hint={walletReady ? `冻结 ¥${formatMoney(wallet?.frozen)}` : undefined}
-          unavailable={!walletQuery.isLoading && !walletReady ? "钱包数据不可用" : undefined}
-          quick={MONEY_QUICK}
-          reasons={MONEY_REASONS}
-          shortageText="余额不足"
-          pending={walletMutation.isPending}
-          onSubmit={adjustWallet}
+          value={walletReady ? `¥${formatMoney(wallet?.balance)}` : EMPTY}
+          sub={walletReady ? `冻结 ¥${formatMoney(wallet?.frozen)}` : walletQuery.isError ? "加载失败" : "钱包数据不可用"}
+          onClick={viewLedger?.("wallet")}
+        />
+        <VipMetric
+          loading={entitlementQuery.isLoading}
+          error={entitlementQuery.isError}
+          entitlement={entitlementQuery.data}
+          onClick={viewLedger?.("vip")}
         />
       </div>
 
-      <UserVipPanel appKey={appKey} userId={userId} />
+      <Section
+        title="资产调整"
+        description="调整立即生效并写入流水；积分与经验同一笔重试只生效一次"
+        icon={SlidersHorizontal}
+        tone="primary"
+        actions={
+          viewLedger ? (
+            <Button size="sm" variant="outline" onClick={viewLedger(kind)}>
+              <Receipt />
+              查看{kind === "integral" ? "积分" : kind === "experience" ? "经验" : "余额"}流水
+            </Button>
+          ) : null
+        }
+        toolbar={<Segmented value={kind} onChange={setKind} options={KIND_OPTIONS} ariaLabel="调整对象" />}
+      >
+        <div className="flex flex-col gap-5">
+          <AdjustForm key={kind} {...forms[kind]} />
+          <KindFacts kind={kind} wallet={walletReady ? wallet : undefined} summary={summaryFor(kind)} />
+        </div>
+      </Section>
+
+      <UserVipPanel appKey={appKey} userId={userId} onViewLedger={viewLedger?.("vip")} />
 
       <UserFeatureUnlocksPanel appKey={appKey} userId={userId} />
-
-      <LedgerPanel appKey={appKey} userId={userId} wallet={walletReady ? wallet : undefined} />
     </div>
   );
 }
 
-// ── 账目记录 ──────────────────────────
+// ── 指标卡 ──────────────────────────
 
-type LedgerView = "wallet" | "vip";
+type PointSummary = NonNullable<ReturnType<typeof useUserPointSummaryQuery>["data"]>;
 
-function LedgerPanel({
-  appKey,
-  userId,
-  wallet
+function PointMetric({
+  label,
+  icon,
+  tone,
+  value,
+  summary,
+  onClick
 }: {
-  appKey: string;
-  userId: number;
-  wallet?: UserWallet;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  tone: Tone;
+  value?: number;
+  summary?: PointSummary;
+  onClick?: () => void;
 }) {
-  const [view, setView] = useState<LedgerView>("wallet");
-  const [walletType, setWalletType] = useState("all");
-  const [walletPage, setWalletPage] = useState(1);
-  const [vipPage, setVipPage] = useState(1);
-
-  const walletTxns = useAdminUserWalletTransactionsQuery(appKey, userId, {
-    type: walletType === "all" ? undefined : walletType,
-    page: walletPage,
-    limit: LEDGER_PAGE_SIZE
-  });
-  const vipTxns = useAdminUserVipTransactionsQuery(appKey, userId, {
-    page: vipPage,
-    limit: LEDGER_PAGE_SIZE
-  });
-
-  const vipTotalPages = Math.max(1, Math.ceil((vipTxns.data?.total ?? 0) / LEDGER_PAGE_SIZE));
-
+  const daily = summary?.daily ?? [];
+  const spark = daily.map((day) => day.balance);
+  const recentIn = daily.reduce((sum, day) => sum + day.in, 0);
+  const recentOut = daily.reduce((sum, day) => sum + day.out, 0);
+  const sub = summary
+    ? `近 ${summary.days} 天 +${recentIn.toLocaleString("zh-CN")} / -${recentOut.toLocaleString("zh-CN")}`
+    : "近 30 天变动";
   return (
-    <Panel
-      title="账目记录"
-      icon={<Receipt className="size-4" />}
-      action={
-        <Segmented
-          value={view}
-          onChange={setView}
-          ariaLabel="账目类型"
-          options={[
-            {
-              value: "wallet",
-              label: "钱包流水",
-              icon: Wallet,
-              count: walletType === "all" ? walletTxns.data?.total : undefined
-            },
-            { value: "vip", label: "会员记录", icon: Crown, count: vipTxns.data?.total }
+    <MetricCard
+      label={label}
+      icon={icon}
+      tone={tone}
+      value={typeof value === "number" ? value.toLocaleString("zh-CN") : EMPTY}
+      sub={sub}
+      spark={spark.length > 1 ? spark : undefined}
+      onClick={onClick}
+    />
+  );
+}
+
+function VipMetric({
+  loading,
+  error,
+  entitlement,
+  onClick
+}: {
+  loading: boolean;
+  error: boolean;
+  entitlement?: VipEntitlement;
+  onClick?: () => void;
+}) {
+  const now = useNow();
+  let value: ReactNode = EMPTY;
+  let sub: ReactNode = error ? "加载失败" : "权益信息不可用";
+  let tone: Tone = "neutral";
+  if (entitlement) {
+    if (entitlement.isLifetime) {
+      value = (
+        <span className="inline-flex items-center gap-1.5">
+          <InfinityIcon className="size-5" />
+          永久会员
+        </span>
+      );
+      sub = entitlement.planName || `开通于 ${formatTime(entitlement.lifetimeSince)}`;
+      tone = "violet";
+    } else if (entitlement.isVip) {
+      const expire = entitlement.expireAt ? new Date(entitlement.expireAt).getTime() : Number.NaN;
+      const days = Number.isFinite(expire) ? Math.max(0, Math.ceil((expire - now) / DAY)) : entitlement.remainingDays;
+      value = `剩余 ${days} 天`;
+      sub = [entitlement.isTrial ? "试用" : entitlement.planName, entitlement.expireAt ? `${formatTime(entitlement.expireAt)} 到期` : ""]
+        .filter(Boolean)
+        .join("，");
+      tone = entitlement.isTrial ? "info" : "violet";
+    } else {
+      value = entitlement.expireAt ? "已过期" : "非会员";
+      sub = entitlement.expireAt ? `${formatTime(entitlement.expireAt)} 到期` : "没有会员记录";
+      tone = entitlement.expireAt ? "warning" : "neutral";
+    }
+  }
+  return <MetricCard label="会员" icon={Crown} tone={tone} loading={loading} value={value} sub={sub} onClick={onClick} />;
+}
+
+// ── 调整区下方的账户概况 ──────────────────────────
+
+function KindFacts({ kind, wallet, summary }: { kind: AssetKind; wallet?: UserWallet; summary?: PointSummary }) {
+  if (kind === "wallet") {
+    if (!wallet) return null;
+    return (
+      <div className="border-t pt-4">
+        <InfoGrid
+          columns={3}
+          items={[
+            { label: "冻结金额", value: `¥${formatMoney(wallet.frozen)}` },
+            { label: "累计充值", value: `¥${formatMoney(wallet.totalRecharged)}` },
+            { label: "累计消费", value: `¥${formatMoney(wallet.totalConsumed)}` },
+            { label: "开户时间", value: wallet.createdAt && !isZeroTime(wallet.createdAt) ? formatTime(wallet.createdAt) : "未开户" },
+            { label: "最近变动", value: wallet.updatedAt && !isZeroTime(wallet.updatedAt) ? formatTime(wallet.updatedAt) : EMPTY }
           ]}
         />
-      }
-      bodyClassName="p-0 sm:px-0"
-    >
-      {view === "wallet" ? (
-        <>
-          <div className="flex flex-col gap-3 border-b px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <dl className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
-              <LedgerFact label="累计充值" value={wallet ? `¥${formatMoney(wallet.totalRecharged)}` : EMPTY} />
-              <LedgerFact label="累计消费" value={wallet ? `¥${formatMoney(wallet.totalConsumed)}` : EMPTY} />
-              <LedgerFact
-                label="开户时间"
-                value={wallet && !isZeroTime(wallet.createdAt) ? formatTime(wallet.createdAt) : "未开户"}
-              />
-            </dl>
-            <Select
-              value={walletType}
-              onValueChange={(value) => {
-                setWalletType(value);
-                setWalletPage(1);
-              }}
-            >
-              <SelectTrigger size="sm" className="h-8 w-full text-xs sm:w-36" aria-label="流水类型">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="text-xs">
-                  全部类型
-                </SelectItem>
-                {Object.entries(WALLET_TXN_LABEL).map(([value, label]) => (
-                  <SelectItem key={value} value={value} className="text-xs">
-                    {label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <WalletLedger
-            loading={walletTxns.isLoading}
-            items={walletTxns.data?.items ?? []}
-            emptyText={walletType === "all" ? "暂无流水记录" : "没有这一类型的流水"}
-          />
-          <Pager
-            page={walletPage}
-            totalPages={walletTxns.data?.totalPages ?? 1}
-            total={walletTxns.data?.total ?? 0}
-            busy={walletTxns.isFetching}
-            onChange={setWalletPage}
-          />
-        </>
-      ) : (
-        <>
-          <VipLedger appKey={appKey} loading={vipTxns.isLoading} items={vipTxns.data?.items ?? []} />
-          <Pager
-            page={vipPage}
-            totalPages={vipTotalPages}
-            total={vipTxns.data?.total ?? 0}
-            busy={vipTxns.isFetching}
-            onChange={setVipPage}
-          />
-        </>
-      )}
-    </Panel>
-  );
-}
-
-function LedgerFact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="font-medium tabular-nums text-foreground">{value}</dd>
-    </div>
-  );
-}
-
-function LedgerSkeleton() {
-  return (
-    <div className="space-y-2 px-4 py-4 sm:px-5">
-      {[0, 1, 2, 3].map((i) => (
-        <Skeleton key={i} className="h-9 w-full rounded-lg" />
-      ))}
-    </div>
-  );
-}
-
-function WalletLedger({
-  loading,
-  items,
-  emptyText
-}: {
-  loading: boolean;
-  items: NonNullable<ReturnType<typeof useAdminUserWalletTransactionsQuery>["data"]>["items"];
-  emptyText: string;
-}) {
-  if (loading) return <LedgerSkeleton />;
-  if (!items?.length) return <EmptyRow text={emptyText} />;
-  return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="pl-4 sm:pl-5">时间</TableHead>
-            <TableHead>类型</TableHead>
-            <TableHead>说明</TableHead>
-            <TableHead className="text-right">金额</TableHead>
-            <TableHead className="text-right">余额</TableHead>
-            <TableHead className="pr-4 sm:pr-5">操作人</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((txn) => {
-            const negative = isNegativeAmount(txn.amount);
-            return (
-              <TableRow key={txn.id}>
-                <TableCell
-                  className="whitespace-nowrap pl-4 text-xs tabular-nums text-muted-foreground sm:pl-5"
-                  title={formatTime(txn.createdAt)}
-                >
-                  {formatShortTime(txn.createdAt)}
-                </TableCell>
-                <TableCell>
-                  <Badge variant="outline" size="sm">
-                    {WALLET_TXN_LABEL[txn.type] ?? txn.type}
-                  </Badge>
-                </TableCell>
-                <TableCell className="max-w-[260px]">
-                  <div className="truncate text-xs" title={txn.title}>
-                    {textValue(txn.title)}
-                  </div>
-                  {txn.remark || txn.relatedOrderNo ? (
-                    <div className="truncate text-[11px] text-muted-foreground">
-                      {[txn.remark, txn.relatedOrderNo].filter(Boolean).join("，")}
-                    </div>
-                  ) : null}
-                </TableCell>
-                <TableCell
-                  className={cn(
-                    "text-right text-xs font-medium tabular-nums",
-                    negative ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"
-                  )}
-                >
-                  {negative ? "" : "+"}
-                  {formatMoney(txn.amount)}
-                </TableCell>
-                <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
-                  {formatMoney(txn.balanceAfter)}
-                </TableCell>
-                <TableCell className="pr-4 text-xs text-muted-foreground sm:pr-5">
-                  {textValue(txn.operator)}
-                </TableCell>
-              </TableRow>
-            );
-          })}
-        </TableBody>
-      </Table>
-    </div>
-  );
-}
-
-function VipLedger({
-  appKey,
-  loading,
-  items
-}: {
-  appKey: string;
-  loading: boolean;
-  items: NonNullable<ReturnType<typeof useAdminUserVipTransactionsQuery>["data"]>["items"];
-}) {
-  const featuresQuery = useAdminVipFeaturesQuery(appKey);
-  const featureName = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const feature of featuresQuery.data ?? []) map.set(feature.tag, feature.name);
-    return (tag: string) => map.get(tag) || tag;
-  }, [featuresQuery.data]);
-
-  if (loading) return <LedgerSkeleton />;
-  if (!items?.length) return <EmptyRow text="暂无会员记录" />;
-  return (
-    <div className="overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="pl-4 sm:pl-5">时间</TableHead>
-            <TableHead>套餐</TableHead>
-            <TableHead className="text-right">时长</TableHead>
-            <TableHead>渠道</TableHead>
-            <TableHead className="text-right">金额</TableHead>
-            <TableHead className="pr-4 sm:pr-5">到期变化</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {items.map((txn) => (
-            <TableRow key={txn.id} className={cn(txn.revokedAt && "text-muted-foreground")}>
-              <TableCell
-                className="whitespace-nowrap pl-4 text-xs tabular-nums text-muted-foreground sm:pl-5"
-                title={formatTime(txn.createdAt)}
-              >
-                {formatShortTime(txn.createdAt)}
-              </TableCell>
-              <TableCell className="max-w-[220px]">
-                <div className="truncate text-xs">{textValue(txn.planName)}</div>
-                {txn.features?.length ? (
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {txn.features.map(featureName).join("、")}
-                  </div>
-                ) : null}
-              </TableCell>
-              <TableCell
-                className={cn(
-                  "text-right text-xs font-medium tabular-nums",
-                  txn.durationDays < 0 || txn.payChannel === "admin_revoke"
-                    ? "text-red-600 dark:text-red-400"
-                    : "text-foreground"
-                )}
-              >
-                {formatVipTerm(txn)}
-              </TableCell>
-              <TableCell>
-                <div className="flex items-center gap-1">
-                  <Badge variant="outline" size="sm">
-                    {vipSourceLabel(txn.payChannel)}
-                  </Badge>
-                  {txn.revokedAt ? (
-                    <Badge variant="danger" size="sm" title={txn.revokeReason || undefined}>
-                      已作废
-                    </Badge>
-                  ) : null}
-                </div>
-              </TableCell>
-              <TableCell className="text-right text-xs tabular-nums">{formatMoney(txn.payAmount)}</TableCell>
-              <TableCell className="whitespace-nowrap pr-4 text-[11px] tabular-nums text-muted-foreground sm:pr-5">
-                {/* 永久开通与取消永久会员都不动限时那条线的到期时间 */}
-                {isLifetimeGrant(txn) ? (
-                  "永久"
-                ) : txn.lifetime ? (
-                  EMPTY
-                ) : (
-                  <>
-                    {txn.expireBefore ? `${formatShortTime(txn.expireBefore)} → ` : "开通 → "}
-                    {formatShortTime(txn.expireAfter)}
-                  </>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
-  );
-}
-
-function Pager({
-  page,
-  totalPages,
-  total,
-  busy,
-  onChange
-}: {
-  page: number;
-  totalPages: number;
-  total: number;
-  busy: boolean;
-  onChange: (page: number) => void;
-}) {
-  if (totalPages <= 1) return null;
-  return (
-    <div className="flex items-center justify-between gap-3 border-t px-4 py-3 text-xs text-muted-foreground sm:px-5">
-      <span className="tabular-nums">
-        第 {page} / {totalPages} 页，共 {total} 条
-      </span>
-      <div className="flex gap-2">
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs"
-          disabled={page <= 1 || busy}
-          onClick={() => onChange(page - 1)}
-        >
-          上一页
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-7 text-xs"
-          disabled={page >= totalPages || busy}
-          onClick={() => onChange(page + 1)}
-        >
-          下一页
-        </Button>
       </div>
+    );
+  }
+  if (!summary) return null;
+  if (!summary.count) {
+    return (
+      <div className="border-t pt-2">
+        <StateBlock compact title="还没有任何流水" />
+      </div>
+    );
+  }
+  return (
+    <div className="border-t pt-4">
+      <InfoGrid
+        columns={3}
+        items={[
+          { label: "累计获得", value: `+${summary.totalIn.toLocaleString("zh-CN")}`, tone: "success" },
+          { label: "累计支出", value: `-${summary.totalOut.toLocaleString("zh-CN")}`, tone: summary.totalOut ? "danger" : undefined },
+          { label: "流水笔数", value: summary.count.toLocaleString("zh-CN") },
+          { label: "管理员累计增加", value: summary.adminIn.toLocaleString("zh-CN") },
+          { label: "管理员累计扣减", value: summary.adminOut.toLocaleString("zh-CN") },
+          { label: "最近变动", value: summary.lastAt ? formatTime(summary.lastAt) : EMPTY }
+        ]}
+      />
     </div>
   );
 }
