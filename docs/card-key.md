@@ -96,7 +96,7 @@ POST /api/v1/apps/{appKey}/card-keys/redeem    { "code": "…", "deviceId": "…
 |---|---|
 | `vip_plan` | `extendUserVipTx`，继承套餐的时长与功能标识快照；选永久套餐即发永久会员（套餐可以下架，只用于发卡） |
 | `vip_days` | `extendUserVipTx`，不挂套餐、不带功能标识 |
-| `feature` | `grantFeatureUnlockTx`，来源 `card_key`；天数 0 为永久，同一功能顺延；一张卡可以解锁几个不同的功能；已永久拥有时拒发（40983），卡不会被核销 |
+| `feature` | `grantFeatureUnlockTx`，来源 `card_key`；天数 0 为永久，同一功能顺延；一张卡可以解锁几个不同的功能；已拥有（已永久解锁 / 永久会员已包含）时按[会员权益折算](vip-conversion.md)策略折成积分；策略为照常发放且已永久解锁时拒发（40983），卡不会被核销 |
 | `integral` | `applyIntegralChangeTx` |
 | `experience` | `applyExperienceChangeTx` |
 | `balance` | `applyWalletChangeTx`，类型 `card_key`；幂等键一卡一用时是卡号（与老数据一致），活动码时落到「卡 + 人」 |

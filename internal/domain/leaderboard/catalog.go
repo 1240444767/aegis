@@ -110,6 +110,8 @@ var integralCategories = []CategoryRule{
 	// AI 中转网关：调用扣积分是扣减；管理员退款是把扣掉的还回去，不是「获得」
 	{Category: "ai_gateway", Label: "AI 调用（扣减）", Rule: CategoryExcluded},
 	{Category: "ai_gateway_refund", Label: "AI 调用退款", Rule: CategoryExcluded},
+	// 会员权益折算：已拥有的权益与开通永久时被覆盖的存量折成的积分，是补偿而不是挣来的；取消永久时的收回是扣减
+	{Category: "vip_convert", Label: "会员权益折算", Rule: CategoryExcluded},
 }
 
 // IntegralCategories 全部已登记的分类与处理方式。

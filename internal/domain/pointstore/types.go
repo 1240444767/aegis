@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	vipdomain "aegis/internal/domain/vip"
 )
 
 // 商品状态。
@@ -94,6 +96,8 @@ type RewardResult struct {
 	ExpireAt *time.Time `json:"expireAt,omitempty"`
 	// Pending 人工发放、尚未处理
 	Pending bool `json:"pending,omitempty"`
+	// Conversion 已拥有、按应用折算策略折成了积分（见 vip.Conversion）
+	Conversion *vipdomain.ConversionSummary `json:"conversion,omitempty"`
 }
 
 // Item 一件商品。

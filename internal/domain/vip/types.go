@@ -25,6 +25,9 @@ const (
 	// ChannelLegacyImport 老系统迁移进来的永久会员（vip_time = 999999999），由迁移补记。
 	// 老系统没有留下凭什么，判定时归为来源不明。
 	ChannelLegacyImport = "legacy_import"
+	// ChannelLifetimeConvert 开通永久会员时折掉被覆盖的存量（负时长的说明行），
+	// 以及取消永久会员后把折掉的会员时长还回来（正时长，是一段会员期）。见 conversion.go。
+	ChannelLifetimeConvert = "lifetime_convert"
 )
 
 // LegacyLifetimeExpireAt 老系统永久会员（vip_time = 999999999）导入时被映射成的到期时间。
@@ -78,6 +81,8 @@ type Plan struct {
 	// Included 当前用户的永久会员已经包含这个套餐的全部权益，再买拿不到任何新东西。
 	// 只在用户侧的在售列表里按当前用户填充；购买与下单会以 40378 拒绝这样的套餐。
 	Included bool `json:"included,omitempty"`
+	// UpgradePreview 永久套餐：当前用户开通之后，原有的限时会员等存量会怎样（没有存量时为空）
+	UpgradePreview *UpgradePreview `json:"upgradePreview,omitempty"`
 }
 
 // IsTrial 是否试用套餐。
@@ -131,6 +136,14 @@ type Grant struct {
 	BonusIntegral  int64
 	Operator       string
 	Metadata       map[string]any
+	// Seconds 大于 0 时按秒顺延（DurationDays 只作账本展示）：还回折掉的会员时长要精确到秒
+	Seconds int64
+	// ConvertOwned 按应用的折算策略处理「已拥有」：这一笔对他是空的（永久会员已包含）时折成积分，不记会员段。
+	// 只有赠送类入口（管理员、卡密、邀请、排行榜、远程函数）打开；购买、试用、积分商城在下单前就拦了，
+	// 抽奖与激励广告有自己的活动 / 场景级处理，都不走这里。
+	ConvertOwned bool
+	// UpgradeMode 永久开通时被覆盖的存量怎么办：空为按应用策略，UpgradeConvert / UpgradeKeep 为这一笔单独指定
+	UpgradeMode string
 }
 
 // Transaction VIP 开通/续费记录
@@ -160,6 +173,8 @@ type Transaction struct {
 	RevokedAt    *time.Time `json:"revokedAt,omitempty"`
 	RevokeReason string     `json:"revokeReason,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
+	// Conversion 这一行对应的折算（已拥有发放被折成积分，或开通永久折掉了存量）
+	Conversion *ConversionSummary `json:"conversion,omitempty"`
 }
 
 // Revoke 一次扣减会员天数的指令（仓储层单事务执行：锁用户 → 从链尾截断 → 记账）。

@@ -44,8 +44,8 @@ const (
 
 // 已拥有的原因。
 const (
-	OwnedLifetime = "lifetime"
-	OwnedFeature  = "feature"
+	OwnedLifetime = vipdomain.OwnedLifetime
+	OwnedFeature  = vipdomain.OwnedFeature
 )
 
 // LifetimePolicies 处理方式，顺序即控制台的展示顺序。
@@ -89,43 +89,34 @@ type MemberCoverage struct {
 // 套餐的判据与购买入口同一个函数（vip.LifetimeIncludes）：只看功能，套餐的每个功能都已在永久开通里。
 // 永久基础版抽中限时高级版不算已拥有 —— 那是实打实的升级。会员天数不带功能，对永久会员一律已拥有。
 func (c MemberCoverage) Owned(reward Reward, plans map[int64]pointstore.PlanRef) (string, bool) {
+	holdings := c.Holdings()
 	switch reward.Type {
-	case KindVipDays, KindVipLifetime, KindAdFree:
-		// 永久会员本就免广告、功能时长免扣：免广告时长对他和会员天数一样是空奖
-		if c.Lifetime {
+	case KindVipDays, KindVipLifetime:
+		if holdings.CoversMembership(nil) {
+			return OwnedLifetime, true
+		}
+	case KindAdFree:
+		// 永久会员本就免广告：免广告时长对他和会员天数一样是空奖
+		if holdings.CoversAdFree() {
 			return OwnedLifetime, true
 		}
 	case KindFeatureTime:
 		// 功能时长只在「永远免扣」时是空奖：永久会员（会员一律免扣），或已永久解锁这个功能
-		if c.Lifetime {
-			return OwnedLifetime, true
-		}
-		tag := vipdomain.NormalizeFeatureTags([]string{reward.Tag})
-		if len(tag) > 0 && slices.Contains(vipdomain.NormalizeFeatureTags(c.PermanentUnlocks), tag[0]) {
-			return OwnedFeature, true
-		}
+		return holdings.CoversFeatureTime(reward.Tag)
 	case KindVipPlan:
 		plan, ok := plans[reward.RefID]
-		if !ok {
-			return "", false
-		}
-		if vipdomain.LifetimeIncludes(c.Lifetime, c.LifetimeFeatures,
-			vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
+		if ok && holdings.CoversPlan(vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
 			return OwnedLifetime, true
 		}
 	case KindFeature:
-		tag := vipdomain.NormalizeFeatureTags([]string{reward.Tag})
-		if len(tag) == 0 {
-			return "", false
-		}
-		if slices.Contains(vipdomain.NormalizeFeatureTags(c.PermanentUnlocks), tag[0]) {
-			return OwnedFeature, true
-		}
-		if c.Lifetime && slices.Contains(vipdomain.NormalizeFeatureTags(c.LifetimeFeatures), tag[0]) {
-			return OwnedLifetime, true
-		}
+		return holdings.CoversFeature(reward.Tag)
 	}
 	return "", false
+}
+
+// Holdings 统一的「已拥有」判据（vip.Holdings）。
+func (c MemberCoverage) Holdings() vipdomain.Holdings {
+	return vipdomain.Holdings{Lifetime: c.Lifetime, LifetimeFeatures: c.LifetimeFeatures, PermanentUnlocks: c.PermanentUnlocks}
 }
 
 // SwapRule 活动上的处理方式与折算参数。

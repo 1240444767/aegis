@@ -1449,6 +1449,14 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
     fun vipTransactions(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/vip/transactions", query = pageQuery(page, limit), requireAuth = true)
 
+    /**
+     * 会员折算记录：已拥有的权益被发放时折成的积分，开通永久会员时折掉的限时会员、功能解锁、功能时长与免广告时长。
+     * `status = restored` 表示永久会员被取消后已还回。
+     */
+    @Throws(IOException::class)
+    fun vipConversions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/vip/conversions", query = pageQuery(page, limit), requireAuth = true)
+
     /** 启用中的会员权益目录：标识、名称与说明。[vipStatus] 与套餐里只有标识，名称从这里取。 */
     @Throws(IOException::class)
     fun vipFeatures(): JsonElement = client.call("GET", "/vip/features", requireAuth = true)

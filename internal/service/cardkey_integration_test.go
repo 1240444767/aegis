@@ -276,11 +276,29 @@ func TestCardKeyIntegration(t *testing.T) {
 	if unlocked.Results[0].Detail != "在线音乐 永久" {
 		t.Fatalf("功能解锁的结果文案不对：%+v", unlocked.Results)
 	}
+	// 应用折算策略为「照常发放」时：已永久解锁的没有可记的，整次核销失败、卡不被核销
+	grantPolicy := vipdomain.DefaultConversionPolicy(appID)
+	grantPolicy.Owned = vipdomain.OwnedGrant
+	if _, err := vip.AdminSaveConversionPolicy(ctx, grantPolicy); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := redeem(bob, musicCodes[1].Code); errCode(err) != errCodeCardKeyRewardOwned {
 		t.Fatalf("已永久拥有时应报 40983，得到 %v", err)
 	}
 	if card := codesOf(music.ID)[1]; card.UseCount != 0 || card.Status != cardkeydomain.StatusUnused {
 		t.Fatalf("发放失败时卡不应被核销：%+v", card)
+	}
+	// 默认策略「折算为积分」：已永久拥有的功能按永久权益折成积分，核销成功
+	if _, err := vip.AdminSaveConversionPolicy(ctx, vipdomain.DefaultConversionPolicy(appID)); err != nil {
+		t.Fatal(err)
+	}
+	ownedBefore := integral(bob)
+	converted := mustRedeem(bob, musicCodes[1].Code)
+	if converted.Results[0].Conversion == nil || !strings.Contains(converted.Results[0].Detail, "已折算为") {
+		t.Fatalf("已永久拥有的功能应折成积分：%+v", converted.Results)
+	}
+	if integral(bob)-ownedBefore != vipdomain.DefaultPerLifetime {
+		t.Fatalf("应折 %d 积分，得到 %d", vipdomain.DefaultPerLifetime, integral(bob)-ownedBefore)
 	}
 
 	// ── 授权卡 ──

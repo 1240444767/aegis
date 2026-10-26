@@ -308,6 +308,7 @@ func registerCommerceRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		vip.GET("/plans", h.VipPlans)
 		vip.GET("/status", h.MyVipStatus)
 		vip.GET("/transactions", h.MyVipTransactions)
+		vip.GET("/conversions", h.MyVipConversions)
 		vip.POST("/purchase", h.PurchaseVip)
 		vip.POST("/trial", h.ClaimVipTrial)
 	}

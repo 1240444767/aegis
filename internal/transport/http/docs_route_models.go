@@ -284,8 +284,10 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/wallet/transactions"):                                   WalletTransactionsQuery{},                // AdminAppUserWalletTransactions
 		routeKey("POST", "/api/admin/apps/{appkey}/versions"):                                                            AdminAppVersionSaveRequest{},             // AdminCreateVersion
 		routeKey("PUT", "/api/admin/apps/{appkey}/versions/{vid}"):                                                       AdminAppVersionSaveRequest{},             // AdminUpdateVersion
+		routeKey("PUT", "/api/admin/apps/{appkey}/vip/conversion-policy"):                                                AdminVipConversionPolicyRequest{},        // AdminSaveAppVipConversionPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/features"):                                                        AdminVipFeatureRequest{},                 // AdminSaveAppVipFeature
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant"):                                                           AdminVipGrantRequest{},                   // AdminGrantAppUserVip
+		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant/preview"):                                                   AdminVipGrantRequest{},                   // AdminPreviewAppUserVipGrant
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/plans"):                                                           AdminVipPlanRequest{},                    // AdminSaveAppVipPlan
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/revoke"):                                                          AdminVipRevokeRequest{},                  // AdminRevokeAppUserVip
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/trial/claims"):                                                    AdminVipTrialClaimRequest{},              // AdminClaimAppVipTrial

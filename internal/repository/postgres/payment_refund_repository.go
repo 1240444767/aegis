@@ -323,6 +323,10 @@ func reverseLifetimeVipTx(ctx context.Context, tx pgx.Tx, order *paymentdomain.O
 	if !revoked {
 		return paymentdomain.ReversalFailed, "找不到这笔订单的永久会员开通记录，请人工处理"
 	}
+	// 不再是永久会员时，开通时折掉的存量按策略还回去
+	if _, err := restoreLifetimeConversionsTx(ctx, tx, order.AppID, userID, "payment_refund"); err != nil {
+		return paymentdomain.ReversalFailed, "还回开通永久会员时折算的权益失败：" + err.Error()
+	}
 	if reverse.VipBonus > 0 {
 		if _, _, _, err := applyIntegralChangeTx(ctx, tx, userID, order.AppID, -reverse.VipBonus,
 			"consume", "refund", "订单退款回收赠送积分", order.Subject, "payment_order", &order.ID,

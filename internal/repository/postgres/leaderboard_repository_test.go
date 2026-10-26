@@ -63,6 +63,7 @@ func TestIntegralCategoriesCoverEveryWriter(t *testing.T) {
 		"invite.IntegralCategory":           invite.IntegralCategory,
 		"leaderboard.IntegralCategory":      leaderboard.IntegralCategory,
 		"lotterydomain.IntegralCategory":    lotterydomain.IntegralCategory,
+		"vipConversionIntegralCategory":     vipConversionIntegralCategory,
 	}
 	callPattern := regexp.MustCompile(`applyIntegralChangeTx\(ctx, tx,(?s:.{0,300}?)"(?:earn|consume)",\s*([^,\s]+),`)
 	structPattern := regexp.MustCompile(`integralChange\{(?s:.{0,300}?)Category:\s*([^,\s]+),`)

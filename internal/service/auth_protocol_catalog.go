@@ -296,6 +296,7 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "vipFeatures", Method: "GET", Path: "/vip/features", Auth: true, Summary: "会员权益目录（启用中的标识、名称与说明）"},
 	{Key: "vipFeatureTicket", Method: "POST", Path: "/vip/feature-ticket", Auth: true, Summary: "权益凭证：拥有某项权益时签发绑定账号与设备的 Ed25519 凭证，客户端离线验签"},
 	{Key: "vipTransactions", Method: "GET", Path: "/vip/transactions", Auth: true, Summary: "会员流水"},
+	{Key: "vipConversions", Method: "GET", Path: "/vip/conversions", Auth: true, Summary: "会员折算记录（已拥有的发放、开通永久时折掉的存量）"},
 	{Key: "vipPurchase", Method: "POST", Path: "/vip/purchase", Auth: true, Summary: "购买会员"},
 	{Key: "vipTrial", Method: "POST", Path: "/vip/trial", Auth: true, Summary: "领取试用会员（一人一次，资格见 /vip/status 的 trialOffer）"},
 	{Key: "payMethods", Method: "GET", Path: "/pay/methods", Auth: true,

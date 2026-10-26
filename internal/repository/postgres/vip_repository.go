@@ -291,6 +291,12 @@ func (r *Repository) GrantVip(ctx context.Context, grant vipdomain.Grant) (*vipd
 // 永久开通走 grantLifetimeVipTx：所有发放入口（购买、直购履约、卡密、管理员、激励广告）
 // 都只调这一个函数，按 grant.Lifetime 分支，永久会员不需要每个入口各接一遍。
 func extendUserVipTx(ctx context.Context, tx pgx.Tx, grant vipdomain.Grant) (*vipdomain.Transaction, error) {
+	if grant.ConvertOwned {
+		txn, handled, err := convertOwnedVipTx(ctx, tx, grant)
+		if err != nil || handled {
+			return txn, err
+		}
+	}
 	if grant.Lifetime {
 		return grantLifetimeVipTx(ctx, tx, grant)
 	}
@@ -311,6 +317,9 @@ func extendUserVipTx(ctx context.Context, tx pgx.Tx, grant vipdomain.Grant) (*vi
 		base = expireBefore.UTC()
 	}
 	expireAfter := base.AddDate(0, 0, grant.DurationDays)
+	if grant.Seconds > 0 {
+		expireAfter = base.Add(time.Duration(grant.Seconds) * time.Second)
+	}
 	if _, err := tx.Exec(ctx, `UPDATE users SET vip_expire_at = $1, updated_at = NOW() WHERE id = $2 AND appid = $3`,
 		expireAfter, grant.UserID, grant.AppID); err != nil {
 		return nil, err
@@ -416,6 +425,14 @@ RETURNING id, created_at`,
 
 	if err := grantVipBonusTx(ctx, tx, grant, &txn); err != nil {
 		return nil, err
+	}
+	// 被永久那条线盖住的存量（限时会员、限时功能解锁、功能时长、免广告）按策略折掉
+	conversion, err := convertForLifetimeUpgradeTx(ctx, tx, grant, &txn)
+	if err != nil {
+		return nil, err
+	}
+	if conversion != nil {
+		txn.Conversion = conversion.Summary()
 	}
 	return &txn, nil
 }
@@ -593,6 +610,18 @@ RETURNING vt.transaction_no`, revoke.AppID, revoke.UserID, vipdomain.RevokeReaso
 		revoke.UserID, revoke.AppID); err != nil {
 		return nil, err
 	}
+	// 开通时折掉的存量按策略还回去（先还再读到期时间：还回的会员时长会把它往后推）
+	expireBeforeRevoke := expireAt
+	restoredConversions, err := restoreLifetimeConversionsTx(ctx, tx, revoke.AppID, revoke.UserID, revoke.Operator)
+	if err != nil {
+		return nil, err
+	}
+	if restoredConversions > 0 {
+		if err := tx.QueryRow(ctx, `SELECT vip_expire_at FROM users WHERE id = $1 AND appid = $2`,
+			revoke.UserID, revoke.AppID).Scan(&expireAt); err != nil {
+			return nil, err
+		}
+	}
 
 	planName := truncateColumn(strings.TrimSpace(revoke.Reason), vipPlanNameMaxRunes)
 	if planName == "" {
@@ -605,6 +634,9 @@ RETURNING vt.transaction_no`, revoke.AppID, revoke.UserID, vipdomain.RevokeReaso
 	metadata["reason"] = strings.TrimSpace(revoke.Reason)
 	metadata["lifetimeSince"] = lifetimeAt.UTC().Format(time.RFC3339)
 	metadata["revokedTransactions"] = revoked
+	if restoredConversions > 0 {
+		metadata["restoredConversions"] = restoredConversions
+	}
 	txn := vipdomain.Transaction{
 		TransactionNo: generateTransactionNo("VIP"),
 		UserID:        revoke.UserID,
@@ -614,8 +646,8 @@ RETURNING vt.transaction_no`, revoke.AppID, revoke.UserID, vipdomain.RevokeReaso
 		Lifetime:      true,
 		PayChannel:    vipdomain.ChannelAdminRevoke,
 		PayAmount:     decimal.Zero,
-		// 限时那条线不受影响：前后到期时间相同
-		ExpireBefore: expireAt,
+		// 限时那条线只在还回折算的会员时长时变化，否则前后相同
+		ExpireBefore: expireBeforeRevoke,
 		ExpireAfter:  expireAt,
 		Operator:     revoke.Operator,
 		Metadata:     metadata,
@@ -855,5 +887,13 @@ func scanVipTxn(row interface{ Scan(dest ...any) error }) (*vipdomain.Transactio
 	}
 	t.PayAmount = decimal.RequireFromString(payAmount)
 	_ = json.Unmarshal(meta, &t.Metadata)
+	if raw, ok := t.Metadata["conversion"]; ok {
+		if encoded, err := json.Marshal(raw); err == nil {
+			var summary vipdomain.ConversionSummary
+			if json.Unmarshal(encoded, &summary) == nil && summary.ConversionNo != "" {
+				t.Conversion = &summary
+			}
+		}
+	}
 	return &t, nil
 }

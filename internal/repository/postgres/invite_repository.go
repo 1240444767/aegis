@@ -821,32 +821,34 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
 				UserID: userID, AppID: appID, PlanID: &planID, PlanName: plan.Name, Features: plan.Features,
 				DurationDays: plan.DurationDays, Lifetime: plan.Lifetime,
-				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta,
+				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta, ConvertOwned: true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.Detail = plan.Name + "（" + plan.TermLabel() + "）"
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case pointstore.RewardVipDays:
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
 				UserID: userID, AppID: appID, PlanName: grant.Title, DurationDays: int(reward.Amount),
-				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta,
+				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta, ConvertOwned: true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case pointstore.RewardFeature:
 			if feature, ok := grant.Features[reward.Tag]; !ok || !feature.IsActive {
 				return nil, &InviteUnavailableError{Reason: invite.ReasonRewardUnavailable}
 			}
-			unlock, err := grantFeatureUnlockTx(ctx, tx, FeatureUnlockGrant{
+			outcome, err := grantFeatureUnlockOrConvertTx(ctx, tx, FeatureUnlockGrant{
 				AppID: appID, UserID: userID, Tag: reward.Tag, Days: int(reward.Amount),
 				Source: vipdomain.UnlockSourceInvite, SourceRef: ref,
-			})
+			}, vipdomain.ChannelInvite)
 			if errors.Is(err, ErrFeatureUnlockOwned) {
 				// 已永久拥有：这一项没有可发的，记一笔说明而不是让整次邀请失败
 				result.Detail += "（已永久拥有）"
@@ -856,6 +858,14 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			if err != nil {
 				return nil, err
 			}
+			if outcome.Conversion != nil {
+				result.Detail = outcome.Conversion.Message
+				result.Conversion = outcome.Conversion.Summary()
+				result.TransactionNo = outcome.Conversion.ConversionNo
+				out = append(out, result)
+				continue
+			}
+			unlock := outcome.Unlock
 			result.ExpireAt = unlock.EndsAt
 			result.TransactionNo = strconv.FormatInt(unlock.ID, 10)
 

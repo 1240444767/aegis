@@ -1,7 +1,6 @@
 package pointstore
 
 import (
-	"slices"
 	"strconv"
 	"time"
 
@@ -107,25 +106,24 @@ func rewardsResolvable(rewards []Reward, facts UserFacts) bool {
 // 拦的是纯花积分的情形 —— 永久会员再兑会员天数或已包含的套餐、已永久解锁的功能再兑一次限时的。
 // 一件商品里只要有一项是这样就拦：积分花出去收不回来，宁可让运营把商品拆开。
 func Owned(rewards []Reward, facts UserFacts) bool {
+	holdings := vipdomain.Holdings{
+		Lifetime: facts.IsLifetime, LifetimeFeatures: facts.LifetimeFeatures, PermanentUnlocks: facts.PermanentUnlocks,
+	}
 	for _, reward := range rewards {
 		switch reward.Type {
 		case RewardVipPlan:
 			// 与购买的 40378 同一口径：永久会员已包含套餐的全部功能即算拥有
 			plan, ok := facts.Plans[reward.RefID]
-			if ok && vipdomain.LifetimeIncludes(facts.IsLifetime, facts.LifetimeFeatures,
-				vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
+			if ok && holdings.CoversPlan(vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
 				return true
 			}
 		case RewardVipDays:
 			// 不带功能的会员天数对永久会员没有任何作用
-			if facts.IsLifetime {
+			if holdings.CoversMembership(nil) {
 				return true
 			}
 		case RewardFeature:
-			if slices.Contains(facts.PermanentUnlocks, reward.Tag) {
-				return true
-			}
-			if facts.IsLifetime && slices.Contains(vipdomain.NormalizeFeatureTags(facts.LifetimeFeatures), reward.Tag) {
+			if _, ok := holdings.CoversFeature(reward.Tag); ok {
 				return true
 			}
 		}

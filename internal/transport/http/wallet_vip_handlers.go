@@ -81,6 +81,10 @@ type AdminVipGrantRequest struct {
 	Features      []string `json:"features"`
 	Reason        string   `json:"reason"`
 	BonusIntegral int64    `json:"bonusIntegral"`
+	// OwnedPolicy 这笔对他已是空的（永久会员已包含）时：空为按应用折算策略，grant 为照常发放
+	OwnedPolicy string `json:"ownedPolicy"`
+	// UpgradePolicy 发永久会员时被覆盖的存量：空为按应用折算策略，convert 折算 / keep 保留
+	UpgradePolicy string `json:"upgradePolicy"`
 }
 
 // AdminVipRevokeRequest 管理员收回会员。
@@ -305,6 +309,25 @@ func (h *Handler) MyVipTransactions(c *gin.Context) {
 	})
 }
 
+// MyVipConversions GET /api/vip/conversions —— 我的会员折算记录（已拥有的发放、开通永久时折掉的存量）
+func (h *Handler) MyVipConversions(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	items, total, err := h.vip.MyConversions(c.Request.Context(), session, page, limit)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取折算记录成功", gin.H{
+		"items": items, "total": total, "page": page, "limit": limit,
+	})
+}
+
 // PurchaseVip POST /api/vip/purchase （余额支付）
 func (h *Handler) PurchaseVip(c *gin.Context) {
 	session, ok := authSession(c)
@@ -431,12 +454,127 @@ func (h *Handler) AdminGrantAppUserVip(c *gin.Context) {
 		Reason:        req.Reason,
 		BonusIntegral: req.BonusIntegral,
 		Operator:      operator,
+		OwnedPolicy:   req.OwnedPolicy,
+		UpgradePolicy: req.UpgradePolicy,
 	})
 	if err != nil {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "会员发放成功", txn)
+	message := "会员发放成功"
+	if txn.Conversion != nil && txn.Conversion.Kind == vipdomain.ConversionOwned {
+		message = "该用户已包含这些权益，已按折算策略折成积分"
+	}
+	response.Success(c, 200, message, txn)
+}
+
+// AdminPreviewAppUserVipGrant POST /api/admin/apps/:appkey/vip/grant/preview —— 发放前预览（不落账）
+//
+// 请求体与发放相同。回答两件事：这一笔对他是不是已经拥有、会不会被折成积分；
+// 发的是永久会员时，他原有的限时会员等存量会怎样。
+func (h *Handler) AdminPreviewAppUserVipGrant(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req AdminVipGrantRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	preview, err := h.vip.AdminPreviewGrant(c.Request.Context(), service.AdminVipGrantInput{
+		UserID:        req.UserID,
+		AppID:         appID,
+		PlanID:        req.PlanID,
+		Quantity:      req.Quantity,
+		Days:          req.Days,
+		Lifetime:      req.Lifetime,
+		Features:      req.Features,
+		Reason:        req.Reason,
+		BonusIntegral: req.BonusIntegral,
+		OwnedPolicy:   req.OwnedPolicy,
+		UpgradePolicy: req.UpgradePolicy,
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取发放预览成功", preview)
+}
+
+// AdminVipConversionPolicyRequest 折算策略（整体覆盖）。
+type AdminVipConversionPolicyRequest struct {
+	Owned           string `json:"owned" binding:"required"`
+	Upgrade         string `json:"upgrade" binding:"required"`
+	PerVipDay       int64  `json:"perVipDay"`
+	PerFeatureDay   int64  `json:"perFeatureDay"`
+	PerFeatureHour  int64  `json:"perFeatureHour"`
+	PerLifetime     int64  `json:"perLifetime"`
+	RestoreOnRevoke bool   `json:"restoreOnRevoke"`
+}
+
+// AdminAppVipConversionPolicy GET /api/admin/apps/:appkey/vip/conversion-policy
+//
+// 连同两种处理方式的目录一起给：控制台的选项与说明以服务端为准。
+func (h *Handler) AdminAppVipConversionPolicy(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	policy, err := h.vip.AdminConversionPolicy(c.Request.Context(), appID)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取折算策略成功", gin.H{
+		"policy":       policy,
+		"ownedModes":   vipdomain.OwnedModeCatalog(),
+		"upgradeModes": vipdomain.UpgradeModeCatalog(),
+		"defaults":     vipdomain.DefaultConversionPolicy(appID),
+	})
+}
+
+// AdminSaveAppVipConversionPolicy PUT /api/admin/apps/:appkey/vip/conversion-policy
+func (h *Handler) AdminSaveAppVipConversionPolicy(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req AdminVipConversionPolicyRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	_, operator := adminAccount(c)
+	policy, err := h.vip.AdminSaveConversionPolicy(c.Request.Context(), vipdomain.ConversionPolicy{
+		AppID: appID, Owned: req.Owned, Upgrade: req.Upgrade,
+		PerVipDay: req.PerVipDay, PerFeatureDay: req.PerFeatureDay, PerFeatureHour: req.PerFeatureHour,
+		PerLifetime: req.PerLifetime, RestoreOnRevoke: req.RestoreOnRevoke, UpdatedBy: operator,
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "折算策略已保存", policy)
+}
+
+// AdminAppVipConversions GET /api/admin/apps/:appkey/vip/conversions?userId=&page=&limit=
+func (h *Handler) AdminAppVipConversions(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	userID, _ := strconv.ParseInt(c.DefaultQuery("userId", "0"), 10, 64)
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "20"))
+	items, total, err := h.vip.AdminListConversions(c.Request.Context(), appID, userID, page, limit)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取折算记录成功", gin.H{
+		"items": items, "total": total, "page": page, "limit": limit,
+	})
 }
 
 // AdminRevokeAppUserVip POST /api/admin/apps/:appkey/vip/revoke —— 扣减会员天数 / 取消永久会员

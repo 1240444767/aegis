@@ -33,8 +33,8 @@ const (
 
 // 已拥有的原因。
 const (
-	OwnedLifetime = "lifetime" // 永久会员已包含
-	OwnedFeature  = "feature"  // 已永久解锁这个功能
+	OwnedLifetime = vipdomain.OwnedLifetime // 永久会员已包含
+	OwnedFeature  = vipdomain.OwnedFeature  // 已永久解锁这个功能
 )
 
 // 默认折算与上界。
@@ -105,25 +105,19 @@ type Coverage struct {
 //   - 会员套餐：与购买入口同一个判据 vip.LifetimeIncludes
 //   - 功能时长：会员使用时免扣，永久会员的余额永远用不上；已永久解锁该功能的人同理
 func (c Coverage) Owned(scene Scene, reward Reward, plans map[int64]vipdomain.Plan) (string, bool) {
+	holdings := vipdomain.Holdings{Lifetime: c.Lifetime, LifetimeFeatures: c.LifetimeFeatures, PermanentUnlocks: c.PermanentUnlocks}
 	switch reward.Type {
 	case cardkeydomain.RewardVipDays:
-		if vipdomain.LifetimeIncludes(c.Lifetime, c.LifetimeFeatures,
-			vipdomain.Plan{Kind: vipdomain.KindPaid, Features: scene.Membership.Features}) {
+		if holdings.CoversMembership(scene.Membership.Features) {
 			return OwnedLifetime, true
 		}
 	case cardkeydomain.RewardVipPlan:
 		plan, ok := plans[reward.RefID]
-		if ok && vipdomain.LifetimeIncludes(c.Lifetime, c.LifetimeFeatures, plan) {
+		if ok && holdings.CoversPlan(plan) {
 			return OwnedLifetime, true
 		}
 	case RewardFeatureMinutes:
-		if c.Lifetime {
-			return OwnedLifetime, true
-		}
-		tag := strings.ToLower(strings.TrimSpace(reward.Feature))
-		if tag != "" && slices.Contains(vipdomain.NormalizeFeatureTags(c.PermanentUnlocks), tag) {
-			return OwnedFeature, true
-		}
+		return holdings.CoversFeatureTime(strings.ToLower(strings.TrimSpace(reward.Feature)))
 	}
 	return "", false
 }

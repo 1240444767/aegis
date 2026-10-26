@@ -2255,6 +2255,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/apps/:appkey/vip/conversions",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/apps/:appkey/version/check",
     "permission": "",
     "appScoped": false,
@@ -2389,6 +2396,13 @@
   {
     "method": "GET",
     "path": "/api/vip/transactions",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/vip/conversions",
     "permission": "",
     "appScoped": false,
     "unmapped": true
@@ -3510,6 +3524,34 @@
     "method": "POST",
     "path": "/api/admin/apps/:appkey/vip/grant",
     "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/vip/grant/preview",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/conversion-policy",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/vip/conversion-policy",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/conversions",
+    "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },

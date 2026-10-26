@@ -431,12 +431,14 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 				PayAmount:     decimal.Zero,
 				BonusIntegral: plan.BonusIntegral,
 				Metadata:      meta,
+				ConvertOwned:  true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.Detail = plan.Name + "（" + plan.TermLabel() + "）"
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case cardkeydomain.RewardVipDays:
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
@@ -447,12 +449,14 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 				PayChannel:   vipdomain.ChannelCardKey,
 				PayAmount:    decimal.Zero,
 				Metadata:     meta,
+				ConvertOwned: true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.Detail = strconv.FormatInt(reward.Amount, 10) + " 天"
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case cardkeydomain.RewardFeature:
 			var name string
@@ -467,20 +471,28 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 			if !active {
 				return nil, ErrCardKeyRewardMissing
 			}
-			unlock, err := grantFeatureUnlockTx(ctx, tx, FeatureUnlockGrant{
+			outcome, err := grantFeatureUnlockOrConvertTx(ctx, tx, FeatureUnlockGrant{
 				AppID:     appID,
 				UserID:    userID,
 				Tag:       reward.Feature,
 				Days:      int(reward.Amount),
 				Source:    vipdomain.UnlockSourceCardKey,
 				SourceRef: card.Code,
-			})
+			}, vipdomain.ChannelCardKey)
 			if errors.Is(err, ErrFeatureUnlockOwned) {
 				return nil, &CardKeyRewardOwnedError{Feature: name}
 			}
 			if err != nil {
 				return nil, err
 			}
+			if outcome.Conversion != nil {
+				result.Detail = outcome.Conversion.Message
+				result.Conversion = outcome.Conversion.Summary()
+				result.TransactionNo = outcome.Conversion.ConversionNo
+				out = append(out, result)
+				continue
+			}
+			unlock := outcome.Unlock
 			if reward.Amount == 0 {
 				result.Detail = name + " 永久"
 			} else {

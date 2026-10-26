@@ -299,6 +299,8 @@ GET	/api/admin/apps/:appkey/users/export	ExportAdminAppUsers
 GET	/api/admin/apps/:appkey/versions	AdminListVersions
 GET	/api/admin/apps/:appkey/versions/:vid	AdminGetVersion
 GET	/api/admin/apps/:appkey/versions/stats	AdminVersionStats
+GET	/api/admin/apps/:appkey/vip/conversion-policy	AdminAppVipConversionPolicy
+GET	/api/admin/apps/:appkey/vip/conversions	AdminAppVipConversions
 GET	/api/admin/apps/:appkey/vip/entitlement	AdminAppUserVipEntitlement
 GET	/api/admin/apps/:appkey/vip/features	AdminAppVipFeatures
 GET	/api/admin/apps/:appkey/vip/plans	AdminAppVipPlans
@@ -682,12 +684,14 @@ GET	/api/v1/apps/:appkey/tickets	UserListTickets
 GET	/api/v1/apps/:appkey/tickets/:ticketId	UserGetTicket
 GET	/api/v1/apps/:appkey/tickets/categories	UserListTicketCategories
 GET	/api/v1/apps/:appkey/version/check	AppVersionCheck
+GET	/api/v1/apps/:appkey/vip/conversions	MyVipConversions
 GET	/api/v1/apps/:appkey/vip/features	VipFeatures
 GET	/api/v1/apps/:appkey/vip/plans	VipPlans
 GET	/api/v1/apps/:appkey/vip/status	MyVipStatus
 GET	/api/v1/apps/:appkey/vip/transactions	MyVipTransactions
 GET	/api/v1/apps/:appkey/wallet	MyWallet
 GET	/api/v1/apps/:appkey/wallet/transactions	MyWalletTransactions
+GET	/api/vip/conversions	MyVipConversions
 GET	/api/vip/plans	VipPlans
 GET	/api/vip/status	MyVipStatus
 GET	/api/vip/transactions	MyVipTransactions
@@ -903,6 +907,7 @@ POST	/api/admin/apps/:appkey/versions/:vid/publish	AdminPublishVersion
 POST	/api/admin/apps/:appkey/versions/:vid/revoke	AdminRevokeVersion
 POST	/api/admin/apps/:appkey/vip/features	AdminSaveAppVipFeature
 POST	/api/admin/apps/:appkey/vip/grant	AdminGrantAppUserVip
+POST	/api/admin/apps/:appkey/vip/grant/preview	AdminPreviewAppUserVipGrant
 POST	/api/admin/apps/:appkey/vip/plans	AdminSaveAppVipPlan
 POST	/api/admin/apps/:appkey/vip/revoke	AdminRevokeAppUserVip
 POST	/api/admin/apps/:appkey/vip/trial/claims	AdminClaimAppVipTrial
@@ -1381,6 +1386,7 @@ PUT	/api/admin/apps/:appkey/users/:userId/profile	AdminUpdateUserProfile
 PUT	/api/admin/apps/:appkey/users/:userId/status	UpdateAdminAppUserStatus
 PUT	/api/admin/apps/:appkey/users/status/batch	BatchUpdateAdminAppUserStatus
 PUT	/api/admin/apps/:appkey/versions/:vid	AdminUpdateVersion
+PUT	/api/admin/apps/:appkey/vip/conversion-policy	AdminSaveAppVipConversionPolicy
 PUT	/api/admin/notify/channels/:id	AdminSaveNotifyChannel
 PUT	/api/admin/notify/subscriptions/:id	AdminSaveNotifySubscription
 PUT	/api/admin/notify/templates/:id	AdminSaveNotifyTemplate

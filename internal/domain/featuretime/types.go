@@ -50,6 +50,10 @@ const (
 	KindEarn   = "earn"   // 发放（看激励广告等），delta 为正
 	KindLease  = "lease"  // 租出，delta 为负
 	KindRefund = "refund" // 结算时退回没用完的部分，delta 为正
+	// KindConvert 开通永久会员时余额折成积分（永久会员一律免扣，余额用不上），delta 为负
+	KindConvert = "convert"
+	// KindRestore 取消永久会员后还回折掉的余额，delta 为正
+	KindRestore = "restore"
 )
 
 // 租约状态。

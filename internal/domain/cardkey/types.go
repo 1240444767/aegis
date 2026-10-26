@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	vipdomain "aegis/internal/domain/vip"
 )
 
 // 卡的形态。
@@ -127,6 +129,8 @@ type RewardResult struct {
 	TransactionNo string `json:"transactionNo,omitempty"`
 	// ExpireAt 功能解锁 / 授权时长发放后的到期时间（永久为空）。
 	ExpireAt *time.Time `json:"expireAt,omitempty"`
+	// Conversion 已拥有、按应用折算策略折成了积分（见 vip.Conversion）
+	Conversion *vipdomain.ConversionSummary `json:"conversion,omitempty"`
 }
 
 // Batch 一批卡密。
