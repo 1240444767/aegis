@@ -200,6 +200,24 @@ func (h *Handler) MyVipStatus(c *gin.Context) {
 	response.Success(c, 200, "获取会员状态成功", entitlement)
 }
 
+// VipFeatures GET /api/vip/features
+//
+// 启用中的会员权益目录：标识、名称与说明。`/vip/status` 的 features 与套餐的 features
+// 只给标识，客户端要把权益说给用户听，名称得从这里取。停用的权益不出现。
+func (h *Handler) VipFeatures(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	features, err := h.vip.ListVisibleFeatures(c.Request.Context(), session)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取会员权益成功", features)
+}
+
 // ClaimVipTrial POST /api/vip/trial —— 领取试用期会员
 func (h *Handler) ClaimVipTrial(c *gin.Context) {
 	session, ok := authSession(c)

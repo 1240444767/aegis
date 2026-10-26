@@ -1446,7 +1446,12 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
     fun vipStatus(): JsonElement = client.call("GET", "/vip/status", requireAuth = true)
 
     @Throws(IOException::class)
-    fun vipTransactions(): JsonElement = client.call("GET", "/vip/transactions", requireAuth = true)
+    fun vipTransactions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/vip/transactions", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 启用中的会员权益目录：标识、名称与说明。[vipStatus] 与套餐里只有标识，名称从这里取。 */
+    @Throws(IOException::class)
+    fun vipFeatures(): JsonElement = client.call("GET", "/vip/features", requireAuth = true)
 
     @Throws(IOException::class)
     /** 购买会员。[idempotencyKey] 同 [consumeWallet]：重复提交只购买一次。 */

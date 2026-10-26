@@ -2234,6 +2234,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/apps/:appkey/vip/features",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/apps/:appkey/vip/transactions",
     "permission": "",
     "appScoped": false,
@@ -2354,6 +2361,13 @@
   {
     "method": "GET",
     "path": "/api/vip/status",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/vip/features",
     "permission": "",
     "appScoped": false,
     "unmapped": true

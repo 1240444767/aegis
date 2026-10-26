@@ -36,6 +36,26 @@ const (
 	errCodeFeatureDuplicated = 40905 // 409：功能标识重复
 )
 
+// ── 功能标识目录（用户侧）──
+
+// ListVisibleFeatures 当前应用启用中的权益目录（用户侧展示用）。
+//
+// 只给展示需要的几项：编号、启停与时间戳是管理端的事，用户侧看到的一定是启用中的。
+func (s *VipService) ListVisibleFeatures(ctx context.Context, session *authdomain.Session) ([]vipdomain.FeatureView, error) {
+	if session == nil {
+		return nil, apperrors.New(40170, http.StatusUnauthorized, "未认证")
+	}
+	features, err := s.pg.ListVipFeatures(ctx, session.AppID, true)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]vipdomain.FeatureView, 0, len(features))
+	for _, feature := range features {
+		views = append(views, feature.View())
+	}
+	return views, nil
+}
+
 // ── 功能标识目录（管理端）──
 
 // AdminListFeatures 应用的功能标识目录。

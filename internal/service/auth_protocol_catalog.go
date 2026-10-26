@@ -293,6 +293,7 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "walletConsume", Method: "POST", Path: "/wallet/consume", Auth: true, Summary: "余额消费"},
 	{Key: "vipPlans", Method: "GET", Path: "/vip/plans", Auth: true, Summary: "会员套餐"},
 	{Key: "vipStatus", Method: "GET", Path: "/vip/status", Auth: true, Summary: "我的会员状态"},
+	{Key: "vipFeatures", Method: "GET", Path: "/vip/features", Auth: true, Summary: "会员权益目录（启用中的标识、名称与说明）"},
 	{Key: "vipTransactions", Method: "GET", Path: "/vip/transactions", Auth: true, Summary: "会员流水"},
 	{Key: "vipPurchase", Method: "POST", Path: "/vip/purchase", Auth: true, Summary: "购买会员"},
 	{Key: "vipTrial", Method: "POST", Path: "/vip/trial", Auth: true, Summary: "领取试用会员（一人一次，资格见 /vip/status 的 trialOffer）"},

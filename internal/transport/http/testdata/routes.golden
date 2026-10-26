@@ -682,6 +682,7 @@ GET	/api/v1/apps/:appkey/tickets	UserListTickets
 GET	/api/v1/apps/:appkey/tickets/:ticketId	UserGetTicket
 GET	/api/v1/apps/:appkey/tickets/categories	UserListTicketCategories
 GET	/api/v1/apps/:appkey/version/check	AppVersionCheck
+GET	/api/v1/apps/:appkey/vip/features	VipFeatures
 GET	/api/v1/apps/:appkey/vip/plans	VipPlans
 GET	/api/v1/apps/:appkey/vip/status	MyVipStatus
 GET	/api/v1/apps/:appkey/vip/transactions	MyVipTransactions
