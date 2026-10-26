@@ -62,6 +62,11 @@ type PointsStoreItemStatusRequest struct {
 	Active bool `json:"active"`
 }
 
+// PointsStoreItemOrderRequest 商品排序：按数组顺序重写排序值。
+type PointsStoreItemOrderRequest struct {
+	ItemIDs []int64 `json:"itemIds" binding:"required"`
+}
+
 // PointsStoreHandleRequest 处理一笔待发放的兑换；note 会写进给用户的站内信。
 type PointsStoreHandleRequest struct {
 	Note string `json:"note"`
@@ -235,6 +240,25 @@ func (h *Handler) AdminUpdatePointsStoreItem(c *gin.Context) {
 	response.Success(c, http.StatusOK, "商品已保存", item)
 }
 
+// AdminReorderPointsStoreItems 按给定顺序重排商品（排序值 10、20、30……）。
+func (h *Handler) AdminReorderPointsStoreItems(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req PointsStoreItemOrderRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	updated, err := h.pointsStore.ReorderItems(c.Request.Context(), appID, req.ItemIDs)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "排序已保存", gin.H{"updated": updated})
+}
+
 // AdminSetPointsStoreItemStatus 上架 / 下架。
 func (h *Handler) AdminSetPointsStoreItemStatus(c *gin.Context) {
 	appID, ok := resolveAppID(c, h.app)
@@ -295,6 +319,8 @@ func (h *Handler) AdminListPointsStoreRedemptions(c *gin.Context) {
 		ItemID:  itemID,
 		Status:  strings.TrimSpace(c.Query("status")),
 		Keyword: strings.TrimSpace(c.Query("keyword")),
+		From:    cardKeyQueryTime(c.Query("from")),
+		To:      cardKeyQueryTime(c.Query("to")),
 		Page:    parsePositiveInt(c.Query("page"), 1),
 		Limit:   parsePositiveInt(c.Query("limit"), 20),
 	})
@@ -354,7 +380,7 @@ func (h *Handler) AdminPointsStoreStats(c *gin.Context) {
 	if !ok {
 		return
 	}
-	stats, err := h.pointsStore.Stats(c.Request.Context(), appID, parsePositiveInt(c.Query("days"), 14))
+	stats, err := h.pointsStore.Stats(c.Request.Context(), appID, parsePositiveInt(c.Query("days"), 14), c.Query("tz"))
 	if err != nil {
 		h.writeError(c, err)
 		return

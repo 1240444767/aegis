@@ -132,6 +132,29 @@ func (s *PointsStoreService) SetItemStatus(ctx context.Context, appID, itemID in
 	return item, s.translate(err)
 }
 
+// ReorderItems 按给定顺序重排商品（控制台拖拽排序）。编号去重、最多 500 个。
+func (s *PointsStoreService) ReorderItems(ctx context.Context, appID int64, itemIDs []int64) (int64, error) {
+	if len(itemIDs) == 0 || len(itemIDs) > 500 {
+		return 0, apperrors.New(40000, http.StatusBadRequest, "排序的商品数量须在 1 到 500 之间")
+	}
+	seen := make(map[int64]struct{}, len(itemIDs))
+	ids := make([]int64, 0, len(itemIDs))
+	for _, id := range itemIDs {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		return 0, apperrors.New(40000, http.StatusBadRequest, "缺少商品编号")
+	}
+	return s.pg.ReorderPointsStoreItems(ctx, appID, ids)
+}
+
 // DeleteItem 删除商品（兑换记录保留快照）。
 func (s *PointsStoreService) DeleteItem(ctx context.Context, appID, itemID int64) error {
 	return s.translate(s.pg.DeletePointsStoreItem(ctx, appID, itemID))
@@ -220,7 +243,8 @@ func validateHandleNote(note string) error {
 }
 
 // Stats 概览：窗口内的兑换汇总、按天趋势（缺的日期补零）与兑换最多的商品。
-func (s *PointsStoreService) Stats(ctx context.Context, appID int64, days int) (*pointstore.Stats, error) {
+// timezone 为 IANA 时区名（控制台传浏览器时区），决定「今天」与按天分桶；无效或为空用服务器默认时区。
+func (s *PointsStoreService) Stats(ctx context.Context, appID int64, days int, timezone string) (*pointstore.Stats, error) {
 	if days <= 0 {
 		days = pointsStoreStatsDefaultDays
 	}
@@ -228,6 +252,11 @@ func (s *PointsStoreService) Stats(ctx context.Context, appID int64, days int) (
 		days = pointsStoreStatsMaxDays
 	}
 	loc := timeutil.DefaultLocation()
+	if tz := strings.TrimSpace(timezone); tz != "" {
+		if parsed, err := time.LoadLocation(tz); err == nil {
+			loc = parsed
+		}
+	}
 	windows := pointstore.WindowsAt(time.Now(), loc)
 	since := windows.Day.AddDate(0, 0, -(days - 1))
 	stats, err := s.pg.PointsStoreStats(ctx, appID, since, windows.Day, loc.String())

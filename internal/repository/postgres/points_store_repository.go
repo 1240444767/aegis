@@ -197,6 +197,18 @@ func (r *Repository) SetPointsStoreItemStatus(ctx context.Context, appID, itemID
 WHERE i.id = $1 AND i.appid = $2 RETURNING `+pointsStoreItemColumns, itemID, appID, status))
 }
 
+// ReorderPointsStoreItems 按给定顺序重写排序值（10、20、30……），只动排序与更新时间，
+// 不碰库存等字段，免得和并发中的兑换互相覆盖。不属于该应用的编号被忽略。
+func (r *Repository) ReorderPointsStoreItems(ctx context.Context, appID int64, itemIDs []int64) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE points_store_items AS i SET sort_order = o.ord * 10, updated_at = NOW()
+FROM unnest($2::bigint[]) WITH ORDINALITY AS o(id, ord)
+WHERE i.id = o.id AND i.appid = $1 AND i.sort_order IS DISTINCT FROM o.ord * 10`, appID, itemIDs)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 // DeletePointsStoreItem 删除商品。兑换记录保留（item_id 置空，标题与权益看快照），
 // 待发放的兑换照常处理。
 func (r *Repository) DeletePointsStoreItem(ctx context.Context, appID, itemID int64) error {
@@ -756,6 +768,14 @@ func (r *Repository) ListPointsStoreRedemptions(ctx context.Context, query point
 		args = append(args, status)
 		where = append(where, fmt.Sprintf("r.status = $%d", len(args)))
 	}
+	if query.From != nil {
+		args = append(args, *query.From)
+		where = append(where, fmt.Sprintf("r.created_at >= $%d", len(args)))
+	}
+	if query.To != nil {
+		args = append(args, *query.To)
+		where = append(where, fmt.Sprintf("r.created_at < $%d", len(args)))
+	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		args = append(args, "%"+keyword+"%")
 		where = append(where, fmt.Sprintf("(u.account ILIKE $%d OR p.nickname ILIKE $%d OR r.redemption_no ILIKE $%d OR r.item_title ILIKE $%d)",
@@ -807,10 +827,11 @@ func (r *Repository) PointsStoreStats(ctx context.Context, appID int64, since, d
   COUNT(DISTINCT user_id) FILTER (WHERE status <> 'cancelled' AND created_at >= $2),
   COALESCE(SUM(cost) FILTER (WHERE status <> 'cancelled' AND created_at >= $2), 0),
   COUNT(*) FILTER (WHERE status = 'pending'),
-  COUNT(*) FILTER (WHERE status <> 'cancelled' AND created_at >= $3)
+  COUNT(*) FILTER (WHERE status <> 'cancelled' AND created_at >= $3),
+  COUNT(*) FILTER (WHERE status = 'cancelled' AND created_at >= $2)
 FROM points_store_redemptions WHERE appid = $1`, appID, since, dayStart).Scan(
 		&stats.Summary.Redemptions, &stats.Summary.Redeemers, &stats.Summary.PointsSpent,
-		&stats.Summary.Pending, &stats.Summary.Today); err != nil {
+		&stats.Summary.Pending, &stats.Summary.Today, &stats.Summary.Cancelled); err != nil {
 		return nil, err
 	}
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM points_store_items

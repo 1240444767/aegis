@@ -160,6 +160,9 @@ export type PointsStoreRedemptionParams = {
   itemId?: number;
   status?: PointsStoreRedemptionStatus;
   keyword?: string;
+  /** 下单时间区间（ISO 瞬时值），左闭右开 */
+  from?: string;
+  to?: string;
   page?: number;
   limit?: number;
 };
@@ -172,6 +175,8 @@ export type PointsStoreStats = {
     pending: number;
     activeItems: number;
     today: number;
+    /** 窗口内被取消（已退积分）的笔数，不计入上面的汇总 */
+    cancelled: number;
   };
   trend: Array<{ date: string; redemptions: number; pointsSpent: number; redeemers: number }>;
   topItems: Array<{ itemId?: number; title: string; redemptions: number; pointsSpent: number }>;
@@ -258,6 +263,15 @@ export function setPointsStoreItemStatus(token: string, appKey: string, itemId: 
   });
 }
 
+/** 按数组顺序重排商品（排序值写成 10、20、30……），只动排序，不碰库存 */
+export function reorderPointsStoreItems(token: string, appKey: string, itemIds: number[]) {
+  return apiRequest<{ updated: number }>(`${base(appKey)}/item-order`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ itemIds })
+  });
+}
+
 export function deletePointsStoreItem(token: string, appKey: string, itemId: number) {
   return apiRequest<{ deleted: boolean }>(`${base(appKey)}/items/${itemId}`, { method: "DELETE", token });
 }
@@ -286,8 +300,9 @@ export function handlePointsStoreRedemption(
   });
 }
 
-export function getPointsStoreStats(token: string, appKey: string, days: number) {
-  return apiRequest<PointsStoreStats>(`${base(appKey)}/stats${buildQuery({ days })}`, { token });
+/** tz 为浏览器时区：「今天」与按天分桶都按它切日 */
+export function getPointsStoreStats(token: string, appKey: string, days: number, tz?: string) {
+  return apiRequest<PointsStoreStats>(`${base(appKey)}/stats${buildQuery({ days, tz })}`, { token });
 }
 
 // ── 用户的功能解锁 ──

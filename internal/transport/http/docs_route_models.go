@@ -217,6 +217,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/passkey"):                                                              app.PasskeyPolicy{},                      // UpdateAdminAppPasskeyPolicy
 		routeKey("PUT", "/api/admin/apps/{appkey}/password-policy"):                                                      AdminPasswordPolicyUpdateRequest{},       // UpdateAdminAppPasswordPolicy
 		routeKey("POST", "/api/admin/apps/{appkey}/password-policy/test"):                                                AdminPasswordPolicyTestRequest{},         // TestAdminAppPasswordPolicy
+		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/item-order"):                                              PointsStoreItemOrderRequest{},            // AdminReorderPointsStoreItems
 		routeKey("POST", "/api/admin/apps/{appkey}/points-store/items"):                                                  PointsStoreItemRequest{},                 // AdminCreatePointsStoreItem
 		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/items/{itemId}"):                                          PointsStoreItemRequest{},                 // AdminUpdatePointsStoreItem
 		routeKey("PUT", "/api/admin/apps/{appkey}/points-store/items/{itemId}/status"):                                   PointsStoreItemStatusRequest{},           // AdminSetPointsStoreItemStatus

@@ -110,6 +110,12 @@ GET  /api/v1/apps/{appKey}/points/store/redemptions     我的兑换记录
 管理端：`/api/admin/apps/{appKey}/points-store/{catalog,settings,items,redemptions,stats}`，
 用户的功能解锁挂在 `/api/admin/apps/{appKey}/users/{userId}/feature-unlocks`（按用户数据权限判定）。
 
+- `PUT .../points-store/item-order` `{ "itemIds": [...] }`：按数组顺序把排序值写成 10、20、30……（控制台拖拽排序），
+  只改排序值，不碰库存，避免和并发兑换互相覆盖。
+- `GET .../points-store/redemptions` 支持 `from` / `to`（RFC3339，左闭右开）按下单时间筛选。
+- `GET .../points-store/stats?tz=` 按给定 IANA 时区切「今天」与按天分桶（控制台传浏览器时区），
+  `summary.cancelled` 是窗口内被取消的笔数（不计入兑换汇总）。
+
 Kotlin SDK：`engagement.pointsStore()` / `redeemPointsStoreItem(itemId, requestId)` / `pointsStoreRedemptions()`。
 
 ## 验证

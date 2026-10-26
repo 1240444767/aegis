@@ -279,6 +279,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/points-store/items", h.AdminCreatePointsStoreItem)
 		admin.PUT("/apps/:appkey/points-store/items/:itemId", h.AdminUpdatePointsStoreItem)
 		admin.PUT("/apps/:appkey/points-store/items/:itemId/status", h.AdminSetPointsStoreItemStatus)
+		admin.PUT("/apps/:appkey/points-store/item-order", h.AdminReorderPointsStoreItems)
 		admin.DELETE("/apps/:appkey/points-store/items/:itemId", h.AdminDeletePointsStoreItem)
 		admin.GET("/apps/:appkey/points-store/redemptions", h.AdminListPointsStoreRedemptions)
 		admin.POST("/apps/:appkey/points-store/redemptions/:redemptionId/fulfill", h.AdminFulfillPointsStoreRedemption)

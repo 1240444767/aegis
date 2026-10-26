@@ -85,6 +85,7 @@ func init() {
 		Write("PUT /api/admin/apps/:appkey/points-store/items/:itemId", "修改积分商城商品", "积分商品", SeverityHigh),
 		Write("PUT /api/admin/apps/:appkey/points-store/items/:itemId/status", "上下架积分商城商品", "积分商品", SeverityMedium),
 		Write("DELETE /api/admin/apps/:appkey/points-store/items/:itemId", "删除积分商城商品", "积分商品", SeverityHigh),
+		Write("PUT /api/admin/apps/:appkey/points-store/item-order", "调整积分商城商品排序", "积分商品", SeverityLow),
 		View("GET /api/admin/apps/:appkey/points-store/redemptions", "查看积分兑换记录", ""),
 		Write("POST /api/admin/apps/:appkey/points-store/redemptions/:redemptionId/fulfill", "发放积分兑换", "积分兑换", SeverityMedium),
 		Write("POST /api/admin/apps/:appkey/points-store/redemptions/:redemptionId/cancel", "取消积分兑换并退回积分", "积分兑换", SeverityHigh),

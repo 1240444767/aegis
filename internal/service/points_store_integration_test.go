@@ -306,7 +306,7 @@ func TestPointsStoreIntegration(t *testing.T) {
 	}
 
 	// ── 统计与管理端列表 ──
-	stats, err := store.Stats(ctx, appID, 7)
+	stats, err := store.Stats(ctx, appID, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}

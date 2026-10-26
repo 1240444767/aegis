@@ -1365,6 +1365,7 @@ PUT	/api/admin/apps/:appkey/oauth-providers/:provider/enabled	AdminSetAppOAuthPr
 PUT	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminUpdateOAuth2Client
 PUT	/api/admin/apps/:appkey/passkey	UpdateAdminAppPasskeyPolicy
 PUT	/api/admin/apps/:appkey/password-policy	UpdateAdminAppPasswordPolicy
+PUT	/api/admin/apps/:appkey/points-store/item-order	AdminReorderPointsStoreItems
 PUT	/api/admin/apps/:appkey/points-store/items/:itemId	AdminUpdatePointsStoreItem
 PUT	/api/admin/apps/:appkey/points-store/items/:itemId/status	AdminSetPointsStoreItemStatus
 PUT	/api/admin/apps/:appkey/points-store/settings	AdminSavePointsStoreSettings

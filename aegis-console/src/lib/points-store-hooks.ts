@@ -12,6 +12,7 @@ import {
   handlePointsStoreRedemption,
   listPointsStoreItems,
   listPointsStoreRedemptions,
+  reorderPointsStoreItems,
   revokeUserFeatureUnlock,
   savePointsStoreSettings,
   setPointsStoreItemStatus,
@@ -20,6 +21,7 @@ import {
   type PointsStoreRedemptionParams
 } from "@/lib/api/points-store";
 import { useAdminToken } from "@/lib/admin-hooks";
+import { browserTimeZone } from "@/lib/datetime";
 
 /**
  * 积分商城域 hooks。
@@ -109,6 +111,15 @@ export function useSetPointsStoreItemStatusMutation(appKey?: string | null) {
   });
 }
 
+export function useReorderPointsStoreItemsMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidatePointsStoreScope();
+  return useMutation({
+    mutationFn: (itemIds: number[]) => reorderPointsStoreItems(token as string, appKey as string, itemIds),
+    onSuccess: invalidate
+  });
+}
+
 export function useDeletePointsStoreItemMutation(appKey?: string | null) {
   const token = useAdminToken();
   const invalidate = useInvalidatePointsStoreScope();
@@ -131,11 +142,48 @@ export function usePointsStoreRedemptionsQuery(appKey?: string | null, params?: 
       params?.itemId ?? 0,
       params?.status ?? "",
       params?.keyword ?? "",
+      params?.from ?? "",
+      params?.to ?? "",
       params?.page ?? 1,
       params?.limit ?? 20
     ],
     queryFn: () => listPointsStoreRedemptions(token as string, appKey as string, params),
     enabled: Boolean(token && appKey)
+  });
+}
+
+/** 当前筛选条件下各状态的笔数（每个状态取一条，只读 total），供状态页签上的计数 */
+export function usePointsStoreRedemptionCountsQuery(
+  appKey?: string | null,
+  filters?: Omit<PointsStoreRedemptionParams, "status" | "page" | "limit">
+) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [
+      KEY.redemptions,
+      "counts",
+      token,
+      appKey,
+      filters?.userId ?? 0,
+      filters?.itemId ?? 0,
+      filters?.keyword ?? "",
+      filters?.from ?? "",
+      filters?.to ?? ""
+    ],
+    enabled: Boolean(token && appKey),
+    queryFn: async () => {
+      const count = (status?: PointsStoreRedemptionParams["status"]) =>
+        listPointsStoreRedemptions(token as string, appKey as string, { ...filters, status, page: 1, limit: 1 }).then(
+          (page) => page.total
+        );
+      const [all, completed, pending, cancelled] = await Promise.all([
+        count(),
+        count("completed"),
+        count("pending"),
+        count("cancelled")
+      ]);
+      return { all, completed, pending, cancelled };
+    }
   });
 }
 
@@ -153,7 +201,7 @@ export function usePointsStoreStatsQuery(appKey?: string | null, days = 14) {
   const token = useAdminToken();
   return useQuery({
     queryKey: [KEY.stats, token, appKey, days],
-    queryFn: () => getPointsStoreStats(token as string, appKey as string, days),
+    queryFn: () => getPointsStoreStats(token as string, appKey as string, days, browserTimeZone()),
     enabled: Boolean(token && appKey)
   });
 }

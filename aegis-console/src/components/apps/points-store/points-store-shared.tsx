@@ -1,9 +1,13 @@
 "use client";
 
+import type { ComponentType } from "react";
+import { CalendarPlus, Crown, Gift, HandHelping, KeyRound, Sparkles, Ticket, Wallet } from "lucide-react";
+import type { Tone } from "@/components/users/detail/kit";
 import { Badge } from "@/components/ui/badge";
 import type {
   PointsStoreAudience,
   PointsStoreItem,
+  PointsStoreItemPayload,
   PointsStoreLimitPeriod,
   PointsStoreRedemptionStatus,
   PointsStoreReward,
@@ -146,4 +150,87 @@ export function toLocalInput(value?: string | null) {
   if (Number.isNaN(date.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 商品此刻在用户端的状态。和 itemShelfState 同一判据，多了「在售」，供筛选与统计。 */
+export type ShelfKey = "on_sale" | "scheduled" | "ended" | "sold_out" | "inactive";
+
+export const SHELF_META: Record<ShelfKey, { label: string; tone: Tone; color: string }> = {
+  on_sale: { label: "在售", tone: "success", color: "bg-emerald-500" },
+  scheduled: { label: "未开始", tone: "info", color: "bg-sky-500" },
+  sold_out: { label: "已兑完", tone: "warning", color: "bg-amber-500" },
+  ended: { label: "已结束", tone: "neutral", color: "bg-zinc-400 dark:bg-zinc-500" },
+  inactive: { label: "已下架", tone: "neutral", color: "bg-zinc-300 dark:bg-zinc-700" }
+};
+
+export const SHELF_ORDER: ShelfKey[] = ["on_sale", "scheduled", "sold_out", "ended", "inactive"];
+
+export function shelfKey(item: PointsStoreItem, now = Date.now()): ShelfKey {
+  if (item.status !== "active") return "inactive";
+  if (item.endsAt && new Date(item.endsAt).getTime() <= now) return "ended";
+  if (item.startsAt && new Date(item.startsAt).getTime() > now) return "scheduled";
+  if (hasStock(item) && (item.stock ?? 0) <= 0) return "sold_out";
+  return "on_sale";
+}
+
+export function hasStock(item: Pick<PointsStoreItem, "stock">) {
+  return item.stock !== undefined && item.stock !== null;
+}
+
+/** 权益类型的图标与色调；未登记的类型落到礼物图标 */
+const REWARD_VISUAL: Record<string, { icon: ComponentType<{ className?: string }>; tone: Tone }> = {
+  vip_plan: { icon: Crown, tone: "violet" },
+  vip_days: { icon: CalendarPlus, tone: "violet" },
+  feature: { icon: KeyRound, tone: "info" },
+  experience: { icon: Sparkles, tone: "primary" },
+  balance: { icon: Wallet, tone: "success" },
+  lottery_draws: { icon: Ticket, tone: "warning" },
+  manual: { icon: HandHelping, tone: "danger" }
+};
+
+export function rewardVisual(type?: string) {
+  return (type && REWARD_VISUAL[type]) || { icon: Gift, tone: "neutral" as Tone };
+}
+
+/** 一件商品的限制条件，逐条短句 */
+export function itemRules(item: PointsStoreItem) {
+  const rules: string[] = [];
+  if (item.limitCount > 0) {
+    rules.push(item.limitPeriod === "total" ? `每人限兑 ${item.limitCount} 次` : `每人${LIMIT_PERIOD_LABEL[item.limitPeriod]}限兑 ${item.limitCount} 次`);
+  }
+  if (item.audience !== "all") rules.push(AUDIENCE_LABEL[item.audience]);
+  if (item.minLevel > 0) rules.push(`Lv.${item.minLevel} 起`);
+  return rules;
+}
+
+/** 上下架时间：两头都有写「起 至 止」，只有一头写「起」或「截至」 */
+export function saleWindow(startsAt?: string, endsAt?: string) {
+  if (startsAt && endsAt) return `${formatStoreDate(startsAt)} 至 ${formatStoreDate(endsAt)}`;
+  if (startsAt) return `${formatStoreDate(startsAt)} 起`;
+  if (endsAt) return `截至 ${formatStoreDate(endsAt)}`;
+  return "";
+}
+
+/** 已有商品 → 保存载荷（复制商品用）。 */
+export function itemToPayload(item: PointsStoreItem, overrides: Partial<PointsStoreItemPayload> = {}): PointsStoreItemPayload {
+  return {
+    title: item.title,
+    subtitle: item.subtitle ?? "",
+    description: item.description ?? "",
+    category: item.category ?? "",
+    badge: item.badge ?? "",
+    cost: item.cost,
+    originalCost: item.originalCost ?? null,
+    rewards: item.rewards,
+    stock: hasStock(item) ? (item.stock ?? 0) : null,
+    limitPeriod: item.limitPeriod,
+    limitCount: item.limitCount,
+    audience: item.audience,
+    minLevel: item.minLevel,
+    startsAt: item.startsAt ?? null,
+    endsAt: item.endsAt ?? null,
+    status: item.status,
+    sortOrder: item.sortOrder,
+    ...overrides
+  };
 }

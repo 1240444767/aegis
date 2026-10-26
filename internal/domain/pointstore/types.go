@@ -230,8 +230,11 @@ type RedemptionQuery struct {
 	ItemID  int64
 	Status  string
 	Keyword string
-	Page    int
-	Limit   int
+	// From / To 下单时间区间，左闭右开；为空不限
+	From  *time.Time
+	To    *time.Time
+	Page  int
+	Limit int
 }
 
 // Page 分页结果。
@@ -413,6 +416,8 @@ type StatsSummary struct {
 	Pending     int64 `json:"pending"`
 	ActiveItems int64 `json:"activeItems"`
 	Today       int64 `json:"today"`
+	// Cancelled 窗口内被取消（已退积分）的笔数，不计入上面的兑换汇总
+	Cancelled int64 `json:"cancelled"`
 }
 
 // StatsDay 按天的兑换。
