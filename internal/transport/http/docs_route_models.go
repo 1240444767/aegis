@@ -748,6 +748,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/tickets/{ticketId}/cancel"):                                              TicketCancelRequest{},                    // UserCancelTicket
 		routeKey("POST", "/api/v1/apps/{appkey}/tickets/{ticketId}/rating"):                                              TicketRatingRequest{},                    // UserRateTicket
 		routeKey("POST", "/api/v1/apps/{appkey}/tickets/{ticketId}/replies"):                                             TicketReplyRequest{},                     // UserReplyTicket
+		routeKey("POST", "/api/v1/apps/{appkey}/vip/feature-ticket"):                                                     service.FeatureTicketRequest{},           // VipFeatureTicket
 		routeKey("POST", "/api/v1/apps/{appkey}/vip/purchase"):                                                           VipPurchaseRequest{},                     // PurchaseVip
 		routeKey("POST", "/api/v1/apps/{appkey}/wallet/consume"):                                                         WalletConsumeRequest{},                   // WalletConsume
 		routeKey("GET", "/api/v1/apps/{appkey}/wallet/transactions"):                                                     WalletTransactionsQuery{},                // MyWalletTransactions

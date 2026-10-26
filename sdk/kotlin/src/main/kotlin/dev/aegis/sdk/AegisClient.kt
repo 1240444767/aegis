@@ -110,6 +110,9 @@ class AegisClient private constructor(
      */
     val control: AegisClientControlApi = AegisClientControlApi(this)
 
+    /** 权益凭证：服务端签名、离线可验的「拥有某项权益」，见 [AegisFeatureTicketApi]。 */
+    val featureTickets: AegisFeatureTicketApi = AegisFeatureTicketApi(this)
+
     // ── /config ───────────────────────────────────────────────────────
 
     /**

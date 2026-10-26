@@ -1315,6 +1315,7 @@ POST	/api/v1/apps/:appkey/tickets/:ticketId/cancel	UserCancelTicket
 POST	/api/v1/apps/:appkey/tickets/:ticketId/rating	UserRateTicket
 POST	/api/v1/apps/:appkey/tickets/:ticketId/replies	UserReplyTicket
 POST	/api/v1/apps/:appkey/tickets/attachments	UserUploadTicketAttachment
+POST	/api/v1/apps/:appkey/vip/feature-ticket	VipFeatureTicket
 POST	/api/v1/apps/:appkey/vip/purchase	PurchaseVip
 POST	/api/v1/apps/:appkey/vip/trial	ClaimVipTrial
 POST	/api/v1/apps/:appkey/wallet/consume	WalletConsume

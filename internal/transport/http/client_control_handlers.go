@@ -26,6 +26,8 @@ type ClientControlAPI interface {
 	Spec(ctx context.Context, app *appdomain.App) (*authprotocol.ClientControlSpec, error)
 	Check(ctx context.Context, app *appdomain.App, req service.ClientControlSealedRequest, userID int64, ip string) (*service.ClientControlSealedResponse, error)
 	Watch(ctx context.Context, appID int64, since int64, wait time.Duration) (*appdomain.ClientControlWatchResult, error)
+	// SignFeatureTicket 用同一套签名密钥签权益凭证（POST /vip/feature-ticket）。
+	SignFeatureTicket(ctx context.Context, app *appdomain.App, ticket *service.FeatureTicket) (*service.FeatureTicketEnvelope, error)
 
 	Overview(ctx context.Context, appID int64) (*appdomain.ClientControlOverview, error)
 	Settings(ctx context.Context, appID int64) (*appdomain.ClientControlSettings, error)

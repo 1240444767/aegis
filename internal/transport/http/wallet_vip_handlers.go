@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
@@ -216,6 +217,54 @@ func (h *Handler) VipFeatures(c *gin.Context) {
 		return
 	}
 	response.Success(c, 200, "获取会员权益成功", features)
+}
+
+// VipFeatureTicket POST /api/vip/feature-ticket
+//
+// 权益凭证：拥有某项权益时，返回服务端签名、绑定账号与设备的凭证，客户端离线也能验
+// （见 service/feature_ticket.go）。没有该权益返回 40230，客户端据此删掉旧凭证。
+func (h *Handler) VipFeatureTicket(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	app, _, ok := h.resolveGatewayApp(c)
+	if !ok || !h.clientControlReady(c) {
+		return
+	}
+	var req service.FeatureTicketRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, "请求格式无效")
+		return
+	}
+	req, err := service.NormalizeFeatureTicketRequest(req)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	verification, err := h.vip.VerifyMembershipByToken(c.Request.Context(), app.ID, session, req.Feature)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	// 绑定登录时记下的设备；老会话没有时取本次请求的 X-Device-Id
+	deviceID := strings.TrimSpace(session.DeviceID)
+	if deviceID == "" {
+		deviceID = strings.TrimSpace(c.GetHeader("X-Device-Id"))
+	}
+	ticket, err := service.BuildFeatureTicket(app, req, verification, deviceID, time.Now())
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	envelope, err := h.clientControl.SignFeatureTicket(c.Request.Context(), app, ticket)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	c.Header("Cache-Control", "no-store")
+	response.Success(c, http.StatusOK, "签发权益凭证成功", envelope)
 }
 
 // ClaimVipTrial POST /api/vip/trial —— 领取试用期会员

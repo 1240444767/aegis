@@ -294,6 +294,7 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "vipPlans", Method: "GET", Path: "/vip/plans", Auth: true, Summary: "会员套餐"},
 	{Key: "vipStatus", Method: "GET", Path: "/vip/status", Auth: true, Summary: "我的会员状态"},
 	{Key: "vipFeatures", Method: "GET", Path: "/vip/features", Auth: true, Summary: "会员权益目录（启用中的标识、名称与说明）"},
+	{Key: "vipFeatureTicket", Method: "POST", Path: "/vip/feature-ticket", Auth: true, Summary: "权益凭证：拥有某项权益时签发绑定账号与设备的 Ed25519 凭证，客户端离线验签"},
 	{Key: "vipTransactions", Method: "GET", Path: "/vip/transactions", Auth: true, Summary: "会员流水"},
 	{Key: "vipPurchase", Method: "POST", Path: "/vip/purchase", Auth: true, Summary: "购买会员"},
 	{Key: "vipTrial", Method: "POST", Path: "/vip/trial", Auth: true, Summary: "领取试用会员（一人一次，资格见 /vip/status 的 trialOffer）"},
@@ -464,6 +465,9 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40378, Name: "VIP_LIFETIME_INCLUDED", Message: "永久会员已包含该套餐的全部权益，无需购买",
 		Recovery: authprotocol.RecoveryNone,
 		Hint:     "/vip/plans 里 included=true 的套餐不要给购买按钮；/vip/purchase 与会员直购下单都会拒绝它"},
+	// ── 权益凭证 ──
+	{Code: errCodeFeatureNotGranted, Name: "FEATURE_NOT_GRANTED", Message: "当前账号未拥有该会员权益",
+		Recovery: authprotocol.RecoveryNone, Hint: "/vip/feature-ticket 拒绝签发；客户端应删掉本地保存的旧凭证并关闭该功能"},
 	// ── 卡密 ──
 	// 每个判据一个码，客户端据此分支。文案区分得比较细是有原因的：
 	// 「已作废」「已用过」「已过期」对用户是三件完全不同的事，
