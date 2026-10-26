@@ -5,20 +5,21 @@ import {
   claimAdminVipTrial,
   deleteAdminVipFeature,
   deleteAdminVipPlan,
-  getAdminVipEntitlement,
-  grantAdminVip,
+  getAdminVipConversionPolicy,
+  listAdminVipConversions,
   listAdminVipFeatures,
   listAdminVipPlans,
   listAdminVipTransactions,
   listAdminVipTrialClaims,
+  previewAdminVipGrant,
   resetAdminVipTrial,
-  revokeAdminVip,
+  saveAdminVipConversionPolicy,
   saveAdminVipFeature,
   saveAdminVipPlan,
+  type VipConversionPolicyPayload,
   type VipFeaturePayload,
   type VipGrantPayload,
-  type VipPlanPayload,
-  type VipRevokePayload
+  type VipPlanPayload
 } from "@/lib/api/vip";
 import { useAdminToken } from "@/lib/admin-hooks";
 
@@ -36,18 +37,37 @@ const KEY = {
   features: "admin-vip-features",
   entitlement: "admin-vip-entitlement",
   claims: "admin-vip-trial-claims",
-  transactions: "admin-vip-transactions"
+  transactions: "admin-vip-transactions",
+  conversions: "admin-vip-conversions",
+  conversionPolicy: "admin-vip-conversion-policy",
+  grantPreview: "admin-vip-grant-preview"
 } as const;
 
-/** 会员域的全部缓存键，任一写操作后成组失效 */
-const VIP_SCOPE_KEYS = Object.values(KEY);
+/**
+ * 会员写操作后要成组失效的缓存键。
+ *
+ * 除了会员域自己的几张表，还有用户详情那一套（记录、权益判定、详情与流水、列表）、
+ * 功能解锁 —— 一次发放可能折成积分、开通永久会折掉功能解锁与功能时长，
+ * 从哪个页面发的都要让另一个页面看到。
+ */
+const MEMBERSHIP_SCOPE_KEYS = [
+  ...Object.values(KEY),
+  "admin-user-vip-txns",
+  "admin-user-vip-entitlement",
+  "admin-app-user",
+  "admin-app-users",
+  "admin-points-store-unlocks"
+];
 
-function useInvalidateVipScope() {
+/** 会员发放 / 收回 / 试用 / 套餐与功能变更之后调用（用户详情的会员面板也走它）。 */
+export function useInvalidateMembershipScope() {
   const queryClient = useQueryClient();
   return async () => {
-    await Promise.all(VIP_SCOPE_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    await Promise.all(MEMBERSHIP_SCOPE_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
   };
 }
+
+const useInvalidateVipScope = useInvalidateMembershipScope;
 
 // ── 套餐 ──
 
@@ -107,33 +127,52 @@ export function useDeleteAdminVipFeatureMutation(appKey?: string | null) {
   });
 }
 
-// ── 会员权益 ──
+// ── 发放预览 ──
+//
+// 发放、收回与试用的写操作在 app-user-hooks（按用户），失效用 useInvalidateMembershipScope。
 
-export function useAdminVipEntitlementQuery(appKey?: string | null, userId?: number | null) {
+/** 发放前预览（不落账）。payload 为空时不请求。 */
+export function useAdminVipGrantPreviewQuery(appKey?: string | null, payload?: VipGrantPayload | null) {
   const token = useAdminToken();
   return useQuery({
-    queryKey: [KEY.entitlement, token, appKey, userId],
-    queryFn: () => getAdminVipEntitlement(token as string, appKey as string, userId as number),
-    enabled: Boolean(token && appKey && userId && userId > 0)
+    queryKey: [KEY.grantPreview, token, appKey, payload],
+    queryFn: () => previewAdminVipGrant(token as string, appKey as string, payload as VipGrantPayload),
+    enabled: Boolean(token && appKey && payload && payload.userId > 0),
+    staleTime: 0,
+    retry: false
   });
 }
 
-export function useGrantAdminVipMutation(appKey?: string | null) {
+// ── 折算 ──
+
+export function useAdminVipConversionPolicyQuery(appKey?: string | null) {
   const token = useAdminToken();
-  const invalidate = useInvalidateVipScope();
+  return useQuery({
+    queryKey: [KEY.conversionPolicy, token, appKey],
+    queryFn: () => getAdminVipConversionPolicy(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useSaveAdminVipConversionPolicyMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateMembershipScope();
   return useMutation({
-    mutationFn: (payload: VipGrantPayload) => grantAdminVip(token as string, appKey as string, payload),
+    mutationFn: (payload: VipConversionPolicyPayload) =>
+      saveAdminVipConversionPolicy(token as string, appKey as string, payload),
     onSuccess: invalidate
   });
 }
 
-/** 收回会员：扣减限时天数，或取消永久会员（`lifetime: true`）。 */
-export function useRevokeAdminVipMutation(appKey?: string | null) {
+export function useAdminVipConversionsQuery(
+  appKey?: string | null,
+  params?: { userId?: number; page?: number; limit?: number }
+) {
   const token = useAdminToken();
-  const invalidate = useInvalidateVipScope();
-  return useMutation({
-    mutationFn: (payload: VipRevokePayload) => revokeAdminVip(token as string, appKey as string, payload),
-    onSuccess: invalidate
+  return useQuery({
+    queryKey: [KEY.conversions, token, appKey, params?.userId ?? 0, params?.page ?? 1, params?.limit ?? 20],
+    queryFn: () => listAdminVipConversions(token as string, appKey as string, params),
+    enabled: Boolean(token && appKey)
   });
 }
 

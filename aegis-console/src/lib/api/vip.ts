@@ -37,6 +37,96 @@ export type VipPlan = {
   updatedAt: string;
 };
 
+// ── 会员权益折算（docs/vip-conversion.md） ──
+
+/** 已拥有的发放：convert 折算为积分 / grant 照常发放 */
+export type VipOwnedMode = "convert" | "grant";
+/** 开通永久时的存量：convert 折算并结束 / keep 保留 */
+export type VipUpgradeMode = "convert" | "keep";
+
+export type VipConversionPolicy = {
+  appid: number;
+  owned: VipOwnedMode;
+  upgrade: VipUpgradeMode;
+  perVipDay: number;
+  perFeatureDay: number;
+  perFeatureHour: number;
+  perLifetime: number;
+  restoreOnRevoke: boolean;
+  /** false 表示从未保存过，当前是默认策略 */
+  configured: boolean;
+  updatedBy?: string;
+  updatedAt?: string | null;
+};
+
+export type VipConversionModeSpec = { key: string; label: string; hint: string };
+
+export type VipConversionPolicyBundle = {
+  policy: VipConversionPolicy;
+  ownedModes: VipConversionModeSpec[];
+  upgradeModes: VipConversionModeSpec[];
+  defaults: VipConversionPolicy;
+};
+
+/** vip_time / vip_plan / vip_lifetime / feature_unlock / feature_permanent / feature_time / ad_free */
+export type VipConversionItem = {
+  kind: string;
+  label: string;
+  seconds?: number;
+  feature?: string;
+  features?: string[];
+  ref?: string;
+  points: number;
+};
+
+export type VipConversionSummary = {
+  conversionNo: string;
+  /** owned（发放时已拥有）/ upgrade（开通永久时折算存量） */
+  kind: "owned" | "upgrade";
+  reason: string;
+  points: number;
+  label: string;
+  message: string;
+};
+
+export type VipConversion = {
+  id: number;
+  conversionNo: string;
+  appid: number;
+  userId: number;
+  kind: "owned" | "upgrade";
+  source: string;
+  reason: string;
+  items: VipConversionItem[];
+  points: number;
+  integralTransactionNo?: string;
+  triggerTransactionNo?: string;
+  vipTransactionNo?: string;
+  message: string;
+  /** applied / restored（永久会员被取消后已还回） */
+  status: "applied" | "restored";
+  restoredAt?: string | null;
+  restore?: { restored?: string[]; pointsClawedBack?: number; pointsShortfall?: number; operator?: string } | null;
+  operator?: string;
+  createdAt: string;
+};
+
+export type VipConversionPage = { items: VipConversion[]; total: number; page: number; limit: number };
+
+export type VipUpgradePreview = {
+  mode: VipUpgradeMode;
+  items: VipConversionItem[];
+  points: number;
+  message: string;
+};
+
+export type VipGrantPreview = {
+  holdings: { lifetime: boolean; lifetimeFeatures: string[]; permanentUnlocks: string[] };
+  policy: VipConversionPolicy;
+  owned?: { covered: boolean; converted: boolean; item: VipConversionItem; message: string } | null;
+  upgrade?: VipUpgradePreview | null;
+};
+
 /** 套餐保存载荷。字段不传即不变更（后端按指针语义处理）。 */
 export type VipPlanPayload = {
   id?: number;
@@ -96,6 +186,7 @@ export type VipSource =
   | "lottery"
   | "admin_revoke"
   | "legacy_import"
+  | "lifetime_convert"
   | "unknown";
 
 export type VipTrialState = {
@@ -210,6 +301,8 @@ export type VipTransaction = {
   /** refund / admin_revoke */
   revokeReason?: string;
   createdAt: string;
+  /** 这一行对应的折算：已拥有的发放被折成积分（原渠道、0 天），或开通永久折掉了存量（lifetime_convert、负天数） */
+  conversion?: VipConversionSummary | null;
 };
 
 export type VipTransactionPage = {
@@ -291,6 +384,10 @@ export type VipGrantPayload = {
   features?: string[];
   reason?: string;
   bonusIntegral?: number;
+  /** 这笔对他已是空的（永久会员已包含）时：不传按应用折算策略，grant 为这一次照常发放 */
+  ownedPolicy?: "" | VipOwnedMode;
+  /** 发永久会员时被覆盖的存量：不传按应用折算策略，convert / keep 为这一次单独指定 */
+  upgradePolicy?: "" | VipUpgradeMode;
 };
 
 export function grantAdminVip(token: string, appKey: string, payload: VipGrantPayload) {
@@ -319,6 +416,42 @@ export function revokeAdminVip(token: string, appKey: string, payload: VipRevoke
     token,
     body: JSON.stringify(payload)
   });
+}
+
+/** 发放前预览（不落账）：这一笔会不会被折成积分、发永久会员时存量会怎样。 */
+export function previewAdminVipGrant(token: string, appKey: string, payload: VipGrantPayload) {
+  return apiRequest<VipGrantPreview>(`/api/admin/apps/${appKey}/vip/grant/preview`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+// ── 折算策略与记录 ──
+
+export function getAdminVipConversionPolicy(token: string, appKey: string) {
+  return apiRequest<VipConversionPolicyBundle>(`/api/admin/apps/${appKey}/vip/conversion-policy`, { token });
+}
+
+export type VipConversionPolicyPayload = Omit<VipConversionPolicy, "appid" | "configured" | "updatedBy" | "updatedAt">;
+
+export function saveAdminVipConversionPolicy(token: string, appKey: string, payload: VipConversionPolicyPayload) {
+  return apiRequest<VipConversionPolicy>(`/api/admin/apps/${appKey}/vip/conversion-policy`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+export function listAdminVipConversions(
+  token: string,
+  appKey: string,
+  params?: { userId?: number; page?: number; limit?: number }
+) {
+  return apiRequest<VipConversionPage>(
+    `/api/admin/apps/${appKey}/vip/conversions${buildQuery(params ?? {})}`,
+    { token }
+  );
 }
 
 export function listAdminVipTransactions(

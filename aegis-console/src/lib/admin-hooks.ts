@@ -33,7 +33,6 @@ import {
   getAdminPaymentOrders,
   getAdminVipPlans,
   getAdminVipTransactions,
-  grantAdminVip,
   saveAdminVipPlan,
   createWorkflow,
   createWorkflowFromTemplate,
@@ -1667,18 +1666,6 @@ export function useDeleteAdminVipPlanMutation(appId?: number | null) {
     mutationFn: (planId: number) => deleteAdminVipPlan(token as string, appId as number, planId),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["admin-vip-plans"] });
-    }
-  });
-}
-
-export function useGrantAdminVipMutation(appId?: number | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof grantAdminVip>[2]) =>
-      grantAdminVip(token as string, appId as number, payload),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-vip-transactions"] });
     }
   });
 }

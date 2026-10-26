@@ -25,16 +25,18 @@ import {
   revokeAdminUserBan,
   type BulkNotifyPayload
 } from "@/lib/api/app-users";
+import { getAdminVipPlans, getAdminVipTransactions } from "@/lib/api/configuration";
 import {
   claimAdminVipTrial,
   getAdminVipEntitlement,
-  getAdminVipFeatures,
-  getAdminVipPlans,
-  getAdminVipTransactions,
   grantAdminVip,
+  listAdminVipFeatures,
   resetAdminVipTrial,
-  revokeAdminVip
-} from "@/lib/api/configuration";
+  revokeAdminVip,
+  type VipGrantPayload,
+  type VipRevokePayload
+} from "@/lib/api/vip";
+import { useInvalidateMembershipScope } from "@/lib/vip-hooks";
 import type { AdminAppUserListParams } from "@/lib/api/apps";
 import type { AdminUserBanCreateInput } from "@/lib/api/types";
 
@@ -205,38 +207,19 @@ export function useAdminVipFeaturesQuery(appKey?: Key) {
   const token = useAdminToken();
   return useQuery({
     queryKey: ["admin-vip-features", token, appKey],
-    queryFn: () => getAdminVipFeatures(token as string, appKey as string),
+    queryFn: () => listAdminVipFeatures(token as string, appKey as string),
     enabled: Boolean(token && appKey)
   });
 }
 
-/** 发放 / 收回会员后需要一起刷新的查询：记录、权益判定、详情、列表。 */
-const VIP_SCOPE_KEYS = [
-  ["admin-user-vip-txns"],
-  ["admin-user-vip-entitlement"],
-  ["admin-app-user"],
-  ["admin-app-users"]
-] as const;
-
-function useInvalidateVipScope() {
-  const queryClient = useQueryClient();
-  return () =>
-    Promise.all(VIP_SCOPE_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })));
-}
+/** 发放 / 收回会员后的失效与会员区块同一份（vip-hooks），从哪个页面操作两边都会刷新。 */
+const useInvalidateVipScope = useInvalidateMembershipScope;
 
 export function useGrantAdminUserVipMutation(appKey?: Key, userId?: Id) {
   const token = useAdminToken();
   const invalidate = useInvalidateVipScope();
   return useMutation({
-    mutationFn: (payload: {
-      planId?: number;
-      quantity?: number;
-      days?: number;
-      lifetime?: boolean;
-      features?: string[];
-      reason?: string;
-      bonusIntegral?: number;
-    }) =>
+    mutationFn: (payload: Omit<VipGrantPayload, "userId">) =>
       grantAdminVip(token as string, appKey as string, {
         userId: Number(userId),
         ...payload
@@ -250,7 +233,7 @@ export function useRevokeAdminUserVipMutation(appKey?: Key, userId?: Id) {
   const token = useAdminToken();
   const invalidate = useInvalidateVipScope();
   return useMutation({
-    mutationFn: (payload: { lifetime?: boolean; days?: number; reason?: string }) =>
+    mutationFn: (payload: Omit<VipRevokePayload, "userId">) =>
       revokeAdminVip(token as string, appKey as string, {
         userId: Number(userId),
         ...payload

@@ -11,9 +11,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { VipFeature, VipSource, VipTrialReason } from "@/lib/api/vip";
+import type { VipFeature, VipSource } from "@/lib/api/vip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -42,6 +41,8 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
   admin_revoke: { label: "收回", variant: "warning" },
   // 只出现在开通记录里：老系统的永久会员由迁移补记，判定时归为 unknown
   legacy_import: { label: "旧系统迁移", variant: "secondary" },
+  // 开通永久时折掉存量的说明行（负时长），以及取消永久会员后还回的会员时长（正时长，是一段会员期）
+  lifetime_convert: { label: "永久会员折算", variant: "warning" },
   // 老系统迁移进来的用户：到期时间是直接写进 users 的，账本里没有对应流水。
   // 谎报成某个具体渠道比说"不知道"更糟 —— 那会让对账的人去找一笔不存在的钱。
   unknown: { label: "来源未知", variant: "secondary" }
@@ -50,56 +51,6 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
 /** 接受 string：交易中心与用户详情走的是宽松类型层（`lib/api/types.ts`），渠道是裸字符串 */
 export function vipSourceLabel(source?: VipSource | string) {
   return SOURCE_META[(source ?? "none") as VipSource]?.label ?? source ?? "—";
-}
-
-export function VipSourceBadge({ source }: { source?: VipSource | string }) {
-  const meta = SOURCE_META[(source ?? "none") as VipSource] ?? SOURCE_META.none;
-  return (
-    <Badge variant={meta.variant} size="sm">
-      {meta.label}
-    </Badge>
-  );
-}
-
-/** 试用资格判据 → 展示名 */
-export const TRIAL_REASON_META: Record<VipTrialReason, { label: string }> = {
-  eligible: { label: "可领取" },
-  not_configured: { label: "未开放" },
-  already_claimed: { label: "已领过" },
-  member_active: { label: "已是会员" },
-  device_claimed: { label: "设备已用" },
-  device_required: { label: "缺设备标识" }
-};
-
-/** 会员状态徽标：是不是会员 / 是不是永久 / 是不是试用，一眼分清 */
-export function VipStatusBadge({
-  isVip,
-  isTrial,
-  isLifetime
-}: {
-  isVip: boolean;
-  isTrial: boolean;
-  isLifetime?: boolean;
-}) {
-  if (!isVip) {
-    return (
-      <Badge variant="secondary" size="sm">
-        非会员
-      </Badge>
-    );
-  }
-  if (isLifetime) {
-    return (
-      <Badge variant="success" size="sm">
-        永久会员
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant={isTrial ? "warning" : "success"} size="sm">
-      {isTrial ? "试用会员" : "正式会员"}
-    </Badge>
-  );
 }
 
 /**
@@ -188,7 +139,12 @@ export function vipPlanTerm(plan: { lifetime?: boolean; durationDays: number }) 
   return plan.lifetime ? "永久" : `${plan.durationDays} 天`;
 }
 
-type VipTermRecord = { lifetime?: boolean; durationDays: number; payChannel: string };
+type VipTermRecord = {
+  lifetime?: boolean;
+  durationDays: number;
+  payChannel: string;
+  conversion?: { kind: string; points: number } | null;
+};
 
 /** 这条记录是不是一次永久开通（取消永久会员的留痕同样带 lifetime，要排除） */
 export function isLifetimeGrant(txn: VipTermRecord) {
@@ -200,6 +156,8 @@ export function isLifetimeGrant(txn: VipTermRecord) {
  * 扣减天数的记录 durationDays 本身就是负数。
  */
 export function formatVipTerm(txn: VipTermRecord) {
+  // 已拥有的发放被折成积分：没有记会员段，时长列说折了多少
+  if (txn.conversion?.kind === "owned") return `折算 ${txn.conversion.points} 积分`;
   if (txn.lifetime) return txn.payChannel === "admin_revoke" ? "取消永久" : "永久";
   return txn.durationDays < 0 ? `-${Math.abs(txn.durationDays)} 天` : `+${txn.durationDays} 天`;
 }
@@ -281,22 +239,6 @@ export function formatVipDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
-}
-
-/**
- * 剩余时长。
- *
- * 不足一天时给到小时 —— 「还剩 0 天」既像已经过期又像马上过期，
- * 而这两种情况客服要说的话完全不同。
- */
-export function formatRemaining(seconds?: number) {
-  const value = Math.max(0, Math.floor(seconds ?? 0));
-  if (value <= 0) return "已到期";
-  const days = Math.floor(value / 86400);
-  if (days >= 1) return `${days} 天`;
-  const hours = Math.floor(value / 3600);
-  if (hours >= 1) return `${hours} 小时`;
-  return `${Math.max(1, Math.floor(value / 60))} 分钟`;
 }
 
 /**

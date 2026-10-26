@@ -1,5 +1,6 @@
 import type { CaptchaDynamicConfig } from "./captcha";
 import type { DeviceInfo } from "./device-info";
+import type { VipConversionSummary, VipUpgradePreview } from "./vip";
 
 export type AdminAssignment = {
   roleKey?: string;
@@ -1225,6 +1226,10 @@ export type VipPlan = {
   sortOrder: number;
   createdAt?: string;
   updatedAt?: string;
+  /** 用户侧：永久会员已包含 */
+  included?: boolean;
+  /** 用户侧：永久套餐开通后存量会怎样 */
+  upgradePreview?: VipUpgradePreview | null;
 };
 
 export type VipTransaction = {
@@ -1251,7 +1256,21 @@ export type VipTransaction = {
   revokedAt?: string | null;
   revokeReason?: string;
   createdAt: string;
+  /** 这一行对应的折算：已拥有的发放被折成积分（原渠道、0 天），或开通永久折掉了存量（lifetime_convert、负天数） */
+  conversion?: VipConversionSummary | null;
 };
+
+/* 会员权益折算的类型定义在 ./vip（会员域的唯一来源），这里转出供旧引用使用 */
+export type {
+  VipConversion,
+  VipConversionItem,
+  VipConversionPage,
+  VipConversionPolicy,
+  VipConversionPolicyBundle,
+  VipConversionSummary,
+  VipGrantPreview,
+  VipUpgradePreview
+} from "./vip";
 
 /** 会员功能目录条目 */
 export type VipFeature = {

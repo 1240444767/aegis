@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Puzzle, Search, Sparkles } from "lucide-react";
+import { Crown, Puzzle, Search, Shuffle, Sparkles } from "lucide-react";
 import { NoAppSelected } from "@/components/apps/app-config-primitives";
+import { VipConversionPanel } from "@/components/apps/vip/vip-conversion-panel";
 import { VipFeaturesPanel } from "@/components/apps/vip/vip-features-panel";
 import { VipMemberPanel } from "@/components/apps/vip/vip-member-panel";
 import { VipPlansPanel } from "@/components/apps/vip/vip-plans-panel";
@@ -12,22 +13,24 @@ import { cn } from "@/lib/utils";
 /**
  * 会员区块。
  *
- * 四个视图回答四个不同的问题，刻意不合并成一张长页面：
+ * 五个视图回答五个不同的问题，刻意不合并成一张长页面：
  *
  * | 视图 | 回答什么 |
  * |---|---|
  * | 套餐 | 卖什么、试用发什么 |
  * | 功能标识 | 「会员」细分成哪些能力（接入方服务端按它校验） |
  * | 试用 | 领了多少、转化了多少、某个人还能不能领 |
+ * | 折算 | 永久会员收到已包含的权益、开通永久时原有存量怎么办 |
  * | 会员查询 | 某个具体的人现在是什么状态，以及授予 |
  *
- * 这四段的视图状态**不进 URL**：`?tab=` 已经被应用区块占用，
+ * 这几段的视图状态**不进 URL**：`?tab=` 已经被应用区块占用，
  * 再塞一层会让「分享出去的链接指向哪」变成两个参数的组合问题。
  */
 const VIEWS = [
   { key: "plans", label: "套餐", icon: Crown },
   { key: "features", label: "功能标识", icon: Puzzle },
   { key: "trial", label: "试用", icon: Sparkles },
+  { key: "conversion", label: "折算", icon: Shuffle },
   { key: "member", label: "会员查询", icon: Search }
 ] as const;
 
@@ -64,6 +67,7 @@ export function AppVipPanel({ appKey }: { appKey?: string | null }) {
       {view === "plans" ? <VipPlansPanel appKey={appKey} /> : null}
       {view === "features" ? <VipFeaturesPanel appKey={appKey} /> : null}
       {view === "trial" ? <VipTrialPanel appKey={appKey} /> : null}
+      {view === "conversion" ? <VipConversionPanel appKey={appKey} /> : null}
       {view === "member" ? <VipMemberPanel appKey={appKey} /> : null}
     </div>
   );

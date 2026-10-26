@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   BadgeCheck,
   CalendarClock,
@@ -14,6 +14,7 @@ import {
   Plus,
   Receipt,
   RotateCcw,
+  Shuffle,
   Undo2
 } from "lucide-react";
 import { toast } from "sonner";
@@ -53,6 +54,8 @@ import {
   useRevokeAdminUserVipMutation
 } from "@/lib/app-user-hooks";
 import type { VipEntitlement, VipPlan, VipTransaction } from "@/lib/api/types";
+import type { VipConversion, VipGrantPayload, VipGrantPreview, VipOwnedMode, VipUpgradeMode } from "@/lib/api/vip";
+import { useAdminVipConversionsQuery, useAdminVipGrantPreviewQuery } from "@/lib/vip-hooks";
 import { cn } from "@/lib/utils";
 import {
   InfoGrid,
@@ -259,6 +262,8 @@ export function UserVipPanel({
       </Section>
 
       <VipRecords appKey={appKey} userId={userId} featureName={featureName} onViewLedger={onViewLedger} />
+
+      <VipConversionRecords appKey={appKey} userId={userId} />
     </div>
   );
 }
@@ -415,6 +420,9 @@ function GrantForm({
   const [features, setFeatures] = useState<string[]>([]);
   const [reason, setReason] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // 这一次单独指定的折算处理方式；空为跟随应用策略
+  const [ownedPolicy, setOwnedPolicy] = useState<"" | VipOwnedMode>("");
+  const [upgradePolicy, setUpgradePolicy] = useState<"" | VipUpgradeMode>("");
 
   const plan = grantablePlans.find((item) => item.id === planId);
   // 永久套餐只能发 1 份：永久乘以 N 还是永久，赠送积分却会乘上去（后端同样拒绝）
@@ -434,23 +442,41 @@ function GrantForm({
   const grantFeatures = mode === "plan" ? (plan?.features?.length ?? 0) : features.length;
   const ready = mode === "plan" ? Boolean(plan) : customValid;
 
+  const payload: Omit<VipGrantPayload, "userId"> | null = !ready
+    ? null
+    : mode === "plan" && plan
+      ? { planId: plan.id, quantity: planQuantity, reason: reason.trim() || undefined }
+      : {
+          ...(customLifetime ? { lifetime: true } : { days }),
+          bonusIntegral: bonusCount || undefined,
+          features: features.length ? features : undefined,
+          reason: reason.trim() || undefined
+        };
+  const previewPayload = useDebounced(
+    payload ? { userId, ...payload, ownedPolicy: undefined, upgradePolicy: upgradePolicy || undefined } : null
+  );
+  const previewQuery = useAdminVipGrantPreviewQuery(appKey, previewPayload);
+  const preview = payload ? previewQuery.data : undefined;
+  const ownedConverted = Boolean(preview?.owned?.converted) && ownedPolicy !== "grant";
+
   async function submit() {
-    if (!ready || grant.isPending) return;
-    const payload =
-      mode === "plan" && plan
-        ? { planId: plan.id, quantity: planQuantity, reason: reason.trim() || undefined }
-        : {
-            ...(customLifetime ? { lifetime: true } : { days }),
-            bonusIntegral: bonusCount || undefined,
-            features: features.length ? features : undefined,
-            reason: reason.trim() || undefined
-          };
+    if (!payload || grant.isPending) return;
     try {
-      const result = await grant.mutateAsync(payload);
-      toast.success(result.lifetime ? "永久会员已发放" : "会员已发放", {
-        description: result.expireAfter ? `到期时间 ${formatTime(result.expireAfter)}` : undefined
+      const result = await grant.mutateAsync({
+        ...payload,
+        ownedPolicy: ownedPolicy || undefined,
+        upgradePolicy: upgradePolicy || undefined
       });
+      if (result.conversion?.kind === "owned") {
+        toast.success("已按折算策略折成积分", { description: result.conversion.message });
+      } else {
+        toast.success(result.lifetime ? "永久会员已发放" : "会员已发放", {
+          description: result.conversion?.message ?? (result.expireAfter ? `到期时间 ${formatTime(result.expireAfter)}` : undefined)
+        });
+      }
       setConfirmOpen(false);
+      setOwnedPolicy("");
+      setUpgradePolicy("");
       setQuantity(1);
       setCustomDays("");
       setBonus("");
@@ -471,6 +497,11 @@ function GrantForm({
 
   const summary = !ready ? (
     mode === "plan" ? "选择一个套餐" : "填写发放天数"
+  ) : ownedConverted && preview?.owned ? (
+    <span className="flex items-center gap-1.5">
+      <Shuffle className="size-3.5 shrink-0" />
+      已包含，将折算为 {preview.owned.item.points.toLocaleString("zh-CN")} 积分
+    </span>
   ) : grantLifetime ? (
     <span className="flex items-center gap-1.5">
       <InfinityIcon className="size-3.5 shrink-0" />
@@ -620,6 +651,14 @@ function GrantForm({
         />
       </div>
 
+      <ConversionNotice
+        preview={preview}
+        ownedPolicy={ownedPolicy}
+        onOwnedPolicy={setOwnedPolicy}
+        upgradePolicy={upgradePolicy}
+        onUpgradePolicy={setUpgradePolicy}
+      />
+
       <SubmitBar summary={summary}>
         <Button size="sm" disabled={!ready || grant.isPending} onClick={() => setConfirmOpen(true)}>
           {grant.isPending ? <Loader2 className="animate-spin" /> : <Crown />}
@@ -634,10 +673,17 @@ function GrantForm({
               {grantLifetime ? "确认发放永久会员？" : `确认发放 ${grantDays} 天会员？`}
             </AlertDialogTitle>
             <AlertDialogDescription>
-              {grantLifetime
-                ? lifetimeText
-                : `${entitlement?.isLifetime ? "限时到期" : "到期时间"}将变为 ${expireText}`}
+              {ownedConverted && preview?.owned
+                ? preview.owned.message
+                : grantLifetime
+                  ? lifetimeText
+                  : `${entitlement?.isLifetime ? "限时到期" : "到期时间"}将变为 ${expireText}`}
               {extras.length ? `，${extras.join("，")}` : ""}。
+              {!ownedConverted && preview?.upgrade
+                ? (upgradePolicy || preview.policy.upgrade) === "convert"
+                  ? ` ${preview.upgrade.message}。`
+                  : " 原有的限时会员等存量将保留。"
+                : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <dl className="grid gap-2 rounded-lg border bg-muted/30 p-3 text-sm">
@@ -714,6 +760,95 @@ function QuantityStepper({ value, onChange }: { value: number; onChange: (value:
       <Button size="icon-sm" variant="outline" aria-label="增加份数" disabled={value >= 100} onClick={() => onChange(clamp(value + 1))}>
         <Plus />
       </Button>
+    </div>
+  );
+}
+
+/** 输入停下来 delay 毫秒后才更新：发放预览跟着表单走，不必每敲一个数字请求一次。 */
+function useDebounced<T>(value: T, delay = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delay);
+    return () => window.clearTimeout(timer);
+  }, [value, delay]);
+  return debounced;
+}
+
+/**
+ * 发放的折算预览（后端同一套判据算出，不落账）：
+ *
+ * - 这一笔对他已经是空的（永久会员已包含）：按应用策略折成积分，管理员可以这一次选照常发放；
+ * - 发的是永久会员、而他还有限时会员 / 功能解锁 / 功能时长 / 免广告：开通后这些会怎样，管理员可以这一次改成折算或保留。
+ */
+function ConversionNotice({
+  preview,
+  ownedPolicy,
+  onOwnedPolicy,
+  upgradePolicy,
+  onUpgradePolicy
+}: {
+  preview?: VipGrantPreview;
+  ownedPolicy: "" | VipOwnedMode;
+  onOwnedPolicy: (value: "" | VipOwnedMode) => void;
+  upgradePolicy: "" | VipUpgradeMode;
+  onUpgradePolicy: (value: "" | VipUpgradeMode) => void;
+}) {
+  if (!preview) return null;
+  const owned = preview.owned;
+  const upgrade = preview.upgrade;
+  const appConverts = preview.policy.owned === "convert";
+  if (!owned && !upgrade) return null;
+  const upgradeMode: VipUpgradeMode = upgradePolicy || preview.policy.upgrade;
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+      {owned ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2 text-xs leading-5">
+            <Shuffle className={cn("mt-0.5 size-3.5 shrink-0", TONE_TEXT.warning)} />
+            <span>{owned.message}</span>
+          </div>
+          {appConverts ? (
+            <Segmented
+              value={ownedPolicy === "grant" ? "grant" : "convert"}
+              onChange={(value) => onOwnedPolicy(value === "grant" ? "grant" : "")}
+              options={[
+                { value: "convert", label: `折算 ${owned.item.points.toLocaleString("zh-CN")} 积分` },
+                { value: "grant", label: "照常发放" }
+              ]}
+              ariaLabel="已拥有的处理方式"
+            />
+          ) : (
+            <p className="text-xs text-muted-foreground">应用的折算策略为「照常发放」，可在会员 › 折算中修改</p>
+          )}
+        </div>
+      ) : null}
+      {upgrade ? (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2 text-xs leading-5">
+            <Shuffle className={cn("mt-0.5 size-3.5 shrink-0", TONE_TEXT.warning)} />
+            <span>{upgrade.message}</span>
+          </div>
+          <ul className="flex flex-col gap-1 text-xs">
+            {upgrade.items.map((item, index) => (
+              <li key={`${item.kind}-${item.ref ?? index}`} className="flex items-center justify-between gap-3">
+                <span className="min-w-0 truncate text-muted-foreground">{item.label}</span>
+                {upgradeMode === "convert" ? (
+                  <span className="shrink-0 tabular-nums">{item.points.toLocaleString("zh-CN")} 积分</span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          <Segmented
+            value={upgradeMode}
+            onChange={(value) => onUpgradePolicy(value === preview.policy.upgrade ? "" : value)}
+            options={[
+              { value: "convert", label: "折算为积分" },
+              { value: "keep", label: "保留存量" }
+            ]}
+            ariaLabel="开通永久时存量的处理方式"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -984,7 +1119,11 @@ function VipRecords({
         <span
           className={cn(
             "text-sm font-medium tabular-nums",
-            txn.durationDays < 0 || txn.payChannel === "admin_revoke" ? TONE_TEXT.danger : "text-foreground"
+            txn.conversion?.kind === "owned"
+              ? TONE_TEXT.warning
+              : txn.durationDays < 0 || txn.payChannel === "admin_revoke"
+                ? TONE_TEXT.danger
+                : "text-foreground"
           )}
         >
           {formatVipTerm(txn)}
@@ -1002,6 +1141,11 @@ function VipRecords({
           {txn.revokedAt ? (
             <Badge variant="danger" size="sm" title={txn.revokeReason || undefined}>
               已作废
+            </Badge>
+          ) : null}
+          {txn.conversion ? (
+            <Badge variant="warning" size="sm" title={txn.conversion.message}>
+              已折算
             </Badge>
           ) : null}
         </div>
@@ -1090,6 +1234,140 @@ function VipRecords({
   );
 }
 
+/**
+ * 折算记录：已拥有的发放折成的积分、开通永久时折掉的存量。
+ * 取消永久会员后已还回的标「已还回」，并说明收回了多少积分、差多少没收回。
+ */
+function VipConversionRecords({ appKey, userId }: { appKey: string; userId: number }) {
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<VipConversion | null>(null);
+  const query = useAdminVipConversionsQuery(appKey, { userId, page, limit: RECORD_PAGE_SIZE });
+  const total = query.data?.total ?? 0;
+  if (!query.isLoading && total === 0 && !query.error) return null;
+
+  const columns: Array<Column<VipConversion>> = [
+    {
+      id: "time",
+      header: "时间",
+      width: "128px",
+      cell: (item) => (
+        <span className="text-xs whitespace-nowrap tabular-nums text-muted-foreground" title={formatTime(item.createdAt)}>
+          {formatShortTime(item.createdAt)}
+        </span>
+      )
+    },
+    {
+      id: "kind",
+      header: "类型",
+      cell: (item) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <Badge variant={item.kind === "upgrade" ? "info" : "warning"} size="sm">
+            {item.kind === "upgrade" ? "开通永久" : "已拥有"}
+          </Badge>
+          {item.status === "restored" ? (
+            <Badge variant="secondary" size="sm">
+              已还回
+            </Badge>
+          ) : null}
+        </div>
+      )
+    },
+    {
+      id: "items",
+      header: "折掉的权益",
+      cell: (item) => (
+        <span className="block max-w-[280px] truncate text-sm" title={item.items.map((entry) => entry.label).join("、")}>
+          {item.items.map((entry) => entry.label).join("、") || EMPTY}
+        </span>
+      )
+    },
+    {
+      id: "source",
+      header: "来源",
+      hideBelow: "md",
+      cell: (item) => (
+        <Badge variant="outline" size="sm">
+          {vipSourceLabel(item.source)}
+        </Badge>
+      )
+    },
+    {
+      id: "points",
+      header: "积分",
+      align: "right",
+      cell: (item) => (
+        <span className={cn("text-sm font-medium tabular-nums", item.status === "restored" && "line-through text-muted-foreground")}>
+          +{item.points.toLocaleString("zh-CN")}
+        </span>
+      )
+    }
+  ];
+
+  return (
+    <Section
+      title="折算记录"
+      description="已拥有的发放与开通永久时被覆盖的存量，按折算策略折成的积分"
+      icon={Shuffle}
+      tone="warning"
+      flush
+      footer={total > RECORD_PAGE_SIZE ? <Pager page={page} limit={RECORD_PAGE_SIZE} total={total} onPage={setPage} /> : undefined}
+    >
+      <RecordTable
+        columns={columns}
+        rows={query.data?.items}
+        rowKey={(item) => item.id}
+        loading={query.isLoading}
+        fetching={query.isFetching}
+        error={query.error}
+        onRetry={() => void query.refetch()}
+        onRowClick={setSelected}
+        empty={<StateBlock compact title="暂无折算记录" />}
+        minWidth={600}
+        skeletonRows={2}
+      />
+      <RecordSheet
+        open={Boolean(selected)}
+        onOpenChange={(open) => !open && setSelected(null)}
+        title={selected ? (selected.kind === "upgrade" ? "开通永久会员折算" : "已拥有权益折算") : ""}
+        description={selected ? `折算单号 ${selected.conversionNo}` : undefined}
+        hero={
+          selected ? (
+            <div className="flex flex-col gap-1">
+              <span className="text-2xl font-semibold tabular-nums">+{selected.points.toLocaleString("zh-CN")} 积分</span>
+              <span className="text-xs text-muted-foreground">{selected.message}</span>
+            </div>
+          ) : null
+        }
+        fields={selected ? conversionFields(selected) : undefined}
+        raw={selected}
+      />
+    </Section>
+  );
+}
+
+function conversionFields(item: VipConversion): InfoItem[] {
+  return [
+    { label: "折算单号", value: item.conversionNo, mono: true, copy: item.conversionNo, wide: true },
+    { label: "时间", value: formatTime(item.createdAt) },
+    { label: "来源", value: vipSourceLabel(item.source) },
+    { label: "操作人", value: textValue(item.operator) },
+    { label: "积分流水", value: item.integralTransactionNo || EMPTY, mono: true, copy: item.integralTransactionNo || null },
+    ...(item.triggerTransactionNo
+      ? [{ label: "触发的开通", value: item.triggerTransactionNo, mono: true, copy: item.triggerTransactionNo }]
+      : []),
+    ...item.items.map((entry) => ({ label: entry.label, value: `${entry.points.toLocaleString("zh-CN")} 积分`, wide: true })),
+    ...(item.status === "restored"
+      ? [
+          { label: "还回时间", value: item.restoredAt ? formatTime(item.restoredAt) : EMPTY, tone: "info" as const },
+          { label: "收回积分", value: (item.restore?.pointsClawedBack ?? 0).toLocaleString("zh-CN") },
+          ...(item.restore?.pointsShortfall
+            ? [{ label: "未能收回", value: item.restore.pointsShortfall.toLocaleString("zh-CN"), tone: "danger" as const }]
+            : [])
+        ]
+      : [])
+  ];
+}
+
 function vipRecordFields(txn: VipTransaction, featureName: (tag: string) => string): InfoItem[] {
   return [
     { label: "流水号", value: txn.transactionNo, mono: true, copy: txn.transactionNo, wide: true },
@@ -1107,6 +1385,13 @@ function vipRecordFields(txn: VipTransaction, featureName: (tag: string) => stri
       wide: true
     },
     { label: "权益", value: txn.features?.length ? txn.features.map(featureName).join("、") : EMPTY, wide: true },
+    ...(txn.conversion
+      ? [
+          { label: "折算说明", value: txn.conversion.message, wide: true, tone: "warning" as const },
+          { label: "折算积分", value: txn.conversion.points.toLocaleString("zh-CN") },
+          { label: "折算单号", value: txn.conversion.conversionNo, mono: true, copy: txn.conversion.conversionNo }
+        ]
+      : []),
     ...(txn.revokedAt
       ? [
           { label: "作废时间", value: formatTime(txn.revokedAt), tone: "danger" as const },
