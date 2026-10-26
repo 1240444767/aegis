@@ -102,7 +102,9 @@ function expireAfterGrant(entitlement: VipEntitlement | undefined, days: number,
   const current = timedExpire(entitlement);
   const currentTime = current ? new Date(current).getTime() : Number.NaN;
   const base = Number.isFinite(currentTime) && currentTime > now ? currentTime : now;
-  return new Date(base + days * DAY).toISOString();
+  // 自定义天数清空时 days 是 NaN，天数过大会超出 Date 范围；两者都不能 toISOString
+  const expire = new Date(base + days * DAY);
+  return Number.isNaN(expire.getTime()) ? null : expire.toISOString();
 }
 
 function entitlementLabel(entitlement: VipEntitlement) {
