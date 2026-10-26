@@ -94,29 +94,38 @@ const MAP_HINT: Record<string, string> = {
  * 出奖策略编辑：六个维度的开关与参数、行为画像的信号权重、自定义规则。
  * 只改草稿；载荷与校验在 lottery-strategy-form.ts。
  */
+/** 已启用的策略项数（维度、概率控制各算一项，自定义规则整体算一项） */
+export function strategyEnabledCount(value: StrategyDraft) {
+  return (
+    DIMENSIONS.filter((dimension) => value[dimension.key]).length +
+    CONTROLS.filter((control) => value[control.key]).length +
+    (value.rules.length ? 1 : 0)
+  );
+}
+
 export function LotteryStrategyEditor({
   value,
   onChange,
   catalog,
-  prizeLabels
+  prizeLabels,
+  embedded
 }: {
   value: StrategyDraft;
   onChange: (next: StrategyDraft) => void;
   catalog?: LotteryCatalog | null;
   /** 奖盘上每一格的名字（下标即位置） */
   prizeLabels: string[];
+  /** 嵌在外层已有标题的分区里时不再画自己的分组标题 */
+  embedded?: boolean;
 }) {
   const limits = catalog?.strategyLimits ?? STRATEGY_LIMITS;
   const kinds = catalog?.kinds ?? [];
   const winningKinds = kinds.filter((spec) => spec.type !== "none");
   const patch = (next: Partial<StrategyDraft>) => onChange({ ...value, ...next });
-  const enabled =
-    DIMENSIONS.filter((dimension) => value[dimension.key]).length +
-    CONTROLS.filter((control) => value[control.key]).length +
-    (value.rules.length ? 1 : 0);
+  const enabled = strategyEnabledCount(value);
 
-  return (
-    <FieldGroup label="出奖策略" hint={enabled ? `已启用 ${enabled} 项` : "未启用，按权重随机"}>
+  const content = (
+    <>
       <div className="grid gap-2 sm:grid-cols-2">
         {DIMENSIONS.map((dimension) => {
           const Icon = dimension.icon;
@@ -320,6 +329,13 @@ export function LotteryStrategyEditor({
         prizeLabels={prizeLabels}
         max={limits.rules}
       />
+    </>
+  );
+  return embedded ? (
+    <div className="space-y-2.5">{content}</div>
+  ) : (
+    <FieldGroup label="出奖策略" hint={enabled ? `已启用 ${enabled} 项` : "未启用，按权重随机"}>
+      {content}
     </FieldGroup>
   );
 }
