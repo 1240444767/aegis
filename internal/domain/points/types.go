@@ -179,6 +179,8 @@ type AdminAdjustOptions struct {
 	AdminAccount string
 	ClientIP     string
 	UserAgent    string
+	// Extra 并入流水 extra_data 的附加字段（如冲正时的 reversalOf）
+	Extra map[string]any
 }
 
 type IntegralAdjustResult struct {

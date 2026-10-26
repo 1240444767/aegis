@@ -161,6 +161,9 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		// 余额系统（管理端）
 		admin.GET("/apps/:appkey/users/:userId/wallet", h.AdminAppUserWallet)
 		admin.GET("/apps/:appkey/users/:userId/wallet/transactions", h.AdminAppUserWalletTransactions)
+		admin.GET("/apps/:appkey/users/:userId/points/:kind/transactions", h.AdminAppUserPointLedger)
+		admin.GET("/apps/:appkey/users/:userId/points/:kind/summary", h.AdminAppUserPointSummary)
+		admin.POST("/apps/:appkey/users/:userId/points/integral/transactions/:transactionNo/reverse", h.AdminReverseAppUserIntegral)
 		admin.POST("/apps/:appkey/wallet/adjust", h.AdminAdjustAppUserWallet)
 		// 全应用资金视图：按用户一个个点过去无法对账
 		admin.GET("/apps/:appkey/wallet/transactions", h.AdminAppWalletTransactions)

@@ -1425,6 +1425,7 @@ func (h *Handler) AdminAppSignInRecords(c *gin.Context) {
 	}
 
 	item, err := h.app.ListAppSignInRecords(c.Request.Context(), appID, appdomain.AppSignInRecordQuery{
+		UserID:    req.UserID,
 		Keyword:   req.Keyword,
 		Source:    req.Source,
 		BonusType: req.BonusType,

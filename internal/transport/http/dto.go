@@ -416,6 +416,7 @@ type AdminAppSignInStatsQuery struct {
 }
 
 type AdminAppSignInRecordQuery struct {
+	UserID    int64  `form:"userId"`
 	Keyword   string `form:"keyword"`
 	Source    string `form:"source"`
 	BonusType string `form:"bonusType"`

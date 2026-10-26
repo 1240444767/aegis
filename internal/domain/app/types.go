@@ -727,6 +727,8 @@ type AppSignInSourceStat struct {
 }
 
 type AppSignInRecordQuery struct {
+	// UserID 只看某个用户（用户详情页），0 表示不限
+	UserID  int64  `json:"userId,omitempty"`
 	Keyword string `json:"keyword"`
 	Source  string `json:"source"`
 	// BonusType 按奖励类型过滤；"normal" 同时匹配空值（历史记录未写类型）。

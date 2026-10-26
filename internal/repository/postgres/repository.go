@@ -3009,6 +3009,10 @@ LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1`
 	args := []any{appID}
 
+	if query.UserID > 0 {
+		baseQuery += fmt.Sprintf(" AND ds.user_id = $%d", len(args)+1)
+		args = append(args, query.UserID)
+	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		baseQuery += fmt.Sprintf(`
   AND (

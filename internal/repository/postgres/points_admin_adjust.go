@@ -62,6 +62,11 @@ func adminAdjustExtra(opts pointdomain.AdminAdjustOptions, reason string, reques
 	if batch {
 		extra["batch"] = true
 	}
+	for key, value := range opts.Extra {
+		if _, taken := extra[key]; !taken {
+			extra[key] = value
+		}
+	}
 	return extra
 }
 
