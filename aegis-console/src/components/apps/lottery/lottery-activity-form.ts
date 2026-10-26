@@ -6,6 +6,13 @@ import {
   validateStrategy,
   type StrategyDraft
 } from "@/components/apps/lottery/lottery-strategy-form";
+import {
+  PERK_LIMITS,
+  perksPayload,
+  seedPerks,
+  validatePerks,
+  type PerkDraft
+} from "@/components/apps/lottery/lottery-perks-form";
 import type {
   LotteryActivityPayload,
   LotteryAdminActivity,
@@ -49,8 +56,8 @@ export const LIFETIME_DEFAULTS = {
   draws: 1
 };
 
-/** 可能「已拥有」的奖品类型：只有它们能设置改发 */
-export const OWNABLE_KINDS = ["vip_days", "vip_plan", "feature"];
+/** 可能「已拥有」的奖品类型：只有它们能设置改发（目录未下发时的回落，与后端 `lottery.OwnableKinds` 一致） */
+export const OWNABLE_KINDS = ["vip_days", "vip_plan", "feature", "vip_lifetime", "feature_time", "ad_free"];
 /** 改发可选的类型（目录未下发时的回落） */
 export const SWAP_KINDS = ["points", "experience", "lottery_draws"];
 
@@ -106,12 +113,14 @@ export type ActivityForm = {
   lifetimeDraws: string;
   /** 多维度出奖策略 */
   strategy: StrategyDraft;
+  /** 人群特权 */
+  perks: PerkDraft[];
   sortOrder: string;
   /** 下标即位置：九宫格为外圈顺时针 0–7，转盘为从顶部起顺时针 */
   prizes: PrizeDraft[];
 };
 
-export type FormIssue = { scope: "basic" | "prizes" | "strategy"; message: string };
+export type FormIssue = { scope: "basic" | "prizes" | "strategy" | "perks"; message: string };
 
 export const nextPrizeKey = (prizes: PrizeDraft[]) => prizes.reduce((max, prize) => Math.max(max, prize.key), 0) + 1;
 
@@ -181,6 +190,7 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
       lifetimePointsLifetime: String(defaults.pointsLifetime),
       lifetimeDraws: String(defaults.draws),
       strategy: seedStrategy(null),
+      perks: [],
       sortOrder: "0",
       prizes: defaultPrizes()
     };
@@ -232,6 +242,7 @@ export function seedForm(activity?: LotteryAdminActivity | null, catalog?: Lotte
     lifetimePointsLifetime: String(activity.lifetimePointsLifetime ?? defaults.pointsLifetime),
     lifetimeDraws: String(activity.lifetimeDraws || defaults.draws),
     strategy: seedStrategy(activity.strategy),
+    perks: seedPerks(activity.perks),
     sortOrder: String(activity.sortOrder),
     prizes
   };
@@ -251,6 +262,7 @@ export function rewardOf(prize: PrizeDraft, kinds: LotteryRewardSpec[]): Lottery
     case "ref":
       return { type: prize.type, refId: prize.refId };
     case "feature":
+    case "feature_minutes":
       return { type: prize.type, tag: prize.tag, amount: toInt(prize.amount) };
     case "text":
       return { type: prize.type, text: prize.text.trim() };
@@ -260,8 +272,8 @@ export function rewardOf(prize: PrizeDraft, kinds: LotteryRewardSpec[]): Lottery
 }
 
 /** 草稿 → 已拥有时改发什么；非会员 / 功能奖品或未设置时为 null */
-export function swapRewardOf(prize: PrizeDraft): LotteryReward | null {
-  if (!OWNABLE_KINDS.includes(prize.type) || !prize.swapType) return null;
+export function swapRewardOf(prize: PrizeDraft, ownable: string[] = OWNABLE_KINDS): LotteryReward | null {
+  if (!ownable.includes(prize.type) || !prize.swapType) return null;
   return { type: prize.swapType, amount: toInt(prize.swapAmount) };
 }
 
@@ -271,6 +283,9 @@ function prizeTerm(prize: PrizeDraft, catalog?: LotteryCatalog | null): { days: 
     const plan = catalog?.plans.find((item) => item.id === prize.refId);
     return { days: plan?.durationDays ?? 0, lifetime: plan?.lifetime ?? false };
   }
+  if (prize.type === "vip_lifetime") return { days: 0, lifetime: true };
+  // 功能时长按小时折算（不足一小时按一小时），每小时与会员一天同价
+  if (prize.type === "feature_time") return { days: Math.ceil(toInt(prize.amount) / 60), lifetime: false };
   const days = toInt(prize.amount);
   return { days, lifetime: prize.type === "feature" && days === 0 };
 }
@@ -279,8 +294,9 @@ const SWAP_UNIT: Record<string, string> = { points: "积分", experience: "经�
 
 /** 这一格被已拥有的人抽中时改发什么（一句话）；不改发时为 null */
 export function swapPreview(form: ActivityForm, prize: PrizeDraft, catalog?: LotteryCatalog | null): string | null {
-  if (!OWNABLE_KINDS.includes(prize.type)) return null;
-  const own = swapRewardOf(prize);
+  const ownable = catalog?.ownableKinds ?? OWNABLE_KINDS;
+  if (!ownable.includes(prize.type)) return null;
+  const own = swapRewardOf(prize, ownable);
   if (form.lifetimePolicy === "grant") return null;
   if (own) return `${own.amount ?? 0} ${SWAP_UNIT[own.type] ?? ""}`.trim();
   if (form.lifetimePolicy === "draws") return `${toInt(form.lifetimeDraws)} 次抽奖`;
@@ -325,6 +341,7 @@ export function toPayload(
     lifetimePointsLifetime: toInt(form.lifetimePointsLifetime),
     lifetimeDraws: toInt(form.lifetimeDraws),
     strategy: strategyPayload(form.strategy, catalog),
+    perks: perksPayload(form.perks),
     sortOrder: toInt(form.sortOrder),
     prizes: form.prizes.map((prize, index) => {
       const weighted = weightedOf(prize);
@@ -337,7 +354,7 @@ export function toPayload(
         weight: weighted.weight,
         position: index,
         fallback: prize.fallback,
-        lifetimeReward: swapRewardOf(prize),
+        lifetimeReward: swapRewardOf(prize, catalog?.ownableKinds ?? OWNABLE_KINDS),
         dailyLimit: Math.max(0, toInt(prize.dailyLimit)),
         userLimit: Math.max(0, toInt(prize.userLimit)),
         userDailyLimit: Math.max(0, toInt(prize.userDailyLimit)),
@@ -404,6 +421,13 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
       if (!prize.tag) prizes(`${label}：请选择功能`);
       if (toInt(prize.amount) < 0) prizes(`${label}：天数不能为负`);
     }
+    if (spec?.value === "feature_minutes") {
+      if (!prize.tag) prizes(`${label}：请选择功能`);
+      const amount = toInt(prize.amount);
+      if ((spec.min !== undefined && amount < spec.min) || (spec.max !== undefined && amount > spec.max)) {
+        prizes(`${label}：${spec.label}需要在 ${spec.min ?? 0}–${spec.max ?? amount} ${spec.unit ?? ""}之间`);
+      }
+    }
     if (spec?.value === "text" && !prize.text.trim()) prizes(`${label}：请填写发放内容`);
 
     const weight = toInt(prize.weight);
@@ -442,7 +466,7 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
     basic("折算积分时每天积分与永久奖品积分不能都为 0");
   }
   form.prizes.forEach((prize, index) => {
-    const swap = swapRewardOf(prize);
+    const swap = swapRewardOf(prize, catalog?.ownableKinds ?? OWNABLE_KINDS);
     if (!swap) return;
     const spec = kinds.find((item) => item.type === swap.type);
     const amount = swap.amount ?? 0;
@@ -453,6 +477,9 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
 
   for (const message of validateStrategy(form.strategy, count, catalog?.strategyLimits ?? STRATEGY_LIMITS)) {
     issues.push({ scope: "strategy", message });
+  }
+  for (const message of validatePerks(form.perks, catalog?.perkLimits ?? PERK_LIMITS)) {
+    issues.push({ scope: "perks", message });
   }
 
   if (form.pity) {

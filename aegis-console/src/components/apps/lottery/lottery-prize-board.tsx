@@ -723,7 +723,7 @@ function PrizeInspector({
     const next = kinds.find((item) => item.type === type);
     onPatch({
       type,
-      amount: String(next?.value === "feature" ? 7 : next?.min ?? 1),
+      amount: String(next?.value === "feature" ? 7 : next?.value === "feature_minutes" ? 30 : next?.min ?? 1),
       refId: plans[0]?.id ?? 0,
       tag: features[0]?.tag ?? "",
       text: ""
@@ -870,6 +870,40 @@ function PrizeInspector({
             )
           ) : null}
 
+          {spec?.value === "feature_minutes" ? (
+            features.length === 0 ? (
+              <EmptyHint className="sm:col-span-2">暂无功能标识</EmptyHint>
+            ) : (
+              <>
+                <Field label="功能" aside="看激励广告换时长的那个功能">
+                  <Select value={prize.tag} onValueChange={(tag) => onPatch({ tag })}>
+                    <SelectTrigger className={cn(FIELD_SURFACE, "h-9 w-full border-0 shadow-none")}>
+                      <SelectValue placeholder="选择功能" />
+                    </SelectTrigger>
+                    <SelectContent position="popper">
+                      {features.map((feature) => (
+                        <SelectItem key={feature.tag} value={feature.tag}>
+                          {feature.name || feature.tag}
+                          <span className="ml-1.5 font-mono text-[10px] text-muted-foreground">{feature.tag}</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="时长" aside={`${spec.min ?? 1}–${spec.max ?? "∞"} ${spec.unit ?? "分钟"}`}>
+                  <Stepper
+                    value={prize.amount}
+                    min={spec.min}
+                    max={spec.max}
+                    step={10}
+                    suffix={spec.unit ?? "分钟"}
+                    onChange={(amount) => onPatch({ amount })}
+                  />
+                </Field>
+              </>
+            )
+          ) : null}
+
           {spec?.value === "text" ? (
             <Field label="发放内容" className="sm:col-span-2">
               <TextField value={prize.text} maxLength={64} placeholder="例如：定制贴纸一套" onChange={(text) => onPatch({ text })} />
@@ -953,7 +987,7 @@ function PrizeInspector({
         />
       </InspectorBlock>
 
-      {OWNABLE_KINDS.includes(prize.type) ? (
+      {(catalog?.ownableKinds ?? OWNABLE_KINDS).includes(prize.type) ? (
         <InspectorBlock title="已拥有时改发" aside={preview ? `改发 ${preview}` : "照常发放"}>
           <div className="grid gap-3 sm:grid-cols-2">
             <Select

@@ -69,6 +69,11 @@ export function DrawPlanView({
             保底触发
           </Badge>
         ) : null}
+        {plan.perks?.names.length ? (
+          <Badge variant="success" size="sm" title={perkEffectsText(plan.perks)}>
+            特权 {plan.perks.names.join("、")}
+          </Badge>
+        ) : null}
         {plan.fallback ? (
           <Badge variant="warning" size="sm">
             改发兜底奖
@@ -172,4 +177,16 @@ export function BehaviorScoreView({ score, signals }: { score: LotteryBehaviorSc
       </div>
     </div>
   );
+}
+
+/** 一次抽奖生效的特权效果（方案里的悬停说明） */
+function perkEffectsText(perks: NonNullable<LotteryDrawPlan["perks"]>) {
+  const parts: string[] = [];
+  if (perks.extraFree) parts.push(`免费 +${perks.extraFree}`);
+  if (perks.adSkip) parts.push(`免看广告 ${percent(perks.adSkip)}${perks.waived ? `（今天 ${perks.waived} 次）` : ""}`);
+  if (perks.pointsDiscount) parts.push(`积分省 ${perks.pointsDiscount}%`);
+  if (perks.extraPoints) parts.push(`积分次数 +${perks.extraPoints}`);
+  if (perks.pityCut) parts.push(`保底提前 ${perks.pityCut}`);
+  if (perks.winBoost) parts.push(`中奖 ×${perks.winBoost}`);
+  return parts.join("，");
 }

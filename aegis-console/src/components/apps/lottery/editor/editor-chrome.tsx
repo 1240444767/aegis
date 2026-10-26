@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
  * 概览里的问题列表点一下就滚到对应分区。
  */
 
-export type SectionKey = "basic" | "draws" | "prizes" | "pity" | "strategy" | "owned" | "rules";
+export type SectionKey = "basic" | "draws" | "prizes" | "pity" | "strategy" | "perks" | "owned" | "rules";
 
 export type SectionMeta = {
   key: SectionKey;
@@ -29,6 +29,7 @@ export type SectionMeta = {
 export function issueSection(issue: FormIssue): SectionKey {
   const message = issue.message;
   if (issue.scope === "strategy") return "strategy";
+  if (issue.scope === "perks") return "perks";
   if (message.includes("保底")) return "pity";
   if (message.includes("折算") || message.includes("改发抽奖次数")) return "owned";
   if (issue.scope === "prizes") return "prizes";

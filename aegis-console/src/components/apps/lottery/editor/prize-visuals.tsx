@@ -2,11 +2,14 @@
 
 import {
   BadgeCheck,
+  Clock,
   Coins,
   Crown,
+  Gem,
   Gift,
   KeyRound,
   Package,
+  ShieldOff,
   Smile,
   Sparkles,
   Ticket,
@@ -75,6 +78,27 @@ const KIND_VISUALS: Record<string, KindVisual> = {
     fill: "bg-rose-400",
     ring: "ring-rose-500/60",
     stroke: "stroke-rose-400"
+  },
+  vip_lifetime: {
+    icon: Gem,
+    tone: "bg-purple-500/12 text-purple-600 dark:text-purple-400",
+    fill: "bg-purple-500",
+    ring: "ring-purple-500/60",
+    stroke: "stroke-purple-500"
+  },
+  feature_time: {
+    icon: Clock,
+    tone: "bg-pink-500/12 text-pink-600 dark:text-pink-400",
+    fill: "bg-pink-400",
+    ring: "ring-pink-500/60",
+    stroke: "stroke-pink-400"
+  },
+  ad_free: {
+    icon: ShieldOff,
+    tone: "bg-lime-500/12 text-lime-700 dark:text-lime-400",
+    fill: "bg-lime-400",
+    ring: "ring-lime-500/60",
+    stroke: "stroke-lime-400"
   },
   lottery_draws: {
     icon: Ticket,

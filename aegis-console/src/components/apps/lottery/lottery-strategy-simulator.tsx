@@ -25,11 +25,23 @@ import type {
   LotteryActivityPayload,
   LotteryCatalog,
   LotteryDistribution,
+  LotterySimulatePayload,
   LotterySimulateResponse,
   LotterySource
 } from "@/lib/api/lottery";
 import { useSimulateLotteryMutation } from "@/lib/lottery-hooks";
 import { cn } from "@/lib/utils";
+
+type PerkIdentity = "none" | "member" | "lifetime" | "adFree" | "signed";
+
+/** 模拟时虚拟用户可选的特权身份 */
+const PERK_IDENTITY: Record<PerkIdentity, { label: string; facts: NonNullable<LotterySimulatePayload["perk"]> }> = {
+  none: { label: "普通用户", facts: {} },
+  member: { label: "会员", facts: { member: true } },
+  lifetime: { label: "永久会员", facts: { member: true, lifetime: true } },
+  adFree: { label: "免广告用户", facts: { adFree: true } },
+  signed: { label: "今天已签到", facts: { signedToday: true } }
+};
 
 /**
  * 策略模拟：按编辑器里当前（未保存也行）的奖盘与策略，让一批虚拟用户各自连续抽若干次。
@@ -59,6 +71,7 @@ export function LotteryStrategySimulator({
   const [source, setSource] = useState<LotterySource>("free");
   const [userId, setUserId] = useState("");
   const [isolated, setIsolated] = useState(false);
+  const [identity, setIdentity] = useState<PerkIdentity>("none");
   const [result, setResult] = useState<LotterySimulateResponse | null>(null);
 
   const total = (Number(users) || 0) * (Number(draws) || 0);
@@ -75,7 +88,8 @@ export function LotteryStrategySimulator({
         users: Number(users) || 1,
         drawsPerUser: Number(draws) || 1,
         source,
-        isolatedStock: isolated
+        isolatedStock: isolated,
+        perk: Number(userId) > 0 || identity === "none" ? undefined : PERK_IDENTITY[identity].facts
       });
       setResult(response);
     } catch (error) {
@@ -143,6 +157,31 @@ export function LotteryStrategySimulator({
                 />
               </div>
             </div>
+            {Number(userId) > 0 ? null : (
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-medium">虚拟用户的特权身份</span>
+                <div role="radiogroup" className="flex flex-wrap gap-1.5">
+                  {(Object.keys(PERK_IDENTITY) as PerkIdentity[]).map((key) => (
+                    <button
+                      key={key}
+                      type="button"
+                      role="radio"
+                      aria-checked={identity === key}
+                      onClick={() => setIdentity(key)}
+                      className={cn(
+                        "h-7 rounded-lg border px-2.5 text-[11px] font-medium transition-colors",
+                        identity === key
+                          ? "border-foreground/80 bg-foreground text-background"
+                          : "border-border bg-card text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      {PERK_IDENTITY[key].label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[10px] text-muted-foreground">按这一身份判定人群特权，保底提前与中奖加成计入模拟</p>
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-3">
               <div className="min-w-56 flex-1">
                 <SwitchRow
@@ -198,6 +237,13 @@ function SimulationReport({
           sub={sim.softPityDraws ? `软保底生效 ${formatCount(sim.softPityDraws)} 次` : "软保底未生效"}
         />
       </div>
+      {result.perks?.names.length ? (
+        <p className="rounded-xl bg-emerald-500/[0.07] px-3 py-2 text-[11px] text-emerald-800 dark:text-emerald-300">
+          计入人群特权：{result.perks.names.join("、")}
+          {result.perks.pityCut ? `，保底提前 ${result.perks.pityCut} 次` : ""}
+          {result.perks.winBoost ? `，中奖 ×${result.perks.winBoost}` : ""}
+        </p>
+      ) : null}
       <p className="text-[11px] text-muted-foreground">
         共 {formatCount(sim.users)} 人、{formatCount(sim.draws)} 次，发出积分 {formatCount(sim.pointsIssued)}
         {sim.valuePerDraw !== undefined ? `，平均每次 ${sim.valuePerDraw.toFixed(2)} 积分当量` : ""}

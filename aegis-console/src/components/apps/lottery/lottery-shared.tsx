@@ -160,6 +160,10 @@ export function describeLotteryReward(
       const feature = features.find((item) => item.tag === reward.tag);
       return `${feature?.name || reward.tag || label} ${termLabel(reward.amount ?? 0)}`;
     }
+    case "feature_minutes": {
+      const feature = features.find((item) => item.tag === reward.tag);
+      return `${feature?.name || reward.tag || label} ${reward.amount ?? 0} 分钟`;
+    }
     case "text":
       return reward.text || label;
     case "amount":
@@ -190,6 +194,10 @@ export function defaultPrizeName(
       return `抽奖 ${reward.amount ?? 0} 次`;
     case "vip_days":
       return `会员 ${reward.amount ?? 0} 天`;
+    case "vip_lifetime":
+      return "永久会员";
+    case "ad_free":
+      return `免广告 ${reward.amount ?? 0} 天`;
   }
   return Array.from(describeLotteryReward(reward, kinds, plans, features)).slice(0, 16).join("");
 }

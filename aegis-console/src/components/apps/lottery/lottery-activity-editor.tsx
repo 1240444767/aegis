@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Ticket,
+  UsersRound,
   X
 } from "lucide-react";
 import { toast } from "sonner";
@@ -62,6 +63,7 @@ import {
   weightedOf,
   type ActivityForm
 } from "@/components/apps/lottery/lottery-activity-form";
+import { LotteryPerksEditor } from "@/components/apps/lottery/lottery-perks-editor";
 import { LotteryPrizeBoard } from "@/components/apps/lottery/lottery-prize-board";
 import { LotteryStrategyEditor, strategyEnabledCount } from "@/components/apps/lottery/lottery-strategy-editor";
 import { LotteryStrategySimulator } from "@/components/apps/lottery/lottery-strategy-simulator";
@@ -108,6 +110,7 @@ const SECTIONS: SectionMeta[] = [
   { key: "prizes", label: "奖盘", icon: LayoutGrid },
   { key: "pity", label: "保底", icon: ShieldCheck },
   { key: "strategy", label: "出奖策略", icon: SlidersHorizontal },
+  { key: "perks", label: "人群特权", icon: UsersRound },
   { key: "owned", label: "已拥有的奖品", icon: Repeat },
   { key: "rules", label: "活动规则", icon: ScrollText }
 ];
@@ -249,7 +252,9 @@ export function LotteryActivityEditor({
   const policies = catalog?.lifetimePolicies?.length
     ? catalog.lifetimePolicies
     : LIFETIME_POLICIES.map((key) => ({ key, ...LIFETIME_POLICY_META[key] }));
-  const ownablePrizes = form.prizes.filter((prize) => OWNABLE_KINDS.includes(prize.type));
+  const ownableKinds = catalog?.ownableKinds ?? OWNABLE_KINDS;
+  const ownablePrizes = form.prizes.filter((prize) => ownableKinds.includes(prize.type));
+  const activePerks = form.perks.filter((perk) => !perk.disabled).length;
   const showPoints = form.lifetimePolicy === "points" || form.lifetimePolicy === "exclude";
 
   const currentScene = scenes.find((scene) => scene.key === form.videoScene);
@@ -294,7 +299,8 @@ export function LotteryActivityEditor({
       value: form.pity && pityPrize ? `${pityThreshold} 抽` : "未开启",
       hint: form.pity && pityPrize ? prizeName(pityPrize.key) : undefined
     },
-    { label: "出奖策略", value: strategyCount ? `${strategyCount} 项` : "按权重", hint: strategyCount ? "已启用" : "未启用策略" }
+    { label: "出奖策略", value: strategyCount ? `${strategyCount} 项` : "按权重", hint: strategyCount ? "已启用" : "未启用策略" },
+    { label: "人群特权", value: activePerks ? `${activePerks} 条` : "未设置", hint: activePerks ? "按人群改写次数与概率" : undefined }
   ];
 
   const submit = async () => {
@@ -680,6 +686,30 @@ export function LotteryActivityEditor({
                 </EditorSection>
 
                 <EditorSection
+                  id="perks"
+                  icon={UsersRound}
+                  title="人群特权"
+                  description={
+                    activePerks
+                      ? `已启用 ${activePerks} 条，按人群与当天行为改写次数、价格与概率`
+                      : "会员、永久会员、免广告用户、签到或在线时长达标的人得到额外次数、免看广告等"
+                  }
+                  issues={issueCount("perks")}
+                >
+                  <LotteryPerksEditor
+                    value={form.perks}
+                    onChange={(perks) => patch("perks", perks)}
+                    catalog={catalog}
+                    context={{
+                      video: !!form.videoScene,
+                      points: pointsOpen,
+                      pointsDaily: Number(form.pointsDaily) > 0,
+                      pity: form.pity
+                    }}
+                  />
+                </EditorSection>
+
+                <EditorSection
                   id="owned"
                   icon={Repeat}
                   title="已拥有的奖品"
@@ -728,7 +758,7 @@ export function LotteryActivityEditor({
                   {form.lifetimePolicy !== "grant" && ownablePrizes.length > 0 ? (
                     <div className="overflow-hidden rounded-xl border border-border">
                       <div className="border-b border-border bg-muted/40 px-3 py-2 text-[11px] font-medium text-muted-foreground">
-                        本活动的会员与功能奖品
+                        本活动的会员、功能与免广告奖品
                       </div>
                       <ul className="divide-y divide-border">
                         {ownablePrizes.map((prize) => {

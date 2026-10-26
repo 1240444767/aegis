@@ -16,7 +16,7 @@ export type LotteryDrawStatus = "granted" | "pending" | "fulfilled";
 /** 抽中已拥有的奖品怎么办：折算积分 / 改发抽奖次数 / 不参与抽取 / 照常发放 */
 export type LotteryLifetimePolicy = "points" | "draws" | "exclude" | "grant";
 /** 奖品取值形态：空为不需要取值（谢谢参与） */
-export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "text";
+export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "feature_minutes" | "text";
 
 /** 一档奖品的自述，由后端目录下发，前端不另抄一份 */
 export type LotteryRewardSpec = {
@@ -83,6 +83,72 @@ export type LotteryCatalog = {
   /** 自定义规则里能用的变量 */
   ruleVariables?: LotteryRuleVariable[];
   strategyLimits?: LotteryStrategyLimits;
+  /** 人群特权：人群目录、条件表达式变量、取值上界 */
+  perkAudiences?: LotteryPerkAudienceSpec[];
+  perkVariables?: LotteryRuleVariable[];
+  perkLimits?: LotteryPerkLimits;
+  /** 可能「已拥有」、能设置改发的奖品类型 */
+  ownableKinds?: string[];
+};
+
+// ── 人群特权 ──
+
+export type LotteryPerkAudience = "all" | "member" | "lifetime" | "non_member" | "non_lifetime" | "ad_free";
+
+export type LotteryPerkAudienceSpec = { key: LotteryPerkAudience; label: string; hint: string };
+
+export type LotteryPerkLimits = {
+  perks: number;
+  name: number;
+  extraFree: number;
+  extraPoints: number;
+  pointsDiscount: number;
+  adSkipSlots: number;
+  defaultAdSkipSlots: number;
+  onlineMinutes: number;
+  winBoost: number;
+  pityCut: number;
+};
+
+/** 一条人群特权：谁（人群 + 今天的条件）得到什么（效果）。多条叠加：次数相加、免广告概率独立合并、折扣取最大、加成相乘 */
+export type LotteryPerk = {
+  name: string;
+  disabled?: boolean;
+  audience: LotteryPerkAudience;
+  /** 今天签到之后才生效 */
+  signedToday?: boolean;
+  /** 今天在线满这么多分钟之后才生效 */
+  onlineMinutes?: number;
+  /** 附加条件（expr 表达式） */
+  when?: string;
+  /** 每天多几次免费抽奖 */
+  extraFree?: number;
+  /** 视频抽奖免看广告的概率（百分比 0–100），判中的直接并进免费次数 */
+  adSkip?: number;
+  /** 视频不限次时每天前几次参与判定 */
+  adSkipSlots?: number;
+  /** 积分抽奖省百分之几 */
+  pointsDiscount?: number;
+  /** 积分抽奖每天多几次（活动设了每日上限时） */
+  extraPoints?: number;
+  /** 保底提前几次 */
+  pityCut?: number;
+  /** 中奖奖品的权重系数（1–3） */
+  winBoost?: number;
+};
+
+/** 一个人此刻生效的特权（叠加后） */
+export type LotteryPerkEffects = {
+  names: string[];
+  extraFree?: number;
+  /** 0–1 */
+  adSkip?: number;
+  adSkipSlots?: number;
+  waived?: number;
+  pointsDiscount?: number;
+  extraPoints?: number;
+  pityCut?: number;
+  winBoost?: number;
 };
 
 // ── 出奖策略 ──
@@ -232,6 +298,8 @@ export type LotteryDrawPlan = {
   pity?: boolean;
   picked?: number;
   fallback?: boolean;
+  /** 这一次生效的人群特权 */
+  perks?: LotteryPerkEffects;
 };
 
 /** 距首次中奖次数的精确分布（吸收马尔可夫链） */
@@ -307,6 +375,8 @@ export type LotterySimulatePayload = {
   source?: string;
   isolatedStock?: boolean;
   seed?: number;
+  /** 不指定用户时，虚拟用户的特权身份 */
+  perk?: { member?: boolean; lifetime?: boolean; adFree?: boolean; signedToday?: boolean; onlineMinutesToday?: number };
 };
 
 export type LotterySimulateResponse = {
@@ -316,11 +386,13 @@ export type LotterySimulateResponse = {
   /** 指定用户此刻再抽一次的方案（只对已保存的活动） */
   current?: LotteryDrawPlan;
   analytic?: LotteryStreakAnalysis;
+  /** 模拟里计入的人群特权（保底提前、中奖加成） */
+  perks?: LotteryPerkEffects;
 };
 
 export type LotteryReward = {
   type: string;
-  /** 整数量；功能解锁时是天数，0 为永久 */
+  /** 整数量；功能解锁时是天数（0 为永久），功能时长是分钟，免广告时长是天数 */
   amount?: number;
   refId?: number;
   tag?: string;
@@ -392,6 +464,7 @@ export type LotteryActivity = {
   /** 改发抽奖次数时发几次 */
   lifetimeDraws?: number;
   strategy?: LotteryStrategy;
+  perks?: LotteryPerk[];
   sortOrder: number;
   createdBy?: string;
   createdAt: string;
@@ -445,6 +518,7 @@ export type LotteryActivityPayload = {
   lifetimePointsLifetime: number;
   lifetimeDraws: number;
   strategy: LotteryStrategy;
+  perks: LotteryPerk[];
   sortOrder: number;
   prizes: LotteryPrizePayload[];
 };

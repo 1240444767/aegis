@@ -177,6 +177,16 @@ export function LotteryActivitiesPanel({
                         <Badge variant="outline" size="sm" className="font-normal">
                           {UI_MODE_LABEL[activity.uiMode] ?? activity.uiMode}
                         </Badge>
+                        {activity.perks?.some((perk) => !perk.disabled) ? (
+                          <Badge
+                            variant="outline"
+                            size="sm"
+                            className="font-normal"
+                            title={activity.perks.filter((perk) => !perk.disabled).map((perk) => perk.name).join("、")}
+                          >
+                            特权 {activity.perks.filter((perk) => !perk.disabled).length} 条
+                          </Badge>
+                        ) : null}
                         {prizes.some((prize) => OWNABLE_KINDS.includes(prize.kind)) ? (
                           <Badge
                             variant="outline"
