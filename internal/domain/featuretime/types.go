@@ -63,6 +63,7 @@ const (
 const (
 	RefRewardedAd = "rewarded_ad"
 	RefLease      = "lease"
+	RefLottery    = "lottery"
 )
 
 // Status 一个用户在一个功能上的时长概况。

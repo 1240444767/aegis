@@ -105,7 +105,9 @@ type Activity struct {
 	// LifetimeDraws 改发抽奖次数时发几次
 	LifetimeDraws int64 `json:"lifetimeDraws"`
 	// Strategy 多维度出奖策略，见 strategy.go；零值为纯加权随机 + 硬保底
-	Strategy  Strategy  `json:"strategy"`
+	Strategy Strategy `json:"strategy"`
+	// Perks 人群特权，见 perks.go
+	Perks     []Perk    `json:"perks"`
 	SortOrder int       `json:"sortOrder"`
 	CreatedBy string    `json:"createdBy,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
@@ -178,6 +180,7 @@ type ActivityInput struct {
 	LifetimePointsLifetime int64
 	LifetimeDraws          int64
 	Strategy               Strategy
+	Perks                  []Perk
 	SortOrder              int
 	Prizes                 []PrizeInput
 	Operator               string
@@ -215,24 +218,26 @@ type AdminActivity struct {
 
 // Draw 一次抽奖。奖品信息存快照：奖品被改、被删之后，记录说的仍是当时抽中的那一份。
 type Draw struct {
-	ID           int64          `json:"id"`
-	DrawNo       string         `json:"drawNo"`
-	AppID        int64          `json:"appid"`
-	ActivityID   int64          `json:"activityId"`
-	ActivityName string         `json:"activityName,omitempty"`
-	UserID       int64          `json:"userId"`
-	Account      string         `json:"account,omitempty"`
-	Nickname     string         `json:"nickname,omitempty"`
-	PrizeID      *int64         `json:"prizeId,omitempty"`
-	PrizeName    string         `json:"prizeName"`
-	PrizeKind    string         `json:"prizeKind"`
-	Reward       Reward         `json:"reward"`
-	Position     int            `json:"position"`
-	Source       string         `json:"source"`
-	PointsCost   int64          `json:"pointsCost,omitempty"`
-	Pity         bool           `json:"pity,omitempty"`
-	Status       string         `json:"status"`
-	Results      []RewardResult `json:"results"`
+	ID           int64  `json:"id"`
+	DrawNo       string `json:"drawNo"`
+	AppID        int64  `json:"appid"`
+	ActivityID   int64  `json:"activityId"`
+	ActivityName string `json:"activityName,omitempty"`
+	UserID       int64  `json:"userId"`
+	Account      string `json:"account,omitempty"`
+	Nickname     string `json:"nickname,omitempty"`
+	PrizeID      *int64 `json:"prizeId,omitempty"`
+	PrizeName    string `json:"prizeName"`
+	PrizeKind    string `json:"prizeKind"`
+	// RewardType 用户端：奖品的真实类型（PrizeKind 对老客户端按 ClientKind 映射过）
+	RewardType string         `json:"rewardType,omitempty"`
+	Reward     Reward         `json:"reward"`
+	Position   int            `json:"position"`
+	Source     string         `json:"source"`
+	PointsCost int64          `json:"pointsCost,omitempty"`
+	Pity       bool           `json:"pity,omitempty"`
+	Status     string         `json:"status"`
+	Results    []RewardResult `json:"results"`
 	// Conversion 抽中的奖品对这个人是已拥有的、改发了别的东西时的说明（Reward 仍是抽中的那一格）
 	Conversion *Conversion `json:"conversion,omitempty"`
 	Note       string      `json:"note,omitempty"`
@@ -289,6 +294,9 @@ type DrawInput struct {
 	Location *time.Location
 	// Profile 行为画像，服务层在事务外取好
 	Profile BehaviorProfile
+	// Video 视频抽奖的配置（只用 enabled 与 dailyLimit：算今天有几次参与「免看广告」判定，见 VideoSlots），
+	// 服务层按激励广告配置取好
+	Video VideoChances
 }
 
 // DrawResult 一次抽奖的结果。Replayed 为 true 表示同一个 requestId 的重复提交，原样返回第一次的结果。
@@ -381,12 +389,14 @@ type ClientActivity struct {
 
 // ClientPrize 用户端看到的奖品：不含库存与权重，只带公示概率。
 type ClientPrize struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Detail   string `json:"detail"`
-	ImageURL string `json:"imageUrl,omitempty"`
-	Position int    `json:"position"`
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Kind 对老客户端按 ClientKind 映射过的类型；RewardType 是真实类型
+	Kind       string `json:"kind"`
+	RewardType string `json:"rewardType"`
+	Detail     string `json:"detail"`
+	ImageURL   string `json:"imageUrl,omitempty"`
+	Position   int    `json:"position"`
 	// Probability 常规抽取下抽中它的概率（百分比，保留到 0.01），不含保底与库存的影响
 	Probability float64 `json:"probability"`
 	SoldOut     bool    `json:"soldOut,omitempty"`
@@ -400,8 +410,12 @@ type ClientState struct {
 	Chances  Chances        `json:"chances"`
 	Pity     *Pity          `json:"pity,omitempty"`
 	// Lifetime 当前用户有已拥有的奖品时的提示（永久会员抽中会员奖品会怎样）
-	Lifetime   *LifetimeNotice `json:"lifetime,omitempty"`
-	ServerTime time.Time       `json:"serverTime"`
+	//
+	// 有生效的人群特权时，特权说明也并进这里（policy = perk，message 为整句）：老客户端只认这一张提示卡
+	Lifetime *LifetimeNotice `json:"lifetime,omitempty"`
+	// Perks 生效的人群特权
+	Perks      *PerkSummary `json:"perks,omitempty"`
+	ServerTime time.Time    `json:"serverTime"`
 }
 
 // ClientList 用户端的活动列表。

@@ -164,8 +164,16 @@ func PrizeValue(activity Activity, guard *Guard, prize Prize) float64 {
 		return amount * expRate
 	case KindLotteryDraws:
 		return amount * drawValue
-	case KindVipDays:
+	case KindVipDays, KindAdFree:
 		return amount * perDay
+	case KindFeatureTime:
+		return math.Ceil(amount/60) * perDay
+	case KindVipLifetime:
+		lifetime := float64(activity.LifetimePointsLifetime)
+		if lifetime <= 0 {
+			lifetime = DefaultLifetimePointsLifetime
+		}
+		return lifetime
 	case KindFeature:
 		if prize.Reward.Amount == 0 {
 			lifetime := float64(activity.LifetimePointsLifetime)

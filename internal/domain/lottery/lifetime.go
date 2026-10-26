@@ -90,9 +90,19 @@ type MemberCoverage struct {
 // 永久基础版抽中限时高级版不算已拥有 —— 那是实打实的升级。会员天数不带功能，对永久会员一律已拥有。
 func (c MemberCoverage) Owned(reward Reward, plans map[int64]pointstore.PlanRef) (string, bool) {
 	switch reward.Type {
-	case KindVipDays:
+	case KindVipDays, KindVipLifetime, KindAdFree:
+		// 永久会员本就免广告、功能时长免扣：免广告时长对他和会员天数一样是空奖
 		if c.Lifetime {
 			return OwnedLifetime, true
+		}
+	case KindFeatureTime:
+		// 功能时长只在「永远免扣」时是空奖：永久会员（会员一律免扣），或已永久解锁这个功能
+		if c.Lifetime {
+			return OwnedLifetime, true
+		}
+		tag := vipdomain.NormalizeFeatureTags([]string{reward.Tag})
+		if len(tag) > 0 && slices.Contains(vipdomain.NormalizeFeatureTags(c.PermanentUnlocks), tag[0]) {
+			return OwnedFeature, true
 		}
 	case KindVipPlan:
 		plan, ok := plans[reward.RefID]
@@ -155,6 +165,10 @@ func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Rewar
 		return Reward{Type: KindLotteryDraws, Amount: rule.Draws}, true
 	}
 	days, lifetime := rewardTerm(prize.Reward, plans)
+	if prize.Reward.Type == KindFeatureTime {
+		// 功能时长按小时折算（不足一小时按一小时），每小时与会员一天同价
+		days = int((prize.Reward.Amount + 59) / 60)
+	}
 	var amount int64
 	if lifetime {
 		amount = rule.PointsLifetime
@@ -171,8 +185,10 @@ func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Rewar
 // rewardTerm 会员 / 功能奖品的时长：天数，或是否永久。
 func rewardTerm(reward Reward, plans map[int64]pointstore.PlanRef) (int, bool) {
 	switch reward.Type {
-	case KindVipDays:
+	case KindVipDays, KindAdFree:
 		return int(reward.Amount), false
+	case KindVipLifetime:
+		return 0, true
 	case KindVipPlan:
 		plan := plans[reward.RefID]
 		return plan.DurationDays, plan.Lifetime
@@ -263,6 +279,26 @@ type LifetimeNotice struct {
 	Lifetime bool   `json:"lifetime"`
 	Policy   string `json:"policy"`
 	Message  string `json:"message"`
+	// OwnedPolicy 并入特权说明后，原来的已拥有处理方式（Policy 变成 perk）
+	OwnedPolicy string `json:"ownedPolicy,omitempty"`
+}
+
+// NoticePerk 提示卡上并入了人群特权说明。老客户端遇到不认识的 policy 时原样显示 message。
+const NoticePerk = "perk"
+
+// MergePerkNotice 把特权说明并进活动页顶部的提示卡。
+func MergePerkNotice(notice *LifetimeNotice, perks *PerkSummary, lifetime bool) *LifetimeNotice {
+	if perks == nil {
+		return notice
+	}
+	if notice == nil {
+		return &LifetimeNotice{Lifetime: lifetime, Policy: NoticePerk, Message: perks.Message}
+	}
+	merged := *notice
+	merged.OwnedPolicy = notice.Policy
+	merged.Policy = NoticePerk
+	merged.Message = notice.Message + "；" + perks.Message
+	return &merged
 }
 
 // NoticeOf 活动页提示；没有已拥有的奖品时为 nil。
@@ -356,7 +392,22 @@ func validateLifetime(input ActivityInput) error {
 	return nil
 }
 
+// OwnableKinds 可能「已拥有」、因而可以设置改发的奖品类型（控制台用）。
+func OwnableKinds() []string {
+	out := []string{}
+	for _, kind := range kinds {
+		if ownable(kind) {
+			out = append(out, kind)
+		}
+	}
+	return out
+}
+
 // ownable 这一类奖品是否可能「已拥有」。
 func ownable(kind string) bool {
-	return kind == KindVipDays || kind == KindVipPlan || kind == KindFeature
+	switch kind {
+	case KindVipDays, KindVipPlan, KindFeature, KindVipLifetime, KindFeatureTime, KindAdFree:
+		return true
+	}
+	return false
 }

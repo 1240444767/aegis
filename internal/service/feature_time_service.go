@@ -113,7 +113,7 @@ func (s *FeatureTimeService) Settle(ctx context.Context, appID, userID int64, le
 	return settlement, nil
 }
 
-// exempt 免扣判定：会员，或权益里带这个功能（含功能解锁）。判据见 featuretime.Exempt。
+// exempt 免扣判定：会员，或权益里带这个功能（含功能解锁），或免广告时长有效期内。判据见 featuretime.Exempt。
 func (s *FeatureTimeService) exempt(ctx context.Context, appID, userID int64, feature string) (bool, error) {
 	facts, err := s.pg.GetVipEntitlementFacts(ctx, appID, userID)
 	if err != nil {
@@ -122,7 +122,15 @@ func (s *FeatureTimeService) exempt(ctx context.Context, appID, userID int64, fe
 		}
 		return false, err
 	}
-	return featuretime.Exempt(vipdomain.Evaluate(*facts, time.Now()), feature), nil
+	if featuretime.Exempt(vipdomain.Evaluate(*facts, time.Now()), feature) {
+		return true, nil
+	}
+	// 免广告时长（抽奖奖品）有效期内：看激励广告换时长的功能一律免扣
+	until, err := s.pg.AdFreePassUntil(ctx, appID, userID)
+	if err != nil {
+		return false, err
+	}
+	return until != nil, nil
 }
 
 // featureName 功能目录里的展示名；目录里没有（或查不出来）时为空串。

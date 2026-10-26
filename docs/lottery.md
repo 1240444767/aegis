@@ -49,6 +49,50 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 因此视频抽奖的每日次数、冷却都在激励广告的场景里配；保存活动时会核对场景存在且发「抽奖次数」。
 广告看完但回调还没到时（`pending`），次数会在回调到达的那一刻补发，客户端下次进页面就能看到。
 
+## 人群特权
+
+活动可以配最多 10 条 `perks`（迁移 `000130`）：**谁**（人群 + 今天的条件）得到**什么**（效果）。特权只改写
+「这个人此刻眼里的活动」（`PerkEffects.Personalize`），不新增次数来源、不改客户端契约，所以**老版本 App 不升级就生效** ——
+它本来就照着服务端给的 `chances.next` 抽、照着 `video.remaining` 拦视频。活动页与抽奖事务调同一套函数（`perks.go`）。
+
+| 字段 | 含义 |
+|---|---|
+| `audience` | `all` 全部 / `member` 会员（含永久）/ `lifetime` 永久会员 / `non_member` / `non_lifetime` / `ad_free` 免广告时长有效期内 |
+| `signedToday` | 今天签到之后才生效 |
+| `onlineMinutes` | 今天在线满 N 分钟之后才生效（`user_online_daily`，实时连接心跳累计） |
+| `when` | 附加条件（expr，变量：画像的全部 `user.*`、`user.adFree`、`user.onlineMinutesToday`、`user.totalDraws`、`draw.hour` / `draw.weekday`），保存时编译 |
+| `extraFree` | 每天多几次免费抽奖 |
+| `adSkip` / `adSkipSlots` | 视频抽奖**免看广告**的概率（%）。今天的第 k 次视频抽奖（k = 1…场景每日上限；不限次时 1…`adSkipSlots`，默认 5）各自独立判定，判中的直接并进免费次数，视频次数相应扣掉 |
+| `pointsDiscount` / `extraPoints` | 积分抽奖省 N%（向上取整，至少 1 积分）/ 每天多几次（活动设了每日上限时） |
+| `pityCut` | 保底提前 N 次（最少保留 2 次） |
+| `winBoost` | 中奖奖品的权重 × 系数（1–3），公示概率随之重算 |
+
+多条同时满足时叠加：次数相加（免费合计不超过 100），免看广告的概率按独立事件合并 1 − Π(1 − p)，折扣取最大，
+保底提前相加，中奖加成相乘（封顶 3 倍）。
+
+**免看广告的判定是确定的**：SHA-256(活动, 用户, 当天零点, k) 映射到 [0, 1) 与 p 比较。同一个人同一天刷新多少次、
+抽奖事务里再算一次都是同一个结论，不会出现「页面说免了 2 次、点了只剩 1 次」；用户改不了输入，提前算出结论也换不来更多次数。
+服务端只把判中的次数从 `video.remaining` 里扣掉（App 据此拦视频按钮），激励广告场景自己的每日上限不变 ——
+绕过 App 直接调激励广告接口的人最多多拿当天判中的那几次。
+
+客户端看到的：
+
+- `chances.free.daily` / `remaining` 变大，`chances.video.remaining` 变小（判中的视频次数）、`points.cost` / `daily`、`pity.threshold` / `remaining` 按特权改写；
+- 新字段 `perks`：`names`、`lines`（一项一句）、`waived`（今天免了几次）、`message`；
+- **老客户端兼容**：顶部提示卡 `lifetime` 并入特权说明（`policy: "perk"`，原处理方式移到 `ownedPolicy`）——老 App 遇到不认识的 policy 时原样显示 `message`。
+
+每次抽奖生效的特权写进 `trace.perks`（管理端「方案」里显示）。模拟接口按 `userId` 的真实身份，
+或按 `perk`（`{member, lifetime, adFree, signedToday, onlineMinutesToday}`）给虚拟用户一个身份，保底提前与中奖加成计入模拟，结果多 `perks`。
+
+```json
+"perks": [
+  {"name": "永久会员特权", "audience": "lifetime", "adSkip": 100, "extraFree": 1, "pointsDiscount": 20},
+  {"name": "会员概率免广告", "audience": "member", "adSkip": 30},
+  {"name": "签到送次数", "audience": "all", "signedToday": true, "extraFree": 1},
+  {"name": "晚间加成", "audience": "all", "when": "draw.hour >= 20", "winBoost": 1.2}
+]
+```
+
 ## 保底
 
 `pityThreshold = N`、`pityPrizeId` 指向一个不是「谢谢参与」的奖品：连续 N−1 次没抽中（谢谢参与），
@@ -168,7 +212,14 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 | `vip_days` / `vip_plan` | 会员（渠道 `lottery`，不能选试用套餐） |
 | `feature` | 功能解锁（天数，0 为永久；已永久拥有时记一笔说明） |
 | `lottery_draws` | 抽奖次数（进 bonus） |
+| `vip_lifetime` | 永久会员（不挂套餐、不携带功能标识，与 `vip_days` 同口径；渠道 `lottery`）。要带功能的永久会员用 `vip_plan` 选永久套餐 |
+| `feature_time` | 功能时长：`tag` + `amount`（分钟），进激励广告发的同一个功能时长账户（流水 ref_type `lottery`） |
+| `ad_free` | 免广告时长（`amount` 天，多次抽中顺延，`user_ad_free_passes`）：有效期内 `/ads/policy` 的 `exempt` 为真（不放开屏、不受同意要求约束，不看策略的会员免除开关），功能时长一律免扣（看激励广告换时长的功能直接可用），并属于特权人群 `ad_free` |
 | `manual` | 人工发放：抽中后为 `pending`，管理员在记录里标记已发放并写一句话给用户 |
+
+后三档是抽奖独有的（积分商城、卡密里没有）。**老客户端兼容**：用户端的 `prizes[].kind` 与记录的 `prizeKind`
+按最接近的已知类型下发（`vip_lifetime` → `vip_plan`，`feature_time` / `ad_free` → `feature`），老 App 的图标、配色与
+「抽中后刷新会员与功能缓存」照常工作；真实类型放在新字段 `rewardType`。管理端接口一律是真实类型。
 
 不含钱包余额。目录与发放分支由 `TestLotteryCatalogHasGrantBranch` 双向钉死。
 
@@ -188,12 +239,14 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 | `vip_days` | 永久会员 |
 | `vip_plan` | `vip.LifetimeIncludes`：套餐的每个功能都已在永久开通里（与购买入口同一判据；永久基础版抽中限时高级版不算） |
 | `feature` | 已永久解锁这个功能，或永久会员的功能里有它 |
+| `vip_lifetime` / `ad_free` | 永久会员（本就免广告、功能时长免扣） |
+| `feature_time` | 永久会员（会员一律免扣），或已永久解锁这个功能 |
 
 积分、经验、抽奖次数、人工发放、谢谢参与从来不算。活动的 `lifetimePolicy` 决定怎么办（迁移 `000114`，已有活动默认 `points`）：
 
 | `lifetimePolicy` | 行为 |
 |---|---|
-| `points`（默认） | 折算积分：天数 × `lifetimePointsPerDay`（默认 10）；永久套餐 / 永久功能给 `lifetimePointsLifetime`（默认 3650）；单次封顶 1 亿 |
+| `points`（默认） | 折算积分：天数 × `lifetimePointsPerDay`（默认 10）；永久套餐 / 永久功能 / 永久会员给 `lifetimePointsLifetime`（默认 3650）；功能时长按小时（不足一小时按一小时）× 每天积分；单次封顶 1 亿 |
 | `draws` | 改发 `lifetimeDraws` 次抽奖（默认 1） |
 | `exclude` | 这个人的常规抽取里剔除这些奖品（权重按 0 算，公示概率随之重算）；保底 / 兜底恰好是这类奖品时按积分折算 —— 保底承诺的是「必中」 |
 | `grant` | 照常发放（旧行为） |
@@ -276,12 +329,16 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
 积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、
 已拥有的奖品（四种处理方式、单奖品改发、剔除后的概率与保底、已永久解锁的功能、统计）、删除与统计，
-最后在旧表形状上跑 000110 + 000114 + 000124 + 000125 两遍核对搬迁。
+最后在旧表形状上跑 000110 + 000114 + 000124 + 000125 + 000130 两遍核对搬迁。
+
+`TestLotteryPerksIntegration`：永久会员奖品（老客户端看到 `vip_plan`）与再抽中的折算、永久会员特权（4 次视频全部免看广告并进免费次数、
+额外免费、积分 5 折与额外次数、保底提前、提示卡并入说明、trace 记特权）、签到条件、功能时长奖品、免广告时长（顺延、功能时长免扣、
+开屏免除、`ad_free` 人群）、永久会员抽中免广告 / 功能时长的折算、模拟里的特权身份。单元测试在 `perks_test.go`（含免看广告判定的稳定性与比例校准）。
 
 `TestLotteryStrategyIntegration`：12 人并发下全站每日限量不超发、个人上限、积分预算、同设备聚集、
 行为画像整条查询（签到、会员率、邀请、在线时长累计）与规则、方案落库且不给用户端、模拟与单人预览、策略回读与非法规则。
 策略、画像、规则、卡方抽样检验与模拟的单元测试在 `internal/domain/lottery/strategy_test.go`。
 
 ```
-AEGIS_TEST_PG_DSN=postgres://... go test ./internal/service -run 'TestLotteryIntegration|TestLotteryStrategyIntegration'
+AEGIS_TEST_PG_DSN=postgres://... go test ./internal/service -run 'TestLotteryIntegration|TestLotteryStrategyIntegration|TestLotteryPerksIntegration'
 ```

@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	"aegis/internal/domain/featuretime"
 	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
@@ -57,17 +58,17 @@ func lotteryUnavailable(reason string) error { return &LotteryUnavailableError{R
 
 const lotteryActivityColumns = `a.id, a.appid, a.name, a.description, a.rules, a.ui_mode, a.status, a.start_time, a.end_time,
 a.free_daily, a.points_cost, a.points_daily, a.video_scene, a.pity_threshold, a.pity_prize_id, a.lifetime_policy,
-a.lifetime_points_per_day, a.lifetime_points_lifetime, a.lifetime_draws, a.strategy, a.sort_order,
+a.lifetime_points_per_day, a.lifetime_points_lifetime, a.lifetime_draws, a.strategy, a.perks, a.sort_order,
 COALESCE(a.created_by, ''), a.created_at, a.updated_at`
 
 func scanLotteryActivity(row interface{ Scan(dest ...any) error }, extra ...any) (*lotterydomain.Activity, error) {
 	var item lotterydomain.Activity
-	var strategy []byte
+	var strategy, perks []byte
 	dest := []any{
 		&item.ID, &item.AppID, &item.Name, &item.Description, &item.Rules, &item.UIMode, &item.Status,
 		&item.StartTime, &item.EndTime, &item.FreeDaily, &item.PointsCost, &item.PointsDaily, &item.VideoScene,
 		&item.PityThreshold, &item.PityPrizeID, &item.LifetimePolicy, &item.LifetimePointsPerDay,
-		&item.LifetimePointsLifetime, &item.LifetimeDraws, &strategy, &item.SortOrder, &item.CreatedBy, &item.CreatedAt,
+		&item.LifetimePointsLifetime, &item.LifetimeDraws, &strategy, &perks, &item.SortOrder, &item.CreatedBy, &item.CreatedAt,
 		&item.UpdatedAt,
 	}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
@@ -81,6 +82,10 @@ func scanLotteryActivity(row interface{ Scan(dest ...any) error }, extra ...any)
 		_ = json.Unmarshal(strategy, &item.Strategy)
 		item.Strategy = lotterydomain.NormalizeStrategy(item.Strategy)
 	}
+	if len(perks) > 0 {
+		_ = json.Unmarshal(perks, &item.Perks)
+	}
+	item.Perks = lotterydomain.NormalizePerks(item.Perks)
 	return &item, nil
 }
 
@@ -289,16 +294,20 @@ func (r *Repository) SaveLotteryActivity(ctx context.Context, activityID int64, 
 	if err != nil {
 		return nil, err
 	}
+	perks, err := json.Marshal(lotterydomain.NormalizePerks(input.Perks))
+	if err != nil {
+		return nil, err
+	}
 	if activityID == 0 {
 		if err := tx.QueryRow(ctx, `INSERT INTO lottery_activities
 (appid, name, description, rules, ui_mode, status, start_time, end_time, free_daily, points_cost, points_daily,
  video_scene, pity_threshold, sort_order, created_by, lifetime_policy, lifetime_points_per_day,
- lifetime_points_lifetime, lifetime_draws, strategy)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
+ lifetime_points_lifetime, lifetime_draws, strategy, perks)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) RETURNING id`,
 			input.AppID, input.Name, input.Description, input.Rules, input.UIMode, input.Status, input.StartTime,
 			input.EndTime, input.FreeDaily, input.PointsCost, input.PointsDaily, input.VideoScene, input.PityThreshold,
 			input.SortOrder, nullableString(input.Operator), input.LifetimePolicy, input.LifetimePointsPerDay,
-			input.LifetimePointsLifetime, input.LifetimeDraws, strategy).Scan(&activityID); err != nil {
+			input.LifetimePointsLifetime, input.LifetimeDraws, strategy, perks).Scan(&activityID); err != nil {
 			return nil, err
 		}
 	} else {
@@ -307,11 +316,11 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) 
   name = $3, description = $4, rules = $5, ui_mode = $6, status = $7, start_time = $8, end_time = $9,
   free_daily = $10, points_cost = $11, points_daily = $12, video_scene = $13, pity_threshold = $14,
   sort_order = $15, lifetime_policy = $16, lifetime_points_per_day = $17, lifetime_points_lifetime = $18,
-  lifetime_draws = $19, strategy = $20, updated_at = NOW()
+  lifetime_draws = $19, strategy = $20, perks = $21, updated_at = NOW()
 WHERE id = $1 AND appid = $2`, activityID, input.AppID, input.Name, input.Description, input.Rules, input.UIMode,
 			input.Status, input.StartTime, input.EndTime, input.FreeDaily, input.PointsCost, input.PointsDaily,
 			input.VideoScene, input.PityThreshold, input.SortOrder, input.LifetimePolicy, input.LifetimePointsPerDay,
-			input.LifetimePointsLifetime, input.LifetimeDraws, strategy)
+			input.LifetimePointsLifetime, input.LifetimeDraws, strategy, perks)
 		if err != nil {
 			return nil, err
 		}
@@ -494,7 +503,8 @@ func (r *Repository) LotteryMemberCoverage(ctx context.Context, appID, userID in
 // lotteryNeedsCatalog 奖盘里有没有要查套餐 / 功能目录才能判定或描述的奖品。
 func lotteryNeedsCatalog(prizes []lotterydomain.Prize) bool {
 	for _, prize := range prizes {
-		if prize.Kind == lotterydomain.KindVipPlan || prize.Kind == lotterydomain.KindFeature {
+		switch prize.Kind {
+		case lotterydomain.KindVipPlan, lotterydomain.KindFeature, lotterydomain.KindFeatureTime:
 			return true
 		}
 	}
@@ -586,7 +596,24 @@ ON CONFLICT (activity_id, user_id) DO NOTHING`, activity.ID, input.UserID); err 
 	if err != nil {
 		return nil, err
 	}
-	chances := lotterydomain.EvaluateChances(*activity, facts, lotterydomain.VideoChances{})
+	// 人群特权：这个人眼里的活动（免费次数、积分价格、保底）与奖盘权重，与活动页同一个函数
+	var effects lotterydomain.PerkEffects
+	if lotterydomain.PerksActive(activity.Perks) {
+		local := now
+		if input.Location != nil {
+			local = now.In(input.Location)
+		}
+		perkFacts, err := lotteryPerkFacts(ctx, tx, input.AppID, input.UserID, local, input.DayStart)
+		if err != nil {
+			return nil, err
+		}
+		perkFacts.Profile, perkFacts.TotalDraws = input.Profile, int(facts.TotalDraws)
+		effects = lotterydomain.ResolvePerks(activity.Perks, perkFacts)
+		effects = effects.WithWaived(activity.ID, input.UserID, input.DayStart, lotterydomain.VideoSlots(input.Video, effects))
+	}
+	personalActivity := effects.Personalize(*activity)
+
+	chances := lotterydomain.EvaluateChances(personalActivity, facts, lotterydomain.VideoChances{})
 	source, reason := lotterydomain.ResolveSource(chances, input.Source)
 	if reason != lotterydomain.ReasonOK {
 		return nil, lotteryUnavailable(reason)
@@ -617,16 +644,19 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 		}
 	}
 	rule := lotterydomain.RuleOf(*activity)
-	personal := lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)
+	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
 
-	state, err := lotteryDrawState(ctx, tx, *activity, personal, input, facts, now)
+	state, err := lotteryDrawState(ctx, tx, personalActivity, personal, input, facts, now)
 	if err != nil {
 		return nil, err
 	}
 	state.Source = source
-	prize, plan, err := pickLotteryPrize(ctx, tx, *activity, personal, state, input.DayStart)
+	prize, plan, err := pickLotteryPrize(ctx, tx, personalActivity, personal, state, input.DayStart)
 	if err != nil {
 		return nil, err
+	}
+	if !effects.Empty() {
+		plan.Perks = &effects
 	}
 	pity := plan.Pity
 	trace, err := json.Marshal(plan)
@@ -640,7 +670,8 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	}
 	var pointsCost int64
 	if source == lotterydomain.SourcePoints {
-		pointsCost = activity.PointsCost
+		// 特权折扣之后的价格（与活动页上的 chances.points.cost 同一个数）
+		pointsCost = chances.Points.Cost
 	}
 	reward, err := json.Marshal(prize.Reward)
 	if err != nil {
@@ -807,7 +838,8 @@ func (r *Repository) grantLotteryPrizeTx(ctx context.Context, tx pgx.Tx, grant l
 	out := make([]lotterydomain.RewardResult, 0, 1)
 
 	plans, features := grant.Plans, grant.Features
-	if (reward.Type == lotterydomain.KindVipPlan || reward.Type == lotterydomain.KindFeature) && plans == nil {
+	if (reward.Type == lotterydomain.KindVipPlan || reward.Type == lotterydomain.KindFeature ||
+		reward.Type == lotterydomain.KindFeatureTime) && plans == nil {
 		var err error
 		plans, features, err = pointsStoreCatalogRefs(ctx, tx, appID)
 		if err != nil {
@@ -890,6 +922,33 @@ func (r *Repository) grantLotteryPrizeTx(ctx context.Context, tx pgx.Tx, grant l
 		}
 		result.ExpireAt = unlock.EndsAt
 		result.TransactionNo = strconv.FormatInt(unlock.ID, 10)
+
+	case lotterydomain.KindVipLifetime:
+		// 与会员天数同口径：不挂套餐、不携带功能标识，只把这个人标记为永久会员
+		txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
+			UserID: userID, AppID: appID, PlanName: grant.Title, Lifetime: true,
+			PayChannel: vipdomain.ChannelLottery, PayAmount: decimal.Zero, Metadata: grant.Meta,
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.TransactionNo = txn.TransactionNo
+
+	case lotterydomain.KindFeatureTime:
+		// 功能时长按秒记账，与激励广告发的是同一个账户；功能停用了也照发（标识本身就是账户的键）
+		balance, err := grantFeatureTimeTx(ctx, tx, appID, userID, reward.Tag, reward.Amount*60,
+			featuretime.RefLottery, grant.DrawNo, grant.Source)
+		if err != nil {
+			return nil, err
+		}
+		result.Detail += "（余额 " + strconv.FormatInt(featuretime.FormatMinutes(balance), 10) + " 分钟）"
+
+	case lotterydomain.KindAdFree:
+		expires, err := grantAdFreePassTx(ctx, tx, appID, userID, int(reward.Amount), time.Now())
+		if err != nil {
+			return nil, err
+		}
+		result.ExpireAt = &expires
 
 	case lotterydomain.KindLotteryDraws:
 		balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)

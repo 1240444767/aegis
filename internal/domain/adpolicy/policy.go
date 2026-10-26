@@ -42,6 +42,16 @@ func Evaluate(policy Policy, consent *Consent, adFree bool) Verdict {
 	return verdict
 }
 
+// WithAdFreePass 免广告时长（抽奖奖品）有效期内：与会员免除一样不受同意要求约束、不展示开屏广告。
+// 它是用户明确拿到手的「免广告」，不看策略的会员免除开关。
+func WithAdFreePass(policy Policy, verdict Verdict) Verdict {
+	verdict.Exempt = true
+	if policy.Enabled {
+		verdict.Mode = ModeFull
+	}
+	return verdict
+}
+
 // Sources 选择的全部来源。
 func Sources() []string {
 	return []string{SourceApp, SourceWeb, SourceGuestSync}

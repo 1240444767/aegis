@@ -128,6 +128,11 @@ func (s *AdPolicyService) ClientPolicy(ctx context.Context, appID, userID int64,
 		}
 	}
 	verdict := adpolicy.Evaluate(policy, consent, result.AdFree)
+	if userID > 0 {
+		if result.AdFreeUntil = s.adFreePass(ctx, appID, userID); result.AdFreeUntil != nil {
+			verdict = adpolicy.WithAdFreePass(policy, verdict)
+		}
+	}
 	result.Mode = verdict.Mode
 	result.DecisionRequired = verdict.DecisionRequired
 	result.Exempt = verdict.Exempt
@@ -310,6 +315,10 @@ func (s *AdPolicyService) UserProfile(ctx context.Context, appID, userID int64) 
 	}
 	vip, adFree := s.membership(ctx, appID, userID)
 	verdict := adpolicy.Evaluate(policy, consent, adFree)
+	adFreeUntil := s.adFreePass(ctx, appID, userID)
+	if adFreeUntil != nil {
+		verdict = adpolicy.WithAdFreePass(policy, verdict)
+	}
 	logs, err := s.pg.ListAdConsentLogs(ctx, adpolicy.ConsentLogQuery{
 		AppID: appID, UserID: userID, Page: 1, Limit: adPolicyProfileLogs})
 	if err != nil {
@@ -332,6 +341,7 @@ func (s *AdPolicyService) UserProfile(ctx context.Context, appID, userID int64) 
 		Vip:              vip,
 		AdFree:           adFree,
 		Exempt:           verdict.Exempt,
+		AdFreeUntil:      adFreeUntil,
 		DecisionRequired: verdict.DecisionRequired,
 		Mode:             verdict.Mode,
 		Logs:             logs.Items,
@@ -369,6 +379,17 @@ func (s *AdPolicyService) membership(ctx context.Context, appID, userID int64) (
 	}
 	entitlement := vipdomain.Evaluate(*facts, time.Now())
 	return entitlement.IsVIP, entitlement.AdFree
+}
+
+// adFreePass 免广告时长（抽奖奖品）的到期时间；没有或查询失败时为 nil（只决定免不免除，失败按不免）。
+func (s *AdPolicyService) adFreePass(ctx context.Context, appID, userID int64) *time.Time {
+	until, err := s.pg.AdFreePassUntil(ctx, appID, userID)
+	if err != nil {
+		s.log.Warn("ad policy: resolve ad-free pass failed", zap.Int64("appid", appID),
+			zap.Int64("userId", userID), zap.Error(err))
+		return nil
+	}
+	return until
 }
 
 func (s *AdPolicyService) publishUser(appID, userID int64, event string, data map[string]any) {

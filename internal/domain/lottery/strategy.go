@@ -340,6 +340,8 @@ type DrawPlan struct {
 	Pity     bool  `json:"pity,omitempty"`
 	Picked   int64 `json:"picked,omitempty"`
 	Fallback bool  `json:"fallback,omitempty"`
+	// Perks 这一次生效的人群特权（权重与保底已按它改写）
+	Perks *PerkEffects `json:"perks,omitempty"`
 }
 
 // PlanDraw 按策略算出这一次每个奖品的最终概率。纯函数：同样的输入永远得到同样的方案。

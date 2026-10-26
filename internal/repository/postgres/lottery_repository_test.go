@@ -25,6 +25,9 @@ func TestLotteryCatalogHasGrantBranch(t *testing.T) {
 		lotterydomain.KindFeature:      "lotterydomain.KindFeature",
 		lotterydomain.KindLotteryDraws: "lotterydomain.KindLotteryDraws",
 		lotterydomain.KindManual:       "lotterydomain.KindManual",
+		lotterydomain.KindVipLifetime:  "lotterydomain.KindVipLifetime",
+		lotterydomain.KindFeatureTime:  "lotterydomain.KindFeatureTime",
+		lotterydomain.KindAdFree:       "lotterydomain.KindAdFree",
 	}
 	offered := map[string]bool{}
 	for _, spec := range lotterydomain.Catalog() {

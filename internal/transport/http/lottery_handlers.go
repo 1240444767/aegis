@@ -76,9 +76,12 @@ type LotteryActivityRequest struct {
 	// LifetimeDraws 改发抽奖次数时发几次
 	LifetimeDraws int64 `json:"lifetimeDraws"`
 	// Strategy 多维度出奖策略：softPity / pacing / cooldown / budget / risk / behavior / rules，全部可选
-	Strategy  lotterydomain.Strategy `json:"strategy"`
-	SortOrder int                    `json:"sortOrder"`
-	Prizes    []LotteryPrizeRequest  `json:"prizes"`
+	Strategy lotterydomain.Strategy `json:"strategy"`
+	// Perks 人群特权：audience（all / member / lifetime / non_member / non_lifetime / ad_free）+ 当天条件
+	// （signedToday / onlineMinutes / when）→ extraFree / adSkip / pointsDiscount / extraPoints / pityCut / winBoost
+	Perks     []lotterydomain.Perk  `json:"perks"`
+	SortOrder int                   `json:"sortOrder"`
+	Prizes    []LotteryPrizeRequest `json:"prizes"`
 }
 
 // LotterySimulateRequest 策略模拟：一批虚拟用户各自连续抽若干次，看实际中奖率、首中次数与连续未中分布。
@@ -94,6 +97,17 @@ type LotterySimulateRequest struct {
 	Source        string                         `json:"source"`
 	IsolatedStock bool                           `json:"isolatedStock"`
 	Seed          uint64                         `json:"seed"`
+	// Perk 不指定用户时，虚拟用户算作哪类人（判定人群特权用）；不传为没有任何特权身份
+	Perk *LotterySimulatePerk `json:"perk"`
+}
+
+// LotterySimulatePerk 模拟里虚拟用户的特权身份。
+type LotterySimulatePerk struct {
+	Member             bool    `json:"member"`
+	Lifetime           bool    `json:"lifetime"`
+	AdFree             bool    `json:"adFree"`
+	SignedToday        bool    `json:"signedToday"`
+	OnlineMinutesToday float64 `json:"onlineMinutesToday"`
 }
 
 // LotteryStatusRequest 改活动状态：draft / active / paused / ended。
@@ -143,6 +157,7 @@ func (req LotteryActivityRequest) toInput(appID int64, operator string) lotteryd
 		LifetimePointsLifetime: req.LifetimePointsLifetime,
 		LifetimeDraws:          req.LifetimeDraws,
 		Strategy:               req.Strategy,
+		Perks:                  req.Perks,
 		Operator:               operator,
 		Prizes:                 make([]lotterydomain.PrizeInput, 0, len(req.Prizes)),
 	}
@@ -320,6 +335,12 @@ func (h *Handler) AdminSimulateLottery(c *gin.Context) {
 	}
 	if req.Profile != nil {
 		sim.Profile = *req.Profile
+	}
+	if req.Perk != nil {
+		sim.PerkFacts = &lotterydomain.PerkFacts{
+			Member: req.Perk.Member, Lifetime: req.Perk.Lifetime, AdFree: req.Perk.AdFree,
+			SignedToday: req.Perk.SignedToday, OnlineMinutesToday: req.Perk.OnlineMinutesToday,
+		}
 	}
 	result, err := h.lottery.Simulate(c.Request.Context(), sim)
 	if err != nil {

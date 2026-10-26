@@ -149,6 +149,18 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 			"simulationEach": lotterydomain.MaxSimulationEach, "simulationDraws": lotterydomain.MaxSimulationDraws,
 			"luckStrength": lotterydomain.MaxLuckStrength, "controlGain": lotterydomain.MaxControlGain,
 		},
+		// 人群特权：人群、条件表达式的变量与取值上界
+		"perkAudiences": lotterydomain.PerkAudiences(),
+		"perkVariables": lotterydomain.PerkVariables(),
+		"perkLimits": map[string]any{
+			"perks": lotterydomain.MaxPerks, "name": lotterydomain.MaxPerkNameRunes,
+			"extraFree": lotterydomain.MaxPerkExtraFree, "extraPoints": lotterydomain.MaxPerkExtraPoints,
+			"pointsDiscount": lotterydomain.MaxPerkPointsDiscount, "adSkipSlots": lotterydomain.MaxPerkAdSkipSlots,
+			"defaultAdSkipSlots": lotterydomain.DefaultAdSkipSlots, "onlineMinutes": lotterydomain.MaxPerkOnlineMinutes,
+			"winBoost": lotterydomain.MaxPerkWinBoost, "pityCut": lotterydomain.MaxPityThreshold,
+		},
+		// 可能「已拥有」、能设置改发的奖品类型
+		"ownableKinds": lotterydomain.OwnableKinds(),
 		"lifetimeDefaults": map[string]any{
 			"policy":         lotterydomain.LifetimePoints,
 			"pointsPerDay":   lotterydomain.DefaultLifetimePointsPerDay,
@@ -243,7 +255,7 @@ func activityInputOf(item *lotterydomain.AdminActivity) lotterydomain.ActivityIn
 		PityThreshold: item.PityThreshold, PityPosition: -1, SortOrder: item.SortOrder,
 		LifetimePolicy: item.LifetimePolicy, LifetimePointsPerDay: item.LifetimePointsPerDay,
 		LifetimePointsLifetime: item.LifetimePointsLifetime, LifetimeDraws: item.LifetimeDraws,
-		Strategy: item.Strategy,
+		Strategy: item.Strategy, Perks: item.Perks,
 	}
 	for _, prize := range item.Prizes {
 		input.Prizes = append(input.Prizes, lotterydomain.PrizeInput{
@@ -281,6 +293,11 @@ func (s *LotteryService) prepare(ctx context.Context, input lotterydomain.Activi
 			}
 			if plan.Trial {
 				return input, apperrors.New(40000, http.StatusBadRequest, "试用套餐不能作为奖品")
+			}
+		case lotterydomain.KindFeatureTime:
+			if _, ok := features[prize.Reward.Tag]; !ok {
+				return input, apperrors.New(40000, http.StatusBadRequest,
+					"功能标识 "+prize.Reward.Tag+" 未登记，请先在会员功能目录里创建它")
 			}
 		case lotterydomain.KindFeature:
 			feature, ok := features[prize.Reward.Tag]
@@ -419,20 +436,67 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	}
 	plans, features := s.catalogRefs(ctx, appID, prizes)
 	rule := lotterydomain.RuleOf(*activity)
+	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
 	return &lotterydomain.ClientState{
-		Activity:   s.clientActivity(*activity, prizes, coverage, plans, features),
-		Chances:    lotterydomain.EvaluateChances(*activity, facts, s.videoChances(ctx, *activity, appID, userID)),
-		Pity:       lotterydomain.PityProgress(*activity, prizes, facts.MissStreak),
-		Lifetime:   lotterydomain.NoticeOf(rule, coverage, prizes, plans),
+		Activity:   s.clientActivity(*activity, prizes, coverage, personal.effects, plans, features),
+		Chances:    personal.chances,
+		Pity:       personal.pity,
+		Lifetime:   lotterydomain.MergePerkNotice(lotterydomain.NoticeOf(rule, coverage, prizes, plans), personal.summary, coverage.Lifetime),
+		Perks:      personal.summary,
 		ServerTime: now.UTC(),
 	}, nil
+}
+
+// lotteryPersonal 这个人此刻的次数、保底与人群特权（活动页与抽奖结果共用）。
+type lotteryPersonal struct {
+	effects lotterydomain.PerkEffects
+	chances lotterydomain.Chances
+	pity    *lotterydomain.Pity
+	summary *lotterydomain.PerkSummary
+}
+
+// personalize 按人群特权改写活动后再判次数与保底：与抽奖事务里同一套函数，「还剩 N 次」与能抽几次一致。
+func (s *LotteryService) personalize(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
+	appID, userID int64, facts lotterydomain.UserFacts, now time.Time) lotteryPersonal {
+	video := s.videoChances(ctx, activity, appID, userID)
+	effects := s.perkEffects(ctx, activity, appID, userID, facts, video, now)
+	personalActivity := effects.Personalize(activity)
+	return lotteryPersonal{
+		effects: effects,
+		chances: lotterydomain.EvaluateChances(personalActivity, facts, effects.AdjustVideo(video)),
+		pity:    lotterydomain.PityProgress(personalActivity, prizes, facts.MissStreak),
+		summary: lotterydomain.SummaryOf(effects, activity, video),
+	}
+}
+
+// perkEffects 这个人此刻生效的人群特权。事实取不到时按没有特权处理（记日志）：特权只会多给，不该拦住抽奖。
+func (s *LotteryService) perkEffects(ctx context.Context, activity lotterydomain.Activity, appID, userID int64,
+	facts lotterydomain.UserFacts, video lotterydomain.VideoChances, now time.Time) lotterydomain.PerkEffects {
+	if !lotterydomain.PerksActive(activity.Perks) {
+		return lotterydomain.PerkEffects{}
+	}
+	dayStart := lotteryDayStart(now)
+	perkFacts, err := s.pg.LotteryPerkFacts(ctx, appID, userID, now.In(timeutil.DefaultLocation()), dayStart)
+	if err != nil {
+		s.log.Warn("lottery: perk facts failed", zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
+		return lotterydomain.PerkEffects{}
+	}
+	if lotterydomain.PerksNeedProfile(activity.Perks) {
+		if perkFacts.Profile, err = s.pg.LotteryBehaviorProfile(ctx, appID, userID, now, dayStart); err != nil {
+			s.log.Warn("lottery: perk profile failed", zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
+		}
+	}
+	perkFacts.TotalDraws = int(facts.TotalDraws)
+	effects := lotterydomain.ResolvePerks(activity.Perks, perkFacts)
+	return effects.WithWaived(activity.ID, userID, dayStart, lotterydomain.VideoSlots(video, effects))
 }
 
 // catalogRefs 奖盘里有会员套餐或功能奖品时取目录（判定已拥有、描述奖品用）；取不到时按空目录处理。
 func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []lotterydomain.Prize) (
 	map[int64]pointstore.PlanRef, map[string]pointstore.FeatureRef) {
 	for _, prize := range prizes {
-		if prize.Kind == lotterydomain.KindVipPlan || prize.Kind == lotterydomain.KindFeature {
+		if prize.Kind == lotterydomain.KindVipPlan || prize.Kind == lotterydomain.KindFeature ||
+			prize.Kind == lotterydomain.KindFeatureTime {
 			plans, features, err := s.pg.PointsStoreCatalogRefs(ctx, appID)
 			if err != nil {
 				s.log.Warn("lottery: load catalog refs failed", zap.Int64("appid", appID), zap.Error(err))
@@ -446,10 +510,10 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 // clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0），
 // 已拥有的奖品带上「对你来说会怎样」。
 func (s *LotteryService) clientActivity(activity lotterydomain.Activity, prizes []lotterydomain.Prize,
-	coverage lotterydomain.MemberCoverage, plans map[int64]pointstore.PlanRef,
+	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
 	features map[string]pointstore.FeatureRef) lotterydomain.ClientActivity {
 	rule := lotterydomain.RuleOf(activity)
-	probabilities := lotterydomain.Probabilities(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
+	probabilities := lotterydomain.Probabilities(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)))
 	out := lotterydomain.ClientActivity{
 		ID: activity.ID, Name: activity.Name, Description: activity.Description, Rules: activity.Rules,
 		UIMode: activity.UIMode, StartTime: activity.StartTime, EndTime: activity.EndTime,
@@ -457,7 +521,7 @@ func (s *LotteryService) clientActivity(activity lotterydomain.Activity, prizes 
 	}
 	for index, prize := range prizes {
 		out.Prizes = append(out.Prizes, lotterydomain.ClientPrize{
-			ID: prize.ID, Name: prize.Name, Kind: prize.Kind,
+			ID: prize.ID, Name: prize.Name, Kind: lotterydomain.ClientKind(prize.Kind), RewardType: prize.Kind,
 			Detail:   lotterydomain.DescribeReward(prize.Reward, plans, features).Detail,
 			ImageURL: prize.ImageURL, Position: prize.Position, Probability: probabilities[index],
 			SoldOut: !prize.InStock(),
@@ -532,25 +596,32 @@ func (s *LotteryService) Draw(ctx context.Context, req LotteryDrawRequest) (*lot
 	}
 
 	now := time.Now()
-	outcome, err := s.pg.DrawLottery(ctx, lotterydomain.DrawInput{
+	input := lotterydomain.DrawInput{
 		AppID: req.AppID, UserID: req.UserID, ActivityID: req.ActivityID, Source: req.Source,
 		RequestID: req.RequestID, DeviceID: strings.TrimSpace(req.DeviceID), ClientIP: strings.TrimSpace(req.ClientIP),
 		UserAgent: req.UserAgent, DayStart: lotteryDayStart(now), Now: now, Location: timeutil.DefaultLocation(),
-		Profile: s.drawProfile(ctx, req.AppID, req.UserID, req.ActivityID, now),
-	})
+	}
+	// 事务外先读一次活动：决定要不要取画像、要不要先问激励广告视频抽奖今天几次（免看广告的判定要用）。
+	// 读不到时照常进事务，由事务报「活动不存在」
+	if activity, err := s.pg.GetLotteryActivity(ctx, req.AppID, req.ActivityID); err == nil {
+		input.Profile = s.drawProfile(ctx, *activity, req.AppID, req.UserID, now)
+		if lotterydomain.PerksAdSkip(activity.Perks) {
+			input.Video = s.videoChances(ctx, *activity, req.AppID, req.UserID)
+		}
+	}
+	outcome, err := s.pg.DrawLottery(ctx, input)
 	if err != nil {
 		return nil, s.translate(err)
 	}
 
 	result := &lotterydomain.DrawResult{Draw: userLotteryDraw(outcome.Draw), Replayed: outcome.Replayed}
 	if facts, err := s.pg.LotteryUserFacts(ctx, req.AppID, outcome.Activity.ID, req.UserID, lotteryDayStart(time.Now())); err == nil {
-		result.Chances = lotterydomain.EvaluateChances(outcome.Activity, facts,
-			s.videoChances(ctx, outcome.Activity, req.AppID, req.UserID))
 		prizes, err := s.pg.ListLotteryPrizes(ctx, outcome.Activity.ID)
 		if err != nil {
 			prizes = outcome.Prizes
 		}
-		result.Pity = lotterydomain.PityProgress(outcome.Activity, prizes, facts.MissStreak)
+		personal := s.personalize(ctx, outcome.Activity, prizes, req.AppID, req.UserID, facts, time.Now())
+		result.Chances, result.Pity = personal.chances, personal.pity
 	} else {
 		s.log.Warn("lottery: reload chances failed", zap.Int64("appid", req.AppID), zap.Error(err))
 	}
@@ -581,6 +652,9 @@ func userLotteryDraw(draw lotterydomain.Draw) lotterydomain.Draw {
 	draw.DeviceID, draw.ClientIP, draw.HandledBy, draw.RequestID = "", "", "", ""
 	// 出奖方案里有策略、画像与各奖品的实时系数，不给用户端
 	draw.Trace = nil
+	// 抽奖独有的奖品类型对老客户端按最接近的已知类型下发（图标、刷新会员缓存都照常），真实类型放 rewardType
+	draw.RewardType = draw.PrizeKind
+	draw.PrizeKind = lotterydomain.ClientKind(draw.PrizeKind)
 	if draw.Results == nil {
 		draw.Results = []lotterydomain.RewardResult{}
 	}

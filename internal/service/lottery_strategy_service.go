@@ -21,9 +21,10 @@ func strategyNeedsProfile(strategy lotterydomain.Strategy) bool {
 }
 
 // drawProfile 抽奖前取这个人的行为画像。取不到时记日志、按空画像继续：画像只调概率，不该拦住抽奖。
-func (s *LotteryService) drawProfile(ctx context.Context, appID, userID, activityID int64, now time.Time) lotterydomain.BehaviorProfile {
-	activity, err := s.pg.GetLotteryActivity(ctx, appID, activityID)
-	if err != nil || !strategyNeedsProfile(activity.Strategy) {
+// 人群特权写了条件表达式时也要取（表达式里能用画像的全部字段）。
+func (s *LotteryService) drawProfile(ctx context.Context, activity lotterydomain.Activity, appID, userID int64,
+	now time.Time) lotterydomain.BehaviorProfile {
+	if !strategyNeedsProfile(activity.Strategy) && !lotterydomain.PerksNeedProfile(activity.Perks) {
 		return lotterydomain.BehaviorProfile{}
 	}
 	profile, err := s.pg.LotteryBehaviorProfile(ctx, appID, userID, now, lotteryDayStart(now))
@@ -43,7 +44,9 @@ type LotterySimulation struct {
 	// UserID 用这个真实用户的画像、已拥有的奖品与本活动里的进度；为 0 时用 Profile
 	UserID  int64
 	Profile lotterydomain.BehaviorProfile
-	Options lotterydomain.SimulationInput
+	// PerkFacts 不指定用户时虚拟用户的特权身份（会员、永久会员、免广告……）；为空时没有特权身份
+	PerkFacts *lotterydomain.PerkFacts
+	Options   lotterydomain.SimulationInput
 }
 
 // LotterySimulationResult 模拟结果，以及（指定了用户时）这个人的画像与下一次抽奖的出奖方案。
@@ -51,6 +54,8 @@ type LotterySimulationResult struct {
 	Result   lotterydomain.SimulationResult `json:"result"`
 	Profile  lotterydomain.BehaviorProfile  `json:"profile"`
 	Behavior *lotterydomain.BehaviorScore   `json:"behavior,omitempty"`
+	// Perks 模拟用的这个人（或虚拟用户）生效的人群特权：保底提前、中奖加成已计入模拟
+	Perks *lotterydomain.PerkEffects `json:"perks,omitempty"`
 	// Current 指定用户此刻再抽一次的方案（只对已保存的活动给出）
 	Current *lotterydomain.DrawPlan `json:"current,omitempty"`
 	// Analytic 距首次中奖次数的精确分布（吸收马尔可夫链），与模拟结果互相印证
@@ -117,6 +122,28 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 		}
 	}
 	base.Profile = out.Profile
+	// 人群特权：真实用户按他此刻的身份与行为；虚拟用户按请求给的身份。只有保底提前与中奖加成影响出奖
+	if lotterydomain.PerksActive(activity.Perks) && (req.UserID > 0 || req.PerkFacts != nil) {
+		var effects lotterydomain.PerkEffects
+		if req.UserID > 0 {
+			effects = s.perkEffects(ctx, activity, req.AppID, req.UserID, lotterydomain.UserFacts{
+				TotalDraws: int64(base.TotalDraws)}, lotterydomain.VideoChances{}, now)
+		} else {
+			facts := *req.PerkFacts
+			facts.Now, facts.Profile = now, out.Profile
+			effects = lotterydomain.ResolvePerks(activity.Perks, facts)
+		}
+		if !effects.Empty() {
+			activity = effects.Personalize(activity)
+			prizes = effects.BoostPrizes(prizes)
+			out.Perks = &effects
+			if out.Current != nil {
+				plan := lotterydomain.PlanDraw(activity, activity.Strategy, prizes, base)
+				plan.Perks = &effects
+				out.Current = &plan
+			}
+		}
+	}
 	out.Analytic = lotterydomain.AnalyzeStreak(activity, activity.Strategy, prizes, base)
 	out.Behavior = lotterydomain.ScoreBehavior(activity.Strategy.Behavior, out.Profile)
 
@@ -136,7 +163,7 @@ func draftActivity(input lotterydomain.ActivityInput, saved *lotterydomain.Admin
 		StartTime: input.StartTime, EndTime: input.EndTime, FreeDaily: input.FreeDaily, PointsCost: input.PointsCost,
 		PointsDaily: input.PointsDaily, PityThreshold: input.PityThreshold, LifetimePolicy: input.LifetimePolicy,
 		LifetimePointsPerDay: input.LifetimePointsPerDay, LifetimePointsLifetime: input.LifetimePointsLifetime,
-		LifetimeDraws: input.LifetimeDraws, Strategy: input.Strategy, CreatedAt: now,
+		LifetimeDraws: input.LifetimeDraws, Strategy: input.Strategy, Perks: input.Perks, CreatedAt: now,
 	}
 	used := map[int64]int64{}
 	if saved != nil {

@@ -8,6 +8,7 @@ import (
 
 	"aegis/internal/domain/invite"
 	"aegis/internal/domain/pointstore"
+	vipdomain "aegis/internal/domain/vip"
 )
 
 // 奖品类型。除「谢谢参与」外与积分商城、邀请同名同义（发放走同一套账本）。
@@ -20,6 +21,19 @@ const (
 	KindExperience   = pointstore.RewardExperience
 	KindLotteryDraws = pointstore.RewardLotteryDraws
 	KindManual       = pointstore.RewardManual
+	// 抽奖独有的三档（积分商城、卡密里没有）
+	KindVipLifetime = "vip_lifetime"
+	KindFeatureTime = "feature_time"
+	KindAdFree      = "ad_free"
+)
+
+// 抽奖独有奖品的取值形态：功能时长是功能标识 + 分钟数（Reward.Tag + Reward.Amount）。
+const ValueFeatureMinutes = "feature_minutes"
+
+// 上界。
+const (
+	MaxFeatureTimeMinutes = 100_000
+	MaxAdFreeDays         = 3650
 )
 
 // IntegralCategory / SourceType 积分与经验流水上的分类和来源：抽奖。
@@ -42,7 +56,57 @@ var kinds = []string{
 	KindVipPlan,
 	KindFeature,
 	KindLotteryDraws,
+	KindVipLifetime,
+	KindFeatureTime,
+	KindAdFree,
 	KindManual,
+}
+
+// localSpecs 抽奖独有的奖品档位。
+var localSpecs = map[string]RewardSpec{
+	KindVipLifetime: {
+		Type:  KindVipLifetime,
+		Label: "永久会员",
+		Hint:  "直接开通永久会员（不挂套餐、不携带功能标识，与会员天数同口径）；已是永久会员时按已拥有处理",
+		Value: "",
+	},
+	KindFeatureTime: {
+		Type:  KindFeatureTime,
+		Label: "功能时长",
+		Hint:  "直接发放某功能的使用时长（原本看激励广告换的那种），按分钟计；会员与已解锁该功能的人本就免扣",
+		Value: ValueFeatureMinutes,
+		Unit:  "分钟",
+		Min:   1,
+		Max:   MaxFeatureTimeMinutes,
+	},
+	KindAdFree: {
+		Type:  KindAdFree,
+		Label: "免广告时长",
+		Hint:  "有效期内免开屏广告，看激励广告换时长的功能直接免扣；多次抽中顺延",
+		Value: ValueAmount,
+		Unit:  "天",
+		Min:   1,
+		Max:   MaxAdFreeDays,
+	},
+}
+
+// ValueAmount 数量型取值（与积分商城同名）。
+const ValueAmount = pointstore.ValueAmount
+
+// clientKinds 老版本客户端只认识积分商城那几档：抽奖独有的奖品对它们按最接近的已知类型下发，
+// 图标、配色与「抽中后刷新会员与功能缓存」都能照常工作（真实类型另放在 rewardType）。
+var clientKinds = map[string]string{
+	KindVipLifetime: KindVipPlan,
+	KindFeatureTime: KindFeature,
+	KindAdFree:      KindFeature,
+}
+
+// ClientKind 用户端 kind 字段的取值。
+func ClientKind(kind string) string {
+	if alias, ok := clientKinds[kind]; ok {
+		return alias
+	}
+	return kind
 }
 
 var noneSpec = RewardSpec{
@@ -74,6 +138,9 @@ func FindSpec(kind string) (RewardSpec, bool) {
 			spec.Hint = "计入积分余额，流水分类为抽奖"
 		}
 		return spec, ok
+	}
+	if spec, ok := localSpecs[kind]; ok {
+		return spec, true
 	}
 	if !slices.Contains(kinds, kind) {
 		return RewardSpec{}, false
@@ -114,8 +181,18 @@ func NormalizeReward(reward Reward) Reward {
 	if reward.Type == KindNone {
 		return Reward{Type: KindNone}
 	}
-	if reward.Type == KindPoints {
-		return Reward{Type: KindPoints, Amount: reward.Amount}
+	switch reward.Type {
+	case KindPoints, KindAdFree:
+		return Reward{Type: reward.Type, Amount: reward.Amount}
+	case KindVipLifetime:
+		return Reward{Type: KindVipLifetime}
+	case KindFeatureTime:
+		tags := vipdomain.NormalizeFeatureTags([]string{reward.Tag})
+		tag := ""
+		if len(tags) > 0 {
+			tag = tags[0]
+		}
+		return Reward{Type: KindFeatureTime, Tag: tag, Amount: reward.Amount}
 	}
 	normalized := pointstore.NormalizeRewards([]Reward{reward})
 	if len(normalized) == 0 {
@@ -133,16 +210,42 @@ func ValidateReward(reward Reward) error {
 	if !slices.Contains(kinds, reward.Type) {
 		return fmt.Errorf("未登记的奖品类型：%s", reward.Type)
 	}
-	if reward.Type == KindPoints {
+	switch reward.Type {
+	case KindPoints:
 		return invite.ValidateRewards("奖品", []Reward{reward})
+	case KindVipLifetime:
+		return nil
+	case KindFeatureTime, KindAdFree:
+		spec := localSpecs[reward.Type]
+		if reward.Type == KindFeatureTime && reward.Tag == "" {
+			return fmt.Errorf("%s需要选择功能", spec.Label)
+		}
+		if reward.Amount < spec.Min || reward.Amount > spec.Max {
+			return fmt.Errorf("%s需要在 %d–%d %s之间", spec.Label, spec.Min, spec.Max, spec.Unit)
+		}
+		return nil
 	}
 	return pointstore.ValidateRewards([]Reward{reward})
 }
 
 // DescribeReward 一句话说清这个奖品发什么（「积分 30 点」「会员 7 天」）。
 func DescribeReward(reward Reward, plans map[int64]pointstore.PlanRef, features map[string]pointstore.FeatureRef) pointstore.ClientReward {
-	if reward.Type == KindNone {
+	switch reward.Type {
+	case KindNone:
 		return pointstore.ClientReward{Type: KindNone, Label: noneSpec.Label, Detail: noneSpec.Label}
+	case KindVipLifetime:
+		return pointstore.ClientReward{Type: KindVipLifetime, Label: localSpecs[KindVipLifetime].Label,
+			Detail: "永久会员", Permanent: true}
+	case KindAdFree:
+		return pointstore.ClientReward{Type: KindAdFree, Label: localSpecs[KindAdFree].Label,
+			Detail: fmt.Sprintf("免广告 %d 天", reward.Amount), Days: int(reward.Amount)}
+	case KindFeatureTime:
+		name := reward.Tag
+		if feature, ok := features[reward.Tag]; ok && strings.TrimSpace(feature.Name) != "" {
+			name = feature.Name
+		}
+		return pointstore.ClientReward{Type: KindFeatureTime, Label: localSpecs[KindFeatureTime].Label,
+			Detail: fmt.Sprintf("%s %d 分钟", name, reward.Amount), Tag: reward.Tag}
 	}
 	return invite.DescribeReward(reward, plans, features)
 }
@@ -196,6 +299,7 @@ func NormalizeInput(input ActivityInput) ActivityInput {
 	input.Prizes = prizes
 	NormalizeLifetime(&input)
 	input.Strategy = NormalizeStrategy(input.Strategy)
+	input.Perks = NormalizePerks(input.Perks)
 	return input
 }
 
@@ -315,6 +419,9 @@ func validatePrizes(input ActivityInput) error {
 		return err
 	}
 	if err := ValidateStrategy(input.Strategy, count); err != nil {
+		return err
+	}
+	if err := ValidatePerks(input.Perks); err != nil {
 		return err
 	}
 	// 至少一个不限库存的奖品：否则奖池总有被抽空的一天，那之后每一次抽奖都只能报错，
