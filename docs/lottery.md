@@ -62,7 +62,7 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 | `onlineMinutes` | 今天在线满 N 分钟之后才生效（`user_online_daily`，实时连接心跳累计） |
 | `when` | 附加条件（expr，变量：画像的全部 `user.*`、`user.adFree`、`user.onlineMinutesToday`、`user.totalDraws`、`draw.hour` / `draw.weekday`），保存时编译 |
 | `extraFree` | 每天多几次免费抽奖 |
-| `adSkip` / `adSkipSlots` | 视频抽奖**免看广告**的概率（%）。今天的第 k 次视频抽奖（k = 1…场景每日上限；不限次时 1…`adSkipSlots`，默认 5）各自独立判定，判中的直接并进免费次数，视频次数相应扣掉 |
+| `adSkip` / `adSkipSlots` | 视频抽奖**免看广告**的概率（%）。今天的第 k 次视频抽奖（k = 1…场景每日上限；不限次时 1…`adSkipSlots`，默认 5）各自独立判定，**按顺序逐次解锁**（见下） |
 | `pointsDiscount` / `extraPoints` | 积分抽奖省 N%（向上取整，至少 1 积分）/ 每天多几次（活动设了每日上限时） |
 | `pityCut` | 保底提前 N 次（最少保留 2 次） |
 | `winBoost` | 中奖奖品的权重 × 系数（1–3），公示概率随之重算 |
@@ -70,15 +70,20 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 多条同时满足时叠加：次数相加（免费合计不超过 100），免看广告的概率按独立事件合并 1 − Π(1 − p)，折扣取最大，
 保底提前相加，中奖加成相乘（封顶 3 倍）。
 
-**免看广告的判定是确定的**：SHA-256(活动, 用户, 当天零点, k) 映射到 [0, 1) 与 p 比较。同一个人同一天刷新多少次、
-抽奖事务里再算一次都是同一个结论，不会出现「页面说免了 2 次、点了只剩 1 次」；用户改不了输入，提前算出结论也换不来更多次数。
-服务端只把判中的次数从 `video.remaining` 里扣掉（App 据此拦视频按钮），激励广告场景自己的每日上限不变 ——
-绕过 App 直接调激励广告接口的人最多多拿当天判中的那几次。
+**免看广告按顺序逐次解锁**（`WalkAdSkip`）：第 k 次视频抽奖**轮到时**才看它免不免 —— 免看的那一次作为 1 次免费给出
+（`perks.nextWaived`），用掉之后才轮到第 k+1 次；不免的那一次要看完广告才往下走。任何时刻最多只解锁「当前这一次」。
+进度由今天看完并发放的视频次数（场景的 `todayCount`）与已用掉的免看次数（免费次数里超出「基础 + 额外免费」的部分）推出，
+不另存状态。2026-10-26 修过一次：最初的实现一早就把全天判中的次数一次性并进免费次数（46 次视频 × 25% → 开页就多 8 次）。
+
+**判定是确定的**：SHA-256(活动, 用户, 当天零点, k) 映射到 [0, 1) 与 p 比较。同一个人同一天刷新多少次、
+抽奖事务里再算一次都是同一个结论；用户改不了输入，提前算出结论也换不来更多次数。
+已解锁的免看次数从 `video.remaining` 里扣掉（App 据此拦视频按钮），激励广告场景自己的每日上限不变 ——
+绕过 App 直接调激励广告接口的人最多多拿当天解锁的那几次。
 
 客户端看到的：
 
 - `chances.free.daily` / `remaining` 变大，`chances.video.remaining` 变小（判中的视频次数）、`points.cost` / `daily`、`pity.threshold` / `remaining` 按特权改写；
-- 新字段 `perks`：`names`、`lines`（一项一句）、`waived`（今天免了几次）、`message`；
+- 新字段 `perks`：`names`、`lines`（一项一句）、`waived`（今天已解锁的免看次数）、`nextWaived`（下一次视频抽奖免看）、`message`；
 - **老客户端兼容**：顶部提示卡 `lifetime` 并入特权说明（`policy: "perk"`，原处理方式移到 `ownedPolicy`）——老 App 遇到不认识的 policy 时原样显示 `message`。
 
 每次抽奖生效的特权写进 `trace.perks`（管理端「方案」里显示）。模拟接口按 `userId` 的真实身份，

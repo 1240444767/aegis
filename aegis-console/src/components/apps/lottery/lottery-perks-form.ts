@@ -176,7 +176,7 @@ export function perkEffectLines(perk: PerkDraft, limits: LotteryPerkLimits = PER
   const adSkip = num(perk.adSkip);
   if (adSkip > 0) {
     const slots = int(perk.adSkipSlots) || limits.defaultAdSkipSlots;
-    lines.push(adSkip >= 100 ? "视频抽奖免看广告" : `视频抽奖 ${adSkip}% 概率免看广告`);
+    lines.push(adSkip >= 100 ? "视频抽奖免看广告（逐次解锁）" : `视频抽奖每次 ${adSkip}% 概率免看广告`);
     if (slots !== limits.defaultAdSkipSlots) lines.push(`不限次时判定前 ${slots} 次`);
   }
   const discount = int(perk.pointsDiscount);

@@ -183,7 +183,7 @@ export function BehaviorScoreView({ score, signals }: { score: LotteryBehaviorSc
 function perkEffectsText(perks: NonNullable<LotteryDrawPlan["perks"]>) {
   const parts: string[] = [];
   if (perks.extraFree) parts.push(`免费 +${perks.extraFree}`);
-  if (perks.adSkip) parts.push(`免看广告 ${percent(perks.adSkip)}${perks.waived ? `（今天 ${perks.waived} 次）` : ""}`);
+  if (perks.adSkip) parts.push(`免看广告 ${percent(perks.adSkip)}${perks.waivedUsed ? `（今天已用 ${perks.waivedUsed} 次）` : ""}`);
   if (perks.pointsDiscount) parts.push(`积分省 ${perks.pointsDiscount}%`);
   if (perks.extraPoints) parts.push(`积分次数 +${perks.extraPoints}`);
   if (perks.pityCut) parts.push(`保底提前 ${perks.pityCut}`);

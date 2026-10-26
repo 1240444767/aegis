@@ -123,7 +123,7 @@ export type LotteryPerk = {
   when?: string;
   /** 每天多几次免费抽奖 */
   extraFree?: number;
-  /** 视频抽奖免看广告的概率（百分比 0–100），判中的直接并进免费次数 */
+  /** 视频抽奖免看广告的概率（百分比 0–100），按顺序逐次判定，轮到且判中时变成 1 次免费 */
   adSkip?: number;
   /** 视频不限次时每天前几次参与判定 */
   adSkipSlots?: number;
@@ -145,6 +145,8 @@ export type LotteryPerkEffects = {
   adSkip?: number;
   adSkipSlots?: number;
   waived?: number;
+  waivedUsed?: number;
+  nextWaived?: boolean;
   pointsDiscount?: number;
   extraPoints?: number;
   pityCut?: number;

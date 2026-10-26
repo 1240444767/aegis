@@ -104,8 +104,11 @@ type PerkEffects struct {
 	// AdSkip 合并后的免看广告概率（0–1，各条独立：1 − Π(1 − p)）
 	AdSkip      float64 `json:"adSkip,omitempty"`
 	AdSkipSlots int     `json:"adSkipSlots,omitempty"`
-	// Waived 今天免看广告的视频次数（已并进免费次数）
-	Waived         int     `json:"waived,omitempty"`
+	// Waived 已解锁的免看广告次数（已并进免费次数）= WaivedUsed + 当前这一次（NextWaived）
+	Waived int `json:"waived,omitempty"`
+	// WaivedUsed 今天已用掉的免看广告次数；NextWaived 下一次视频抽奖免看广告（已作为 1 次免费给出）
+	WaivedUsed     int     `json:"waivedUsed,omitempty"`
+	NextWaived     bool    `json:"nextWaived,omitempty"`
 	PointsDiscount int     `json:"pointsDiscount,omitempty"`
 	ExtraPoints    int     `json:"extraPoints,omitempty"`
 	PityCut        int     `json:"pityCut,omitempty"`
@@ -222,7 +225,7 @@ func PerksAdSkip(perks []Perk) bool {
 	return slices.ContainsFunc(perks, func(perk Perk) bool { return !perk.Disabled && perk.AdSkip > 0 })
 }
 
-// ResolvePerks 这个人此刻满足哪些特权，叠加成一份效果（不含 Waived，见 WithWaived）。
+// ResolvePerks 这个人此刻满足哪些特权，叠加成一份效果（不含免看广告的进度，见 WithAdSkip）。
 //
 // 叠加口径：次数相加（免费次数合计不超过单日上限）；免看广告的概率按独立事件合并；
 // 折扣取最大；保底提前相加；中奖加成相乘（封顶 3 倍）。
@@ -322,32 +325,74 @@ func VideoSlots(video VideoChances, effects PerkEffects) int {
 	return max(effects.AdSkipSlots, 1)
 }
 
-// WaivedVideos 今天免看广告的视频次数：第 k 次（1…slots）各自以概率 p 判中。
+// AdSkipSlot 今天第 k 次视频抽奖（从 1 起）是否免看广告。
 //
 // 判定是确定的：同一个人、同一个活动、同一天、同一个 k 永远得到同一个结论（SHA-256 散列成 [0, 1) 的数），
-// 活动页刷新多少次、抽奖事务里再算一次都是同一个数，不会出现「页面说免了 2 次、抽的时候只剩 1 次」。
-// 用户改不了散列的输入，提前知道结论也换不来更多次数。
-func WaivedVideos(activityID, userID int64, dayStart time.Time, slots int, p float64) int {
-	if slots <= 0 || p <= 0 {
-		return 0
+// 活动页刷新多少次、抽奖事务里再算一次都是同一个数。用户改不了散列的输入，提前知道结论也换不来更多次数。
+func AdSkipSlot(activityID, userID int64, dayStart time.Time, k int, p float64) bool {
+	if p <= 0 {
+		return false
 	}
 	if p >= 1 {
-		return slots
+		return true
 	}
-	waived := 0
-	for k := 1; k <= slots; k++ {
-		sum := sha256.Sum256([]byte(fmt.Sprintf("lottery-ad-skip|%d|%d|%d|%d", activityID, userID, dayStart.Unix(), k)))
-		u := float64(binary.BigEndian.Uint64(sum[:8])>>11) / float64(uint64(1)<<53)
-		if u < p {
-			waived++
-		}
-	}
-	return waived
+	sum := sha256.Sum256([]byte(fmt.Sprintf("lottery-ad-skip|%d|%d|%d|%d", activityID, userID, dayStart.Unix(), k)))
+	return float64(binary.BigEndian.Uint64(sum[:8])>>11)/float64(uint64(1)<<53) < p
 }
 
-// WithWaived 补上今天免看广告的视频次数。
-func (e PerkEffects) WithWaived(activityID, userID int64, dayStart time.Time, slots int) PerkEffects {
-	e.Waived = WaivedVideos(activityID, userID, dayStart, slots, e.AdSkip)
+// AdSkipProgress 今天走到第几次视频抽奖、免看广告解锁了几次。
+type AdSkipProgress struct {
+	// Used 已经用掉的免看广告次数；Next 当前这一次（下一次视频抽奖）是否免看
+	Used int
+	Next bool
+}
+
+// Unlocked 已解锁（并进免费次数）的免看广告次数：用掉的加上当前这一次。
+func (p AdSkipProgress) Unlocked() int {
+	if p.Next {
+		return p.Used + 1
+	}
+	return p.Used
+}
+
+// WalkAdSkip 按顺序走今天的视频抽奖：第 k 次轮到时才看它免不免广告 —— 免看的那一次并进免费次数，
+// 用掉之后才轮到第 k+1 次；不免的那一次要看完广告才往下走。所以任何时刻最多只有「当前这一次」是解锁的，
+// 不会出现一早就把全天判中的次数一次性发出来。
+//
+// watched 今天已看完并发放的视频次数；waivedUsed 已用掉的免看广告次数（免费次数里超出基础免费的部分）。
+// 看广告可以消耗任何一次（哪怕那一次本来免看：用户主动看了也照样给次数），免看次数只能消耗免看的那一次。
+func WalkAdSkip(activityID, userID int64, dayStart time.Time, slots int, p float64, watched, waivedUsed int) AdSkipProgress {
+	var progress AdSkipProgress
+	if slots <= 0 || p <= 0 {
+		return progress
+	}
+	for k := 1; k <= slots; k++ {
+		skip := AdSkipSlot(activityID, userID, dayStart, k, p)
+		switch {
+		case skip && waivedUsed > 0:
+			waivedUsed--
+			progress.Used++
+		case watched > 0:
+			watched--
+		case skip:
+			progress.Next = true
+			return progress
+		default:
+			return progress
+		}
+	}
+	return progress
+}
+
+// WithAdSkip 补上免看广告的进度。freeUsed 今天已用的免费次数（基础免费 + 额外免费先用，超出的才算免看广告）。
+func (e PerkEffects) WithAdSkip(activity Activity, userID int64, dayStart time.Time, video VideoChances, freeUsed int) PerkEffects {
+	slots := VideoSlots(video, e)
+	if slots <= 0 {
+		return e
+	}
+	base := activity.FreeDaily + e.ExtraFree
+	progress := WalkAdSkip(activity.ID, userID, dayStart, slots, e.AdSkip, video.Watched, max(freeUsed-base, 0))
+	e.Waived, e.WaivedUsed, e.NextWaived = progress.Unlocked(), progress.Used, progress.Next
 	return e
 }
 
@@ -391,7 +436,8 @@ func (e PerkEffects) BoostPrizes(prizes []Prize) []Prize {
 	return out
 }
 
-// AdjustVideo 视频次数里扣掉免看广告的那几次（它们已经并进免费次数）。
+// AdjustVideo 视频次数里扣掉已解锁的免看广告次数（它们已经并进免费次数）：用掉的免看次数与看完的广告
+// 一样占今天的视频次数，当前这一次免看也不必再看广告。
 func (e PerkEffects) AdjustVideo(video VideoChances) VideoChances {
 	if e.Waived <= 0 || !video.Enabled || video.Remaining < 0 {
 		return video
@@ -408,9 +454,10 @@ type PerkSummary struct {
 	Names []string `json:"names"`
 	// Lines 一条效果一句话（「每天多 2 次免费抽奖」「视频抽奖 30% 概率免看广告」）
 	Lines []string `json:"lines"`
-	// Waived 今天免看广告的视频次数
-	Waived  int    `json:"waived"`
-	Message string `json:"message"`
+	// Waived 今天已免看广告的次数（含已解锁未用的那一次）；NextWaived 下一次视频抽奖免看广告
+	Waived     int    `json:"waived"`
+	NextWaived bool   `json:"nextWaived,omitempty"`
+	Message    string `json:"message"`
 }
 
 // SummaryOf 用户端的特权说明；没有生效的特权时为 nil。
@@ -427,8 +474,11 @@ func SummaryOf(effects PerkEffects, activity Activity, video VideoChances) *Perk
 		if effects.AdSkip < 1 {
 			line = fmt.Sprintf("视频抽奖 %s%% 概率免看广告", trimFloat(effects.AdSkip*100))
 		}
-		if effects.Waived > 0 {
-			line += fmt.Sprintf("（今天已免 %d 次）", effects.Waived)
+		switch {
+		case effects.NextWaived:
+			line += "（本次免看，已计入免费次数）"
+		case effects.WaivedUsed > 0:
+			line += fmt.Sprintf("（今天已免 %d 次）", effects.WaivedUsed)
 		}
 		lines = append(lines, line)
 	}
@@ -448,10 +498,11 @@ func SummaryOf(effects PerkEffects, activity Activity, video VideoChances) *Perk
 		return nil
 	}
 	return &PerkSummary{
-		Names:   effects.Names,
-		Lines:   lines,
-		Waived:  effects.Waived,
-		Message: strings.Join(effects.Names, "、") + "：" + strings.Join(lines, "，"),
+		Names:      effects.Names,
+		Lines:      lines,
+		Waived:     effects.Waived,
+		NextWaived: effects.NextWaived,
+		Message:    strings.Join(effects.Names, "、") + "：" + strings.Join(lines, "，"),
 	}
 }
 

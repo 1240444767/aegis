@@ -49,7 +49,8 @@ import { cn } from "@/lib/utils";
  * 人群特权编辑器：一条特权一张卡 —— 人群、今天的条件、效果。
  *
  * 特权只改「这个人眼里的活动」（免费次数、积分价格、保底、中奖权重），客户端照着服务端给的次数抽，
- * 所以老版本 App 不升级就生效。「免看广告」判中的视频次数直接并进免费次数，视频次数相应减少。
+ * 所以老版本 App 不升级就生效。「免看广告」按顺序逐次解锁：轮到的那一次视频抽奖判中时变成 1 次免费，
+ * 用掉之后才判下一次，视频次数相应减少。
  */
 
 const AUDIENCE_ICON: Record<LotteryPerkAudience, LucideIcon> = {
@@ -260,7 +261,12 @@ function PerkCard({
           <EffectField icon={Ticket} label="额外免费次数" hint="每天">
             <Stepper value={perk.extraFree} min={0} max={limits.extraFree} suffix="次" onChange={(extraFree) => onChange({ extraFree })} />
           </EffectField>
-          <EffectField icon={Clapperboard} label="视频抽奖免看广告" hint={context.video ? "100% 即全部免看" : "活动未开视频抽奖"} muted={!context.video}>
+          <EffectField
+            icon={Clapperboard}
+            label="视频抽奖免看广告"
+            hint={context.video ? "逐次判定，轮到时才变成 1 次免费" : "活动未开视频抽奖"}
+            muted={!context.video}
+          >
             <Stepper value={perk.adSkip} min={0} max={100} step={5} suffix="%" onChange={(next) => onChange({ adSkip: next })} />
           </EffectField>
           {adSkip > 0 ? (

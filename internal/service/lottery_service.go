@@ -488,7 +488,7 @@ func (s *LotteryService) perkEffects(ctx context.Context, activity lotterydomain
 	}
 	perkFacts.TotalDraws = int(facts.TotalDraws)
 	effects := lotterydomain.ResolvePerks(activity.Perks, perkFacts)
-	return effects.WithWaived(activity.ID, userID, dayStart, lotterydomain.VideoSlots(video, effects))
+	return effects.WithAdSkip(activity, userID, dayStart, video, facts.FreeUsedToday)
 }
 
 // catalogRefs 奖盘里有会员套餐或功能奖品时取目录（判定已拥有、描述奖品用）；取不到时按空目录处理。
@@ -556,7 +556,7 @@ func (s *LotteryService) videoChances(ctx context.Context, activity lotterydomai
 		return lotterydomain.VideoChances{
 			Enabled: true, Scene: scene.Key, PlacementID: scene.PlacementID, UserID: status.UserID,
 			DrawsPerView: draws, DailyLimit: scene.DailyLimit, Remaining: scene.Remaining,
-			CooldownRemaining: scene.CooldownRemaining, Available: scene.Available,
+			CooldownRemaining: scene.CooldownRemaining, Available: scene.Available, Watched: scene.TodayCount,
 		}
 	}
 	return video

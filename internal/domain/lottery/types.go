@@ -294,7 +294,7 @@ type DrawInput struct {
 	Location *time.Location
 	// Profile 行为画像，服务层在事务外取好
 	Profile BehaviorProfile
-	// Video 视频抽奖的配置（只用 enabled 与 dailyLimit：算今天有几次参与「免看广告」判定，见 VideoSlots），
+	// Video 视频抽奖的配置与今天的进度（enabled、dailyLimit、watched：免看广告按顺序解锁，见 WalkAdSkip），
 	// 服务层按激励广告配置取好
 	Video VideoChances
 }
@@ -361,7 +361,9 @@ type VideoChances struct {
 	DrawsPerView int64 `json:"drawsPerView"`
 	DailyLimit   int   `json:"dailyLimit"`
 	// Remaining 今天还能看几次，-1 为不限
-	Remaining         int  `json:"remaining"`
+	Remaining int `json:"remaining"`
+	// Watched 今天已看完并发放的次数（只在服务端用：免看广告按顺序解锁要知道走到第几次）
+	Watched           int  `json:"-"`
 	CooldownRemaining int  `json:"cooldownRemaining"`
 	Available         bool `json:"available"`
 }

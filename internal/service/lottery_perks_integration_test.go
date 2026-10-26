@@ -147,15 +147,16 @@ func TestLotteryPerksIntegration(t *testing.T) {
 		t.Fatalf("没有特权时不变，得到 %+v %+v %+v", plain.Chances, plain.Pity, plain.Perks)
 	}
 
-	// 永久会员：4 次视频全部免看广告并进免费次数，视频按钮没了；积分 5 折、每天多 1 次；保底提前 3 次
+	// 永久会员（100% 免看广告）：免看广告按顺序逐次解锁 —— 开页只解锁当前这 1 次（不是全天 4 次一次性给），
+	// 视频次数相应少 1；积分 5 折、每天多 1 次；保底提前 3 次
 	vipState := mustState(carol, perks.ID)
-	if vipState.Chances.Free.Daily != 1+1+4 || vipState.Chances.Video.Remaining != 0 || vipState.Chances.Video.Available ||
+	if vipState.Chances.Free.Daily != 1+1+1 || vipState.Chances.Video.Remaining != 3 || !vipState.Chances.Video.Available ||
 		vipState.Chances.Points.Cost != 10 || vipState.Chances.Points.Daily != 3 || vipState.Pity == nil ||
 		vipState.Pity.Threshold != 3 {
 		t.Fatalf("永久会员特权，得到 %+v %+v", vipState.Chances, vipState.Pity)
 	}
-	if vipState.Perks == nil || vipState.Perks.Waived != 4 || vipState.Lifetime == nil ||
-		vipState.Lifetime.Policy != lotterydomain.NoticePerk || !strings.Contains(vipState.Lifetime.Message, "视频抽奖免看广告") {
+	if vipState.Perks == nil || vipState.Perks.Waived != 1 || !vipState.Perks.NextWaived || vipState.Lifetime == nil ||
+		vipState.Lifetime.Policy != lotterydomain.NoticePerk || !strings.Contains(vipState.Lifetime.Message, "本次免看") {
 		t.Fatalf("活动页说明并进提示卡（老客户端原样显示），得到 %+v %+v", vipState.Perks, vipState.Lifetime)
 	}
 	for i := 0; i < 6; i++ {
@@ -166,6 +167,14 @@ func TestLotteryPerksIntegration(t *testing.T) {
 		if i == 2 && !result.Draw.Pity {
 			t.Fatalf("保底提前到 3 次：第 3 次必中，得到 %+v", result.Draw)
 		}
+		// 基础 2 次用完后，每用掉一次免看才解锁下一次：免费总数逐次涨到 6，视频次数逐次降到 0
+		if want := min(max(i+2, 3), 6); result.Chances.Free.Daily != want {
+			t.Fatalf("第 %d 次之后免费总数应为 %d，得到 %d", i+1, want, result.Chances.Free.Daily)
+		}
+	}
+	if done := mustState(carol, perks.ID); done.Chances.Video.Remaining != 0 || done.Chances.Video.Available ||
+		done.Perks.NextWaived || done.Perks.Waived != 4 {
+		t.Fatalf("4 次视频全部免看用完，视频次数为 0，得到 %+v %+v", done.Chances.Video, done.Perks)
 	}
 	if _, err := lottery.Draw(ctx, LotteryDrawRequest{AppID: appID, UserID: carol, ActivityID: perks.ID,
 		Source: lotterydomain.SourceFree}); errCode(err) != errCodeLotteryFreeExhausted {

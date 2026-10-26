@@ -609,7 +609,7 @@ ON CONFLICT (activity_id, user_id) DO NOTHING`, activity.ID, input.UserID); err 
 		}
 		perkFacts.Profile, perkFacts.TotalDraws = input.Profile, int(facts.TotalDraws)
 		effects = lotterydomain.ResolvePerks(activity.Perks, perkFacts)
-		effects = effects.WithWaived(activity.ID, input.UserID, input.DayStart, lotterydomain.VideoSlots(input.Video, effects))
+		effects = effects.WithAdSkip(*activity, input.UserID, input.DayStart, input.Video, facts.FreeUsedToday)
 	}
 	personalActivity := effects.Personalize(*activity)
 
