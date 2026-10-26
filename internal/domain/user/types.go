@@ -260,8 +260,12 @@ type SessionRevokeResult struct {
 
 type LoginAuditQuery struct {
 	Status string `json:"status"`
-	Page   int    `json:"page"`
-	Limit  int    `json:"limit"`
+	// Keyword 匹配 IP、设备标识、UA、登录方式与渠道（仅管理端）
+	Keyword string     `json:"keyword,omitempty"`
+	From    *time.Time `json:"from,omitempty"`
+	To      *time.Time `json:"to,omitempty"`
+	Page    int        `json:"page"`
+	Limit   int        `json:"limit"`
 }
 
 type LoginAuditExportQuery struct {
@@ -306,8 +310,12 @@ type LoginAuditListResult struct {
 
 type SessionAuditQuery struct {
 	EventType string `json:"eventType"`
-	Page      int    `json:"page"`
-	Limit     int    `json:"limit"`
+	// Keyword 匹配令牌 ID 与附加信息（仅管理端）
+	Keyword string     `json:"keyword,omitempty"`
+	From    *time.Time `json:"from,omitempty"`
+	To      *time.Time `json:"to,omitempty"`
+	Page    int        `json:"page"`
+	Limit   int        `json:"limit"`
 }
 
 type SessionAuditExportQuery struct {

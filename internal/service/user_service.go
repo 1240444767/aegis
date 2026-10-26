@@ -1697,9 +1697,12 @@ func (s *UserService) ListLoginAudits(ctx context.Context, session *authdomain.S
 func (s *UserService) AdminListUserLoginAudits(ctx context.Context, appID int64, userID int64, query userdomain.LoginAuditQuery) (*userdomain.LoginAuditListResult, error) {
 	page, limit := normalizeAuditPaging(query.Page, query.Limit)
 	items, total, err := s.pg.ListLoginAuditsByUser(ctx, appID, userID, userdomain.LoginAuditQuery{
-		Status: query.Status,
-		Page:   page,
-		Limit:  limit,
+		Status:  query.Status,
+		Keyword: query.Keyword,
+		From:    query.From,
+		To:      query.To,
+		Page:    page,
+		Limit:   limit,
 	})
 	if err != nil {
 		return nil, err
@@ -1718,6 +1721,9 @@ func (s *UserService) AdminListUserSessionAudits(ctx context.Context, appID int6
 	page, limit := normalizeAuditPaging(query.Page, query.Limit)
 	items, total, err := s.pg.ListSessionAuditsByUser(ctx, appID, userID, userdomain.SessionAuditQuery{
 		EventType: query.EventType,
+		Keyword:   query.Keyword,
+		From:      query.From,
+		To:        query.To,
 		Page:      page,
 		Limit:     limit,
 	})

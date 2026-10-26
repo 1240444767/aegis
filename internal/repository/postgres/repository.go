@@ -749,6 +749,8 @@ func (r *Repository) ListLoginAuditsByUser(ctx context.Context, appID int64, use
 	}
 	offset := (page - 1) * limit
 	baseQuery, args := buildUserLoginAuditFilter(appID, userID, query.Status)
+	baseQuery, args = appendAuditRange(baseQuery, args, "l", query.Keyword, query.From, query.To,
+		"COALESCE(HOST(l.login_ip), '')", "COALESCE(l.device_id, '')", "COALESCE(l.user_agent, '')", "l.login_type", "COALESCE(l.provider, '')")
 
 	var total int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*)`+baseQuery, args...).Scan(&total); err != nil {
@@ -847,6 +849,8 @@ func (r *Repository) ListSessionAuditsByUser(ctx context.Context, appID int64, u
 	}
 	offset := (page - 1) * limit
 	baseQuery, args := buildUserSessionAuditFilter(appID, userID, query.EventType)
+	baseQuery, args = appendAuditRange(baseQuery, args, "s", query.Keyword, query.From, query.To,
+		"COALESCE(s.token_jti, '')", "COALESCE(s.metadata::text, '')")
 
 	var total int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*)`+baseQuery, args...).Scan(&total); err != nil {
@@ -4603,6 +4607,28 @@ WHERE l.appid = $1 AND l.user_id = $2`
 	if status != "" && status != "all" {
 		baseQuery += fmt.Sprintf(" AND l.status = $%d", len(args)+1)
 		args = append(args, status)
+	}
+	return baseQuery, args
+}
+
+// appendAuditRange 给单用户审计查询追加关键词（在给定列里 ILIKE）与时间区间（左闭右开）。
+func appendAuditRange(baseQuery string, args []any, alias string, keyword string, from, to *time.Time, columns ...string) (string, []any) {
+	if keyword = strings.TrimSpace(keyword); keyword != "" && len(columns) > 0 {
+		args = append(args, "%"+escapeLikePattern(keyword)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		parts := make([]string, len(columns))
+		for i, column := range columns {
+			parts[i] = column + " ILIKE " + placeholder
+		}
+		baseQuery += " AND (" + strings.Join(parts, " OR ") + ")"
+	}
+	if from != nil {
+		args = append(args, *from)
+		baseQuery += fmt.Sprintf(" AND %s.created_at >= $%d", alias, len(args))
+	}
+	if to != nil {
+		args = append(args, *to)
+		baseQuery += fmt.Sprintf(" AND %s.created_at < $%d", alias, len(args))
 	}
 	return baseQuery, args
 }
