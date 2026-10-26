@@ -32,6 +32,7 @@ import { AppCardKeyPanel } from "@/components/apps/card-key/app-card-key-panel";
 import { AppPointsStorePanel } from "@/components/apps/points-store/app-points-store-panel";
 import { AppInvitePanel } from "@/components/apps/invite/app-invite-panel";
 import { AppDeviceLimitPanel } from "@/components/apps/device-limit/app-device-limit-panel";
+import { AppPasskeyPanel } from "@/components/apps/app-passkey-panel";
 import { AppCrashReportsPanel } from "@/components/apps/crash-reports/app-crash-reports-panel";
 import { AppLeaderboardPanel } from "@/components/apps/leaderboard/app-leaderboard-panel";
 import { AppAccountDeletionPanel } from "@/components/apps/account-deletion/app-account-deletion-panel";
@@ -166,6 +167,8 @@ function AppSectionPanel({ section, app }: { section: string; app: AppSummary })
       return <AppDeviceLimitPanel appKey={app.appKey} />;
     case "password":
       return <AppPasswordPanel appKey={app.appKey} />;
+    case "passkey":
+      return <AppPasskeyPanel appKey={app.appKey} />;
     case "captcha":
       return <AppCaptchaPanel appKey={app.appKey} />;
     case "oauth":
