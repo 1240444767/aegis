@@ -46,6 +46,10 @@ var routeGroups = []routeGroup{
 	{Realm: realmPublic, Title: "公开元数据", Tag: tagAPI, Auth: authPublic,
 		Exact:  []string{"/api/public/branding", "/api/system/announcements/active"},
 		Prefix: "/api/avatar/"},
+	// 应用 Passkey 的 Digital Asset Links：Google 的校验器抓取 RP ID 域名下的
+	// /.well-known/assetlinks.json，网站把它反代到这里，所以同样不能要求任何凭据。
+	{Realm: realmPublic, Title: "公开元数据", Tag: tagAPI, Auth: authPublic,
+		Prefix: "/api/public/apps/"},
 	// 永久头像地址。免登录是这条路由的**前提**而不是疏漏：它出现在 <img src>
 	// 与邮件正文里，那两处都没有机会带上 Authorization 头。防遍历靠地址
 	// 自带的签名，见 internal/service/avatar_link.go。

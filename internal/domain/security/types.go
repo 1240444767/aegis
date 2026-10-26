@@ -107,13 +107,15 @@ type PasskeyRecord struct {
 }
 
 type PasskeyView struct {
-	ID             int64      `json:"id"`
-	CredentialID   string     `json:"credentialId"`
-	CredentialName string     `json:"credentialName,omitempty"`
-	SignCount      uint32     `json:"signCount"`
-	LastUsedAt     *time.Time `json:"lastUsedAt,omitempty"`
-	CreatedAt      time.Time  `json:"createdAt"`
-	UpdatedAt      time.Time  `json:"updatedAt"`
+	ID             int64  `json:"id"`
+	CredentialID   string `json:"credentialId"`
+	CredentialName string `json:"credentialName,omitempty"`
+	// AAGUID 认证器型号（UUID 形式），客户端据此认出凭据存在哪个密码管理器里；全零表示未提供
+	AAGUID     string     `json:"aaguid,omitempty"`
+	SignCount  uint32     `json:"signCount"`
+	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	CreatedAt  time.Time  `json:"createdAt"`
+	UpdatedAt  time.Time  `json:"updatedAt"`
 }
 
 type PasskeySummary struct {

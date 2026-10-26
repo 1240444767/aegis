@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
 
 	"aegis/internal/config"
+	appdomain "aegis/internal/domain/app"
+	securitydomain "aegis/internal/domain/security"
 	apperrors "aegis/pkg/errors"
 
 	"github.com/go-webauthn/webauthn/protocol"
@@ -218,4 +221,119 @@ func (s *SecurityService) webAuthnForCeremony(ctx context.Context, rpID string) 
 		return nil, apperrors.New(50322, http.StatusServiceUnavailable, "当前安全模块暂不可用")
 	}
 	return buildPasskeyWebAuthn(s.currentConfig().Passkey, rpID)
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 应用级依赖方（apps.settings.passkey，见 domain/app/passkey.go）
+// ─────────────────────────────────────────────────────────────────────────
+//
+// 原生 App 的请求里没有 Origin，上面那套「跟着地址栏走」无从谈起；clientDataJSON
+// 里的来源又是 android:apk-key-hash:…，平台白名单里不会有。所以应用配了独立
+// 依赖方时，这个应用的四个仪式入口（注册 Begin/Finish、登录 Begin/Verify）一律按它来：
+// RP ID 固定为配置值，允许来源只有配置里的网页源与安卓证书推出的源。
+// 浏览器从别的域打开、或别的 App 冒用，都会在 origin 校验那一步失败。
+
+const (
+	errCodePasskeyAppDisabled = 42214
+	errCodePasskeyRPChanged   = 42215
+	errCodePasskeyPolicy      = 42216
+)
+
+// passkeyFailureDetail 取 go-webauthn 错误里给开发者看的那句（origin 不符、RP ID 哈希不符等）。
+// 只进日志，不出网：对外一律是笼统的「校验失败」。
+func passkeyFailureDetail(err error) string {
+	var protoErr *protocol.Error
+	if errors.As(err, &protoErr) {
+		return strings.TrimSpace(protoErr.Details + " " + protoErr.DevInfo)
+	}
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// appPasskeyPolicy 读应用的 Passkey 配置。显式关闭时直接拒绝。
+func (s *SecurityService) appPasskeyPolicy(ctx context.Context, appID int64) (appdomain.PasskeyPolicy, *appdomain.App, error) {
+	if s.app == nil || appID <= 0 {
+		return appdomain.DefaultPasskeyPolicy(), nil, nil
+	}
+	app, err := s.app.GetApp(ctx, appID)
+	if err != nil {
+		return appdomain.PasskeyPolicy{}, nil, err
+	}
+	policy := appdomain.PasskeyPolicyFromSettings(app.Settings)
+	if !policy.Enabled {
+		return policy, app, apperrors.New(errCodePasskeyAppDisabled, http.StatusForbidden, "当前应用未开放 Passkey")
+	}
+	return policy, app, nil
+}
+
+// buildAppPasskeyWebAuthn 按应用配置造实例。rpID 为空时用配置值。
+func (s *SecurityService) buildAppPasskeyWebAuthn(policy appdomain.PasskeyPolicy, app *appdomain.App, rpID string) (*webauthnlib.WebAuthn, error) {
+	cfg := s.currentConfig().Passkey
+	if rpID == "" {
+		rpID = policy.RPID
+	}
+	if rpID != policy.RPID {
+		// 挑战签发之后管理员改了 RP ID：老挑战按新配置必然对不上，如实失败
+		return nil, apperrors.New(errCodePasskeyRPChanged, http.StatusBadRequest, "Passkey 配置已变更，请重新发起")
+	}
+	appCfg := cfg
+	appCfg.RPID = policy.RPID
+	appCfg.RPOrigins = policy.AllowedOrigins()
+	appCfg.RPTopOrigins = nil
+	switch {
+	case policy.RPName != "":
+		appCfg.RPDisplayName = policy.RPName
+	case app != nil && strings.TrimSpace(app.Name) != "":
+		appCfg.RPDisplayName = strings.TrimSpace(app.Name)
+	}
+	return buildPasskeyWebAuthn(appCfg, policy.RPID)
+}
+
+// webAuthnForAppRequest Begin 阶段：应用配了独立依赖方就用它，否则按请求来源解析。
+func (s *SecurityService) webAuthnForAppRequest(ctx context.Context, appID int64) (*webauthnlib.WebAuthn, error) {
+	if s.currentWebAuthn() == nil {
+		return nil, apperrors.New(50322, http.StatusServiceUnavailable, "当前安全模块暂不可用")
+	}
+	policy, app, err := s.appPasskeyPolicy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if policy.Configured() {
+		return s.buildAppPasskeyWebAuthn(policy, app, "")
+	}
+	return s.webAuthnForRequest(ctx)
+}
+
+// webAuthnForAppCeremony Finish 阶段：沿用 Begin 下发的 RP ID。
+func (s *SecurityService) webAuthnForAppCeremony(ctx context.Context, appID int64, rpID string) (*webauthnlib.WebAuthn, error) {
+	if s.currentWebAuthn() == nil {
+		return nil, apperrors.New(50322, http.StatusServiceUnavailable, "当前安全模块暂不可用")
+	}
+	policy, app, err := s.appPasskeyPolicy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if policy.Configured() {
+		return s.buildAppPasskeyWebAuthn(policy, app, strings.TrimSpace(rpID))
+	}
+	return s.webAuthnForCeremony(ctx, rpID)
+}
+
+// PasskeyAvailability 写进 /config 的 Passkey 能力：模块可用且应用没关。
+// RPID 只在应用配了独立依赖方时给出 —— 原生客户端据此决定要不要画入口：
+// 没有它，App 发起的仪式会在 origin 校验那一步必然失败。
+func (s *SecurityService) PasskeyAvailability(app *appdomain.App) (bool, string) {
+	if s == nil || app == nil || s.ensureModuleReady(securitydomain.ModulePasskey) != nil {
+		return false, ""
+	}
+	policy := appdomain.PasskeyPolicyFromSettings(app.Settings)
+	if !policy.Enabled {
+		return false, ""
+	}
+	if policy.Configured() {
+		return true, policy.RPID
+	}
+	return true, ""
 }

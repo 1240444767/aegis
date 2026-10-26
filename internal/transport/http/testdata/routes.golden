@@ -238,6 +238,7 @@ GET	/api/admin/apps/:appkey/oauth-providers/:provider	AdminGetAppOAuthProvider
 GET	/api/admin/apps/:appkey/oauth2/clients	AdminListOAuth2Clients
 GET	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminGetOAuth2Client
 GET	/api/admin/apps/:appkey/oauth2/overview	AdminOAuth2Overview
+GET	/api/admin/apps/:appkey/passkey	AdminAppPasskeyPolicy
 GET	/api/admin/apps/:appkey/password-policy	AdminAppPasswordPolicy
 GET	/api/admin/apps/:appkey/points-store/catalog	AdminPointsStoreCatalog
 GET	/api/admin/apps/:appkey/points-store/items	AdminListPointsStoreItems
@@ -554,6 +555,7 @@ GET	/api/points/level	MyLevel
 GET	/api/points/levels	PointsLevels
 GET	/api/points/overview	PointsOverview
 GET	/api/points/rankings	PointsRankings
+GET	/api/public/apps/:appkey/passkey/assetlinks.json	PublicAppPasskeyAssetLinks
 GET	/api/public/branding	AdminGetPublicBranding
 GET	/api/public/pay/callback/:method	PaymentCallback
 GET	/api/public/pay/callback/:method/:appid	PaymentCallback
@@ -1358,6 +1360,7 @@ PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider	AdminUpdateAppOAuthProvider
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider/enabled	AdminSetAppOAuthProviderEnabled
 PUT	/api/admin/apps/:appkey/oauth2/clients/:clientId	AdminUpdateOAuth2Client
+PUT	/api/admin/apps/:appkey/passkey	UpdateAdminAppPasskeyPolicy
 PUT	/api/admin/apps/:appkey/password-policy	UpdateAdminAppPasswordPolicy
 PUT	/api/admin/apps/:appkey/points-store/items/:itemId	AdminUpdatePointsStoreItem
 PUT	/api/admin/apps/:appkey/points-store/items/:itemId/status	AdminSetPointsStoreItemStatus

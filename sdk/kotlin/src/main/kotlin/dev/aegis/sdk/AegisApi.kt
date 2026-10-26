@@ -361,12 +361,42 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     @JvmOverloads
-    fun passkeyOptions(account: String? = null): JsonElement =
-        client.call("POST", "/auth/passkey/options", buildBody("account" to account))
+    fun passkeyOptions(account: String? = null, deviceId: String? = null): JsonElement =
+        client.call("POST", "/auth/passkey/options", buildBody("account" to account, "deviceId" to deviceId))
 
+    /**
+     * Passkey 登录。[sessionId] 是 [passkeyOptions] 返回的 `session.challengeId`；
+     * 服务端两个字段名都收，这里一并带上。
+     */
     @Throws(IOException::class)
     fun passkeyLogin(credential: Map<String, Any?>, sessionId: String? = null): AegisSession =
-        login(buildBody("credential" to credential, "sessionId" to sessionId), path = "/auth/passkey/login")
+        login(
+            buildBody("credential" to credential, "challengeId" to sessionId, "sessionId" to sessionId),
+            path = "/auth/passkey/login",
+        )
+
+    /**
+     * Passkey 登录：[credential] 是平台 API 原样给出的断言 JSON
+     * （安卓 Credential Manager 的 `authenticationResponseJson`、浏览器 `PublicKeyCredential.toJSON()`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun passkeyLogin(
+        credential: JsonElement,
+        challengeId: String,
+        deviceId: String? = null,
+        device: String? = null,
+    ): AegisSession =
+        login(
+            buildBody(
+                "credential" to credential,
+                "challengeId" to challengeId,
+                "sessionId" to challengeId,
+                "deviceId" to deviceId,
+                "device" to device,
+            ),
+            path = "/auth/passkey/login",
+        )
 
     // ── 网页扫码登录 ──
 
@@ -660,9 +690,29 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
         requireAuth = true,
     )
 
+    /**
+     * 完成 Passkey 注册：[credential] 是平台 API 原样给出的注册响应 JSON
+     * （安卓 Credential Manager 的 `registrationResponseJson`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun registerPasskey(
+        challengeId: String,
+        credential: JsonElement,
+        credentialName: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/me/passkeys",
+        buildBody(
+            "challengeId" to challengeId,
+            "credential" to credential,
+            "credentialName" to credentialName,
+        ),
+        requireAuth = true,
+    )
+
     @Throws(IOException::class)
     fun deletePasskey(credentialId: String): JsonElement =
-        client.call("DELETE", "/me/passkeys/$credentialId", requireAuth = true)
+        client.call("DELETE", "/me/passkeys/${encodePathSegment(credentialId)}", requireAuth = true)
 
     // ── 会话与审计 ──
 

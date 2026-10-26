@@ -393,10 +393,12 @@ type AppPasskeyOptionsRequest struct {
 type AppPasskeyLoginRequest struct {
 	// Credential 是 WebAuthn 断言，结构由浏览器 / 平台 API 给出
 	Credential map[string]any `json:"credential" binding:"required"`
-	SessionID  string         `json:"sessionId" form:"sessionId"`
-	DeviceID   string         `json:"deviceId" form:"deviceId"`
-	Device     string         `json:"device" form:"device"`
-	MarkCode   string         `json:"markCode" form:"markCode"`
+	// ChallengeID 取自 options 返回的 session.challengeId；SessionID 是它的旧名，两者都收
+	ChallengeID string `json:"challengeId" form:"challengeId"`
+	SessionID   string `json:"sessionId" form:"sessionId"`
+	DeviceID    string `json:"deviceId" form:"deviceId"`
+	Device      string `json:"device" form:"device"`
+	MarkCode    string `json:"markCode" form:"markCode"`
 }
 
 // gatewayDocMethods 供测试断言目录里出现的方法都被规范支持。

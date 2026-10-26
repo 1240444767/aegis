@@ -191,6 +191,14 @@ type AuthCapability struct {
 	OAuthProviders     []oauthdomain.PublicProvider `json:"oauthProviders"`
 	// Invite 注册表单上的邀请码字段：enabled、field（hidden / optional / required）、label、placeholder
 	Invite invite.Capability `json:"invite"`
+	// Passkey 通行密钥能力。rpId 只在应用配了独立依赖方时下发，原生客户端没有它就不该画入口
+	Passkey PasskeyCapability `json:"passkey"`
+}
+
+// PasskeyCapability /config 里的 Passkey 能力。
+type PasskeyCapability struct {
+	Enabled bool   `json:"enabled"`
+	RPID    string `json:"rpId,omitempty"`
 }
 
 // CaptchaRequirement 各入口到底要不要图形验证码 —— 服务端算好的**结论**。

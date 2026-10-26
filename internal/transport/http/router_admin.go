@@ -140,6 +140,9 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/signin-reward/test", h.TestAdminAppSignInReward)
 		admin.POST("/apps/:appkey/signin-reward/reset", h.ResetAdminAppSignInReward)
 		admin.GET("/apps/:appkey/auto-sign", h.AdminAppAutoSign)
+		// 应用级 Passkey 依赖方（RP ID、网页来源、安卓包与证书），见 domain/app/passkey.go
+		admin.GET("/apps/:appkey/passkey", h.AdminAppPasskeyPolicy)
+		admin.PUT("/apps/:appkey/passkey", h.UpdateAdminAppPasskeyPolicy)
 		admin.PUT("/apps/:appkey/auto-sign", h.UpdateAdminAppAutoSign)
 		// 会员系统（管理端）
 		admin.GET("/apps/:appkey/vip/plans", h.AdminAppVipPlans)

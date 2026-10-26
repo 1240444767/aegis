@@ -22,6 +22,9 @@ func init() {
 		View("GET /api/admin/apps/:appkey/policy", "查看应用策略", ""),
 		Write("PUT /api/admin/apps/:appkey/policy", "修改应用策略", "", SeverityMedium),
 
+		View("GET /api/admin/apps/:appkey/passkey", "查看应用 Passkey 配置", ""),
+		Write("PUT /api/admin/apps/:appkey/passkey", "修改应用 Passkey 配置", "", SeverityHigh),
+
 		View("GET /api/admin/apps/:appkey/device-limit", "查看登录设备数概览", ""),
 		View("GET /api/admin/apps/:appkey/device-limit/policy", "查看登录设备数策略", ""),
 		Write("PUT /api/admin/apps/:appkey/device-limit/policy", "修改登录设备数策略", "", SeverityHigh),

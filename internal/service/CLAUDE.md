@@ -255,6 +255,11 @@ WebAuthn 规定 `rp.id` 只能**等于当前页面的有效域名、或它的可
 以前它会被兜底成 `localhost`，而缺省白名单里同时有 `http://127.0.0.1:3000` ——
 两者自相矛盾，从 127.0.0.1 打开控制台必然报上面那句。
 
+应用在控制台配了**独立依赖方**（`apps.settings.passkey`，见 `domain/app/passkey.go` 与
+[docs/passkey.md](../../docs/passkey.md)）时，这个应用的四个仪式入口一律改按它校验：RP ID 固定、
+允许来源 = 配置的网页源 + 由安卓证书 SHA-256 推出的 `android:apk-key-hash:` 源，上面那套按请求来源解析不再参与。
+原生 App 的请求没有 Origin，只能走这条路。入口是 `webAuthnForAppRequest` / `webAuthnForAppCeremony`。
+
 Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 （go-webauthn 已把它写进 `SessionData.RelyingPartyID` 并随挑战落库）。
 注意 `CreateCredential` / `ValidateLogin` 读的是 `Config.RPID` 而**不是** session 里那个字段，

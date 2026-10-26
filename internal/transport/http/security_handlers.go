@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	authdomain "aegis/internal/domain/auth"
 	"aegis/pkg/response"
@@ -298,6 +299,14 @@ func (h *Handler) PasskeyLogin(c *gin.Context) {
 		response.Error(c, http.StatusBadRequest, 40000, "Passkey 凭证数据不能为空")
 		return
 	}
+	challengeID := strings.TrimSpace(req.ChallengeID)
+	if challengeID == "" {
+		challengeID = strings.TrimSpace(req.SessionID)
+	}
+	if challengeID == "" {
+		response.Error(c, http.StatusBadRequest, 40000, "缺少 Passkey 登录会话标识 challengeId")
+		return
+	}
 
 	// Passkey verify 是签发 session 的最终入口，device 名称能在此刻一并提交，做严格校验
 	if !h.enforceDevicePolicy(c, req.AppID, req.DeviceID, req.Device, req.MarkCode, "login") {
@@ -309,7 +318,7 @@ func (h *Handler) PasskeyLogin(c *gin.Context) {
 		device = guessDeviceFromUA(c.Request.UserAgent())
 	}
 	_ = device // Passkey 现阶段未把 device 传进 service，但保留 enrichment 语义便于未来扩展
-	result, err := h.auth.VerifyPasskeyLogin(c.Request.Context(), req.AppID, req.ChallengeID, payload, deviceID, c.ClientIP(), c.Request.UserAgent())
+	result, err := h.auth.VerifyPasskeyLogin(c.Request.Context(), req.AppID, challengeID, payload, deviceID, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		h.writeError(c, err)
 		return

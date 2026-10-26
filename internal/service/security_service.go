@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -463,7 +464,7 @@ func (s *SecurityService) BeginPasskeyRegistration(ctx context.Context, session 
 		return nil, nil, apperrors.New(50320, http.StatusServiceUnavailable, "安全会话服务不可用")
 	}
 	cfg := s.currentConfig()
-	webauthn, err := s.webAuthnForRequest(ctx)
+	webauthn, err := s.webAuthnForAppRequest(ctx, session.AppID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -526,12 +527,14 @@ func (s *SecurityService) FinishPasskeyRegistration(ctx context.Context, session
 	if err != nil {
 		return nil, apperrors.New(40053, http.StatusBadRequest, "Passkey 凭证数据不能为空")
 	}
-	webauthn, err := s.webAuthnForCeremony(ctx, sessionData.RelyingPartyID)
+	webauthn, err := s.webAuthnForAppCeremony(ctx, session.AppID, sessionData.RelyingPartyID)
 	if err != nil {
 		return nil, err
 	}
 	credential, err := webauthn.FinishRegistration(adapter, sessionData, req)
 	if err != nil {
+		s.log.Info("passkey registration rejected", zap.Int64("appid", session.AppID), zap.Int64("userId", session.UserID),
+			zap.String("rpId", sessionData.RelyingPartyID), zap.String("detail", passkeyFailureDetail(err)))
 		return nil, apperrors.New(40054, http.StatusBadRequest, "Passkey 注册校验失败")
 	}
 	rawCredential, err := gojson.Marshal(credential)
@@ -700,7 +703,7 @@ func (s *SecurityService) BeginPasskeyLogin(ctx context.Context, appID int64) (*
 		}
 	}
 	cfg := s.currentConfig()
-	webauthn, err := s.webAuthnForRequest(ctx)
+	webauthn, err := s.webAuthnForAppRequest(ctx, appID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -743,7 +746,7 @@ func (s *SecurityService) VerifyPasskeyLogin(ctx context.Context, appID int64, c
 		return nil, err
 	}
 	// 实例要用 Begin 阶段那个 RP ID 来造，所以必须先把挑战取出来
-	webauthn, err := s.webAuthnForCeremony(ctx, sessionData.RelyingPartyID)
+	webauthn, err := s.webAuthnForAppCeremony(ctx, appID, sessionData.RelyingPartyID)
 	if err != nil {
 		return nil, err
 	}
@@ -755,6 +758,12 @@ func (s *SecurityService) VerifyPasskeyLogin(ctx context.Context, appID int64, c
 		return s.lookupPasskeyLoginUser(ctx, appID, rawID, userHandle)
 	}, sessionData, req)
 	if err != nil {
+		var appErr *apperrors.AppError
+		if errors.As(err, &appErr) {
+			return nil, err
+		}
+		s.log.Info("passkey login rejected", zap.Int64("appid", appID),
+			zap.String("rpId", sessionData.RelyingPartyID), zap.String("detail", passkeyFailureDetail(err)))
 		return nil, apperrors.New(40107, http.StatusUnauthorized, "Passkey 登录校验失败")
 	}
 	adapter, ok := validatedUser.(*webAuthnUser)
@@ -974,6 +983,7 @@ func (s *SecurityService) passkeyRecordToView(item securitydomain.PasskeyRecord)
 	return securitydomain.PasskeyView{
 		ID:             item.ID,
 		CredentialID:   credentialIDToString(item.CredentialID),
+		AAGUID:         formatAAGUID(item.AAGUID),
 		CredentialName: item.CredentialName,
 		SignCount:      item.SignCount,
 		LastUsedAt:     item.LastUsedAt,
@@ -1089,7 +1099,18 @@ func (u *webAuthnUser) WebAuthnName() string {
 	if u == nil || u.user == nil {
 		return ""
 	}
-	return u.user.Account
+	// 系统凭据管理器（安卓 Credential Manager 等）拒绝空的 user.name；第三方登录建的号可能没有账号名
+	if account := strings.TrimSpace(u.user.Account); account != "" {
+		return account
+	}
+	if u.profile != nil {
+		for _, candidate := range []string{u.profile.Email, u.profile.Phone, u.profile.Nickname} {
+			if strings.TrimSpace(candidate) != "" {
+				return strings.TrimSpace(candidate)
+			}
+		}
+	}
+	return fmt.Sprintf("user-%d", u.user.ID)
 }
 
 func (u *webAuthnUser) WebAuthnDisplayName() string {
@@ -1099,7 +1120,7 @@ func (u *webAuthnUser) WebAuthnDisplayName() string {
 	if u.profile != nil && strings.TrimSpace(u.profile.Nickname) != "" {
 		return strings.TrimSpace(u.profile.Nickname)
 	}
-	return u.user.Account
+	return u.WebAuthnName()
 }
 
 func (u *webAuthnUser) WebAuthnCredentials() []webauthnlib.Credential {

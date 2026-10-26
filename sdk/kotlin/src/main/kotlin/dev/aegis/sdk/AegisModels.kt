@@ -42,6 +42,21 @@ data class AuthCapability(
     val oauthProviders: List<JsonElement> = emptyList(),
     /** 注册表单上的邀请码字段：出不出现、是否必填都由它决定，见 [InviteCapability]。 */
     val invite: InviteCapability = InviteCapability(),
+    /** 通行密钥（Passkey）能力，见 [PasskeyCapability]。 */
+    val passkey: PasskeyCapability = PasskeyCapability(),
+)
+
+/**
+ * 通行密钥（Passkey）能力。
+ *
+ * [rpId] 只在应用配了独立依赖方（控制台「Passkey」区块）时下发。原生客户端没有它就不该画入口：
+ * 系统凭据管理器要求 RP ID 是一个发布了 assetlinks / apple-app-site-association 的域名，
+ * 平台级配置给不出这个值，仪式会在 origin 校验那一步失败。
+ */
+@Serializable
+data class PasskeyCapability(
+    val enabled: Boolean = false,
+    val rpId: String = "",
 )
 
 /**

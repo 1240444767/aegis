@@ -31,6 +31,8 @@ func registerPublicRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 	router.HEAD("/readyz", h.Readyz)
 	router.GET("/api/system/announcements/active", h.ActiveAnnouncements)
 	router.GET("/api/public/branding", h.AdminGetPublicBranding)
+	// 应用 Passkey 的 Digital Asset Links，供 RP ID 域名的网站反代成 /.well-known/assetlinks.json
+	router.GET("/api/public/apps/:appkey/passkey/assetlinks.json", h.PublicAppPasskeyAssetLinks)
 	systemMonitor := router.Group("/api/system/monitor")
 	systemMonitor.Use(middleware.AdminAuth(adminService), middleware.RequireSuperAdmin())
 	{

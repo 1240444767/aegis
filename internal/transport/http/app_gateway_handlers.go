@@ -50,6 +50,9 @@ func (h *Handler) AppConfig(c *gin.Context) {
 	if h.invite != nil {
 		config.Auth.Invite = h.invite.Capability(c.Request.Context(), app.ID)
 	}
+	if h.security != nil {
+		config.Auth.Passkey.Enabled, config.Auth.Passkey.RPID = h.security.PasskeyAvailability(app)
+	}
 	// 版本管控通道的公钥随 config 下发；取不到时不下发，客户端沿用已保存的裁决。
 	// 失败原因挂到访问日志上：典型是管控私钥由另一把主密钥加密（换过 root secret），
 	// 否则 clientControl 只是静静地从 config 里消失，看不出缘由。
