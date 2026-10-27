@@ -74,9 +74,9 @@ func enforceMCPKeyRoute(c *gin.Context, access *admindomain.AccessContext, permi
 	}
 	key := access.MCPKey
 	write := !isReadMethod(c.Request.Method)
-	if write && key.ReadOnly {
+	if write && key.ReadOnly && !IsReadPermission(permission) {
 		return apperrors.New(40166, http.StatusForbidden,
-			"MCP 密钥「"+key.Name+"」是只读密钥，只能调用 GET 接口")
+			"MCP 密钥「"+key.Name+"」是只读密钥，只能调用查询接口")
 	}
 	if permission == "" {
 		path := routePath(c)
@@ -116,6 +116,14 @@ func mcpKeyCoversGroup(key *admindomain.MCPKeyScope, prefix string) bool {
 		}
 	}
 	return true
+}
+
+// IsReadPermission 规则表把这条路由判成读权限点（`*:read`）。
+//
+// 一批旧接口与查询接口用 POST 承载（支付配置列表、订单详情、积分统计、发布模拟、邮件预览……），
+// 规则表已经按读判定它们；只读密钥据此放行，而不是一律按方法拒绝。
+func IsReadPermission(permission string) bool {
+	return strings.HasSuffix(permission, ":read")
 }
 
 func isReadMethod(method string) bool {

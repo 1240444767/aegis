@@ -381,7 +381,7 @@ export function McpKeyEditorDialog({
           <div className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
             <div>
               <Label>只读</Label>
-              <p className="text-xs text-muted-foreground">只允许 GET 请求；关闭后可执行写操作（发会员、封禁、回复工单等）</p>
+              <p className="text-xs text-muted-foreground">只允许查询类接口；关闭后可执行写操作（发会员、封禁、回复工单等）</p>
             </div>
             <Switch checked={draft.readOnly} onCheckedChange={(value) => patch("readOnly", value)} />
           </div>

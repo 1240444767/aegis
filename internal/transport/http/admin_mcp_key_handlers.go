@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"aegis/internal/authz"
+	"aegis/internal/middleware"
 	admindomain "aegis/internal/domain/admin"
 	appdomain "aegis/internal/domain/app"
 	"aegis/pkg/response"
@@ -428,7 +429,7 @@ func mcpEndpointVerdict(access *admindomain.AccessContext, snapshot admindomain.
 	write := method != http.MethodGet
 	key := access.MCPKey
 	if key != nil {
-		if write && key.ReadOnly {
+		if write && key.ReadOnly && !middleware.IsReadPermission(decision.Permission) {
 			return false, "只读密钥不能调用写接口"
 		}
 		if decision.Permission == "" {

@@ -35,6 +35,7 @@ func TestEnforceMCPKeyRoute(t *testing.T) {
 		want       int
 	}{
 		{"只读密钥读", false, admindomain.MCPKeyScope{Permissions: []string{"app:user:read"}, ReadOnly: true}, http.MethodGet, "/api/admin/apps/:appkey/users", "app:user:read", true, 0},
+		{"只读密钥 POST 查询", false, admindomain.MCPKeyScope{Permissions: []string{"payment:read"}, ReadOnly: true}, http.MethodPost, "/api/admin/app/payment-config/orders/list", "payment:read", true, 0},
 		{"只读密钥写", false, admindomain.MCPKeyScope{Permissions: []string{"*"}, ReadOnly: true}, http.MethodPost, "/api/admin/apps/:appkey/users", "app:user:write", true, 40166},
 		{"工单需覆盖读", true, admindomain.MCPKeyScope{Permissions: []string{"app:user:read"}}, http.MethodGet, "/api/admin/tickets", "", false, 40164},
 		{"工单读", true, admindomain.MCPKeyScope{Permissions: []string{"ticket:read"}}, http.MethodGet, "/api/admin/tickets", "", false, 0},
