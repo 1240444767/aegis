@@ -39,8 +39,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.base_url:
         settings = dataclasses.replace(settings, base_url=args.base_url.strip().rstrip("/"))
     stdio = args.transport == "stdio"
-    # HTTP 模式下每个客户端可以在请求头里自带密钥，环境变量里的那把只是缺省值
-    settings.validate(require_key=stdio)
+    # 缺密钥不拒绝启动：否则客户端里只看到一个「连接失败」，看不到原因。
+    # 每次调用工具时会提示去控制台签发（HTTP 模式下客户端也可以在请求头里自带密钥）
+    settings.validate(require_key=False)
+    if stdio and not settings.api_key:
+        print("提示：未设置 AEGIS_MCP_KEY，工具调用会失败；请在 Aegis 控制台「个人资料 → MCP 密钥」签发后填入。", file=sys.stderr)
 
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
     logging.getLogger("httpx").setLevel(logging.WARNING)

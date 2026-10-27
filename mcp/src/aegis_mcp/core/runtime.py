@@ -47,5 +47,5 @@ def current_key() -> str:
             return value
     key = runtime().settings.api_key
     if not key:
-        raise ToolError("没有可用的 MCP 密钥：设置 AEGIS_MCP_KEY，或在 HTTP 请求头 Authorization 中携带 Bearer aegis_mcp_…")
+        raise ToolError("没有可用的 MCP 密钥：在 Aegis 控制台「个人资料 → MCP 密钥」签发后，设置环境变量 AEGIS_MCP_KEY（或在 HTTP 请求头 Authorization 中携带 Bearer aegis_mcp_…）")
     return key
