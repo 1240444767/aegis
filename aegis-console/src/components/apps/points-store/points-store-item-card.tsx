@@ -1,13 +1,18 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { CalendarClock, Hourglass } from "lucide-react";
+import { CalendarClock, Clock3, Hourglass, RefreshCw, Users } from "lucide-react";
 import {
+  CURRENT_PERIOD_LABEL,
   SHELF_META,
   describeReward,
   formatPoints,
+  formatStoreDate,
   hasStock,
   itemRules,
+  liveStock,
+  openHoursLabel,
+  restocks,
   rewardVisual,
   saleWindow,
   shelfKey
@@ -16,7 +21,7 @@ import { ToneIcon } from "@/components/users/detail/kit";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
-import type { PointsStoreAdminItem, PointsStoreItem, PointsStoreRewardSpec } from "@/lib/api/points-store";
+import type { PointsStoreAdminItem, PointsStoreItem, PointsStoreLimitPeriod, PointsStoreRewardSpec } from "@/lib/api/points-store";
 import type { VipFeature, VipPlan } from "@/lib/api/vip";
 import { cn } from "@/lib/utils";
 
@@ -53,29 +58,82 @@ export function ItemPrice({ item, compact }: { item: Pick<PointsStoreItem, "cost
   );
 }
 
-/** 库存：限量时画已兑 / 剩余的比例条，不限量写「不限量」 */
-export function ItemStock({ item, compact }: { item: PointsStoreItem; compact?: boolean }) {
+/** 一条细进度条：value / total，按余量着色 */
+function Meter({ value, total, tone }: { value: number; total: number; tone: "ok" | "low" | "out" | "info" }) {
+  const ratio = total > 0 ? Math.min(value / total, 1) : 0;
+  return (
+    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+      <div
+        className={cn(
+          "h-full rounded-full transition-[width]",
+          tone === "out" ? "bg-red-500" : tone === "low" ? "bg-amber-500" : tone === "info" ? "bg-sky-500" : "bg-emerald-500"
+        )}
+        style={{ width: `${Math.max(ratio * 100, value ? 2 : 0)}%` }}
+      />
+    </div>
+  );
+}
+
+/**
+ * 库存：不限量写「不限量」；固定库存画已兑 / 剩余；周期补货画本期剩余 / 补货量，并写下次补货时刻。
+ * 剩余按换算后的此刻库存（liveStock），不会把上个周期的 0 当成「已兑完」。
+ */
+export function ItemStock({ item, compact }: { item: PointsStoreItem & { currentStock?: number; nextRestockAt?: string }; compact?: boolean }) {
   if (!hasStock(item)) return <span className="text-xs text-muted-foreground">不限量</span>;
-  const stock = item.stock ?? 0;
-  const sold = item.soldCount ?? 0;
-  const total = stock + sold;
-  const ratio = total ? sold / total : 0;
-  const low = stock <= Math.max(5, total * 0.1);
+  const stock = liveStock(item) ?? 0;
+  const periodic = restocks(item);
+  const total = periodic ? (item.restockQuantity ?? stock) : stock + (item.soldCount ?? 0);
+  const low = stock <= Math.max(periodic ? 0 : 5, total * 0.1);
+  const tone = stock <= 0 ? "out" : low ? "low" : "ok";
+  const stockClass = stock <= 0 ? "text-red-600 dark:text-red-400" : low ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground";
   return (
     <div className="flex w-full flex-col gap-1">
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className={cn("tabular-nums", stock <= 0 ? "text-red-600 dark:text-red-400" : low ? "text-amber-600 dark:text-amber-400" : "text-muted-foreground")}>
-          剩 {formatPoints(stock)}
+        <span className={cn("inline-flex items-center gap-1 tabular-nums", stockClass)}>
+          {periodic ? <RefreshCw className="size-3" /> : null}
+          {periodic ? `${CURRENT_PERIOD_LABEL[item.restockPeriod as PointsStoreLimitPeriod]}剩 ${formatPoints(stock)}/${formatPoints(total)}` : `剩 ${formatPoints(stock)}`}
         </span>
-        {!compact ? <span className="tabular-nums text-muted-foreground">已兑 {formatPoints(sold)}</span> : null}
+        {!compact ? (
+          <span className="tabular-nums text-muted-foreground">
+            {periodic && item.nextRestockAt ? `${formatStoreDate(item.nextRestockAt).slice(5)} 补货` : `已兑 ${formatPoints(item.soldCount)}`}
+          </span>
+        ) : null}
       </div>
-      <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-        <div
-          className={cn("h-full rounded-full", stock <= 0 ? "bg-red-500" : low ? "bg-amber-500" : "bg-emerald-500")}
-          style={{ width: `${Math.max(ratio * 100, sold ? 2 : 0)}%` }}
-        />
-      </div>
+      {periodic ? <Meter value={stock} total={total} tone={tone} /> : <Meter value={item.soldCount ?? 0} total={total} tone={tone} />}
     </div>
+  );
+}
+
+/** 全站名额：本期已用 / 名额，满了标红 */
+export function ItemQuota({ item }: { item: PointsStoreAdminItem }) {
+  if (!item.globalLimitCount) return null;
+  const used = item.globalUsed ?? 0;
+  const full = used >= item.globalLimitCount;
+  return (
+    <div className="flex w-full flex-col gap-1">
+      <div className="flex items-center justify-between gap-2 text-xs">
+        <span className={cn("inline-flex items-center gap-1 tabular-nums", full ? "text-red-600 dark:text-red-400" : "text-muted-foreground")}>
+          <Users className="size-3" />
+          {CURRENT_PERIOD_LABEL[item.globalLimitPeriod]}名额 {formatPoints(used)}/{formatPoints(item.globalLimitCount)}
+        </span>
+        {item.globalResetsAt ? <span className="tabular-nums text-muted-foreground">{formatStoreDate(item.globalResetsAt).slice(5)} 清零</span> : null}
+      </div>
+      <Meter value={used} total={item.globalLimitCount} tone={full ? "out" : "info"} />
+    </div>
+  );
+}
+
+/** 每日开放时段与此刻是否开放 */
+export function ItemHours({ item }: { item: PointsStoreAdminItem }) {
+  const hours = openHoursLabel(item);
+  if (!hours) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+      <span className={cn("size-1.5 rounded-full", item.openNow ? "bg-emerald-500" : "bg-zinc-400")} />
+      <Clock3 className="size-3" />
+      每日 {hours}
+      <span className={item.openNow ? "text-emerald-600 dark:text-emerald-400" : ""}>{item.openNow ? "开放中" : "未开放"}</span>
+    </span>
   );
 }
 
@@ -105,7 +163,8 @@ export function PointsStoreItemCard({
   menu: ReactNode;
 }) {
   const visual = rewardVisual(item.rewards[0]?.type);
-  const rules = itemRules(item);
+  // 补货、名额、开放时段在卡片上各有一条可视化，规则行里不再重复
+  const rules = itemRules(item).filter((rule) => !/补货|全站|开放/.test(rule));
   const saleTime = saleWindow(item.startsAt, item.endsAt);
   const dimmed = item.status !== "active";
 
@@ -168,6 +227,8 @@ export function PointsStoreItemCard({
         <div className="mt-auto flex flex-col gap-2.5">
           <ItemPrice item={item} />
           <ItemStock item={item} />
+          <ItemQuota item={item} />
+          <ItemHours item={item} />
           {rules.length || saleTime ? (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
               {rules.map((rule) => (

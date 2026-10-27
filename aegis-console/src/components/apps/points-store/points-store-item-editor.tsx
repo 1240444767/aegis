@@ -5,7 +5,9 @@ import {
   AlertCircle,
   CalendarClock,
   CheckCircle2,
+  Clock3,
   Coins,
+  Gauge,
   Gift,
   Loader2,
   PackageOpen,
@@ -19,12 +21,19 @@ import { toast } from "sonner";
 import { ItemPrice } from "@/components/apps/points-store/points-store-item-card";
 import {
   AUDIENCE_LABEL,
+  CURRENT_PERIOD_LABEL,
   LIMIT_PERIOD_LABEL,
+  RESTOCK_PERIOD_LABEL,
   describeReward,
   formatPoints,
+  hasStock,
   itemRules,
+  liveStock,
+  minuteToTime,
+  restocks,
   rewardVisual,
-  saleWindow
+  saleWindow,
+  timeToMinute
 } from "@/components/apps/points-store/points-store-shared";
 import {
   RewardListEditor,
@@ -45,7 +54,8 @@ import type {
   PointsStoreAdminItem,
   PointsStoreAudience,
   PointsStoreItem,
-  PointsStoreLimitPeriod
+  PointsStoreLimitPeriod,
+  PointsStoreRestockPeriod
 } from "@/lib/api/points-store";
 import { fromLocalInputValue, toLocalInputValue } from "@/lib/datetime";
 import { usePointsStoreCatalogQuery, useSavePointsStoreItemMutation } from "@/lib/points-store-hooks";
@@ -66,10 +76,19 @@ type Form = {
   cost: string;
   originalCost: string;
   rewards: RewardDraft[];
-  limited: boolean;
+  stockMode: StockMode;
   stock: string;
+  restockPeriod: Exclude<PointsStoreRestockPeriod, "none">;
+  restockQuantity: string;
+  quotaEnabled: boolean;
+  globalLimitPeriod: PointsStoreLimitPeriod;
+  globalLimitCount: string;
   limitPeriod: PointsStoreLimitPeriod;
   limitCount: string;
+  userTotalLimit: string;
+  hoursEnabled: boolean;
+  openTime: string;
+  closeTime: string;
   audience: PointsStoreAudience;
   minLevel: string;
   startsAt: string;
@@ -79,6 +98,20 @@ type Form = {
 };
 
 const BADGE_PRESETS = ["限时", "热门", "新品", "特惠", "推荐"];
+
+/** 库存的三种形态：不限量、一次性放一批货、每个周期补到固定数量 */
+type StockMode = "unlimited" | "fixed" | "restock";
+
+const STOCK_MODES: Array<{ value: StockMode; label: string; hint: string }> = [
+  { value: "unlimited", label: "不限量", hint: "任何人满足条件都能兑换" },
+  { value: "fixed", label: "固定库存", hint: "兑完即止，取消兑换会加回库存" },
+  { value: "restock", label: "周期补货", hint: "每个周期开始时自动补到设定数量" }
+];
+
+function stockModeOf(item: PointsStoreItem): StockMode {
+  if (restocks(item)) return "restock";
+  return hasStock(item) ? "fixed" : "unlimited";
+}
 
 function seed(target: EditorTarget): Form {
   if (target.mode === "create") {
@@ -91,10 +124,19 @@ function seed(target: EditorTarget): Form {
       cost: "100",
       originalCost: "",
       rewards: [],
-      limited: false,
+      stockMode: "unlimited",
       stock: "100",
+      restockPeriod: "day",
+      restockQuantity: "100",
+      quotaEnabled: false,
+      globalLimitPeriod: "day",
+      globalLimitCount: "100",
       limitPeriod: "total",
       limitCount: "0",
+      userTotalLimit: "0",
+      hoursEnabled: false,
+      openTime: "10:00",
+      closeTime: "22:00",
       audience: "all",
       minLevel: "0",
       startsAt: "",
@@ -114,10 +156,20 @@ function seed(target: EditorTarget): Form {
     cost: String(item.cost),
     originalCost: item.originalCost ? String(item.originalCost) : "",
     rewards: rewardDraftsFrom(item.rewards),
-    limited: item.stock !== undefined && item.stock !== null,
-    stock: String(item.stock ?? 100),
+    stockMode: stockModeOf(item),
+    // 周期补货时库里的 stock 可能还是上个周期的，按换算后的此刻库存编辑
+    stock: String(liveStock(item) ?? 100),
+    restockPeriod: item.restockPeriod && item.restockPeriod !== "none" ? item.restockPeriod : "day",
+    restockQuantity: String(item.restockQuantity ?? liveStock(item) ?? 100),
+    quotaEnabled: (item.globalLimitCount ?? 0) > 0,
+    globalLimitPeriod: item.globalLimitPeriod ?? "day",
+    globalLimitCount: String(item.globalLimitCount || 100),
     limitPeriod: item.limitPeriod,
     limitCount: String(item.limitCount),
+    userTotalLimit: String(item.userTotalLimit ?? 0),
+    hoursEnabled: item.dailyOpenMinute !== undefined && item.dailyOpenMinute !== null,
+    openTime: minuteToTime(item.dailyOpenMinute) || "10:00",
+    closeTime: item.dailyCloseMinute === 0 ? "00:00" : minuteToTime(item.dailyCloseMinute) || "22:00",
     audience: item.audience,
     minLevel: String(item.minLevel),
     startsAt: item.startsAt ? toLocalInputValue(item.startsAt) : "",
@@ -181,6 +233,14 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
   const originalCost = form.originalCost ? Number(form.originalCost) || 0 : 0;
   const startsAt = fromLocalInputValue(form.startsAt);
   const endsAt = fromLocalInputValue(form.endsAt);
+  const timezone = catalogQuery.data?.timezone ?? "Asia/Shanghai";
+
+  const stockValue = Number(form.stock) || 0;
+  const restockQuantity = Number(form.restockQuantity) || 0;
+  const limitCount = Number(form.limitCount) || 0;
+  const userTotalLimit = form.limitPeriod === "total" ? 0 : Number(form.userTotalLimit) || 0;
+  const openMinute = form.hoursEnabled ? timeToMinute(form.openTime) : null;
+  const closeMinute = form.hoursEnabled ? timeToMinute(form.closeTime) : null;
 
   const problems: Array<{ ok: boolean; label: string; blocking: boolean }> = [
     { ok: Boolean(form.title.trim()), label: "填写商品名称", blocking: true },
@@ -188,7 +248,20 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
     { ok: cost >= 1, label: "兑换积分至少为 1", blocking: true },
     { ok: !startsAt || !endsAt || startsAt < endsAt, label: "结束时间晚于开始时间", blocking: true },
     { ok: !originalCost || originalCost > cost, label: "划线价高于兑换积分", blocking: false },
-    { ok: !form.limited || Number(form.stock) > 0, label: "限量商品库存大于 0", blocking: false }
+    { ok: form.stockMode !== "restock" || restockQuantity >= 1, label: "补货数量至少为 1", blocking: true },
+    {
+      ok: form.stockMode !== "restock" || stockValue <= restockQuantity,
+      label: "本期剩余不多于补货数量",
+      blocking: true
+    },
+    { ok: !form.quotaEnabled || Number(form.globalLimitCount) >= 1, label: "全站名额至少为 1", blocking: true },
+    { ok: !userTotalLimit || userTotalLimit >= limitCount, label: "累计上限不少于每期可兑次数", blocking: true },
+    {
+      ok: !form.hoursEnabled || (openMinute !== null && closeMinute !== null && openMinute !== closeMinute),
+      label: "开放与关闭时刻不同",
+      blocking: true
+    },
+    { ok: form.stockMode !== "fixed" || stockValue > 0, label: "限量商品库存大于 0", blocking: false }
   ];
   const blocked = problems.some((problem) => problem.blocking && !problem.ok);
 
@@ -204,10 +277,18 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
     cost,
     originalCost: originalCost || undefined,
     rewards: rewardsFromDrafts(form.rewards, catalog),
-    stock: form.limited ? Number(form.stock) || 0 : undefined,
+    stock: form.stockMode === "unlimited" ? undefined : stockValue,
     soldCount: editing?.soldCount ?? 0,
+    restockPeriod: form.stockMode === "restock" ? form.restockPeriod : "none",
+    restockQuantity: form.stockMode === "restock" ? restockQuantity : undefined,
+    globalLimitPeriod: form.globalLimitPeriod,
+    globalLimitCount: form.quotaEnabled ? Number(form.globalLimitCount) || 0 : 0,
     limitPeriod: form.limitPeriod,
-    limitCount: Number(form.limitCount) || 0,
+    limitCount,
+    userTotalLimit,
+    dailyOpenMinute: openMinute ?? undefined,
+    // 关闭写 00:00 时与开放构成「到当天结束」，后端按跨零点处理
+    dailyCloseMinute: closeMinute ?? undefined,
     audience: form.audience,
     minLevel: Number(form.minLevel) || 0,
     startsAt: startsAt ?? undefined,
@@ -236,9 +317,16 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
           cost,
           originalCost: originalCost || null,
           rewards: preview.rewards,
-          stock: form.limited ? Number(form.stock) || 0 : null,
+          stock: form.stockMode === "unlimited" ? null : stockValue,
+          restockPeriod: preview.restockPeriod,
+          restockQuantity: preview.restockQuantity ?? null,
+          globalLimitPeriod: form.globalLimitPeriod,
+          globalLimitCount: preview.globalLimitCount,
           limitPeriod: form.limitPeriod,
-          limitCount: Number(form.limitCount) || 0,
+          limitCount,
+          userTotalLimit,
+          dailyOpenMinute: openMinute,
+          dailyCloseMinute: closeMinute,
           audience: form.audience,
           minLevel: Number(form.minLevel) || 0,
           startsAt: startsAt ?? null,
@@ -314,37 +402,124 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
             />
           </FormBlock>
 
-          <FormBlock icon={PackageOpen} tone="success" title="库存与限兑">
-            <ToggleRow
-              label="限量"
-              hint={form.limited ? "库存为 0 时显示已兑完，取消兑换会加回库存" : "不限量，任何人满足条件都能兑换"}
-              checked={form.limited}
-              onChange={(value) => patch("limited", value)}
-            />
-            {form.limited ? (
+          <FormBlock icon={PackageOpen} tone="success" title="库存" description="放多少货、多久补一次；补货与限兑的周期按应用时区计算">
+            <ToggleGroup
+              type="single"
+              variant="outline"
+              value={form.stockMode}
+              onValueChange={(value) => value && patch("stockMode", value as StockMode)}
+              className="w-full"
+            >
+              {STOCK_MODES.map((mode) => (
+                <ToggleGroupItem key={mode.value} value={mode.value} className="flex-1 text-xs">
+                  {mode.label}
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+            <p className="-mt-2 text-xs text-muted-foreground">{STOCK_MODES.find((mode) => mode.value === form.stockMode)?.hint}</p>
+
+            {form.stockMode === "fixed" ? (
               <Field label="剩余库存" hint={editing ? `已兑出 ${formatPoints(editing.soldCount)} 件` : undefined}>
                 <NumberInput value={form.stock} min={0} onChange={(value) => patch("stock", value)} suffix="件" />
               </Field>
             ) : null}
-            <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="限兑周期">
-                <Select value={form.limitPeriod} onValueChange={(value) => patch("limitPeriod", value as PointsStoreLimitPeriod)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(catalogQuery.data?.limitPeriods ?? ["total", "day", "week", "month"]).map((period) => (
-                      <SelectItem key={period} value={period}>
-                        {LIMIT_PERIOD_LABEL[period]}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+
+            {form.stockMode === "restock" ? (
+              <>
+                <div className="grid gap-4 sm:grid-cols-3">
+                  <Field label="补货周期">
+                    <Select
+                      value={form.restockPeriod}
+                      onValueChange={(value) => patch("restockPeriod", value as Form["restockPeriod"])}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {(catalogQuery.data?.restockPeriods ?? ["none", "day", "week", "month"])
+                          .filter((period): period is Form["restockPeriod"] => period !== "none")
+                          .map((period) => (
+                            <SelectItem key={period} value={period}>
+                              {RESTOCK_PERIOD_LABEL[period]}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field label="每次补到">
+                    <NumberInput value={form.restockQuantity} min={1} onChange={(value) => patch("restockQuantity", value)} suffix="件" />
+                  </Field>
+                  <Field label={`${CURRENT_PERIOD_LABEL[form.restockPeriod]}剩余`}>
+                    <NumberInput value={form.stock} min={0} onChange={(value) => patch("stock", value)} suffix="件" />
+                  </Field>
+                </div>
+                <RestockTimeline period={form.restockPeriod} quantity={restockQuantity} stock={stockValue} timezone={timezone} />
+              </>
+            ) : null}
+          </FormBlock>
+
+          <FormBlock icon={Gauge} tone="warning" title="限兑" description="全站名额管总量，每人限兑管单人；两者可以叠加">
+            <ToggleRow
+              label="全站名额"
+              hint={
+                form.quotaEnabled
+                  ? "所有用户合计的份数上限，按兑换记录计数；取消的兑换会让出名额"
+                  : "不限制所有用户合计的兑换份数"
+              }
+              checked={form.quotaEnabled}
+              onChange={(value) => patch("quotaEnabled", value)}
+            />
+            {form.quotaEnabled ? (
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="名额周期">
+                  <PeriodSelect value={form.globalLimitPeriod} periods={catalogQuery.data?.limitPeriods} onChange={(value) => patch("globalLimitPeriod", value)} />
+                </Field>
+                <Field label="名额" hint={editing && editing.globalLimitCount ? `${CURRENT_PERIOD_LABEL[editing.globalLimitPeriod]}已用 ${formatPoints(editing.globalUsed)} 份` : undefined}>
+                  <NumberInput value={form.globalLimitCount} min={1} onChange={(value) => patch("globalLimitCount", value)} suffix="份" />
+                </Field>
+              </div>
+            ) : null}
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="每人限兑周期">
+                <PeriodSelect value={form.limitPeriod} periods={catalogQuery.data?.limitPeriods} onChange={(value) => patch("limitPeriod", value)} />
               </Field>
-              <Field label="每人可兑" hint="0 为不限">
+              <Field label="每期可兑" hint="0 为不限">
                 <NumberInput value={form.limitCount} min={0} onChange={(value) => patch("limitCount", value)} suffix="次" />
               </Field>
+              <Field label="每人累计上限" hint={form.limitPeriod === "total" ? "累计周期下无需另设" : "0 为不限"}>
+                <NumberInput
+                  value={form.limitPeriod === "total" ? "0" : form.userTotalLimit}
+                  min={0}
+                  disabled={form.limitPeriod === "total"}
+                  onChange={(value) => patch("userTotalLimit", value)}
+                  suffix="次"
+                />
+              </Field>
             </div>
+          </FormBlock>
+
+          <FormBlock icon={Clock3} tone="info" title="每日开放时段" description={`按应用时区 ${timezone} 计算，与浏览器时区无关`}>
+            <ToggleRow
+              label="限时开放"
+              hint={form.hoursEnabled ? "只在每天的这段时间里可以兑换，其余时间显示开放时段" : "全天开放"}
+              checked={form.hoursEnabled}
+              onChange={(value) => patch("hoursEnabled", value)}
+            />
+            {form.hoursEnabled ? (
+              <>
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="开放">
+                    <Input type="time" value={form.openTime} onChange={(event) => patch("openTime", event.target.value)} />
+                  </Field>
+                  <Field label="关闭" hint="早于开放时刻即跨零点；00:00 表示到当天结束">
+                    <Input type="time" value={form.closeTime} onChange={(event) => patch("closeTime", event.target.value)} />
+                  </Field>
+                </div>
+                {openMinute !== null && closeMinute !== null && openMinute !== closeMinute ? (
+                  <DayDial open={openMinute} close={closeMinute} />
+                ) : null}
+              </>
+            ) : null}
           </FormBlock>
 
           <FormBlock icon={ShieldCheck} tone="info" title="兑换条件">
@@ -487,7 +662,8 @@ function NumberInput({
   min,
   prefix,
   suffix,
-  placeholder
+  placeholder,
+  disabled
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -495,9 +671,15 @@ function NumberInput({
   prefix?: string;
   suffix?: string;
   placeholder?: string;
+  disabled?: boolean;
 }) {
   return (
-    <div className="flex h-9 items-center rounded-md border bg-transparent shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30">
+    <div
+      className={cn(
+        "flex h-9 items-center rounded-md border bg-transparent shadow-xs focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30",
+        disabled && "opacity-50"
+      )}
+    >
       {prefix ? <span className="pl-3 text-xs text-muted-foreground">{prefix}</span> : null}
       <input
         type="number"
@@ -505,6 +687,7 @@ function NumberInput({
         min={min}
         value={value}
         placeholder={placeholder}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         className="h-full min-w-0 flex-1 bg-transparent px-3 text-sm tabular-nums outline-none placeholder:text-muted-foreground"
       />
@@ -619,13 +802,128 @@ function PreviewCard({
       </div>
       {item.stock !== undefined || rules.length || saleTime ? (
         <div className="flex flex-wrap gap-x-3 gap-y-1 border-t pt-2.5 text-xs text-muted-foreground">
-          {item.stock !== undefined ? <span>剩余 {formatPoints(item.stock)} 件</span> : null}
+          {item.stock !== undefined ? (
+            <span>
+              {restocks(item) ? `${CURRENT_PERIOD_LABEL[item.restockPeriod as PointsStoreLimitPeriod]}剩余` : "剩余"} {formatPoints(item.stock)} 件
+            </span>
+          ) : null}
           {rules.map((rule) => (
             <span key={rule}>{rule}</span>
           ))}
           {saleTime ? <span>{saleTime}</span> : null}
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function PeriodSelect({
+  value,
+  periods,
+  onChange
+}: {
+  value: PointsStoreLimitPeriod;
+  periods?: PointsStoreLimitPeriod[];
+  onChange: (value: PointsStoreLimitPeriod) => void;
+}) {
+  return (
+    <Select value={value} onValueChange={(next) => onChange(next as PointsStoreLimitPeriod)}>
+      <SelectTrigger className="w-full">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {(periods ?? ["total", "day", "week", "month"]).map((period) => (
+          <SelectItem key={period} value={period}>
+            {LIMIT_PERIOD_LABEL[period]}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+const RESTOCK_MOMENT: Record<Form["restockPeriod"], string> = {
+  day: "每天 00:00",
+  week: "每周一 00:00",
+  month: "每月 1 日 00:00"
+};
+
+const RESTOCK_SEGMENTS: Record<Form["restockPeriod"], string[]> = {
+  day: ["今天", "明天", "后天"],
+  week: ["本周", "下周", "第三周"],
+  month: ["本月", "下月", "第三个月"]
+};
+
+/**
+ * 补货时间线：三个周期并排，本期画当前剩余，之后的周期画满货。
+ * 让运营一眼看清「现在剩多少、什么时候补、补到多少」，不用在脑子里推。
+ */
+function RestockTimeline({
+  period,
+  quantity,
+  stock,
+  timezone
+}: {
+  period: Form["restockPeriod"];
+  quantity: number;
+  stock: number;
+  timezone: string;
+}) {
+  const segments = RESTOCK_SEGMENTS[period];
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border bg-muted/30 p-3">
+      <div className="flex gap-1.5">
+        {segments.map((label, index) => {
+          const value = index === 0 ? Math.min(stock, quantity) : quantity;
+          const ratio = quantity > 0 ? value / quantity : 0;
+          return (
+            <div key={label} className="flex min-w-0 flex-1 flex-col gap-1">
+              <div className="relative h-8 overflow-hidden rounded-md bg-background">
+                <div
+                  className={cn("absolute inset-y-0 left-0 transition-[width]", index === 0 ? "bg-emerald-500/70" : "bg-emerald-500/25")}
+                  style={{ width: `${ratio * 100}%` }}
+                />
+                <span className="absolute inset-0 flex items-center justify-center text-xs font-medium tabular-nums">
+                  {formatPoints(value)}
+                </span>
+              </div>
+              <span className={cn("text-center text-[11px]", index === 0 ? "font-medium text-foreground" : "text-muted-foreground")}>{label}</span>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {RESTOCK_MOMENT[period]}（{timezone}）补满到 {formatPoints(quantity)} 件；没兑完的余量不累积到下一期。
+      </p>
+    </div>
+  );
+}
+
+/** 24 小时刻度条：开放的时段着色，跨零点时两端各着一段 */
+function DayDial({ open, close }: { open: number; close: number }) {
+  const end = close === 0 ? 1440 : close;
+  const ranges = end > open ? [[open, end]] : [[open, 1440], [0, end]];
+  const total = ranges.reduce((sum, [from, to]) => sum + (to - from), 0);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="relative h-3 overflow-hidden rounded-full bg-muted">
+        {ranges.map(([from, to]) => (
+          <div
+            key={from}
+            className="absolute inset-y-0 rounded-full bg-sky-500"
+            style={{ left: `${(from / 1440) * 100}%`, width: `${((to - from) / 1440) * 100}%` }}
+          />
+        ))}
+      </div>
+      <div className="flex justify-between text-[11px] tabular-nums text-muted-foreground">
+        {["00:00", "06:00", "12:00", "18:00", "24:00"].map((tick) => (
+          <span key={tick}>{tick}</span>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">
+        每天开放 {Math.floor(total / 60)} 小时{total % 60 ? ` ${total % 60} 分钟` : ""}
+        {end <= open ? "，跨零点" : ""}
+      </p>
     </div>
   );
 }

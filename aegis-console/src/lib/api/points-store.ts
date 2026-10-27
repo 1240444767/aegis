@@ -10,6 +10,8 @@ import { apiRequest, buildQuery } from "@/lib/api/client";
 
 export type PointsStoreRewardValue = "amount" | "money" | "ref" | "feature" | "text";
 export type PointsStoreLimitPeriod = "total" | "day" | "week" | "month";
+/** 补货周期：每到新的自然日 / ISO 周 / 自然月，剩余库存回到补货数量 */
+export type PointsStoreRestockPeriod = "none" | "day" | "week" | "month";
 export type PointsStoreAudience = "all" | "vip" | "non_vip";
 export type PointsStoreItemStatus = "active" | "inactive";
 export type PointsStoreRedemptionStatus = "completed" | "pending" | "cancelled";
@@ -32,6 +34,9 @@ export type PointsStoreRewardSpec = {
 export type PointsStoreCatalog = {
   rewards: PointsStoreRewardSpec[];
   limitPeriods: PointsStoreLimitPeriod[];
+  restockPeriods: PointsStoreRestockPeriod[];
+  /** 周期边界与每日开放时段所用的时区（应用默认时区，IANA 名） */
+  timezone: string;
   audiences: PointsStoreAudience[];
   maxRewards: number;
   /** 应用里已经用过的分类，供分类输入补全 */
@@ -77,11 +82,23 @@ export type PointsStoreItem = {
   cost: number;
   originalCost?: number;
   rewards: PointsStoreReward[];
-  /** 剩余库存，缺省为不限 */
+  /** 剩余库存，缺省为不限。开了补货周期时是库里那个周期的值，此刻的库存看管理端的 currentStock */
   stock?: number;
   soldCount: number;
+  restockPeriod: PointsStoreRestockPeriod;
+  /** 每个补货周期补到多少 */
+  restockQuantity?: number;
+  stockWindowStart?: string;
+  /** 全站名额：所有人合计每个周期最多兑多少份，0 为不限 */
+  globalLimitPeriod: PointsStoreLimitPeriod;
+  globalLimitCount: number;
   limitPeriod: PointsStoreLimitPeriod;
   limitCount: number;
+  /** 每人累计上限，与按周期限兑叠加，0 为不限 */
+  userTotalLimit: number;
+  /** 每日开放时段（应用默认时区，自零点起的分钟数），都缺省为全天 */
+  dailyOpenMinute?: number;
+  dailyCloseMinute?: number;
   audience: PointsStoreAudience;
   minLevel: number;
   startsAt?: string;
@@ -99,6 +116,14 @@ export type PointsStoreAdminItem = PointsStoreItem & {
   redeemers: number;
   pointsSpent: number;
   pending: number;
+  /** 此刻的剩余库存（已按补货周期换算），不限时缺省 */
+  currentStock?: number;
+  nextRestockAt?: string;
+  /** 本名额周期已用份数与下次清零时刻 */
+  globalUsed: number;
+  globalResetsAt?: string;
+  /** 此刻是否在每日开放时段内 */
+  openNow: boolean;
 };
 
 export type PointsStoreItemPayload = {
@@ -111,8 +136,15 @@ export type PointsStoreItemPayload = {
   originalCost: number | null;
   rewards: PointsStoreReward[];
   stock: number | null;
+  restockPeriod: PointsStoreRestockPeriod;
+  restockQuantity: number | null;
+  globalLimitPeriod: PointsStoreLimitPeriod;
+  globalLimitCount: number;
   limitPeriod: PointsStoreLimitPeriod;
   limitCount: number;
+  userTotalLimit: number;
+  dailyOpenMinute: number | null;
+  dailyCloseMinute: number | null;
   audience: PointsStoreAudience;
   minLevel: number;
   startsAt: string | null;
