@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { IdCard, KeyRound, ShieldCheck } from "lucide-react";
+import { Bot, IdCard, KeyRound, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api-client";
@@ -21,6 +21,7 @@ import { ProfileAccessPanel } from "@/components/profile/profile-access-panel";
 import { ProfileAccountPanel } from "@/components/profile/profile-account-panel";
 import { BasicInfoPanel, ContactsPanel } from "@/components/profile/profile-form-panels";
 import { ProfileIdentityCard } from "@/components/profile/profile-identity-card";
+import { ProfileMcpKeysPanel } from "@/components/profile/profile-mcp-keys-panel";
 import { ProfileSaveBar } from "@/components/profile/profile-save-bar";
 import {
   changedFields,
@@ -144,6 +145,10 @@ export default function ProfilePage() {
                 <ShieldCheck className="size-3.5" />
                 账户与会话
               </TabsTrigger>
+              <TabsTrigger value="mcp" className="gap-1.5 text-xs">
+                <Bot className="size-3.5" />
+                MCP 密钥
+              </TabsTrigger>
             </TabsList>
 
             <TabsContent value="profile" className="space-y-4">
@@ -167,6 +172,10 @@ export default function ProfilePage() {
                 sessionLoading={sessionQuery.isLoading}
                 loginAvailability={profileQuery.data?.loginAvailability}
               />
+            </TabsContent>
+
+            <TabsContent value="mcp">
+              <ProfileMcpKeysPanel isSuperAdmin={Boolean(shown.isSuperAdmin)} />
             </TabsContent>
           </Tabs>
         </div>
