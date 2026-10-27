@@ -15,8 +15,8 @@ import (
 // 无套利的端到端集成测试：真实 Postgres，跑全部迁移。
 //
 // 复现线上的环：积分商城 10 积分卖一次抽奖，奖盘里有月度会员；永久会员抽中月度会员按会员单价折成 300 积分，
-// 买一次赚一次。修好之后折算积分封在「买一次、抽一次」回本的上限之内，活动页的提示与实际发放一致，
-// 控制台的积分账能看出奖盘本身的套利。
+// 买一次赚一次。修好之后只在原价折算构成套利时按比例缩到「买一次、抽一次」刚好回本，活动页的提示与
+// 实际发放一致，控制台的积分账能看出缩减与奖盘本身的套利。
 //
 // AEGIS_TEST_PG_DSN=postgres://postgres@127.0.0.1:55441/postgres go test ./internal/service -run TestLotteryEconomyIntegration
 func TestLotteryEconomyIntegration(t *testing.T) {
@@ -90,14 +90,14 @@ VALUES ($1, '抽奖次数 1 次', 10, '[{"type": "lottery_draws", "amount": 1}]'
 	}
 	swap := state.Activity.Prizes[7].Swap
 	if swap == nil || swap.Reward == nil || swap.Reward.Type != lotterydomain.KindPoints || swap.Reward.Amount <= 0 || swap.Reward.Amount >= 10 {
-		t.Fatalf("10 积分一次时月度会员的折算应封在 10 积分以内，得到 %+v", swap)
+		t.Fatalf("10 积分一次时月度会员的折算应按比例缩到 10 积分以内，得到 %+v", swap)
 	}
-	capped := swap.Reward.Amount
 
 	admin, err := lottery.GetActivity(ctx, appID, activity.ID)
-	if err != nil || admin.Economy == nil || admin.Economy.Price != 10 || admin.Economy.LifetimeCap != capped ||
-		admin.Economy.LifetimeReturn > 10 || admin.Economy.MemberReturn >= 10 || len(admin.Economy.Warnings) != 0 {
-		t.Fatalf("控制台积分账不对：%+v %v", admin.Economy, err)
+	if err != nil || admin.Economy == nil || admin.Economy.Price != 10 || admin.Economy.LifetimeScale <= 0 ||
+		admin.Economy.LifetimeScale >= 0.1 || admin.Economy.LifetimeReturn > 10.01 || admin.Economy.MemberReturn >= 10 ||
+		len(admin.Economy.Warnings) != 1 {
+		t.Fatalf("控制台积分账应提示永久会员被缩减：%+v %v", admin.Economy, err)
 	}
 
 	// 只让月度会员那两格出：抽中就是已拥有，实际发放与提示一致
@@ -119,7 +119,7 @@ VALUES ($1, '抽奖次数 1 次', 10, '[{"type": "lottery_draws", "amount": 1}]'
 	if err := pool.QueryRow(ctx, `SELECT integral FROM users WHERE id = $1`, frank).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
-	// 奖盘里只剩会员格子时积分奖品的期望为 0，上限变成 10 × (1 − 0) / 1 = 10
+	// 奖盘里只剩会员格子时积分奖品的期望为 0，比例变成 10 / 300：月度会员折 10 积分左右
 	if conversion == nil || conversion.Reward.Type != lotterydomain.KindPoints || conversion.Reward.Amount > 10 || after-before != conversion.Reward.Amount {
 		t.Fatalf("永久会员抽中月度会员应折成不超过 10 积分，得到 %+v（+%d）", conversion, after-before)
 	}
@@ -132,12 +132,12 @@ VALUES ($1, '抽奖次数 1 次', 10, '[{"type": "lottery_draws", "amount": 1}]'
 	if err != nil || admin.Economy == nil || len(admin.Economy.Warnings) != 1 || admin.Economy.MemberReturn <= 10 {
 		t.Fatalf("积分奖品期望超过价格时应警告，得到 %+v %v", admin.Economy, err)
 	}
-	// 这时连永久会员的折算也是 0：已拥有的格子不再折积分，活动页写明
+	// 这时永久会员的折算比例是 0：已拥有的格子改发经验（不是谢谢参与），活动页写明
 	state, err = lottery.State(ctx, appID, frank, activity.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if swap := state.Activity.Prizes[7].Swap; swap == nil || swap.Label != "转为谢谢参与" || swap.Reward == nil || swap.Reward.Type != lotterydomain.KindNone {
-		t.Fatalf("奖盘本身套利时已拥有的格子不再折积分，得到 %+v", swap)
+	if swap := state.Activity.Prizes[7].Swap; swap == nil || swap.Reward == nil || swap.Reward.Type != lotterydomain.KindExperience {
+		t.Fatalf("奖盘本身套利时已拥有的格子改发经验，得到 %+v", swap)
 	}
 }

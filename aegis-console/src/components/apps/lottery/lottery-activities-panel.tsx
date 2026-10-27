@@ -264,10 +264,12 @@ export function LotteryActivitiesPanel({
                     {activity.economy && activity.economy.price > 0 ? (
                       <span
                         className="tabular-nums"
-                        title="积分能换到抽奖次数时，抽一次期望拿回的积分；永久会员抽中已拥有的奖品时折算会被封顶，保证不超过价格"
+                        title="积分能换到抽奖次数时，抽一次期望拿回的积分；永久会员抽中已拥有的奖品按原价折算，只有原价会让积分买次数稳赚时才按比例缩减"
                       >
                         每次 {formatCount(activity.economy.price)} 积分，期望回报 {activity.economy.memberReturn < 0 ? "无上限" : activity.economy.memberReturn}
-                        {activity.economy.lifetimeCap >= 0 ? `，永久会员折算上限 ${formatCount(activity.economy.lifetimeCap)}` : ""}
+                        {activity.economy.lifetimeScale < 1
+                          ? `，永久会员折算按原价 ${Math.round(activity.economy.lifetimeScale * 100)}%`
+                          : "，永久会员按原价折算"}
                       </span>
                     ) : null}
                     {activity.pending > 0 ? (

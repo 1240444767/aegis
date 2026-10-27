@@ -572,12 +572,12 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 	rule := lotterydomain.RuleOf(activity, coverage.Policy)
 	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
 	probabilities := lotterydomain.Probabilities(personal)
-	// 与抽奖事务同一个无套利上限：「转为 N 积分」写的是真会发的数
+	// 与抽奖事务同一个无套利比例：「转为 N 积分」写的是真会发的数
 	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, activity.AppID)
 	if err != nil {
 		s.log.Warn("lottery: store draw price failed", zap.Int64("appid", activity.AppID), zap.Error(err))
 	}
-	rule = rule.WithCap(lotterydomain.EconomyOf(rule, coverage, personal, plans,
+	rule = rule.WithEconomy(lotterydomain.EconomyOf(rule, coverage, personal, plans,
 		lotterydomain.DrawPrice(effects.Personalize(activity), storePrice)))
 	out := lotterydomain.ClientActivity{
 		ID: activity.ID, Name: activity.Name, Description: activity.Description, Rules: activity.Rules,

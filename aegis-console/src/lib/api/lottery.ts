@@ -497,10 +497,10 @@ export type LotteryEconomy = {
   price: number;
   /** 不拥有任何奖品的用户抽一次的期望积分回报；-1 为抽不完 */
   memberReturn: number;
-  /** 已拥有全部会员与功能奖品的永久会员抽一次的期望积分回报（封顶之后） */
+  /** 已拥有全部会员与功能奖品的永久会员抽一次的期望积分回报（缩减之后） */
   lifetimeReturn: number;
-  /** 永久会员抽中已拥有的奖品时最多折多少积分；-1 为不封顶 */
-  lifetimeCap: number;
+  /** 永久会员抽中已拥有的奖品时按原价的几成折算（0–1）；1 为原价，只有原价折算构成套利时才小于 1 */
+  lifetimeScale: number;
   /** 需要处理的问题 */
   warnings: string[];
 };

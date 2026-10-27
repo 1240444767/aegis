@@ -2,6 +2,7 @@ package lottery
 
 import (
 	"fmt"
+	"math"
 	"slices"
 
 	"aegis/internal/domain/pointstore"
@@ -123,10 +124,10 @@ type SwapRule struct {
 	// Value 折算单价：应用的会员折算策略，活动填了每天 / 永久积分时以活动为准
 	Value vipdomain.ConversionPolicy
 	Draws int64
-	// Capped 时折成积分每次最多给 Cap（无套利上限，见 economy.go）；零值为不封顶
-	Capped bool
-	Cap    int64
-	// Price 用积分换一次抽奖的价格：改发的抽奖次数按它折成积分与 Cap 比
+	// Scaled 时改发的积分、抽奖次数按原价的 Scale（0–1）发放（无套利，见 economy.go）；零值为原价
+	Scaled bool
+	Scale  float64
+	// Price 用积分换一次抽奖的价格：改发的抽奖次数按它折成积分
 	Price int64
 }
 
@@ -182,14 +183,14 @@ func OwnedItem(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) v
 // exclude 只影响常规抽取；走到这里（保底奖、兜底奖恰好是已拥有的）时按积分折算 ——
 // 保底承诺的是「必中一个奖」，不能因为他已经是永久会员就落空。
 //
-// 折成积分（公式或奖品单独设的改发积分）时不超过 rule.Cap：超过无套利上限的按上限发，
-// 上限是 0 时改发「谢谢参与」（KindNone）—— 已拥有的东西不再重复发放，也不再折出积分。
+// 正常的奖盘按原价折算。原价折算会让积分买次数稳赚时（rule.Scaled），改发的积分、抽奖次数按 rule.Scale
+// 的比例发积分，不足 1 积分的改发经验 —— 不会落空成「谢谢参与」。
 func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Reward, bool) {
 	if prize.LifetimeReward != nil && prize.LifetimeReward.Type != "" {
 		if rule.Policy == LifetimeGrant {
 			return Reward{}, false
 		}
-		return capPoints(rule, NormalizeReward(*prize.LifetimeReward)), true
+		return scaleSwap(rule, NormalizeReward(*prize.LifetimeReward)), true
 	}
 	switch rule.Policy {
 	case LifetimeGrant:
@@ -198,40 +199,46 @@ func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Rewar
 		if rule.Draws <= 0 {
 			return Reward{}, false
 		}
-		return capPoints(rule, Reward{Type: KindLotteryDraws, Amount: rule.Draws}), true
+		return scaleSwap(rule, Reward{Type: KindLotteryDraws, Amount: rule.Draws}), true
 	}
 	amount := min(OwnedItem(rule, prize, plans).Points, MaxSwapPoints)
 	if amount <= 0 {
 		return Reward{}, false
 	}
-	return capPoints(rule, Reward{Type: KindPoints, Amount: amount}), true
+	return scaleSwap(rule, Reward{Type: KindPoints, Amount: amount}), true
 }
 
-// capPoints 改发的积分、抽奖次数不超过无套利上限（次数按价格折成积分比）：超过时改为按上限发积分，
-// 上限是 0 时什么也不发。
-func capPoints(rule SwapRule, reward Reward) Reward {
-	if !rule.Capped {
+// scaleSwap 需要缩减时，改发的积分、抽奖次数（次数按价格折成积分）按 rule.Scale 发积分（向下取整）；
+// 不足 1 积分时改发同等原价的经验（最多 MaxScaledExperience 点）。其余改发（经验等）不受影响。
+func scaleSwap(rule SwapRule, reward Reward) Reward {
+	if !rule.Scaled || rule.Scale >= 1 {
 		return reward
 	}
-	value := int64(0)
+	if reward.Type == KindLotteryDraws && rule.Price <= 0 {
+		return reward
+	}
+	value := SwapValue(rule, reward)
+	if value <= 0 {
+		return reward
+	}
+	if points := int64(math.Floor(float64(value) * max(rule.Scale, 0))); points >= 1 {
+		return Reward{Type: KindPoints, Amount: points}
+	}
+	return Reward{Type: KindExperience, Amount: min(value, MaxScaledExperience)}
+}
+
+// MaxScaledExperience 缩到不足 1 积分时改发的经验上限（经验换不成积分，只为不让这一格落空）。
+const MaxScaledExperience int64 = 100
+
+// SwapValue 改发的东西值多少积分：积分按数量，抽奖次数按 rule.Price 一次，其余为 0。
+func SwapValue(rule SwapRule, reward Reward) int64 {
 	switch reward.Type {
 	case KindPoints:
-		value = reward.Amount
+		return reward.Amount
 	case KindLotteryDraws:
-		if rule.Price <= 0 {
-			return reward
-		}
-		value = reward.Amount * rule.Price
-	default:
-		return reward
+		return reward.Amount * max(rule.Price, 0)
 	}
-	if value <= rule.Cap {
-		return reward
-	}
-	if rule.Cap == 0 {
-		return Reward{Type: KindNone}
-	}
-	return Reward{Type: KindPoints, Amount: rule.Cap}
+	return 0
 }
 
 // Excluded 这个人的常规抽取里是否剔除这个奖品。
@@ -268,7 +275,7 @@ type Conversion struct {
 	ConversionNo string `json:"conversionNo,omitempty"`
 }
 
-// ConversionMessage 给用户看的说明；改发的是「谢谢参与」（无套利上限为 0）时说不再重复发放。
+// ConversionMessage 给用户看的说明；改发的是「谢谢参与」（旧版无套利上限为 0 时的记录）时说不再重复发放。
 func ConversionMessage(reason, prizeName, label string) string {
 	if label == noneSpec.Label {
 		if reason == OwnedFeature {
