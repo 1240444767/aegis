@@ -1,6 +1,8 @@
 package lottery
 
 import (
+	vipdomain "aegis/internal/domain/vip"
+
 	"fmt"
 	"math"
 
@@ -153,10 +155,6 @@ func PrizeValue(activity Activity, guard *Guard, prize Prize) float64 {
 			drawValue = guard.DrawValue
 		}
 	}
-	perDay := float64(activity.LifetimePointsPerDay)
-	if perDay <= 0 {
-		perDay = DefaultLifetimePointsPerDay
-	}
 	switch prize.Kind {
 	case KindPoints:
 		return amount
@@ -164,28 +162,14 @@ func PrizeValue(activity Activity, guard *Guard, prize Prize) float64 {
 		return amount * expRate
 	case KindLotteryDraws:
 		return amount * drawValue
-	case KindVipDays, KindAdFree:
-		return amount * perDay
-	case KindFeatureTime:
-		return math.Ceil(amount/60) * perDay
-	case KindVipLifetime:
-		lifetime := float64(activity.LifetimePointsLifetime)
-		if lifetime <= 0 {
-			lifetime = DefaultLifetimePointsLifetime
-		}
-		return lifetime
-	case KindFeature:
-		if prize.Reward.Amount == 0 {
-			lifetime := float64(activity.LifetimePointsLifetime)
-			if lifetime <= 0 {
-				lifetime = DefaultLifetimePointsLifetime
-			}
-			return lifetime
-		}
-		return amount * perDay
 	case KindVipPlan:
 		// 套餐时长在套餐目录里，这里拿不到：按 30 天估，需要准确时请给奖品设 value
-		return 30 * perDay
+		rule := RuleOf(activity, vipdomain.DefaultConversionPolicy(activity.AppID))
+		return float64(rule.Value.VipPoints(30 * 86400))
+	case KindVipDays, KindVipLifetime, KindFeature, KindFeatureTime, KindAdFree:
+		// 与「已拥有时折多少积分」同一个价（应用策略取不到，按默认策略 + 活动单价）
+		rule := RuleOf(activity, vipdomain.DefaultConversionPolicy(activity.AppID))
+		return float64(OwnedItem(rule, prize, nil).Points)
 	}
 	return 0
 }

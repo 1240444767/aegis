@@ -131,8 +131,10 @@ func TestEvaluateReasons(t *testing.T) {
 		{"仅会员", func(i *Item) { i.Audience = AudienceVip }, nil, Usage{}, ReasonVipOnly},
 		{"仅非会员", func(i *Item) { i.Audience = AudienceNonVip }, func(f *UserFacts) { f.IsVip = true }, Usage{}, ReasonNonVipOnly},
 		{"等级不足", func(i *Item) { i.MinLevel = 5 }, nil, Usage{}, ReasonLevelRequired},
-		{"已永久解锁", nil, func(f *UserFacts) { f.PermanentUnlocks = []string{"online_music"} }, Usage{}, ReasonOwned},
-		{"永久会员已含该功能", nil, func(f *UserFacts) { f.IsLifetime, f.LifetimeFeatures = true, []string{"online_music"} }, Usage{}, ReasonOwned},
+		{"已永久解锁", nil, func(f *UserFacts) { f.Holdings.PermanentUnlocks = []string{"online_music"} }, Usage{}, ReasonOwned},
+		{"永久会员已含该功能", nil, func(f *UserFacts) {
+			f.IsLifetime, f.Holdings.Lifetime, f.Holdings.LifetimeFeatures = true, true, []string{"online_music"}
+		}, Usage{}, ReasonOwned},
 		{"积分不足", func(i *Item) { i.Cost = 501 }, nil, Usage{}, ReasonInsufficientPoints},
 		// 优先级：下架的商品先说下架，不说积分不够
 		{"下架且积分不足", func(i *Item) { i.Status, i.Cost = StatusInactive, 9999 }, nil, Usage{}, ReasonInactive},
@@ -157,7 +159,8 @@ func TestEvaluateReasons(t *testing.T) {
 // 永久会员兑换会员天数、或已包含全部功能的套餐，都是纯花积分。
 func TestOwnedMembership(t *testing.T) {
 	facts := baseFacts()
-	facts.IsLifetime, facts.LifetimeFeatures = true, []string{"export"}
+	facts.IsLifetime, facts.Holdings.Lifetime, facts.Holdings.LifetimeFeatures = true, true, []string{"export"}
+	facts.Holdings.LifetimeAdFree = true
 	facts.Plans = map[int64]PlanRef{
 		1: {ID: 1, Name: "基础版", DurationDays: 30, Features: []string{"export"}},
 		2: {ID: 2, Name: "高级版", DurationDays: 30, Features: []string{"export", "ai.chat"}},
@@ -171,7 +174,7 @@ func TestOwnedMembership(t *testing.T) {
 	if Owned([]Reward{{Type: RewardVipPlan, RefID: 2}}, facts) {
 		t.Error("多出功能的套餐是正常的升级路径，不该拦")
 	}
-	facts.IsLifetime = false
+	facts.IsLifetime, facts.Holdings.Lifetime = false, false
 	if Owned([]Reward{{Type: RewardVipDays, Amount: 7}}, facts) {
 		t.Error("不是永久会员时会员天数不算已拥有")
 	}

@@ -391,11 +391,10 @@ type UserFacts struct {
 	Integral int64
 	Level    int
 	IsVip    bool
-	// IsLifetime 永久会员；LifetimeFeatures 他的永久开通里有哪些功能（判「已拥有」）
-	IsLifetime       bool
-	LifetimeFeatures []string
-	// PermanentUnlocks 永久解锁了哪些功能
-	PermanentUnlocks []string
+	// IsLifetime 永久会员
+	IsLifetime bool
+	// Holdings 已经永久拥有什么（判「已拥有」的统一判据 vip.Holdings）
+	Holdings vipdomain.Holdings
 	// Plans 商品引用到的会员套餐（判永久套餐是否已包含），按 ID 索引
 	Plans map[int64]PlanRef
 	// Features 功能目录（含停用的），按标识索引：判功能是否还在

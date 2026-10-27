@@ -1,6 +1,8 @@
 package lottery
 
 import (
+	vipdomain "aegis/internal/domain/vip"
+
 	"math"
 	"strings"
 	"testing"
@@ -236,18 +238,19 @@ func TestNewPrizeKinds(t *testing.T) {
 	if ClientKind(KindVipLifetime) != KindVipPlan || ClientKind(KindAdFree) != KindFeature || ClientKind(KindPoints) != KindPoints {
 		t.Fatal("老客户端的类型映射不对")
 	}
-	lifetime := MemberCoverage{Lifetime: true}
+	lifetime := MemberCoverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true}}
 	for _, reward := range []Reward{{Type: KindVipLifetime}, {Type: KindAdFree, Amount: 7}, {Type: KindFeatureTime, Tag: "music", Amount: 5}} {
 		if _, owned := lifetime.Owned(reward, nil); !owned {
 			t.Fatalf("永久会员对 %s 应算已拥有", reward.Type)
 		}
 	}
-	unlocked := MemberCoverage{PermanentUnlocks: []string{"music"}}
+	unlocked := MemberCoverage{Holdings: vipdomain.Holdings{PermanentUnlocks: []string{"music"}}}
 	if reason, owned := unlocked.Owned(Reward{Type: KindFeatureTime, Tag: "music", Amount: 5}, nil); !owned || reason != OwnedFeature {
 		t.Fatal("已永久解锁的功能，其时长应算已拥有")
 	}
-	rule := SwapRule{Policy: LifetimePoints, PointsPerDay: 10, PointsLifetime: 3650}
-	cases := map[string]int64{KindVipLifetime: 3650, KindAdFree: 70, KindFeatureTime: 20}
+	rule := SwapRule{Policy: LifetimePoints, Value: rates(10, 3650)}
+	// 功能时长按应用策略的每小时单价：90 分钟 × 10/小时 = 15
+	cases := map[string]int64{KindVipLifetime: 3650, KindAdFree: 70, KindFeatureTime: 15}
 	for kind, want := range cases {
 		reward := Reward{Type: kind, Amount: 7, Tag: "music"}
 		if kind == KindFeatureTime {

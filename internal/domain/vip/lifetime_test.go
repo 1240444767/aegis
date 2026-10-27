@@ -3,8 +3,6 @@ package vip
 import (
 	"testing"
 	"time"
-
-	"github.com/shopspring/decimal"
 )
 
 // 永久会员的判定。
@@ -148,38 +146,6 @@ func TestLifetimeSegmentIsAlwaysLive(t *testing.T) {
 	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
 	if !lifetimeSegment(1, ChannelWallet, "永久", now.Add(-24*time.Hour)).LiveAt(now.AddDate(50, 0, 0)) {
 		t.Fatal("永久开通没有终点，任何时刻都应生效")
-	}
-}
-
-func TestLifetimeIncludes(t *testing.T) {
-	plan := func(lifetime bool, features ...string) Plan {
-		days := 30
-		if lifetime {
-			days = 0
-		}
-		return Plan{Kind: KindPaid, Lifetime: lifetime, DurationDays: days, Features: features, Price: decimal.NewFromInt(30)}
-	}
-	cases := []struct {
-		name     string
-		lifetime bool
-		have     []string
-		plan     Plan
-		want     bool
-	}{
-		{"不是永久会员：什么都能买", false, []string{"export"}, plan(false, "export"), false},
-		{"永久会员续同档月卡：已包含", true, []string{"export"}, plan(false, "export"), true},
-		{"同一个永久套餐买第二次：已包含", true, []string{"export"}, plan(true, "Export "), true},
-		{"永久会员升级到含新功能的永久套餐：放行", true, []string{"export"}, plan(true, "ai.chat", "export"), false},
-		{"永久基础版买一段限时高级版：放行", true, []string{"export"}, plan(false, "ai.chat"), false},
-		{"不带功能的套餐对永久会员没有意义", true, nil, plan(false), true},
-		{"试用对永久会员一律视为已包含", true, nil, Plan{Kind: KindTrial, DurationDays: 7, Features: []string{"ai.chat"}}, true},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := LifetimeIncludes(tc.lifetime, tc.have, tc.plan); got != tc.want {
-				t.Fatalf("LifetimeIncludes = %v，期望 %v", got, tc.want)
-			}
-		})
 	}
 }
 

@@ -122,8 +122,8 @@ GET /api/apps/{appKey}/ads/apex/callback?userId={{USER_ID}}&transId={{TRANS_ID}}
 
 | 权益 | 已拥有的条件 |
 |---|---|
-| `vip_days` | 永久会员，且场景会员权益里的功能都已在永久开通里（多出来的功能是升级，照发） |
-| `vip_plan` | `vip.LifetimeIncludes`：与购买入口同一个判据 |
+| `vip_days` | 永久会员，且场景会员权益里启用中的功能都已永久拥有、场景送出的免广告也已有（`vip.Holdings.Covers`；多出来的功能或免广告是升级，照发） |
+| `vip_plan` | 与购买入口同一个判据（`vip.Holdings.Covers`），免广告按场景设置 |
 | `feature_minutes` | 永久会员（会员使用时免扣，余额永远用不上），或已永久解锁该功能 |
 
 积分、经验、抽奖次数、AI 额度从来不算已拥有；场景里不是已拥有的那几项照常发放。

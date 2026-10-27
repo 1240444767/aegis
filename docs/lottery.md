@@ -138,7 +138,7 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 | 护栏 | `guard.minWinRate` / `maxWinRate` / `maxValue` / `kindCaps` | 中奖率区间、每次期望价值（积分当量）上限、按奖品类型的单次占比上限，全部是线性不等式。取满足约束且与当前分布 **KL 散度最小**的分布（**I-投影**，最小鉴别信息原理）：解为指数族 p_i ∝ q_i·exp(−λ·a_i)，在凹对偶函数上做带有效集的**投影牛顿法**，KKT 条件满足即停；约束在可发奖品上不可行时 `trace.guardInfeasible` |
 
 奖品的积分当量（`prize.value`，库列 `points_value`）：0 为按类型估算（积分按数量；经验 × `guard.experienceRate`（默认 0.1）；
-抽奖次数 × `guard.drawValue`（默认积分抽奖价，再默认 10）；会员天数、限时功能 × 每天折算积分；永久功能按永久折算；
+抽奖次数 × `guard.drawValue`（默认积分抽奖价，再默认 10）；会员类奖品与已拥有时折算的积分同价（默认折算策略 + 活动单价）；
 会员套餐按 30 天估）。人工发放与会员套餐建议显式设置。`trace` 多 `fair`（控制前中奖率）、`value`（这一次的期望价值）、`luck`（z）、`prd`。
 
 同一奖盘 2000 人 × 60 次的模拟（`strategy_control_test.go`）：独立抽取最长连败 P99 为 13 次、每人中奖次数 P10–P90 为 21–31；
@@ -237,21 +237,23 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 ## 已拥有的奖品（永久会员抽中会员）
 
 永久会员抽中「会员 7 天」，照常记一段限时会员什么也没给他（功能取两条线的并集，永久那条已经全包）。
-同类的还有：永久会员抽中他已含功能的套餐 / 功能、已永久解锁某功能的人再抽中这个功能。判据（`MemberCoverage.Owned`）：
+同类的还有：永久会员抽中他已含功能的套餐 / 功能、已永久解锁某功能的人再抽中这个功能。判据（`MemberCoverage.Owned`）走统一的
+`vip.Holdings`（见 [会员权益折算](vip-conversion.md)「已拥有的判据」），与购买、积分商城、激励广告、卡密同一套：
 
 | 奖品 | 何时算已拥有 |
 |---|---|
-| `vip_days` | 永久会员 |
-| `vip_plan` | `vip.LifetimeIncludes`：套餐的每个功能都已在永久开通里（与购买入口同一判据；永久基础版抽中限时高级版不算） |
+| `vip_days` | 永久会员，且永久那条线免广告（看广告领到的永久会员可以不免，这时会员天数带来免广告，不算已拥有） |
+| `vip_plan` | `vip.Holdings.CoversPlan`：套餐里启用中的功能都已永久拥有（永久开通或永久解锁），且免广告也已有；永久基础版抽中限时高级版不算 |
 | `feature` | 已永久解锁这个功能，或永久会员的功能里有它 |
-| `vip_lifetime` / `ad_free` | 永久会员（本就免广告、功能时长免扣） |
+| `vip_lifetime` | 永久会员且免广告 |
+| `ad_free` | 永久会员且免广告 |
 | `feature_time` | 永久会员（会员一律免扣），或已永久解锁这个功能 |
 
 积分、经验、抽奖次数、人工发放、谢谢参与从来不算。活动的 `lifetimePolicy` 决定怎么办（迁移 `000114`，已有活动默认 `points`）：
 
 | `lifetimePolicy` | 行为 |
 |---|---|
-| `points`（默认） | 折算积分：天数 × `lifetimePointsPerDay`（默认 10）；永久套餐 / 永久功能 / 永久会员给 `lifetimePointsLifetime`（默认 3650）；功能时长按小时（不足一小时按一小时）× 每天积分；单次封顶 1 亿 |
+| `points`（默认） | 折算积分，单价与卡密、邀请、管理员发放同一套（应用的[会员折算策略](vip-conversion.md)）：会员按 `perVipDay`、限时功能与免广告按 `perFeatureDay`（按秒向上取整）、功能时长按 `perFeatureHour`、永久套餐 / 永久功能 / 永久会员给 `perLifetime`。活动的 `lifetimePointsPerDay` 大于 0 时覆盖会员与限时功能、免广告的每天单价，`lifetimePointsLifetime` 大于 0 时覆盖永久；两项默认 0 即完全跟随应用策略。单次封顶 1 亿 |
 | `draws` | 改发 `lifetimeDraws` 次抽奖（默认 1） |
 | `exclude` | 这个人的常规抽取里剔除这些奖品（权重按 0 算，公示概率随之重算）；保底 / 兜底恰好是这类奖品时按积分折算 —— 保底承诺的是「必中」 |
 | `grant` | 照常发放（旧行为） |
@@ -267,6 +269,8 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 ```
 
 `results` 是实际到账的流水（积分流水标题「抽奖奖品折算」，metadata 带 `converted`、`originalKind`）。
+每次改发另记一条会员折算记录（`vip_conversions`，`kind = owned`、`source = lottery`，改发成积分时带积分流水号），
+`conversion.conversionNo` 指向它：用户的 `/vip/conversions` 与控制台的折算视图里能看到抽奖折掉的东西。
 活动页的奖品带 `swap`（`convert` + 改发的东西，或 `excluded`），页顶带 `lifetime` 提示（只在这个人有已拥有的奖品时出现）。
 统计概览多 `converted`、`convertedPoints`，奖品分布多 `converted`。
 
@@ -309,7 +313,7 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
   "startTime": null, "endTime": null,
   "freeDaily": 1, "pointsCost": 0, "pointsDaily": 0, "videoScene": "lottery",
   "pityThreshold": 6, "pityPosition": 1, "sortOrder": 0,
-  "lifetimePolicy": "points", "lifetimePointsPerDay": 10, "lifetimePointsLifetime": 3650, "lifetimeDraws": 1,
+  "lifetimePolicy": "points", "lifetimePointsPerDay": 0, "lifetimePointsLifetime": 0, "lifetimeDraws": 1,
   "prizes": [
     {"id": 0, "name": "", "reward": {"type": "none"}, "imageUrl": "", "quantity": -1, "weight": 40, "position": 0, "fallback": true},
     {"id": 0, "name": "2 积分", "reward": {"type": "points", "amount": 2}, "quantity": -1, "weight": 30, "position": 1},

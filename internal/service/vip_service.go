@@ -43,7 +43,8 @@ func (s *VipService) SetPaymentService(p *PaymentService) { s.payments = p }
 // 试用套餐的信息由 `/vip/status` 的 trialOffer 给出：那里同时带着「能不能领」，
 // 而这里给不出这个答案 —— 一份列不出资格的试用卡片，客户端只能先渲染再报错。
 //
-// 永久会员已经包含的套餐标上 included：它们买了也拿不到任何新东西，购买会以 40378 拒绝。
+// 永久会员已经包含的套餐标上 included：它们买了也拿不到任何新东西（vip.Holdings.CoversPlan：
+// 启用中的功能都已永久拥有，永久开通与永久解锁都算，免广告也已有），购买会以 40378 拒绝。
 // 标出来而不是从列表里拿掉 —— 永久会员看到一张空的套餐页，会以为是加载失败。
 func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Session) ([]vipdomain.Plan, error) {
 	if session == nil {
@@ -53,7 +54,7 @@ func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Se
 	if err != nil || len(plans) == 0 {
 		return plans, err
 	}
-	lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, session.AppID, session.UserID)
+	holdings, err := s.pg.GetVipHoldings(ctx, session.AppID, session.UserID)
 	if err != nil {
 		if errors.Is(err, pgrepo.ErrUserNotFound) {
 			return plans, nil
@@ -61,7 +62,7 @@ func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Se
 		return nil, err
 	}
 	for i := range plans {
-		plans[i].Included = vipdomain.LifetimeIncludes(lifetime, features, plans[i])
+		plans[i].Included = holdings.CoversPlan(plans[i])
 		if plans[i].Lifetime && !plans[i].Included {
 			// 预览失败不影响套餐列表：少一句说明，不该让用户看不到套餐
 			if preview, err := s.previewUpgrade(ctx, session.AppID, session.UserID, plans[i].Features, ""); err == nil {
@@ -84,14 +85,14 @@ func errVipLifetimeIncluded() error {
 
 // ensurePlanNotIncluded 下单前拦住「永久会员已经包含」的套餐（在线直购走这里，余额购买在事务内判）。
 func (s *VipService) ensurePlanNotIncluded(ctx context.Context, appID int64, userID int64, plan vipdomain.Plan) error {
-	lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, appID, userID)
+	holdings, err := s.pg.GetVipHoldings(ctx, appID, userID)
 	if err != nil {
 		if errors.Is(err, pgrepo.ErrUserNotFound) {
 			return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 		}
 		return err
 	}
-	if vipdomain.LifetimeIncludes(lifetime, features, plan) {
+	if holdings.CoversPlan(plan) {
 		return errVipLifetimeIncluded()
 	}
 	return nil

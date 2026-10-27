@@ -13,7 +13,7 @@ func lifetimeScene(rule SceneLifetime, rewards ...Reward) Scene {
 }
 
 func TestResolveConvertsOwnedRewardsByValue(t *testing.T) {
-	lifetime := Coverage{Lifetime: true}
+	lifetime := Coverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true}}
 	plans := map[int64]vipdomain.Plan{
 		7: {ID: 7, Name: "周卡", Kind: vipdomain.KindPaid, DurationDays: 7, BonusIntegral: 5},
 	}
@@ -64,29 +64,29 @@ func TestResolveKeepsUpgradesAndNonMembers(t *testing.T) {
 		t.Fatalf("非永久会员照常发放：%+v", out)
 	}
 	// 永久会员没有 export：这一天会员是实打实的升级，照发
-	if out := Resolve(scene, Coverage{Lifetime: true, LifetimeFeatures: []string{"ai"}}, nil, Labels{}); out.Conversion != nil {
+	if out := Resolve(scene, Coverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeFeatures: []string{"ai"}, LifetimeAdFree: true}}, nil, Labels{}); out.Conversion != nil {
 		t.Fatalf("带永久会员没有的功能时不算已拥有：%+v", out)
 	}
 	// 已包含 export：折算
-	if out := Resolve(scene, Coverage{Lifetime: true, LifetimeFeatures: []string{"export"}}, nil, Labels{}); out.Conversion == nil {
+	if out := Resolve(scene, Coverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeFeatures: []string{"export"}, LifetimeAdFree: true}}, nil, Labels{}); out.Conversion == nil {
 		t.Fatal("功能都已包含时应当折算")
 	}
 	// 套餐带永久会员没有的功能：照发
 	plans := map[int64]vipdomain.Plan{3: {ID: 3, Kind: vipdomain.KindPaid, DurationDays: 30, Features: []string{"pro"}}}
 	planScene := lifetimeScene(SceneLifetime{}, Reward{Type: cardkeydomain.RewardVipPlan, RefID: 3})
-	if out := Resolve(planScene, Coverage{Lifetime: true}, plans, Labels{}); out.Conversion != nil {
+	if out := Resolve(planScene, Coverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true}}, plans, Labels{}); out.Conversion != nil {
 		t.Fatalf("高级套餐对永久基础会员是升级：%+v", out)
 	}
 	// 已永久解锁功能的非会员：功能时长折算，原因是 feature
 	minutes := lifetimeScene(SceneLifetime{}, Reward{Type: RewardFeatureMinutes, Feature: "music", Amount: 60})
-	out := Resolve(minutes, Coverage{PermanentUnlocks: []string{"music"}}, nil, Labels{})
+	out := Resolve(minutes, Coverage{Holdings: vipdomain.Holdings{PermanentUnlocks: []string{"music"}}}, nil, Labels{})
 	if out.Conversion == nil || out.Conversion.Reason != OwnedFeature || len(out.Grants) != 1 || out.Grants[0].Reward.Amount != 10 {
 		t.Fatalf("永久解锁的功能时长应当折算：%+v", out)
 	}
 }
 
 func TestResolvePolicies(t *testing.T) {
-	lifetime := Coverage{Lifetime: true}
+	lifetime := Coverage{Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true}}
 	days := Reward{Type: cardkeydomain.RewardVipDays, Amount: 3}
 
 	grant := lifetimeScene(SceneLifetime{Policy: LifetimeGrant}, days)

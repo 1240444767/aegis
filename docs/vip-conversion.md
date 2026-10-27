@@ -14,14 +14,25 @@
 
 ## 「已拥有」的判据
 
-只有一个入口：`vip.Holdings`（永久身份、永久开通的功能并集、已永久解锁的功能）。
+只有一个入口：`vip.Holdings`（`internal/domain/vip/holdings.go`）。它由会员判定的同一份事实（`EvalInput`，
+与 `/vip/status` 同一条查询）推出（`vip.HoldingsOf`），在事务里取时与发放串行：
 
-- 会员天数 / 套餐：永久会员，且这段会员带的功能都已在永久开通里（`LifetimeIncludes`）。带了永久会员没有的功能（永久基础版再拿限时高级版）**不算**已拥有，照常发放。
+- `lifetime`：是不是永久会员；`lifetimeFeatures`：仍生效的永久开通的功能并集（按套餐当前配置，不与功能目录取交集）；
+- `lifetimeAdFree`：永久那条线免不免广告（看广告领到的永久会员按场景设置，可以不免）；
+- `permanentUnlocks`：已永久解锁的功能；启用中的功能目录。
+
+一份会员类权益带来什么由 `Holdings.GainOf` 算（集合运算用 `golang-set`）：不是永久会员时会员身份本身就是新增；
+是永久会员时，新增 = 权益的功能 − 永久拥有的功能（永久开通 ∪ 永久解锁），加上「这份免广告而永久那条线不免」。
+**限时**的权益只算启用中的功能（停用的此刻开了也用不上），**永久**的全部算（停用的功能恢复后也是他的）。新增为空即已拥有：
+
+- 会员天数 / 套餐：`Holdings.Covers` / `CoversPlan`。永久基础版再拿限时高级版**不算**已拥有，照常发放；
+  永久开通 + 永久解锁已经覆盖的月卡、只多一个停用功能的月卡**算**已拥有。
 - 功能解锁：已永久解锁该功能，或永久会员已包含该功能。
 - 功能时长：永久会员（会员一律免扣），或已永久解锁该功能。
-- 免广告时长：永久会员。
+- 免广告时长：永久会员，且永久那条线免广告。
 
-购买（40378）、积分商城（不可兑换）、抽奖（活动的已拥有处理方式）、激励广告（场景的 `lifetime`）都问同一个判据。
+购买（40378）、在线下单（40378）、在售列表（`included`）、积分商城（不可兑换）、抽奖（活动的已拥有处理方式）、
+激励广告（场景的 `lifetime`）、开通永久时折存量都问同一个判据。
 
 ## 策略
 
@@ -46,7 +57,8 @@ GET 同时返回 `ownedModes`、`upgradeModes`（处理方式目录）与 `defau
 | 管理员发放 / 远程函数 `vip.grant`、`vip.grantLifetime` | 按策略；管理员可以这一次选「照常发放」（`ownedPolicy: "grant"`） | 按策略；管理员可以这一次指定（`upgradePolicy: "convert" \| "keep"`） |
 | 卡密、邀请奖励、排行榜奖励 | 按策略（会员与功能解锁） | 按策略 |
 | 余额购买、在线支付、积分商城、试用 | 下单前就拦（40378 / 不可兑换 / 不可领），不会走到 | 按策略 |
-| 抽奖、激励广告 | 活动 / 场景自己的处理方式（改发积分、次数、隐藏等） | 按策略 |
+| 抽奖 | 活动的处理方式（改发积分、次数、剔除等）；折积分的单价跟随本策略（活动可覆盖每天 / 永久），每次改发记一条 `source = lottery` 的折算记录 | 按策略 |
+| 激励广告 | 场景自己的处理方式与单价 | 按策略 |
 
 开通永久的折算发生在永久开通的同一个事务里（`grantLifetimeVipTx` 末尾），所有入口自动生效。
 
@@ -96,4 +108,5 @@ GET 同时返回 `ownedModes`、`upgradeModes`（处理方式目录）与 `defau
 ## 测法
 
 `TestVipConversionIntegration`（嵌入式 PG：`AEGIS_TEST_PG_DSN=postgres://postgres@127.0.0.1:55441/postgres go test ./internal/service -run TestVipConversionIntegration`），
-纯函数 `internal/domain/vip/conversion_test.go`。
+`TestVipHoldingsIntegration`（同上：管理员赠送的永久会员 + 永久解锁 + 停用功能时月卡已包含、40378、恢复启用后可买），
+纯函数 `internal/domain/vip/conversion_test.go`、`holdings_test.go`。

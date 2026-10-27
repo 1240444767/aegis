@@ -286,10 +286,7 @@ func rewardedAdCoverage(ctx context.Context, q queryExecutor, appID, userID int6
 	if err != nil {
 		return rewardedad.Coverage{}, err
 	}
-	return rewardedad.Coverage{
-		Lifetime: coverage.Lifetime, LifetimeFeatures: coverage.LifetimeFeatures,
-		PermanentUnlocks: coverage.PermanentUnlocks,
-	}, nil
+	return rewardedad.Coverage{Holdings: coverage.Holdings}, nil
 }
 
 // RewardedAdCoverage 见 rewardedAdCoverage（客户端列表据此说明「对你来说这个场景会怎样」）。

@@ -2,6 +2,7 @@ package vip
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -29,57 +30,6 @@ const (
 	OwnedLifetime = "lifetime" // 永久会员已包含
 	OwnedFeature  = "feature"  // 已永久解锁这个功能
 )
-
-// Holdings 一个人已经永久拥有什么：判「这份权益对他是不是空的」。
-type Holdings struct {
-	Lifetime bool `json:"lifetime"`
-	// LifetimeFeatures 仍生效的永久开通的功能并集（不与功能目录取交集：停用的功能他有就是有）
-	LifetimeFeatures []string `json:"lifetimeFeatures"`
-	// PermanentUnlocks 已永久解锁的功能（功能解锁那条线）
-	PermanentUnlocks []string `json:"permanentUnlocks"`
-}
-
-// CoversMembership 一段带这些功能的会员期对他是不是空的：永久会员且功能都已在永久开通里。
-// 会员天数不带功能，对永久会员一律是空的。
-func (h Holdings) CoversMembership(features []string) bool {
-	return LifetimeIncludes(h.Lifetime, h.LifetimeFeatures, Plan{Kind: KindPaid, Features: features})
-}
-
-// CoversPlan 开通这个套餐对他是不是空的（与购买入口同一判据）。
-func (h Holdings) CoversPlan(plan Plan) bool {
-	return LifetimeIncludes(h.Lifetime, h.LifetimeFeatures, plan)
-}
-
-// CoversFeature 这个功能的解锁对他是不是空的：已永久解锁，或永久会员已包含。
-func (h Holdings) CoversFeature(tag string) (string, bool) {
-	tags := NormalizeFeatureTags([]string{tag})
-	if len(tags) == 0 {
-		return "", false
-	}
-	if slices.Contains(NormalizeFeatureTags(h.PermanentUnlocks), tags[0]) {
-		return OwnedFeature, true
-	}
-	if h.Lifetime && slices.Contains(NormalizeFeatureTags(h.LifetimeFeatures), tags[0]) {
-		return OwnedLifetime, true
-	}
-	return "", false
-}
-
-// CoversFeatureTime 这个功能的使用时长对他是不是空的：会员一律免扣（永久会员的余额永远用不上），
-// 已永久解锁这个功能的人同理。
-func (h Holdings) CoversFeatureTime(tag string) (string, bool) {
-	if h.Lifetime {
-		return OwnedLifetime, true
-	}
-	tags := NormalizeFeatureTags([]string{tag})
-	if len(tags) > 0 && slices.Contains(NormalizeFeatureTags(h.PermanentUnlocks), tags[0]) {
-		return OwnedFeature, true
-	}
-	return "", false
-}
-
-// CoversAdFree 免广告时长对他是不是空的：永久会员本就免广告。
-func (h Holdings) CoversAdFree() bool { return h.Lifetime }
 
 // ── 策略 ──
 
@@ -301,6 +251,10 @@ func perSeconds(seconds int64, rate int64, unit int64) int64 {
 	if seconds <= 0 || rate <= 0 {
 		return 0
 	}
+	// 天数极大的奖品 × 单价会溢出 int64：先按上界截住
+	if seconds > (math.MaxInt64-unit)/rate {
+		return MaxConversionPoints
+	}
 	// 向上取整：剩 1 小时的会员也值点什么
 	value := (seconds*rate + unit - 1) / unit
 	return min(value, MaxConversionPoints)
@@ -363,8 +317,10 @@ type TimedSegment struct {
 	TransactionNo string
 	Label         string
 	Features      []string
-	From          time.Time
-	Until         time.Time
+	// AdFree 这一段免广告（看广告领的可能不免）
+	AdFree bool
+	From   time.Time
+	Until  time.Time
 }
 
 // TimedUnlock 一条仍生效的限时功能解锁。
@@ -393,9 +349,7 @@ type UpgradeInput struct {
 	AdFree   *time.Time
 	// Holdings 开通之后的永久持有（已计入这一笔）
 	Holdings Holdings
-	// AdFreeCovered 永久那条线是否免广告（看广告领的永久段可能不免）
-	AdFreeCovered bool
-	Policy        ConversionPolicy
+	Policy   ConversionPolicy
 }
 
 // SegmentMove 一段会员期的新位置；Removed 表示整段（剩余部分）被折掉。
@@ -425,7 +379,7 @@ func (p UpgradePlan) Empty() bool { return len(p.Items) == 0 }
 
 // PlanUpgrade 算出开通永久时被覆盖的存量与折算（纯函数，预览与事务共用）。
 //
-// 限时会员：功能都已在永久开通里的那几段被折掉 —— 正在走的那段截在此刻，还没轮到的整段作废，
+// 限时会员：对他已经是空的那几段（Holdings.Covers：启用中的功能都已永久拥有、免广告也已有）被折掉 —— 正在走的那段截在此刻，还没轮到的整段作废，
 // 排在它们后面、没被覆盖的段（比如永久基础版之后另买的限时高级版）整体前移，不留空档。
 // 没有开通记录的那截到期时间（老系统直接写进 users 的）不带任何功能，一并折掉。
 //
@@ -459,7 +413,7 @@ func PlanUpgrade(in UpgradeInput) UpgradePlan {
 		if start.Before(now) {
 			start = now
 		}
-		if in.Holdings.CoversMembership(segment.Features) {
+		if in.Holdings.Covers(MembershipBenefit(segment.Features, false, segment.AdFree)) {
 			remaining := segment.Until.Sub(start)
 			seconds := int64(remaining / time.Second)
 			plan.RemovedSeconds += seconds
@@ -562,7 +516,7 @@ func PlanUpgrade(in UpgradeInput) UpgradePlan {
 		})
 	}
 
-	if in.AdFree != nil && in.AdFree.After(now) && in.AdFreeCovered && in.Holdings.CoversAdFree() {
+	if in.AdFree != nil && in.AdFree.After(now) && in.Holdings.CoversAdFree() {
 		seconds := int64(in.AdFree.Sub(now) / time.Second)
 		if seconds > 0 {
 			plan.EndAdFree = true

@@ -48,13 +48,16 @@ export const LIMITS = {
   lifetimeDraws: 100
 } as const;
 
-/** 已拥有奖品处理的默认值（与后端 `lottery/lifetime.go` 一致；目录下发时以目录为准） */
+/** 已拥有奖品处理的默认值（与后端 `lottery/lifetime.go` 一致；目录下发时以目录为准）。每天 / 永久积分为 0 即跟随应用的会员折算策略 */
 export const LIFETIME_DEFAULTS = {
   policy: "points" as LotteryLifetimePolicy,
-  pointsPerDay: 10,
-  pointsLifetime: 3650,
+  pointsPerDay: 0,
+  pointsLifetime: 0,
   draws: 1
 };
+
+/** 应用会员折算策略的默认单价（与后端 `vip.DefaultConversionPolicy` 一致；目录下发时以目录为准） */
+export const CONVERSION_RATES = { perVipDay: 10, perFeatureDay: 5, perFeatureHour: 10, perLifetime: 3650 };
 
 /** 可能「已拥有」的奖品类型：只有它们能设置改发（目录未下发时的回落，与后端 `lottery.OwnableKinds` 一致） */
 export const OWNABLE_KINDS = ["vip_days", "vip_plan", "feature", "vip_lifetime", "feature_time", "ad_free"];
@@ -277,17 +280,39 @@ export function swapRewardOf(prize: PrizeDraft, ownable: string[] = OWNABLE_KIND
   return { type: prize.swapType, amount: toInt(prize.swapAmount) };
 }
 
-/** 奖品的时长：天数，或是否永久（与后端 `rewardTerm` 同口径） */
-function prizeTerm(prize: PrizeDraft, catalog?: LotteryCatalog | null): { days: number; lifetime: boolean } {
-  if (prize.type === "vip_plan") {
-    const plan = catalog?.plans.find((item) => item.id === prize.refId);
-    return { days: plan?.durationDays ?? 0, lifetime: plan?.lifetime ?? false };
+/** 按秒折算、向上取整（与后端 `vip.perSeconds` 同口径） */
+function perSeconds(seconds: number, rate: number, unit: number): number {
+  if (seconds <= 0 || rate <= 0) return 0;
+  return Math.ceil((seconds * rate) / unit);
+}
+
+/** 已拥有的奖品折多少积分（与后端 `lottery.OwnedItem` 同口径）：活动填了单价以活动为准，否则跟随应用折算策略 */
+export function ownedPoints(form: ActivityForm, prize: PrizeDraft, catalog?: LotteryCatalog | null): number {
+  const rates = catalog?.conversionRates ?? CONVERSION_RATES;
+  const perDay = toInt(form.lifetimePointsPerDay);
+  const lifetime = toInt(form.lifetimePointsLifetime) || rates.perLifetime;
+  const vipDay = perDay || rates.perVipDay;
+  const featureDay = perDay || rates.perFeatureDay;
+  const amount = toInt(prize.amount);
+  switch (prize.type) {
+    case "vip_days":
+      return perSeconds(amount * 86400, vipDay, 86400);
+    case "vip_lifetime":
+      return lifetime;
+    case "vip_plan": {
+      const plan = catalog?.plans.find((item) => item.id === prize.refId);
+      if (plan?.lifetime) return lifetime;
+      return perSeconds((plan?.durationDays ?? 0) * 86400, vipDay, 86400);
+    }
+    case "feature":
+      return amount === 0 ? lifetime : perSeconds(amount * 86400, featureDay, 86400);
+    case "feature_time":
+      // 功能时长始终按应用每小时单价
+      return perSeconds(amount * 60, rates.perFeatureHour, 3600);
+    case "ad_free":
+      return perSeconds(amount * 86400, featureDay, 86400);
   }
-  if (prize.type === "vip_lifetime") return { days: 0, lifetime: true };
-  // 功能时长按小时折算（不足一小时按一小时），每小时与会员一天同价
-  if (prize.type === "feature_time") return { days: Math.ceil(toInt(prize.amount) / 60), lifetime: false };
-  const days = toInt(prize.amount);
-  return { days, lifetime: prize.type === "feature" && days === 0 };
+  return 0;
 }
 
 const SWAP_UNIT: Record<string, string> = { points: "积分", experience: "经验", lottery_draws: "次抽奖" };
@@ -300,10 +325,7 @@ export function swapPreview(form: ActivityForm, prize: PrizeDraft, catalog?: Lot
   if (form.lifetimePolicy === "grant") return null;
   if (own) return `${own.amount ?? 0} ${SWAP_UNIT[own.type] ?? ""}`.trim();
   if (form.lifetimePolicy === "draws") return `${toInt(form.lifetimeDraws)} 次抽奖`;
-  const term = prizeTerm(prize, catalog);
-  const points = term.lifetime
-    ? toInt(form.lifetimePointsLifetime)
-    : term.days * toInt(form.lifetimePointsPerDay);
+  const points = ownedPoints(form, prize, catalog);
   return points > 0 ? `${Math.min(points, 100_000_000)} 积分` : null;
 }
 
@@ -462,9 +484,6 @@ export function validateForm(form: ActivityForm, catalog?: LotteryCatalog | null
   }
   if (lifetimeDraws < 0 || lifetimeDraws > LIMITS.lifetimeDraws) basic(`改发抽奖次数需要在 0–${LIMITS.lifetimeDraws} 之间`);
   if (form.lifetimePolicy === "draws" && lifetimeDraws === 0) basic("改发抽奖次数时次数至少为 1");
-  if ((form.lifetimePolicy === "points" || form.lifetimePolicy === "exclude") && perDay === 0 && lifetimePoints === 0) {
-    basic("折算积分时每天积分与永久奖品积分不能都为 0");
-  }
   form.prizes.forEach((prize, index) => {
     const swap = swapRewardOf(prize, catalog?.ownableKinds ?? OWNABLE_KINDS);
     if (!swap) return;

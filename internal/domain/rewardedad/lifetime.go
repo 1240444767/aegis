@@ -91,29 +91,33 @@ func LifetimePolicyCatalog() []LifetimePolicySpec {
 	}
 }
 
-// Coverage 一个人已经永久拥有什么。
+// Coverage 一个人已经永久拥有什么（统一判据 vip.Holdings）。
 type Coverage struct {
-	Lifetime         bool
-	LifetimeFeatures []string
-	// PermanentUnlocks 已永久解锁的功能（功能解锁那条线，与会员无关）
-	PermanentUnlocks []string
+	vipdomain.Holdings
 }
 
 // Owned 这项权益对这个人是不是空的；是的话返回原因。
 //
-//   - 会员天数：带场景会员权益里的功能，这些功能都已在永久开通里才算（多出来的功能是实打实的升级）
-//   - 会员套餐：与购买入口同一个判据 vip.LifetimeIncludes
+//   - 会员天数：带场景会员权益里的功能与免广告设置，问 vip.Holdings.Covers（多出来的功能或免广告是实打实的升级）
+//   - 会员套餐：与购买入口同一个判据（vip.Holdings.Covers），免广告按场景设置
 //   - 功能时长：会员使用时免扣，永久会员的余额永远用不上；已永久解锁该功能的人同理
 func (c Coverage) Owned(scene Scene, reward Reward, plans map[int64]vipdomain.Plan) (string, bool) {
-	holdings := vipdomain.Holdings{Lifetime: c.Lifetime, LifetimeFeatures: c.LifetimeFeatures, PermanentUnlocks: c.PermanentUnlocks}
+	holdings := c.Holdings
+	// 看广告领到的会员（天数与套餐两档）是否免广告按场景设置
+	adFree := scene.Membership.AdFreeOrDefault()
 	switch reward.Type {
 	case cardkeydomain.RewardVipDays:
-		if holdings.CoversMembership(scene.Membership.Features) {
+		if holdings.Covers(vipdomain.MembershipBenefit(scene.Membership.Features, false, adFree)) {
 			return OwnedLifetime, true
 		}
 	case cardkeydomain.RewardVipPlan:
 		plan, ok := plans[reward.RefID]
-		if ok && holdings.CoversPlan(plan) {
+		if !ok {
+			break
+		}
+		benefit := vipdomain.PlanBenefit(plan)
+		benefit.AdFree = adFree
+		if holdings.Covers(benefit) {
 			return OwnedLifetime, true
 		}
 	case RewardFeatureMinutes:

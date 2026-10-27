@@ -370,7 +370,7 @@ RETURNING id, created_at`,
 // 账本里 expire_before 记下开通那一刻限时线的到期时间，expire_after 为空 —— 永久开通没有到期时间。
 //
 // 已经是永久会员时照样记一笔：升级到含新功能的永久套餐就是这么来的。
-// 「这一笔什么新东西都拿不到」由购买 / 下单入口拦（LifetimeIncludes），
+// 「这一笔什么新东西都拿不到」由购买 / 下单入口拦（vip.Holdings.CoversPlan），
 // 这里不拦 —— 走到这里的直购订单钱已经收了，拒绝履约只会让钱和权益都悬在半空。
 func grantLifetimeVipTx(ctx context.Context, tx pgx.Tx, grant vipdomain.Grant) (*vipdomain.Transaction, error) {
 	var (
@@ -737,11 +737,11 @@ FROM user_wallets WHERE user_id = $1 AND appid = $2 LIMIT 1`, userID, appID))
 
 	// 永久会员已经包含这个套餐：再扣一次钱拿不到任何新东西。
 	// 判在扣款之前、幂等检查之后 —— 重放首次购买（那次买的正是这个永久套餐）不该被它拦住。
-	lifetime, lifetimeFeatures, err := vipLifetimeCoverage(ctx, tx, appID, userID)
+	holdings, err := vipHoldingsQ(ctx, tx, appID, userID)
 	if err != nil {
 		return nil, err
 	}
-	if vipdomain.LifetimeIncludes(lifetime, lifetimeFeatures, plan) {
+	if holdings.CoversPlan(plan) {
 		return nil, ErrVipLifetimeIncluded
 	}
 

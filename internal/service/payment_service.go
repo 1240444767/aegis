@@ -948,11 +948,11 @@ func (s *PaymentService) prepareFulfillmentMetadata(ctx context.Context, appID i
 		}
 		// 永久会员已经包含这个套餐：拦在付钱之前。履约时不再拦 —— 钱收了就得发，
 		// 两单并发都走到这里的极端情况，由运营在控制台退掉多余的那一单。
-		lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, appID, userID)
+		holdings, err := s.pg.GetVipHoldings(ctx, appID, userID)
 		if err != nil && !errors.Is(err, pgrepo.ErrUserNotFound) {
 			return nil, err
 		}
-		if vipdomain.LifetimeIncludes(lifetime, features, *plan) {
+		if holdings.CoversPlan(*plan) {
 			return nil, errVipLifetimeIncluded()
 		}
 		out[paymentdomain.MetaKeyVipPlanID] = plan.ID

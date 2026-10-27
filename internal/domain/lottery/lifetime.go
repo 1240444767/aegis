@@ -16,7 +16,8 @@ import (
 //
 // 活动的 LifetimePolicy 决定怎么处理（在抽奖事务里判定、发放，客户端只看结果）：
 //
-//   - points  按天折算成积分（会员天数 × 每天积分；永久套餐 / 永久功能给固定积分）
+//   - points  按应用的会员折算策略折成积分（会员与限时功能按天、功能时长按小时、永久权益给固定积分；
+//     活动可以单独填每天 / 永久积分），并记一条会员折算记录
 //   - draws   改发抽奖次数
 //   - exclude 这个人的常规抽取里不出现这些奖品（公示概率随之重算）；保底奖恰好是这类时按积分折算
 //   - grant   照常发放（旧行为）
@@ -76,63 +77,99 @@ func LifetimePolicyCatalog() []LifetimePolicySpec {
 	}
 }
 
-// MemberCoverage 一个人已经拥有什么：判「这个奖品对他是不是空奖」。
+// MemberCoverage 一个人已经拥有什么（统一判据 vip.Holdings），以及应用的会员折算策略（折算积分的单价）。
 type MemberCoverage struct {
-	Lifetime         bool
-	LifetimeFeatures []string
-	// PermanentUnlocks 已永久解锁的功能（功能解锁那条线，与会员无关）
-	PermanentUnlocks []string
+	vipdomain.Holdings
+	Policy vipdomain.ConversionPolicy
 }
 
 // Owned 这个奖品对这个人是不是空奖；是的话返回原因（OwnedLifetime / OwnedFeature）。
 //
-// 套餐的判据与购买入口同一个函数（vip.LifetimeIncludes）：只看功能，套餐的每个功能都已在永久开通里。
-// 永久基础版抽中限时高级版不算已拥有 —— 那是实打实的升级。会员天数不带功能，对永久会员一律已拥有。
+// 会员类奖品问 vip.Holdings.Covers，与购买 40378、积分商城、激励广告、卡密同一个判据：
+// 启用中的功能都已永久拥有（永久开通或永久解锁），且免广告也已经有了。
+// 永久基础版抽中限时高级版不算已拥有 —— 那是实打实的升级。
 func (c MemberCoverage) Owned(reward Reward, plans map[int64]pointstore.PlanRef) (string, bool) {
-	holdings := c.Holdings()
 	switch reward.Type {
-	case KindVipDays, KindVipLifetime:
-		if holdings.CoversMembership(nil) {
+	case KindVipDays:
+		// 抽奖发的会员一律免广告；不带功能
+		if c.CoversMembership(nil) {
+			return OwnedLifetime, true
+		}
+	case KindVipLifetime:
+		if c.Covers(vipdomain.MembershipBenefit(nil, true, true)) {
 			return OwnedLifetime, true
 		}
 	case KindAdFree:
-		// 永久会员本就免广告：免广告时长对他和会员天数一样是空奖
-		if holdings.CoversAdFree() {
+		if c.CoversAdFree() {
 			return OwnedLifetime, true
 		}
 	case KindFeatureTime:
 		// 功能时长只在「永远免扣」时是空奖：永久会员（会员一律免扣），或已永久解锁这个功能
-		return holdings.CoversFeatureTime(reward.Tag)
+		return c.CoversFeatureTime(reward.Tag)
 	case KindVipPlan:
 		plan, ok := plans[reward.RefID]
-		if ok && holdings.CoversPlan(vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
+		if ok && c.CoversPlan(vipdomain.Plan{Kind: vipdomain.KindPaid, Lifetime: plan.Lifetime, Features: plan.Features}) {
 			return OwnedLifetime, true
 		}
 	case KindFeature:
-		return holdings.CoversFeature(reward.Tag)
+		return c.CoversFeature(reward.Tag)
 	}
 	return "", false
 }
 
-// Holdings 统一的「已拥有」判据（vip.Holdings）。
-func (c MemberCoverage) Holdings() vipdomain.Holdings {
-	return vipdomain.Holdings{Lifetime: c.Lifetime, LifetimeFeatures: c.LifetimeFeatures, PermanentUnlocks: c.PermanentUnlocks}
-}
-
-// SwapRule 活动上的处理方式与折算参数。
+// SwapRule 活动上的处理方式，与折算积分的单价。
 type SwapRule struct {
-	Policy         string
-	PointsPerDay   int64
-	PointsLifetime int64
-	Draws          int64
+	Policy string
+	// Value 折算单价：应用的会员折算策略，活动填了每天 / 永久积分时以活动为准
+	Value vipdomain.ConversionPolicy
+	Draws int64
 }
 
 // RuleOf 活动的处理方式。
-func RuleOf(activity Activity) SwapRule {
-	return SwapRule{
-		Policy: activity.LifetimePolicy, PointsPerDay: activity.LifetimePointsPerDay,
-		PointsLifetime: activity.LifetimePointsLifetime, Draws: activity.LifetimeDraws,
+//
+// 折算积分与卡密、邀请、管理员发放同一套单价（应用的会员折算策略）：会员按天、限时功能与免广告按天、
+// 功能时长按小时、永久权益按固定值。活动填了「每天积分」时，会员与限时功能、免广告的每天按活动的；
+// 填了「永久积分」时永久奖品按活动的。两项都是 0 即完全跟随应用策略。
+func RuleOf(activity Activity, policy vipdomain.ConversionPolicy) SwapRule {
+	value := policy
+	if activity.LifetimePointsPerDay > 0 {
+		value.PerVipDay = activity.LifetimePointsPerDay
+		value.PerFeatureDay = activity.LifetimePointsPerDay
 	}
+	if activity.LifetimePointsLifetime > 0 {
+		value.PerLifetime = activity.LifetimePointsLifetime
+	}
+	return SwapRule{Policy: activity.LifetimePolicy, Value: value, Draws: activity.LifetimeDraws}
+}
+
+// OwnedItem 一个已拥有的奖品折成的那一项（与 vip 折算记录同一种结构，积分按 rule.Value 算）。
+func OwnedItem(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) vipdomain.ConversionItem {
+	reward := NormalizeReward(prize.Reward)
+	value := rule.Value
+	label := prize.Name
+	if label == "" {
+		label = DefaultPrizeName(reward, plans, nil)
+	}
+	switch reward.Type {
+	case KindVipDays:
+		return value.OwnedVipItem(label, int(reward.Amount), false, nil)
+	case KindVipLifetime:
+		return value.OwnedVipItem(label, 0, true, nil)
+	case KindVipPlan:
+		plan := plans[reward.RefID]
+		return value.OwnedVipItem(label, plan.DurationDays, plan.Lifetime, plan.Features)
+	case KindFeature:
+		return value.OwnedUnlockItem(label, reward.Tag, int(reward.Amount))
+	case KindFeatureTime:
+		seconds := reward.Amount * 60
+		return vipdomain.ConversionItem{Kind: vipdomain.ItemFeatureTime, Label: label, Feature: reward.Tag,
+			Seconds: seconds, Points: value.FeatureTimePoints(seconds)}
+	case KindAdFree:
+		seconds := reward.Amount * 86400
+		return vipdomain.ConversionItem{Kind: vipdomain.ItemAdFree, Label: label, Seconds: seconds,
+			Points: value.FeatureDayPoints(seconds)}
+	}
+	return vipdomain.ConversionItem{Label: label}
 }
 
 // Swap 已拥有的奖品改发什么。ok=false 表示照常发放（grant，或折算出来是 0）。
@@ -155,38 +192,11 @@ func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Rewar
 		}
 		return Reward{Type: KindLotteryDraws, Amount: rule.Draws}, true
 	}
-	days, lifetime := rewardTerm(prize.Reward, plans)
-	if prize.Reward.Type == KindFeatureTime {
-		// 功能时长按小时折算（不足一小时按一小时），每小时与会员一天同价
-		days = int((prize.Reward.Amount + 59) / 60)
-	}
-	var amount int64
-	if lifetime {
-		amount = rule.PointsLifetime
-	} else {
-		amount = int64(days) * rule.PointsPerDay
-	}
-	amount = min(amount, MaxSwapPoints)
+	amount := min(OwnedItem(rule, prize, plans).Points, MaxSwapPoints)
 	if amount <= 0 {
 		return Reward{}, false
 	}
 	return Reward{Type: KindPoints, Amount: amount}, true
-}
-
-// rewardTerm 会员 / 功能奖品的时长：天数，或是否永久。
-func rewardTerm(reward Reward, plans map[int64]pointstore.PlanRef) (int, bool) {
-	switch reward.Type {
-	case KindVipDays, KindAdFree:
-		return int(reward.Amount), false
-	case KindVipLifetime:
-		return 0, true
-	case KindVipPlan:
-		plan := plans[reward.RefID]
-		return plan.DurationDays, plan.Lifetime
-	case KindFeature:
-		return int(reward.Amount), reward.Amount == 0
-	}
-	return 0, false
 }
 
 // Excluded 这个人的常规抽取里是否剔除这个奖品。
@@ -219,6 +229,8 @@ type Conversion struct {
 	Label string `json:"label"`
 	// Message 给用户看的说明（「你已是永久会员，会员 7 天已折算为 70 积分」）
 	Message string `json:"message"`
+	// ConversionNo 会员折算记录（/vip/conversions 里的那一条）
+	ConversionNo string `json:"conversionNo,omitempty"`
 }
 
 // ConversionMessage 给用户看的说明。
@@ -322,14 +334,10 @@ func NoticeOf(rule SwapRule, coverage MemberCoverage, prizes []Prize, plans map[
 	return &LifetimeNotice{Lifetime: coverage.Lifetime, Policy: rule.Policy, Message: message}
 }
 
-// NormalizeLifetime 清洗处理方式与折算参数：空策略按折算积分，折算参数未填时补默认值。
+// NormalizeLifetime 清洗处理方式与折算参数：空策略按折算积分；每天 / 永久积分留 0 即跟随应用的会员折算策略。
 func NormalizeLifetime(input *ActivityInput) {
 	if input.LifetimePolicy == "" {
 		input.LifetimePolicy = LifetimePoints
-	}
-	if input.LifetimePointsPerDay == 0 && input.LifetimePointsLifetime == 0 {
-		input.LifetimePointsPerDay = DefaultLifetimePointsPerDay
-		input.LifetimePointsLifetime = DefaultLifetimePointsLifetime
 	}
 	if input.LifetimeDraws == 0 {
 		input.LifetimeDraws = DefaultLifetimeDraws
@@ -361,9 +369,6 @@ func validateLifetime(input ActivityInput) error {
 		return fmt.Errorf("改发抽奖次数需要在 0–%d 之间", MaxLifetimeDraws)
 	case input.LifetimePolicy == LifetimeDraws && input.LifetimeDraws == 0:
 		return fmt.Errorf("改发抽奖次数时次数至少为 1")
-	case (input.LifetimePolicy == LifetimePoints || input.LifetimePolicy == LifetimeExclude) &&
-		input.LifetimePointsPerDay == 0 && input.LifetimePointsLifetime == 0:
-		return fmt.Errorf("折算积分时每天积分与永久奖品积分不能都为 0")
 	}
 	for index, prize := range input.Prizes {
 		if prize.LifetimeReward == nil {

@@ -130,9 +130,7 @@ func rewardsResolvable(rewards []Reward, facts UserFacts) bool {
 // 拦的是纯花积分的情形 —— 永久会员再兑会员天数或已包含的套餐、已永久解锁的功能再兑一次限时的。
 // 一件商品里只要有一项是这样就拦：积分花出去收不回来，宁可让运营把商品拆开。
 func Owned(rewards []Reward, facts UserFacts) bool {
-	holdings := vipdomain.Holdings{
-		Lifetime: facts.IsLifetime, LifetimeFeatures: facts.LifetimeFeatures, PermanentUnlocks: facts.PermanentUnlocks,
-	}
+	holdings := facts.Holdings
 	for _, reward := range rewards {
 		switch reward.Type {
 		case RewardVipPlan:

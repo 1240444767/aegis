@@ -408,10 +408,6 @@ func (r *Repository) assemblePointsStoreFacts(ctx context.Context, q queryExecut
 	if err != nil {
 		return nil, err
 	}
-	_, lifetimeFeatures, err := vipLifetimeCoverage(ctx, q, appID, userID)
-	if err != nil {
-		return nil, err
-	}
 	plans, features, err := pointsStoreCatalogRefs(ctx, q, appID)
 	if err != nil {
 		return nil, err
@@ -421,8 +417,7 @@ func (r *Repository) assemblePointsStoreFacts(ctx context.Context, q queryExecut
 		Level:            r.resolveLevelState(levels, experience).CurrentLevel,
 		IsVip:            entitlement.IsVIP,
 		IsLifetime:       entitlement.IsLifetime,
-		LifetimeFeatures: lifetimeFeatures,
-		PermanentUnlocks: vipdomain.PermanentUnlockTags(entitlementFacts.Unlocks, now),
+		Holdings:         vipdomain.HoldingsOf(*entitlementFacts, now),
 		Plans:            plans,
 		Features:         features,
 	}, nil

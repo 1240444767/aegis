@@ -471,28 +471,17 @@ FROM lottery_draws WHERE activity_id = $1 AND user_id = $2 AND created_at >= $3`
 
 // ── 已拥有 ──
 
-// lotteryMemberCoverage 这个人已经拥有什么：永久会员与其功能、已永久解锁的功能。
+// lotteryMemberCoverage 这个人已经拥有什么（vip.Holdings），以及应用的会员折算策略（折算积分的单价）。
 func lotteryMemberCoverage(ctx context.Context, q queryExecutor, appID, userID int64) (lotterydomain.MemberCoverage, error) {
-	var coverage lotterydomain.MemberCoverage
-	lifetime, features, err := vipLifetimeCoverage(ctx, q, appID, userID)
+	holdings, err := vipHoldingsQ(ctx, q, appID, userID)
 	if err != nil {
-		return coverage, err
+		return lotterydomain.MemberCoverage{}, err
 	}
-	coverage.Lifetime, coverage.LifetimeFeatures = lifetime, features
-	rows, err := q.Query(ctx, `SELECT DISTINCT feature_tag FROM user_feature_unlocks
-WHERE appid = $1 AND user_id = $2 AND revoked_at IS NULL AND ends_at IS NULL`, appID, userID)
+	policy, err := vipConversionPolicyQ(ctx, q, appID)
 	if err != nil {
-		return coverage, err
+		return lotterydomain.MemberCoverage{}, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var tag string
-		if err := rows.Scan(&tag); err != nil {
-			return coverage, err
-		}
-		coverage.PermanentUnlocks = append(coverage.PermanentUnlocks, tag)
-	}
-	return coverage, rows.Err()
+	return lotterydomain.MemberCoverage{Holdings: holdings, Policy: policy}, nil
 }
 
 // LotteryMemberCoverage 见 lotteryMemberCoverage（活动页用它标出「对你来说这一格会怎样」）。
@@ -643,7 +632,7 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 			return nil, err
 		}
 	}
-	rule := lotterydomain.RuleOf(*activity)
+	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
 
 	state, err := lotteryDrawState(ctx, tx, personalActivity, personal, input, facts, now)
@@ -727,6 +716,12 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETU
 	if err != nil {
 		return nil, err
 	}
+	if conversion != nil {
+		// 与卡密、邀请、管理员发放的折算记在同一处：用户的「折算记录」与控制台的折算视图都看得到
+		if err := recordLotteryConversionTx(ctx, tx, input.AppID, input.UserID, rule, prize, plans, conversion, results); err != nil {
+			return nil, err
+		}
+	}
 	resultsJSON, err := json.Marshal(results)
 	if err != nil {
 		return nil, err
@@ -761,6 +756,35 @@ WHERE activity_id = $1 AND user_id = $2`, activity.ID, input.UserID,
 	}
 	tx = nil
 	return &LotteryDrawOutcome{Draw: *draw, Activity: *activity, Prizes: prizes}, nil
+}
+
+// recordLotteryConversionTx 抽中已拥有的奖品、按活动的处理方式改发之后，记一条会员折算记录。
+//
+// 改发成积分时积分就是这次折算的积分（流水号取发放结果）；改发成抽奖次数、经验等时积分为 0，
+// 说明里写清改发了什么。这是已拥有的发放（owned），取消永久会员时不收回。
+func recordLotteryConversionTx(ctx context.Context, tx pgx.Tx, appID, userID int64, rule lotterydomain.SwapRule,
+	prize lotterydomain.Prize, plans map[int64]pointstore.PlanRef, conversion *lotterydomain.Conversion,
+	results []lotterydomain.RewardResult) error {
+	item := lotterydomain.OwnedItem(rule, prize, plans)
+	record := &vipdomain.Conversion{
+		AppID: appID, UserID: userID, Kind: vipdomain.ConversionOwned, Source: vipdomain.ChannelLottery,
+		Reason: conversion.Reason, Message: conversion.Message,
+	}
+	if conversion.Reward.Type == lotterydomain.KindPoints {
+		item.Points = conversion.Reward.Amount
+		record.Points = conversion.Reward.Amount
+		if len(results) > 0 {
+			record.IntegralTransactionNo = results[0].TransactionNo
+		}
+	} else {
+		item.Points = 0
+	}
+	record.Items = []vipdomain.ConversionItem{item}
+	if err := insertVipConversionTx(ctx, tx, record); err != nil {
+		return err
+	}
+	conversion.ConversionNo = record.ConversionNo
+	return nil
 }
 
 // pickLotteryPrize 按出奖策略选奖品并占库存。返回选中的奖品与完整的出奖方案（写进记录的 trace）。

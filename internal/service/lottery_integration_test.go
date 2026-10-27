@@ -441,7 +441,7 @@ func testLotteryOwnedPrizes(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("谢谢参与不算已拥有，得到 %+v", state.Activity.Prizes[0].Swap)
 	}
 
-	// 折算积分（默认：每天 10 积分）：会员 7 天 → 70 积分，不记会员段
+	// 折算积分（跟随应用折算策略，默认会员每天 10 积分）：会员 7 天 → 70 积分，不记会员段
 	before := integral(frank)
 	won := mustDraw(frank, vipActivity.ID, "", "")
 	c := won.Draw.Conversion
@@ -461,11 +461,26 @@ func testLotteryOwnedPrizes(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("记录应带改发说明，得到 %+v %v", mine, err)
 	}
 
-	// 永久会员已含 online_music：功能 3 天 → 30 积分
+	// 永久会员已含 online_music：功能 3 天 → 按应用折算策略功能每天 5 积分，共 15 积分
 	before = integral(frank)
 	unlock := mustDraw(frank, featureActivity.ID, "", "")
-	if unlock.Draw.Conversion == nil || unlock.Draw.Conversion.Reward.Amount != 30 || integral(frank)-before != 30 {
-		t.Fatalf("永久会员已含该功能，3 天应折算 30 积分，得到 %+v", unlock.Draw.Conversion)
+	if unlock.Draw.Conversion == nil || unlock.Draw.Conversion.Reward.Amount != 15 || integral(frank)-before != 15 {
+		t.Fatalf("永久会员已含该功能，3 天应折算 15 积分，得到 %+v", unlock.Draw.Conversion)
+	}
+
+	// 两次折算都进了会员折算记录（与卡密、邀请、管理员发放同一处），积分流水对得上
+	records, total, err := vip.pg.ListVipConversions(ctx, appID, frank, 1, 20)
+	if err != nil || total != 2 {
+		t.Fatalf("抽奖折算应记两条会员折算记录，得到 %d %v", total, err)
+	}
+	for _, record := range records {
+		if record.Source != vipdomain.ChannelLottery || record.Kind != vipdomain.ConversionOwned ||
+			record.IntegralTransactionNo == "" || len(record.Items) != 1 || record.Items[0].Points != record.Points {
+			t.Fatalf("折算记录不对：%+v", record)
+		}
+	}
+	if records[0].ConversionNo != unlock.Draw.Conversion.ConversionNo || records[0].Points != 15 {
+		t.Fatalf("抽奖记录应指向折算记录，得到 %+v / %+v", records[0], unlock.Draw.Conversion)
 	}
 
 	// 改发抽奖次数

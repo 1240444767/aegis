@@ -91,6 +91,15 @@ type LotteryVideoScene struct {
 
 // Catalog 控制台的活动表单由它驱动。
 func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]any, error) {
+	// 已拥有奖品折算积分的单价：活动不填时跟随应用的会员折算策略
+	policy, err := s.pg.GetVipConversionPolicy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	conversionRates := map[string]any{
+		"perVipDay": policy.PerVipDay, "perFeatureDay": policy.PerFeatureDay,
+		"perFeatureHour": policy.PerFeatureHour, "perLifetime": policy.PerLifetime,
+	}
 	plans, features, err := s.pg.PointsStoreCatalogRefs(ctx, appID)
 	if err != nil {
 		return nil, err
@@ -161,12 +170,14 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 		},
 		// 可能「已拥有」、能设置改发的奖品类型
 		"ownableKinds": lotterydomain.OwnableKinds(),
+		// 每天 / 永久积分默认 0：跟随应用的会员折算策略（conversionRates）
 		"lifetimeDefaults": map[string]any{
 			"policy":         lotterydomain.LifetimePoints,
-			"pointsPerDay":   lotterydomain.DefaultLifetimePointsPerDay,
-			"pointsLifetime": lotterydomain.DefaultLifetimePointsLifetime,
+			"pointsPerDay":   0,
+			"pointsLifetime": 0,
 			"draws":          lotterydomain.DefaultLifetimeDraws,
 		},
+		"conversionRates": conversionRates,
 	}, nil
 }
 
@@ -435,7 +446,7 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 		return nil, s.translate(err)
 	}
 	plans, features := s.catalogRefs(ctx, appID, prizes)
-	rule := lotterydomain.RuleOf(*activity)
+	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
 	return &lotterydomain.ClientState{
 		Activity:   s.clientActivity(*activity, prizes, coverage, personal.effects, plans, features),
@@ -512,7 +523,7 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 func (s *LotteryService) clientActivity(activity lotterydomain.Activity, prizes []lotterydomain.Prize,
 	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
 	features map[string]pointstore.FeatureRef) lotterydomain.ClientActivity {
-	rule := lotterydomain.RuleOf(activity)
+	rule := lotterydomain.RuleOf(activity, coverage.Policy)
 	probabilities := lotterydomain.Probabilities(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)))
 	out := lotterydomain.ClientActivity{
 		ID: activity.ID, Name: activity.Name, Description: activity.Description, Rules: activity.Rules,

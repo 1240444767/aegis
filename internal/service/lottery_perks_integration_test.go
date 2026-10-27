@@ -249,14 +249,14 @@ func TestLotteryPerksIntegration(t *testing.T) {
 		t.Fatalf("免广告用户每天多 3 次，得到 %+v", got.Chances.Free)
 	}
 
-	// 永久会员抽中免广告时长：已拥有，按 7 天 × 10 折算 70 积分
+	// 永久会员抽中免广告时长：已拥有，按应用折算策略 7 天 × 5 折算 35 积分
 	converted := mustDraw(carol, adFreeActivity.ID, "")
-	if converted.Draw.Conversion == nil || converted.Draw.Conversion.Reward.Amount != 70 {
-		t.Fatalf("永久会员抽中免广告应折算 70 积分，得到 %+v", converted.Draw.Conversion)
+	if converted.Draw.Conversion == nil || converted.Draw.Conversion.Reward.Amount != 35 {
+		t.Fatalf("永久会员抽中免广告应折算 35 积分，得到 %+v", converted.Draw.Conversion)
 	}
-	// 永久会员抽中功能时长：会员本就免扣，折算 1 小时 × 10 = 10 积分
-	if converted = mustDraw(carol, timeActivity.ID, ""); converted.Draw.Conversion == nil || converted.Draw.Conversion.Reward.Amount != 10 {
-		t.Fatalf("永久会员抽中功能时长应折算 10 积分，得到 %+v", converted.Draw.Conversion)
+	// 永久会员抽中功能时长：会员本就免扣，按应用折算策略每小时 10 积分，30 分钟折 5 积分
+	if converted = mustDraw(carol, timeActivity.ID, ""); converted.Draw.Conversion == nil || converted.Draw.Conversion.Reward.Amount != 5 {
+		t.Fatalf("永久会员抽中功能时长应折算 5 积分，得到 %+v", converted.Draw.Conversion)
 	}
 
 	// ── 模拟：虚拟用户按永久会员身份算，保底提前到 3 次 ──

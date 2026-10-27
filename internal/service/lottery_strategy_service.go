@@ -109,7 +109,7 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 		if plans, _, err = s.pg.PointsStoreCatalogRefs(ctx, req.AppID); err != nil {
 			return nil, err
 		}
-		prizes = lotterydomain.PersonalPrizes(lotterydomain.RuleOf(activity), coverage, prizes, plans)
+		prizes = lotterydomain.PersonalPrizes(lotterydomain.RuleOf(activity, coverage.Policy), coverage, prizes, plans)
 		if saved != nil {
 			state, err := s.pg.LotteryPreview(ctx, activity, prizes, req.AppID, req.UserID, profile, now,
 				lotteryDayStart(now), timeutil.DefaultLocation())

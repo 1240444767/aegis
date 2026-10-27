@@ -89,6 +89,11 @@ WHERE u.id = $1 AND u.appid = $2 LIMIT 1`
 // 一次查询而不是三次：三次之间用户可能刚好买了会员 / 试用刚好到期，
 // 拼出来的结论会自相矛盾（比如同时"不是会员"和"试用中"）。
 func (r *Repository) GetVipEntitlementFacts(ctx context.Context, appID int64, userID int64) (*vipdomain.EvalInput, error) {
+	return vipEntitlementFactsQ(ctx, r.pool, appID, userID)
+}
+
+// vipEntitlementFactsQ 见 GetVipEntitlementFacts（事务里判「已拥有」也用它，与 /vip/status 同一份事实）。
+func vipEntitlementFactsQ(ctx context.Context, q queryExecutor, appID int64, userID int64) (*vipdomain.EvalInput, error) {
 	var (
 		facts        vipdomain.EvalInput
 		segmentsRaw  []byte
@@ -98,7 +103,7 @@ func (r *Repository) GetVipEntitlementFacts(ctx context.Context, appID int64, us
 		claimCreated *time.Time
 	)
 	claim := vipdomain.TrialClaim{AppID: appID, UserID: userID}
-	err := r.pool.QueryRow(ctx, vipEntitlementFactsSQL, userID, appID).
+	err := q.QueryRow(ctx, vipEntitlementFactsSQL, userID, appID).
 		Scan(&facts.ExpireAt, &facts.LifetimeSince,
 			&claimID, &claim.PlanID, &claim.PlanName, &claim.DurationDays, &claimEndsAt,
 			&claim.TransactionNo, &claim.DeviceID, &claim.DeviceLocked, &claimCreated,

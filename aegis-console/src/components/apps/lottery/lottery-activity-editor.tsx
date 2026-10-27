@@ -51,6 +51,7 @@ import {
 } from "@/components/apps/lottery/editor/editor-fields";
 import { KindGlyph } from "@/components/apps/lottery/editor/prize-visuals";
 import {
+  CONVERSION_RATES,
   LIMITS,
   OWNABLE_KINDS,
   blankPrize,
@@ -256,6 +257,7 @@ export function LotteryActivityEditor({
   const ownablePrizes = form.prizes.filter((prize) => ownableKinds.includes(prize.type));
   const activePerks = form.perks.filter((perk) => !perk.disabled).length;
   const showPoints = form.lifetimePolicy === "points" || form.lifetimePolicy === "exclude";
+  const rates = catalog?.conversionRates ?? CONVERSION_RATES;
 
   const currentScene = scenes.find((scene) => scene.key === form.videoScene);
   const sceneHint = !catalog
@@ -730,7 +732,11 @@ export function LotteryActivityEditor({
                   </div>
                   {showPoints ? (
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <Field label="每天折算积分" aside="会员天数、限时功能">
+                      <Field
+                        label="每天折算积分"
+                        aside="会员天数、限时功能、免广告"
+                        hint={`填 0 跟随应用的会员折算策略（会员 ${rates.perVipDay}、限时功能 ${rates.perFeatureDay} 积分/天）`}
+                      >
                         <Stepper
                           value={form.lifetimePointsPerDay}
                           min={0}
@@ -739,7 +745,11 @@ export function LotteryActivityEditor({
                           onChange={(value) => patch("lifetimePointsPerDay", value)}
                         />
                       </Field>
-                      <Field label="永久奖品折算积分" aside="永久套餐与永久功能">
+                      <Field
+                        label="永久奖品折算积分"
+                        aside="永久套餐与永久功能"
+                        hint={`填 0 跟随应用的会员折算策略（${rates.perLifetime} 积分）；功能时长始终按应用每小时 ${rates.perFeatureHour} 积分`}
+                      >
                         <Stepper
                           value={form.lifetimePointsLifetime}
                           min={0}

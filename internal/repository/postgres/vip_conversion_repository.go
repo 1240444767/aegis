@@ -86,18 +86,14 @@ ON CONFLICT (appid) DO UPDATE SET
 
 // ── 已拥有 ──
 
-// vipHoldingsQ 一个人已经永久拥有什么（判「已拥有」的唯一事实来源）。
+// vipHoldingsQ 一个人已经永久拥有什么（判「已拥有」的唯一事实来源）：
+// 由会员判定的同一份事实推出（vip.HoldingsOf），与 /vip/status 不会各说各话。
 func vipHoldingsQ(ctx context.Context, q queryExecutor, appID, userID int64) (vipdomain.Holdings, error) {
-	var holdings vipdomain.Holdings
-	err := q.QueryRow(ctx, `SELECT u.vip_lifetime_at IS NOT NULL, `+vipLifetimeFeaturesSQL+`,
-ARRAY(SELECT DISTINCT f.feature_tag FROM user_feature_unlocks f
-      WHERE f.appid = u.appid AND f.user_id = u.id AND f.revoked_at IS NULL AND f.ends_at IS NULL ORDER BY 1)
-FROM users u WHERE u.id = $1 AND u.appid = $2`, userID, appID).
-		Scan(&holdings.Lifetime, &holdings.LifetimeFeatures, &holdings.PermanentUnlocks)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return holdings, ErrUserNotFound
+	facts, err := vipEntitlementFactsQ(ctx, q, appID, userID)
+	if err != nil {
+		return vipdomain.Holdings{}, err
 	}
-	return holdings, err
+	return vipdomain.HoldingsOf(*facts, time.Now()), nil
 }
 
 // GetVipHoldings 见 vipHoldingsQ。
@@ -262,7 +258,7 @@ func convertOwnedVipTx(ctx context.Context, tx pgx.Tx, grant vipdomain.Grant) (*
 	if err != nil {
 		return nil, false, err
 	}
-	if !holdings.CoversMembership(grant.Features) {
+	if !holdings.Covers(vipdomain.GrantBenefit(grant)) {
 		return nil, false, nil
 	}
 
@@ -405,35 +401,25 @@ func grantFeatureUnlockOrConvertTx(ctx context.Context, tx pgx.Tx, grant Feature
 // assume 非空时按「假如此刻再开通一笔带这些功能的永久」算持有（预览用：那一笔还没落账）。
 func loadUpgradeInputQ(ctx context.Context, q queryExecutor, appID, userID int64, assume *[]string) (vipdomain.UpgradeInput, error) {
 	in := vipdomain.UpgradeInput{Now: time.Now().UTC()}
-	holdings, err := vipHoldingsQ(ctx, q, appID, userID)
+	facts, err := vipEntitlementFactsQ(ctx, q, appID, userID)
 	if err != nil {
 		return in, err
 	}
-	var raw []byte
-	if err := q.QueryRow(ctx, `SELECT u.vip_expire_at, `+vipLiveSegmentsSQL+`
-FROM users u WHERE u.id = $1 AND u.appid = $2`, userID, appID).Scan(&in.ExpireAt, &raw); err != nil {
-		return in, err
-	}
-	segments, err := decodeVipSegments(raw)
-	if err != nil {
-		return in, err
-	}
-	for _, segment := range segments {
-		if segment.Lifetime {
-			if segment.GrantsAdFree() {
-				in.AdFreeCovered = true
-			}
+	in.ExpireAt = facts.ExpireAt
+	holdings := vipdomain.HoldingsOf(*facts, in.Now)
+	for _, segment := range facts.Segments {
+		if segment.Lifetime || !segment.LiveAt(in.Now) {
 			continue
 		}
 		in.Segments = append(in.Segments, vipdomain.TimedSegment{
 			ID: segment.ID, TransactionNo: segment.TransactionNo, Label: segment.EffectivePlanName(),
-			Features: segment.EffectiveFeatures(), From: segment.ActiveFrom, Until: segment.ActiveUntil,
+			Features: segment.EffectiveFeatures(), AdFree: segment.GrantsAdFree(),
+			From: segment.ActiveFrom, Until: segment.ActiveUntil,
 		})
 	}
 	if assume != nil {
-		holdings.Lifetime = true
-		holdings.LifetimeFeatures = vipdomain.NormalizeFeatureTags(append(append([]string{}, holdings.LifetimeFeatures...), *assume...))
-		in.AdFreeCovered = true
+		// 预览的永久开通来自套餐（购买 / 发放），一律免广告
+		holdings = holdings.Assume(vipdomain.MembershipBenefit(*assume, true, true))
 	}
 	in.Holdings = holdings
 

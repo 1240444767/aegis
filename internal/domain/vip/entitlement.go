@@ -313,31 +313,6 @@ func evaluateTrialOffer(in EvalInput, entitlement Entitlement) TrialOffer {
 	return offer
 }
 
-// LifetimeIncludes 永久会员是否已经包含这个套餐：再开通一次拿不到任何新东西。
-//
-// 判据只看功能：套餐的每个功能标识都已在永久开通的功能里（按套餐当前配置取并集）。
-// 不包含 ≠ 不能买 —— 永久基础版再买一段限时的高级版是正常的升级路径，
-// 拦的只是「已经是永久会员还在续月卡」「同一个永久套餐买第二次」这种纯花钱。
-// 试用对永久会员一律视为已包含（领试用的资格判定本来也会拒）。
-func LifetimeIncludes(lifetime bool, lifetimeFeatures []string, plan Plan) bool {
-	if !lifetime {
-		return false
-	}
-	if plan.IsTrial() {
-		return true
-	}
-	have := make(map[string]struct{}, len(lifetimeFeatures))
-	for _, tag := range NormalizeFeatureTags(lifetimeFeatures) {
-		have[tag] = struct{}{}
-	}
-	for _, tag := range NormalizeFeatureTags(plan.Features) {
-		if _, ok := have[tag]; !ok {
-			return false
-		}
-	}
-	return true
-}
-
 // normalizeSource 把账本里的渠道翻成会员来源，未登记的渠道一律算"说不清"。
 func normalizeSource(channel string) string {
 	switch channel {

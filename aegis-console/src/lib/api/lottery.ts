@@ -78,6 +78,13 @@ export type LotteryCatalog = {
     pointsLifetime: number;
     draws: number;
   };
+  /** 应用会员折算策略的单价：活动的每天 / 永久积分为 0 时按它折算 */
+  conversionRates?: {
+    perVipDay: number;
+    perFeatureDay: number;
+    perFeatureHour: number;
+    perLifetime: number;
+  };
   /** 行为画像的信号目录 */
   signals?: LotterySignalSpec[];
   /** 自定义规则里能用的变量 */

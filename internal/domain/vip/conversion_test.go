@@ -12,7 +12,7 @@ var upgradeNow = time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)
 func upDay(n int) time.Time { return upgradeNow.Add(time.Duration(n) * 24 * time.Hour) }
 
 func lifetimeHoldings(features ...string) Holdings {
-	return Holdings{Lifetime: true, LifetimeFeatures: features}
+	return Holdings{Lifetime: true, LifetimeAdFree: true, LifetimeFeatures: features}
 }
 
 // 正在走的基础版被覆盖：截在此刻，按剩余 10 天折积分，到期时间回到此刻。
@@ -87,11 +87,10 @@ func TestPlanUpgradeFeatureLines(t *testing.T) {
 			{ID: 7, Tag: "export", Name: "导出", Starts: upDay(-1), Ends: upDay(4)},
 			{ID: 8, Tag: "ai", Name: "AI", Starts: upDay(-1), Ends: upDay(4)},
 		},
-		Balances:      []FeatureTimeBalance{{Feature: "online_music", Name: "在线听歌", Seconds: 5400}},
-		AdFree:        &adFree,
-		AdFreeCovered: true,
-		Holdings:      lifetimeHoldings("export"),
-		Policy:        DefaultConversionPolicy(1),
+		Balances: []FeatureTimeBalance{{Feature: "online_music", Name: "在线听歌", Seconds: 5400}},
+		AdFree:   &adFree,
+		Holdings: lifetimeHoldings("export"),
+		Policy:   DefaultConversionPolicy(1),
 	})
 	if len(plan.UnlockIDs) != 1 || plan.UnlockIDs[0] != 7 {
 		t.Fatalf("只折已包含功能的解锁：%v", plan.UnlockIDs)
@@ -114,9 +113,9 @@ func TestPlanUpgradeNotLifetimeDoesNothing(t *testing.T) {
 }
 
 func TestHoldingsCovers(t *testing.T) {
-	h := Holdings{Lifetime: true, LifetimeFeatures: []string{"export"}, PermanentUnlocks: []string{"ai"}}
-	if !h.CoversMembership(nil) || h.CoversMembership([]string{"ai"}) {
-		t.Fatal("会员天数对永久会员是空的；多出功能的不是")
+	h := Holdings{Lifetime: true, LifetimeAdFree: true, LifetimeFeatures: []string{"export"}, PermanentUnlocks: []string{"ai"}}
+	if !h.CoversMembership(nil) || !h.CoversMembership([]string{"ai", "export"}) || h.CoversMembership([]string{"music"}) {
+		t.Fatal("会员天数对永久会员是空的；永久解锁的功能也算已有；多出功能的不是")
 	}
 	if reason, ok := h.CoversFeature("ai"); !ok || reason != OwnedFeature {
 		t.Fatal("已永久解锁")
