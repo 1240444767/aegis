@@ -23,6 +23,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--read-only", action="store_true", help="只暴露只读工具（与密钥本身是否只读无关，双保险）")
     parser.add_argument("--modules", default="", help="只挂载这些模块，逗号分隔（通用层恒挂载），如 users,vip,lottery")
     parser.add_argument("--exclude-modules", default="", help="不挂载这些模块，逗号分隔")
+    parser.add_argument("--tool-search", action="store_true",
+                        help="只下发 search_tools / run_tool 与通用层，其余工具按需检索（客户端工具数量受限时用）")
     parser.add_argument("--list-modules", action="store_true", help="列出可用模块后退出")
     parser.add_argument("--version", action="version", version=f"aegis-mcp {__version__}")
     args = parser.parse_args(argv)
@@ -47,6 +49,7 @@ def main(argv: list[str] | None = None) -> None:
         read_only=args.read_only,
         include_modules=args.modules.split(","),
         exclude_modules=args.exclude_modules.split(","),
+        tool_search=args.tool_search,
     )
     if stdio:
         server.run("stdio", show_banner=False)

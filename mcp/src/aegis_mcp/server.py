@@ -18,6 +18,7 @@ from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
 from fastmcp.server.middleware.logging import LoggingMiddleware
 from fastmcp.server.middleware.response_limiting import ResponseLimitingMiddleware
 from fastmcp.server.middleware.timing import TimingMiddleware
+from fastmcp.server.transforms.search import BM25SearchTransform
 
 from . import __version__, modules
 from .core.config import Settings
@@ -30,6 +31,7 @@ INSTRUCTIONS = """\
 1. 先调用 whoami 看清这把密钥代表谁、能访问哪些应用、权限范围、是否只读。
 2. 工具按领域分组，名字前缀即领域：apps_ / users_ / audit_ / points_ / wallet_ / payment_ / store_ / cardkey_ /
    vip_ / lottery_ / content_ / tickets_ ……。优先用这些带类型参数的工具。
+   若只看到 search_tools / run_tool：先用 search_tools 按英文关键词（如 "vip grant"、"lottery prize"、"users ban"）检索，再用 run_tool 调用。
 3. 没有现成工具时：list_endpoints 按关键词找接口 → describe_endpoint 看参数 → call_api 调用（覆盖全部约 970 条管理端接口）。
 4. 应用参数 app 可填 appKey 或数字应用 ID；user_id 指管理端用户 ID（数据库主键）。
 5. 写操作真实生效并记入审计日志（会话列 mcp:<密钥前缀>）。删除、封禁、扣减、撤销会员、退款、批量推送等
@@ -55,6 +57,7 @@ def build_server(
     read_only: bool = False,
     include_modules: Iterable[str] | None = None,
     exclude_modules: Iterable[str] | None = None,
+    tool_search: bool = False,
 ) -> FastMCP:
     init_runtime(settings)
     root = FastMCP(
@@ -81,4 +84,13 @@ def build_server(
         root.mount(module.server, namespace=module.NAMESPACE or None)
     if read_only:
         root.disable(tags={"write"})
+    if tool_search:
+        # 三百多个工具一次性下发会挤爆部分客户端的工具上限与上下文：只露出检索入口与通用层，
+        # 其余按需检索后经 run_tool 调用（权限、只读过滤照常生效）
+        root.add_transform(BM25SearchTransform(
+            max_results=8,
+            always_visible=["whoami", "list_endpoints", "describe_endpoint", "call_api"],
+            search_tool_name="search_tools",
+            call_tool_name="run_tool",
+        ))
     return root

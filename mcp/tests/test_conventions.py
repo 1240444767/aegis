@@ -77,3 +77,65 @@ async def test_read_only_mode_hides_write_tools(backend):
         tools = await client.list_tools()
     tags = [set((t.meta or {}).get("fastmcp", {}).get("tags") or []) for t in tools]
     assert tools and all("write" not in item for item in tags)
+
+
+PERMISSIONS = Path(__file__).resolve().parents[2] / "internal" / "authz" / "testdata" / "route_permissions.json"
+
+
+@pytest.mark.skipif(not PERMISSIONS.exists(), reason="不在 Aegis 仓库里")
+def test_read_tools_only_hit_read_routes():
+    """只读工具引用的接口必须是 GET，或规则表判为 *:read 的 POST 查询——否则只读密钥调不了、--read-only 模式下会露出用不了的工具。"""
+    import ast
+    import inspect
+    import json
+
+    from aegis_mcp.core.route import Route
+
+    read_routes = {
+        (row["method"], row["path"])
+        for row in json.loads(PERMISSIONS.read_text(encoding="utf-8"))
+        if not row.get("unmapped") and str(row.get("permission", "")).endswith(":read")
+    }
+    problems: list[str] = []
+    for module in discover_modules():
+        tree = ast.parse(inspect.getsource(module))
+        routes = {name: value for name, value in vars(module).items() if isinstance(value, Route)}
+        route_maps = {name: value for name, value in vars(module).items()
+                      if isinstance(value, dict) and value and all(isinstance(v, Route) for v in value.values())}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.AsyncFunctionDef):
+                continue
+            is_read = any(
+                isinstance(dec, ast.Call) and any(
+                    isinstance(kw.value, ast.Call) and getattr(kw.value.func, "id", "") == "READ"
+                    for kw in dec.keywords if kw.arg is None
+                )
+                for dec in node.decorator_list
+            )
+            if not is_read:
+                continue
+            used: list[Route] = []
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and sub.id in routes:
+                    used.append(routes[sub.id])
+                if isinstance(sub, ast.Name) and sub.id in route_maps:
+                    used.extend(route_maps[sub.id].values())
+            for route in used:
+                if route.method in ("GET", "HEAD") or (route.method, route.template) in read_routes:
+                    continue
+                problems.append(f"{module.__name__}.{node.name}：只读工具调用了 {route.method} {route.template}（不是读权限点），应改用 WRITE(..., idempotent=True)")
+    assert not problems, "\n".join(problems)
+
+
+async def test_tool_search_mode(backend):
+    from fastmcp import Client
+
+    from aegis_mcp.core.config import Settings
+    from aegis_mcp.server import build_server
+
+    srv = build_server(Settings(base_url="https://aegis.test", api_key="aegis_mcp_" + "t" * 43), tool_search=True)
+    async with Client(srv) as client:
+        names = {t.name for t in await client.list_tools()}
+        assert names == {"search_tools", "run_tool", "whoami", "list_endpoints", "describe_endpoint", "call_api"}
+        found = await client.call_tool("search_tools", {"query": "vip grant"})
+        assert "vip_grant" in "".join(getattr(b, "text", "") for b in found.content)
