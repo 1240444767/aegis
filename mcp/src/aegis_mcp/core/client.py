@@ -15,7 +15,7 @@ from urllib.parse import quote
 
 import httpx
 
-from . import __version__
+from .. import __version__
 from .config import Settings
 
 _PATH_PARAM = re.compile(r"[:{]([A-Za-z_][A-Za-z0-9_]*)}?")

@@ -1,18 +1,18 @@
 [project]
 name = "aegis-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "Aegis 管理端 MCP 服务：让 AI 助手凭 MCP 密钥查询与管理 Aegis（应用、用户、会员、积分、工单、审计等）"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-  "mcp>=2.3,<3",
+  "fastmcp>=4.1,<5",
   "httpx>=0.28",
+  "pydantic>=2.11",
 ]
 
 [project.optional-dependencies]
-http = ["uvicorn>=0.34"]
-dev = ["pytest>=8", "anyio>=4"]
+dev = ["pytest>=8", "pytest-asyncio>=1.0"]
 
 [project.scripts]
 aegis-mcp = "aegis_mcp.__main__:main"
@@ -26,3 +26,5 @@ packages = ["src/aegis_mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
