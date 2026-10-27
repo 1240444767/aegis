@@ -214,6 +214,8 @@ type AdminActivity struct {
 	TotalUsers int64   `json:"totalUsers"`
 	TodayDraws int64   `json:"todayDraws"`
 	Pending    int64   `json:"pending"`
+	// Economy 积分账与套利检查（见 economy.go）；取不到时为空
+	Economy *ActivityEconomy `json:"economy,omitempty"`
 }
 
 // Draw 一次抽奖。奖品信息存快照：奖品被改、被删之后，记录说的仍是当时抽中的那一份。

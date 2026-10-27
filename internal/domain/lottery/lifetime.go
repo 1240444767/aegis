@@ -123,6 +123,11 @@ type SwapRule struct {
 	// Value 折算单价：应用的会员折算策略，活动填了每天 / 永久积分时以活动为准
 	Value vipdomain.ConversionPolicy
 	Draws int64
+	// Capped 时折成积分每次最多给 Cap（无套利上限，见 economy.go）；零值为不封顶
+	Capped bool
+	Cap    int64
+	// Price 用积分换一次抽奖的价格：改发的抽奖次数按它折成积分与 Cap 比
+	Price int64
 }
 
 // RuleOf 活动的处理方式。
@@ -176,12 +181,15 @@ func OwnedItem(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) v
 //
 // exclude 只影响常规抽取；走到这里（保底奖、兜底奖恰好是已拥有的）时按积分折算 ——
 // 保底承诺的是「必中一个奖」，不能因为他已经是永久会员就落空。
+//
+// 折成积分（公式或奖品单独设的改发积分）时不超过 rule.Cap：超过无套利上限的按上限发，
+// 上限是 0 时改发「谢谢参与」（KindNone）—— 已拥有的东西不再重复发放，也不再折出积分。
 func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Reward, bool) {
 	if prize.LifetimeReward != nil && prize.LifetimeReward.Type != "" {
 		if rule.Policy == LifetimeGrant {
 			return Reward{}, false
 		}
-		return NormalizeReward(*prize.LifetimeReward), true
+		return capPoints(rule, NormalizeReward(*prize.LifetimeReward)), true
 	}
 	switch rule.Policy {
 	case LifetimeGrant:
@@ -190,13 +198,40 @@ func Swap(rule SwapRule, prize Prize, plans map[int64]pointstore.PlanRef) (Rewar
 		if rule.Draws <= 0 {
 			return Reward{}, false
 		}
-		return Reward{Type: KindLotteryDraws, Amount: rule.Draws}, true
+		return capPoints(rule, Reward{Type: KindLotteryDraws, Amount: rule.Draws}), true
 	}
 	amount := min(OwnedItem(rule, prize, plans).Points, MaxSwapPoints)
 	if amount <= 0 {
 		return Reward{}, false
 	}
-	return Reward{Type: KindPoints, Amount: amount}, true
+	return capPoints(rule, Reward{Type: KindPoints, Amount: amount}), true
+}
+
+// capPoints 改发的积分、抽奖次数不超过无套利上限（次数按价格折成积分比）：超过时改为按上限发积分，
+// 上限是 0 时什么也不发。
+func capPoints(rule SwapRule, reward Reward) Reward {
+	if !rule.Capped {
+		return reward
+	}
+	value := int64(0)
+	switch reward.Type {
+	case KindPoints:
+		value = reward.Amount
+	case KindLotteryDraws:
+		if rule.Price <= 0 {
+			return reward
+		}
+		value = reward.Amount * rule.Price
+	default:
+		return reward
+	}
+	if value <= rule.Cap {
+		return reward
+	}
+	if rule.Cap == 0 {
+		return Reward{Type: KindNone}
+	}
+	return Reward{Type: KindPoints, Amount: rule.Cap}
 }
 
 // Excluded 这个人的常规抽取里是否剔除这个奖品。
@@ -233,15 +268,22 @@ type Conversion struct {
 	ConversionNo string `json:"conversionNo,omitempty"`
 }
 
-// ConversionMessage 给用户看的说明。
+// ConversionMessage 给用户看的说明；改发的是「谢谢参与」（无套利上限为 0）时说不再重复发放。
 func ConversionMessage(reason, prizeName, label string) string {
+	if label == noneSpec.Label {
+		if reason == OwnedFeature {
+			return fmt.Sprintf("你已永久拥有该功能，「%s」不再重复发放", prizeName)
+		}
+		return fmt.Sprintf("你已是永久会员，「%s」不再重复发放", prizeName)
+	}
 	if reason == OwnedFeature {
 		return fmt.Sprintf("你已永久拥有该功能，「%s」已转为%s", prizeName, label)
 	}
 	return fmt.Sprintf("你已是永久会员，「%s」已转为%s", prizeName, label)
 }
 
-// SwapLabel 改发的东西的短名（「70 积分」「抽奖 1 次」）。
+// SwapLabel 改发的东西的短名（「70 积分」「抽奖 1 次」「谢谢参与」）。
+// 老客户端不认识 none 改发，按这个短名显示「已转为 谢谢参与」，说得通。
 func SwapLabel(reward Reward) string {
 	return DefaultPrizeName(reward, nil, nil)
 }

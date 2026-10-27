@@ -17,6 +17,7 @@ import (
 	notificationdomain "aegis/internal/domain/notification"
 	"aegis/internal/domain/pointstore"
 	securitydomain "aegis/internal/domain/security"
+	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
@@ -196,13 +197,58 @@ func sceneLotteryDraws(rewards []cardkeydomain.Reward) int64 {
 
 // ListActivities 管理端活动列表（含奖品与汇总）。
 func (s *LotteryService) ListActivities(ctx context.Context, appID int64) ([]lotterydomain.AdminActivity, error) {
-	return s.pg.ListLotteryAdminActivities(ctx, appID, lotteryDayStart(time.Now()))
+	items, err := s.pg.ListLotteryAdminActivities(ctx, appID, lotteryDayStart(time.Now()))
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		s.annotateEconomy(ctx, appID, &items[index])
+	}
+	return items, nil
 }
 
 // GetActivity 管理端单个活动。
 func (s *LotteryService) GetActivity(ctx context.Context, appID, activityID int64) (*lotterydomain.AdminActivity, error) {
 	item, err := s.pg.GetLotteryAdminActivity(ctx, appID, activityID, lotteryDayStart(time.Now()))
-	return item, s.translate(err)
+	if err != nil {
+		return nil, s.translate(err)
+	}
+	s.annotateEconomy(ctx, appID, item)
+	return item, nil
+}
+
+// annotateEconomy 给管理端的活动算积分账：积分能换到次数时，奖盘本身会不会让人用积分稳赚。
+// 永久会员按「已拥有奖盘里全部会员与功能奖品」算（最坏情况）。取不到事实时不标，记日志。
+func (s *LotteryService) annotateEconomy(ctx context.Context, appID int64, item *lotterydomain.AdminActivity) {
+	if item == nil {
+		return
+	}
+	policy, err := s.pg.GetVipConversionPolicy(ctx, appID)
+	if err != nil {
+		s.log.Warn("lottery: conversion policy failed", zap.Int64("appid", appID), zap.Error(err))
+		return
+	}
+	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, appID)
+	if err != nil {
+		s.log.Warn("lottery: store draw price failed", zap.Int64("appid", appID), zap.Error(err))
+		return
+	}
+	plans, _ := s.catalogRefs(ctx, appID, item.Prizes)
+	owned := []string{}
+	for _, prize := range item.Prizes {
+		switch prize.Kind {
+		case lotterydomain.KindVipPlan:
+			owned = append(owned, plans[prize.Reward.RefID].Features...)
+		case lotterydomain.KindFeature, lotterydomain.KindFeatureTime:
+			owned = append(owned, prize.Reward.Tag)
+		}
+	}
+	coverage := lotterydomain.MemberCoverage{
+		Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true, LifetimeFeatures: vipdomain.NormalizeFeatureTags(owned)},
+		Policy:   policy,
+	}
+	economy := lotterydomain.AuditEconomy(item.Activity, item.Prizes, plans, coverage, storePrice)
+	item.Economy = &economy
 }
 
 // CreateActivity 新建活动（连同奖品）。
@@ -449,7 +495,7 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
 	return &lotterydomain.ClientState{
-		Activity:   s.clientActivity(*activity, prizes, coverage, personal.effects, plans, features),
+		Activity:   s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features),
 		Chances:    personal.chances,
 		Pity:       personal.pity,
 		Lifetime:   lotterydomain.MergePerkNotice(lotterydomain.NoticeOf(rule, coverage, prizes, plans), personal.summary, coverage.Lifetime),
@@ -520,11 +566,19 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 
 // clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0），
 // 已拥有的奖品带上「对你来说会怎样」。
-func (s *LotteryService) clientActivity(activity lotterydomain.Activity, prizes []lotterydomain.Prize,
+func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
 	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
 	features map[string]pointstore.FeatureRef) lotterydomain.ClientActivity {
 	rule := lotterydomain.RuleOf(activity, coverage.Policy)
-	probabilities := lotterydomain.Probabilities(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)))
+	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
+	probabilities := lotterydomain.Probabilities(personal)
+	// 与抽奖事务同一个无套利上限：「转为 N 积分」写的是真会发的数
+	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, activity.AppID)
+	if err != nil {
+		s.log.Warn("lottery: store draw price failed", zap.Int64("appid", activity.AppID), zap.Error(err))
+	}
+	rule = rule.WithCap(lotterydomain.EconomyOf(rule, coverage, personal, plans,
+		lotterydomain.DrawPrice(effects.Personalize(activity), storePrice)))
 	out := lotterydomain.ClientActivity{
 		ID: activity.ID, Name: activity.Name, Description: activity.Description, Rules: activity.Rules,
 		UIMode: activity.UIMode, StartTime: activity.StartTime, EndTime: activity.EndTime,

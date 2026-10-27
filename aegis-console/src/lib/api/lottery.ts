@@ -487,6 +487,22 @@ export type LotteryAdminActivity = LotteryActivity & {
   totalUsers: number;
   todayDraws: number;
   pending: number;
+  /** 积分账与套利检查：积分能换到次数时，抽一次期望拿回多少积分 */
+  economy?: LotteryEconomy;
+};
+
+/** 一个活动的积分账（后端 `lottery.ActivityEconomy`） */
+export type LotteryEconomy = {
+  /** 用积分换一次抽奖的最低价（积分抽奖价、积分商城单价）；0 表示积分换不到次数 */
+  price: number;
+  /** 不拥有任何奖品的用户抽一次的期望积分回报；-1 为抽不完 */
+  memberReturn: number;
+  /** 已拥有全部会员与功能奖品的永久会员抽一次的期望积分回报（封顶之后） */
+  lifetimeReturn: number;
+  /** 永久会员抽中已拥有的奖品时最多折多少积分；-1 为不封顶 */
+  lifetimeCap: number;
+  /** 需要处理的问题 */
+  warnings: string[];
 };
 
 export type LotteryPrizePayload = {

@@ -16,6 +16,9 @@ import (
 
 // lotteryBehaviorSQL 一个人在应用里的全部行为，一条语句取齐（都是按人的索引查询）。
 // $1 user_id、$2 appid、$3 此刻、$4 应用时区的今天（DATE）。
+//
+// 最近一次在线取 user_online_daily.updated_at（最后一次累计的时刻），不能取 day::timestamptz：
+// day 是 UTC 日期，转成时刻是那一天的零点、还随会话时区变，「最近活跃」会差出一天多。
 const lotteryBehaviorSQL = `
 WITH u AS (
   SELECT id, created_at, vip_expire_at, vip_lifetime_at, integral, experience
@@ -25,7 +28,7 @@ WITH u AS (
     COALESCE(SUM(seconds) FILTER (WHERE day >= $4::date - 6), 0)  AS s7,
     COALESCE(SUM(seconds) FILTER (WHERE day >= $4::date - 29), 0) AS s30,
     COUNT(*) FILTER (WHERE day >= $4::date - 29 AND seconds >= 60) AS d30,
-    MAX(day) AS last_day
+    MAX(updated_at) AS last_at
   FROM user_online_daily WHERE user_id = $1 AND day >= $4::date - 29
 ), logins AS (
   SELECT COUNT(DISTINCT (created_at AT TIME ZONE 'UTC')::date) AS d30, MAX(created_at) AS last_at
@@ -35,7 +38,7 @@ WITH u AS (
 SELECT
   EXTRACT(EPOCH FROM ($3::timestamptz - u.created_at)) / 86400,
   online.s7 / 60.0, online.s30 / 60.0, online.d30, logins.d30,
-  GREATEST(logins.last_at, online.last_day::timestamptz,
+  GREATEST(logins.last_at, online.last_at,
            (SELECT MAX(last_seen_at) FROM user_login_devices WHERE appid = $2 AND user_id = $1)),
   COALESCE((SELECT CASE WHEN s.last_sign_date >= $4::date - 1 THEN s.consecutive_days ELSE 0 END
             FROM sign_stats s WHERE s.user_id = $1 AND s.appid = $2), 0),

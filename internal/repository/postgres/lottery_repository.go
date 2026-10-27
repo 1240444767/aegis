@@ -484,6 +484,35 @@ func lotteryMemberCoverage(ctx context.Context, q queryExecutor, appID, userID i
 	return lotterydomain.MemberCoverage{Holdings: holdings, Policy: policy}, nil
 }
 
+// lotteryStoreDrawPriceQ 积分商城里一次抽奖次数的最低单价（商品积分 ÷ 其中抽奖次数的总数）；不卖时为 0。
+//
+// 含抽奖次数的组合商品也算（按全部积分摊给次数，偏低、偏保守）。不看上下架时段：今天不开放、明天开放，
+// 环照样接得上。
+func lotteryStoreDrawPriceQ(ctx context.Context, q queryExecutor, appID int64) (int64, error) {
+	var price *float64
+	if err := q.QueryRow(ctx, `SELECT MIN(i.cost::float8 / d.draws)
+FROM points_store_items i
+CROSS JOIN LATERAL (
+    SELECT SUM((r->>'amount')::float8) AS draws
+    FROM jsonb_array_elements(i.rewards) r
+    WHERE r->>'type' = $2 AND (r->>'amount')::float8 > 0
+) d
+WHERE i.appid = $1 AND i.status = $3 AND d.draws > 0`, appID, pointstore.RewardLotteryDraws, pointstore.StatusActive).
+		Scan(&price); err != nil {
+		return 0, err
+	}
+	if price == nil {
+		return 0, nil
+	}
+	// 向下取整：单价 9.5 时按 9 封顶，宁可少给
+	return max(int64(*price), 1), nil
+}
+
+// LotteryStoreDrawPrice 见 lotteryStoreDrawPriceQ（活动页的改发提示与控制台的套利检查用）。
+func (r *Repository) LotteryStoreDrawPrice(ctx context.Context, appID int64) (int64, error) {
+	return lotteryStoreDrawPriceQ(ctx, r.pool, appID)
+}
+
 // LotteryMemberCoverage 见 lotteryMemberCoverage（活动页用它标出「对你来说这一格会怎样」）。
 func (r *Repository) LotteryMemberCoverage(ctx context.Context, appID, userID int64) (lotterydomain.MemberCoverage, error) {
 	return lotteryMemberCoverage(ctx, r.pool, appID, userID)
@@ -634,6 +663,13 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	}
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
+	// 无套利：积分能换到次数时，已拥有格子的改发不超过让「买一次、抽一次」回本的上限
+	storePrice, err := lotteryStoreDrawPriceQ(ctx, tx, input.AppID)
+	if err != nil {
+		return nil, err
+	}
+	rule = rule.WithCap(lotterydomain.EconomyOf(rule, coverage, personal, plans,
+		lotterydomain.DrawPrice(personalActivity, storePrice)))
 
 	state, err := lotteryDrawState(ctx, tx, personalActivity, personal, input, facts, now)
 	if err != nil {

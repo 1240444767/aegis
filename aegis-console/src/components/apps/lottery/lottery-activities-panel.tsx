@@ -261,6 +261,15 @@ export function LotteryActivitiesPanel({
                     </span>
                     <span className="tabular-nums">{formatCount(activity.totalUsers)} 人</span>
                     <span className="tabular-nums">今日 {formatCount(activity.todayDraws)} 次</span>
+                    {activity.economy && activity.economy.price > 0 ? (
+                      <span
+                        className="tabular-nums"
+                        title="积分能换到抽奖次数时，抽一次期望拿回的积分；永久会员抽中已拥有的奖品时折算会被封顶，保证不超过价格"
+                      >
+                        每次 {formatCount(activity.economy.price)} 积分，期望回报 {activity.economy.memberReturn < 0 ? "无上限" : activity.economy.memberReturn}
+                        {activity.economy.lifetimeCap >= 0 ? `，永久会员折算上限 ${formatCount(activity.economy.lifetimeCap)}` : ""}
+                      </span>
+                    ) : null}
                     {activity.pending > 0 ? (
                       <button
                         type="button"
@@ -271,6 +280,15 @@ export function LotteryActivitiesPanel({
                       </button>
                     ) : null}
                   </div>
+                  {activity.economy?.warnings.map((warning) => (
+                    <p
+                      key={warning}
+                      role="alert"
+                      className="mt-2 rounded-lg bg-destructive/10 px-3 py-2 text-xs leading-relaxed text-destructive"
+                    >
+                      {warning}
+                    </p>
+                  ))}
                 </div>
               );
             })}
