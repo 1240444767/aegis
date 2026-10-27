@@ -56,15 +56,17 @@
 
 ## 可兑换判定：一个纯函数
 
-`pointstore.Evaluate(item, facts, usage, now)` 回答「这件商品此刻能不能被这个人兑换」。
+`pointstore.Evaluate(item, facts, usage, clock)` 回答「这件商品此刻能不能被这个人兑换」。
 `/points/store` 里每件商品的 `availability` 与兑换失败的错误码出自同一个函数，
 列表上「为什么灰着」与点了之后的报错永远是同一句话。判据顺序即优先级：
 
 | reason | 码 | 含义 |
 |---|---|---|
 | `inactive` / `not_started` / `ended` / `reward_unavailable` | 40304 | 商品本身不可兑 |
-| `sold_out` | 40305 | 库存为 0 |
-| `limit_reached` | 40306 | 每人限兑：`limitCount` 次 / `limitPeriod`（total / 自然日 / ISO 周 / 自然月，应用默认时区） |
+| `closed_now` | 40304 | 不在每日开放时段内（提示「每日 10:00–22:00 开放兑换」） |
+| `sold_out` | 40305 | 库存为 0（按补货周期换算后；开了补货时提示「已兑完，明日补货」） |
+| `quota_reached` | 40305 | 全站名额已满（提示「今日名额已满」） |
+| `limit_reached` | 40306 | 每人限兑：`limitCount` 次 / `limitPeriod`（total / 自然日 / ISO 周 / 自然月，应用默认时区），或每人累计上限 `userTotalLimit` |
 | `vip_only` / `non_vip_only` / `level_required` | 40308 | 兑换对象或等级门槛不符 |
 | `owned` | 40309 | 永久会员已包含所兑会员（会员天数、功能已全包含的套餐），或功能已永久解锁 |
 | `insufficient_points` | 40307 | 积分不足 —— 排最后：它是唯一一个用户自己马上能解决的原因 |
@@ -72,9 +74,30 @@
 另有 40303（未开启）、40443（商品不存在）、40911（同一 requestId 并发提交）。
 管理端：40444 兑换记录不存在、40912 已处理过、40445 解锁记录不存在或已收回、40913 已永久解锁。
 
+## 时间规则：补货、名额、累计上限、开放时段
+
+周期边界一律是应用默认时区的自然日、ISO 周（周一起）、自然月，与每人限兑同一口径（`pointstore.Clock`）。
+
+- **补货周期** `restockPeriod`（none / day / week / month）+ `restockQuantity`：每到新周期，剩余库存回到补货数量。
+  补货是**惰性**的，不跑定时任务：`stock` 属于 `stock_window_start` 那个周期，跨周期后读到时按补满看待
+  （`Item.CurrentStock`），新周期第一笔兑换在锁住的商品行上把两者一起回写——补货与扣库存在同一把锁里。
+  保存商品时填的剩余库存属于当前周期，不填则从满货开始。取消兑换时只有本周期兑出的那份退回库存，
+  上个周期的货已随补货清零。
+- **全站名额** `globalLimitPeriod` + `globalLimitCount`：所有人合计每个周期最多兑多少份，按兑换记录计数，
+  取消的那笔自动让出名额。与库存的区别：库存是运营放进去的货，名额是速率上限，两者可以叠加。
+  兑换时在锁住的商品行上计数，同一件商品的并发兑换在这里排队。
+- **每人累计上限** `userTotalLimit`：与按周期限兑叠加（每日 1 次、累计 10 次）。`limitPeriod` 为 total 时没有意义，保存时抹为 0。
+- **每日开放时段** `dailyOpenMinute` / `dailyCloseMinute`（自零点起的分钟数，关闭可写 1440 即 24:00）：
+  两端都为空时全天开放；开放晚于关闭表示跨零点（22:00–02:00）。
+
+`/points/store` 的每件商品因此多出：`stock`（换算后的此刻库存）、`restockPeriod`、`restockQuantity`、`nextRestockAt`、
+`globalLimitPeriod`、`globalLimitCount`、`globalUsed`、`globalResetsAt`、`limitResetsAt`、`userTotalLimit`、`usedTotal`、
+`openHours`、`openNow`、`nextOpenAt`；商城本身多出 `timezone`。管理端商品列表多出 `currentStock`、`nextRestockAt`、
+`globalUsed`、`globalResetsAt`、`openNow`。
+
 ## 兑换：一个事务
 
-锁用户行 → 幂等键回放 → 锁商品行 → 取齐事实并判定 → 扣库存 → 落兑换记录 → 扣积分 → 逐项发放 → 回写结果。
+锁用户行 → 幂等键回放 → 锁商品行 → 取齐事实（含全站名额计数）→ 跨周期则补货 → 判定 → 扣库存 → 落兑换记录 → 扣积分 → 逐项发放 → 回写结果。
 
 - **锁用户行在最前**：限兑次数、积分余额、「已拥有」都是这个人的事实，不锁就有两个并发请求
   都读到「还剩一次」的窗口。锁商品行在其次：库存是共享的，判定与扣减在同一把锁里。

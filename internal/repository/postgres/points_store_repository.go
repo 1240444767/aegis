@@ -77,7 +77,9 @@ RETURNING enabled, COALESCE(updated_by, ''), updated_at`, appID, enabled, nullab
 
 const pointsStoreItemColumns = `i.id, i.appid, i.title, i.subtitle, i.description, i.category, i.badge, i.cost, i.original_cost,
 i.rewards, i.stock, i.sold_count, i.limit_period, i.limit_count, i.audience, i.min_level, i.starts_at, i.ends_at,
-i.status, i.sort_order, COALESCE(i.created_by, ''), i.created_at, i.updated_at`
+i.status, i.sort_order, COALESCE(i.created_by, ''), i.created_at, i.updated_at,
+i.restock_period, i.restock_quantity, i.stock_window_start, i.global_limit_period, i.global_limit_count,
+i.user_total_limit, i.daily_open_minute, i.daily_close_minute`
 
 func scanPointsStoreItem(row interface{ Scan(dest ...any) error }, extra ...any) (*pointstore.Item, error) {
 	var item pointstore.Item
@@ -85,7 +87,9 @@ func scanPointsStoreItem(row interface{ Scan(dest ...any) error }, extra ...any)
 	dest := []any{&item.ID, &item.AppID, &item.Title, &item.Subtitle, &item.Description, &item.Category, &item.Badge,
 		&item.Cost, &item.OriginalCost, &rewards, &item.Stock, &item.SoldCount, &item.LimitPeriod, &item.LimitCount,
 		&item.Audience, &item.MinLevel, &item.StartsAt, &item.EndsAt, &item.Status, &item.SortOrder,
-		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt}
+		&item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
+		&item.RestockPeriod, &item.RestockQuantity, &item.StockWindowStart, &item.GlobalLimitPeriod, &item.GlobalLimitCount,
+		&item.UserTotalLimit, &item.DailyOpenMinute, &item.DailyCloseMinute}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPointsStoreItemNotFound
@@ -168,13 +172,17 @@ func (r *Repository) CreatePointsStoreItem(ctx context.Context, input pointstore
 	rewards, _ := json.Marshal(input.Rewards)
 	return scanPointsStoreItem(r.pool.QueryRow(ctx, `INSERT INTO points_store_items AS i
 (appid, title, subtitle, description, category, badge, cost, original_cost, rewards, stock,
- limit_period, limit_count, audience, min_level, starts_at, ends_at, status, sort_order, created_by)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+ limit_period, limit_count, audience, min_level, starts_at, ends_at, status, sort_order, created_by,
+ restock_period, restock_quantity, stock_window_start, global_limit_period, global_limit_count,
+ user_total_limit, daily_open_minute, daily_close_minute)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 RETURNING `+pointsStoreItemColumns,
 		input.AppID, input.Title, input.Subtitle, input.Description, input.Category, input.Badge,
 		input.Cost, input.OriginalCost, rewards, input.Stock, input.LimitPeriod, input.LimitCount,
 		input.Audience, input.MinLevel, input.StartsAt, input.EndsAt, input.Status, input.SortOrder,
-		nullableString(input.Operator)))
+		nullableString(input.Operator),
+		input.RestockPeriod, input.RestockQuantity, input.StockWindowStart, input.GlobalLimitPeriod, input.GlobalLimitCount,
+		input.UserTotalLimit, input.DailyOpenMinute, input.DailyCloseMinute))
 }
 
 // UpdatePointsStoreItem 整体更新商品。已兑出的记录存的是快照，不受影响。
@@ -183,12 +191,16 @@ func (r *Repository) UpdatePointsStoreItem(ctx context.Context, itemID int64, in
 	return scanPointsStoreItem(r.pool.QueryRow(ctx, `UPDATE points_store_items AS i SET
 title = $3, subtitle = $4, description = $5, category = $6, badge = $7, cost = $8, original_cost = $9,
 rewards = $10, stock = $11, limit_period = $12, limit_count = $13, audience = $14, min_level = $15,
-starts_at = $16, ends_at = $17, status = $18, sort_order = $19, updated_at = NOW()
+starts_at = $16, ends_at = $17, status = $18, sort_order = $19,
+restock_period = $20, restock_quantity = $21, stock_window_start = $22, global_limit_period = $23,
+global_limit_count = $24, user_total_limit = $25, daily_open_minute = $26, daily_close_minute = $27, updated_at = NOW()
 WHERE i.id = $1 AND i.appid = $2
 RETURNING `+pointsStoreItemColumns,
 		itemID, input.AppID, input.Title, input.Subtitle, input.Description, input.Category, input.Badge,
 		input.Cost, input.OriginalCost, rewards, input.Stock, input.LimitPeriod, input.LimitCount,
-		input.Audience, input.MinLevel, input.StartsAt, input.EndsAt, input.Status, input.SortOrder))
+		input.Audience, input.MinLevel, input.StartsAt, input.EndsAt, input.Status, input.SortOrder,
+		input.RestockPeriod, input.RestockQuantity, input.StockWindowStart, input.GlobalLimitPeriod, input.GlobalLimitCount,
+		input.UserTotalLimit, input.DailyOpenMinute, input.DailyCloseMinute))
 }
 
 // SetPointsStoreItemStatus 上架 / 下架。
@@ -269,6 +281,48 @@ func (r *Repository) PointsStoreUsage(ctx context.Context, appID, userID int64, 
 		out[itemID] = usage
 	}
 	return out, rows.Err()
+}
+
+// pointsStoreGlobalUsageSQL 所有人对商品的已兑次数（不含已取消），各周期分别计数：判全站名额。
+const pointsStoreGlobalUsageSQL = `SELECT item_id, COUNT(*),
+       COUNT(*) FILTER (WHERE created_at >= $2),
+       COUNT(*) FILTER (WHERE created_at >= $3),
+       COUNT(*) FILTER (WHERE created_at >= $4)
+FROM points_store_redemptions
+WHERE appid = $1 AND status <> 'cancelled' AND item_id IS NOT NULL`
+
+// PointsStoreGlobalUsage 每件设了全站名额的商品被所有人兑了几次。只数设了名额的商品，
+// 没设名额的商品不需要这个数，免得每次打开商城都把全表扫一遍。
+func (r *Repository) PointsStoreGlobalUsage(ctx context.Context, appID int64, windows pointstore.Windows) (map[int64]pointstore.Counts, error) {
+	rows, err := r.pool.Query(ctx, pointsStoreGlobalUsageSQL+`
+  AND item_id IN (SELECT id FROM points_store_items WHERE appid = $1 AND global_limit_count > 0)
+GROUP BY item_id`, appID, windows.Day, windows.Week, windows.Month)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]pointstore.Counts{}
+	for rows.Next() {
+		var itemID int64
+		var counts pointstore.Counts
+		if err := rows.Scan(&itemID, &counts.Total, &counts.Day, &counts.Week, &counts.Month); err != nil {
+			return nil, err
+		}
+		out[itemID] = counts
+	}
+	return out, rows.Err()
+}
+
+func pointsStoreItemGlobalUsageTx(ctx context.Context, tx pgx.Tx, appID, itemID int64, windows pointstore.Windows) (pointstore.Counts, error) {
+	var counts pointstore.Counts
+	var ignored int64
+	err := tx.QueryRow(ctx, pointsStoreGlobalUsageSQL+` AND item_id = $5 GROUP BY item_id`,
+		appID, windows.Day, windows.Week, windows.Month, itemID).
+		Scan(&ignored, &counts.Total, &counts.Day, &counts.Week, &counts.Month)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return pointstore.Counts{}, nil
+	}
+	return counts, err
 }
 
 func pointsStoreItemUsageTx(ctx context.Context, tx pgx.Tx, appID, userID, itemID int64, windows pointstore.Windows) (pointstore.Usage, error) {
@@ -470,8 +524,26 @@ FROM points_store_items i WHERE i.id = $1 AND i.appid = $2 FOR UPDATE`, input.It
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	if availability := pointstore.Evaluate(*item, *facts, usage, now); !availability.Redeemable {
+	// 全站名额在锁住的商品行上数：同一件商品的兑换在这里排队，数到的就是提交前的真实份数
+	if item.GlobalLimited() {
+		if usage.Global, err = pointsStoreItemGlobalUsageTx(ctx, tx, input.AppID, item.ID, input.Windows); err != nil {
+			return nil, err
+		}
+	}
+	clock := pointstore.Clock{Now: time.Now(), Location: input.Location, Windows: input.Windows}
+	if clock.Location == nil {
+		clock.Location = time.Local
+	}
+	// 跨进新的补货周期：先把库存补满、记下新周期，再按补满后的数判定与扣减
+	if stock, rolled := item.CurrentStock(input.Windows); rolled {
+		windowStart := input.Windows.Start(item.RestockPeriod)
+		item.Stock, item.StockWindowStart = stock, &windowStart
+		if _, err := tx.Exec(ctx, `UPDATE points_store_items SET stock = $2, stock_window_start = $3 WHERE id = $1`,
+			item.ID, stock, windowStart); err != nil {
+			return nil, err
+		}
+	}
+	if availability := pointstore.Evaluate(*item, *facts, usage, clock); !availability.Redeemable {
 		return nil, &PointsStoreUnavailableError{Availability: availability}
 	}
 
@@ -706,10 +778,16 @@ FROM points_store_redemptions r WHERE r.id = $1 AND r.appid = $2 FOR UPDATE`, in
 		}
 		refundNo = txnNo
 		if redemption.ItemID != nil {
+			// 开了补货周期时，只有本周期兑出的那份才退回库存：上个周期的货已经随补货清零，
+			// 退回去会让本周期凭空多出一份
 			if _, err := tx.Exec(ctx, `UPDATE points_store_items
-SET stock = CASE WHEN stock IS NULL THEN NULL ELSE stock + 1 END,
+SET stock = CASE
+        WHEN stock IS NULL THEN NULL
+        WHEN restock_period <> 'none' AND (stock_window_start IS NULL OR $2 < stock_window_start) THEN stock
+        WHEN restock_quantity IS NOT NULL THEN LEAST(stock + 1, restock_quantity)
+        ELSE stock + 1 END,
     sold_count = GREATEST(sold_count - 1, 0), updated_at = NOW()
-WHERE id = $1`, *redemption.ItemID); err != nil {
+WHERE id = $1`, *redemption.ItemID, redemption.CreatedAt); err != nil {
 				return nil, err
 			}
 		}

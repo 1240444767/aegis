@@ -40,16 +40,27 @@ type PointsStoreItemRequest struct {
 	Cost         int64                      `json:"cost"`
 	OriginalCost *int64                     `json:"originalCost"`
 	Rewards      []PointsStoreRewardRequest `json:"rewards"`
-	// Stock 剩余库存，不传或 null 为不限
-	Stock       *int64     `json:"stock"`
-	LimitPeriod string     `json:"limitPeriod"`
-	LimitCount  int        `json:"limitCount"`
-	Audience    string     `json:"audience"`
-	MinLevel    int        `json:"minLevel"`
-	StartsAt    *time.Time `json:"startsAt"`
-	EndsAt      *time.Time `json:"endsAt"`
-	Status      string     `json:"status"`
-	SortOrder   int        `json:"sortOrder"`
+	// Stock 剩余库存，不传或 null 为不限；开了补货周期时是本周期还剩多少（不传则从满货开始）
+	Stock *int64 `json:"stock"`
+	// RestockPeriod 补货周期 none / day / week / month；RestockQuantity 每个周期补到多少
+	RestockPeriod   string `json:"restockPeriod"`
+	RestockQuantity *int64 `json:"restockQuantity"`
+	// GlobalLimitPeriod / GlobalLimitCount 全站名额：所有人合计每个周期最多兑多少份，0 为不限
+	GlobalLimitPeriod string `json:"globalLimitPeriod"`
+	GlobalLimitCount  int    `json:"globalLimitCount"`
+	LimitPeriod       string `json:"limitPeriod"`
+	LimitCount        int    `json:"limitCount"`
+	// UserTotalLimit 每人累计上限，与按周期限兑叠加，0 为不限
+	UserTotalLimit int `json:"userTotalLimit"`
+	// DailyOpenMinute / DailyCloseMinute 每日开放时段（应用默认时区，自零点起的分钟数），都不传为全天
+	DailyOpenMinute  *int       `json:"dailyOpenMinute"`
+	DailyCloseMinute *int       `json:"dailyCloseMinute"`
+	Audience         string     `json:"audience"`
+	MinLevel         int        `json:"minLevel"`
+	StartsAt         *time.Time `json:"startsAt"`
+	EndsAt           *time.Time `json:"endsAt"`
+	Status           string     `json:"status"`
+	SortOrder        int        `json:"sortOrder"`
 }
 
 // PointsStoreSettingsRequest 积分商城开关。
@@ -104,25 +115,32 @@ func (req PointsStoreItemRequest) toInput(appID int64, operator string) pointsto
 		rewards = append(rewards, reward)
 	}
 	return pointstore.ItemInput{
-		AppID:        appID,
-		Title:        req.Title,
-		Subtitle:     req.Subtitle,
-		Description:  req.Description,
-		Category:     req.Category,
-		Badge:        req.Badge,
-		Cost:         req.Cost,
-		OriginalCost: req.OriginalCost,
-		Rewards:      rewards,
-		Stock:        req.Stock,
-		LimitPeriod:  req.LimitPeriod,
-		LimitCount:   req.LimitCount,
-		Audience:     req.Audience,
-		MinLevel:     req.MinLevel,
-		StartsAt:     req.StartsAt,
-		EndsAt:       req.EndsAt,
-		Status:       req.Status,
-		SortOrder:    req.SortOrder,
-		Operator:     operator,
+		AppID:             appID,
+		Title:             req.Title,
+		Subtitle:          req.Subtitle,
+		Description:       req.Description,
+		Category:          req.Category,
+		Badge:             req.Badge,
+		Cost:              req.Cost,
+		OriginalCost:      req.OriginalCost,
+		Rewards:           rewards,
+		Stock:             req.Stock,
+		RestockPeriod:     req.RestockPeriod,
+		RestockQuantity:   req.RestockQuantity,
+		GlobalLimitPeriod: req.GlobalLimitPeriod,
+		GlobalLimitCount:  req.GlobalLimitCount,
+		LimitPeriod:       req.LimitPeriod,
+		LimitCount:        req.LimitCount,
+		UserTotalLimit:    req.UserTotalLimit,
+		DailyOpenMinute:   req.DailyOpenMinute,
+		DailyCloseMinute:  req.DailyCloseMinute,
+		Audience:          req.Audience,
+		MinLevel:          req.MinLevel,
+		StartsAt:          req.StartsAt,
+		EndsAt:            req.EndsAt,
+		Status:            req.Status,
+		SortOrder:         req.SortOrder,
+		Operator:          operator,
 	}
 }
 

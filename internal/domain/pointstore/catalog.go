@@ -343,6 +343,28 @@ func NormalizeItemInput(input ItemInput) ItemInput {
 	if input.LimitPeriod == "" {
 		input.LimitPeriod = PeriodTotal
 	}
+	// 累计周期本身就是累计上限，另一个累计上限没有意义
+	if input.LimitPeriod == PeriodTotal {
+		input.UserTotalLimit = 0
+	}
+	if input.RestockPeriod == "" {
+		input.RestockPeriod = RestockNone
+	}
+	if input.RestockPeriod == RestockNone {
+		input.RestockQuantity = nil
+		input.StockWindowStart = nil
+	} else if input.Stock == nil && input.RestockQuantity != nil {
+		// 开了补货却没填当前剩余：从满货开始
+		quantity := *input.RestockQuantity
+		input.Stock = &quantity
+	}
+	if input.GlobalLimitPeriod == "" {
+		input.GlobalLimitPeriod = PeriodDay
+	}
+	// 开放时段要么都填、要么都不填
+	if input.DailyOpenMinute == nil || input.DailyCloseMinute == nil {
+		input.DailyOpenMinute, input.DailyCloseMinute = nil, nil
+	}
 	if input.Audience == "" {
 		input.Audience = AudienceAll
 	}
@@ -381,6 +403,29 @@ func ValidateItemInput(input ItemInput) error {
 		return fmt.Errorf("未知的限兑周期：%s", input.LimitPeriod)
 	case input.LimitCount < 0 || input.LimitCount > MaxLimitCount:
 		return fmt.Errorf("限兑次数需要在 0–%d 之间", MaxLimitCount)
+	case input.UserTotalLimit < 0 || input.UserTotalLimit > MaxLimitCount:
+		return fmt.Errorf("每人累计上限需要在 0–%d 之间", MaxLimitCount)
+	case input.UserTotalLimit > 0 && input.LimitCount > input.UserTotalLimit:
+		return fmt.Errorf("每人累计上限不能少于每个周期的限兑次数")
+	case !ValidRestockPeriod(input.RestockPeriod):
+		return fmt.Errorf("未知的补货周期：%s", input.RestockPeriod)
+	case input.RestockPeriod != RestockNone && input.RestockQuantity == nil:
+		return fmt.Errorf("开启补货周期时需要填写每次补到的数量")
+	case input.RestockQuantity != nil && (*input.RestockQuantity <= 0 || *input.RestockQuantity > MaxStock):
+		return fmt.Errorf("补货数量需要在 1–%d 之间", MaxStock)
+	case input.RestockQuantity != nil && input.Stock != nil && *input.Stock > *input.RestockQuantity:
+		return fmt.Errorf("当前剩余不能多于每次补到的数量")
+	case !ValidPeriod(input.GlobalLimitPeriod):
+		return fmt.Errorf("未知的名额周期：%s", input.GlobalLimitPeriod)
+	case input.GlobalLimitCount < 0 || input.GlobalLimitCount > MaxStock:
+		return fmt.Errorf("全站名额需要在 0–%d 之间", MaxStock)
+	case input.DailyOpenMinute != nil && (*input.DailyOpenMinute < 0 || *input.DailyOpenMinute >= MinutesPerDay):
+		return fmt.Errorf("开放时刻需要在 00:00–23:59 之间")
+	case input.DailyCloseMinute != nil && (*input.DailyCloseMinute < 0 || *input.DailyCloseMinute > MinutesPerDay):
+		return fmt.Errorf("关闭时刻需要在 00:00–24:00 之间")
+	case input.DailyOpenMinute != nil && input.DailyCloseMinute != nil &&
+		(*input.DailyOpenMinute == *input.DailyCloseMinute || *input.DailyOpenMinute%MinutesPerDay == *input.DailyCloseMinute%MinutesPerDay):
+		return fmt.Errorf("开放与关闭时刻不能相同；全天开放请清空时段")
 	case !ValidAudience(input.Audience):
 		return fmt.Errorf("未知的兑换对象：%s", input.Audience)
 	case input.MinLevel < 0 || input.MinLevel > MaxMinLevel:

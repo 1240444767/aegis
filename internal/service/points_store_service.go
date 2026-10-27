@@ -80,9 +80,12 @@ func (s *PointsStoreService) Catalog(ctx context.Context, appID int64) (map[stri
 	return map[string]any{
 		"rewards":      pointstore.RewardCatalog(),
 		"limitPeriods": pointstore.LimitPeriods(),
-		"audiences":    pointstore.Audiences(),
-		"maxRewards":   pointstore.MaxRewardsPerItem,
-		"categories":   categories,
+		// 补货周期；全站名额的周期与限兑周期同一组
+		"restockPeriods": pointstore.RestockPeriods(),
+		"timezone":       timeutil.DefaultLocation().String(),
+		"audiences":      pointstore.Audiences(),
+		"maxRewards":     pointstore.MaxRewardsPerItem,
+		"categories":     categories,
 	}, nil
 }
 
@@ -98,9 +101,28 @@ func (s *PointsStoreService) SaveSettings(ctx context.Context, appID int64, enab
 
 // ── 管理端：商品 ──
 
-// ListItems 管理端商品列表（含下架的，带兑换汇总）。
+// ListItems 管理端商品列表（含下架的，带兑换汇总），以及每件商品此刻的库存、名额与开放状态。
 func (s *PointsStoreService) ListItems(ctx context.Context, appID int64) ([]pointstore.AdminItem, error) {
-	return s.pg.ListPointsStoreAdminItems(ctx, appID)
+	items, err := s.pg.ListPointsStoreAdminItems(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	clock := s.clock()
+	global, err := s.pg.PointsStoreGlobalUsage(ctx, appID, clock.Windows)
+	if err != nil {
+		return nil, err
+	}
+	for index := range items {
+		item := &items[index]
+		item.CurrentStock, _ = item.Item.CurrentStock(clock.Windows)
+		item.NextRestockAt = item.Item.NextRestockAt(clock.Windows)
+		item.OpenNow = item.Item.OpenAt(clock)
+		if item.GlobalLimited() {
+			item.GlobalUsed = global[item.ID].In(item.GlobalLimitPeriod)
+			item.GlobalResetsAt = clock.Windows.Next(item.GlobalLimitPeriod)
+		}
+	}
+	return items, nil
 }
 
 // CreateItem 新建商品。
@@ -168,6 +190,11 @@ func (s *PointsStoreService) prepareItem(ctx context.Context, input pointstore.I
 	input = pointstore.NormalizeItemInput(input)
 	if err := pointstore.ValidateItemInput(input); err != nil {
 		return input, apperrors.New(40000, http.StatusBadRequest, err.Error())
+	}
+	// 保存时填的剩余库存属于「当前这个补货周期」：下个周期开始时回到补货数量
+	if input.RestockPeriod != pointstore.RestockNone {
+		start := s.clock().Windows.Start(input.RestockPeriod)
+		input.StockWindowStart = &start
 	}
 	plans, features, err := s.pg.PointsStoreCatalogRefs(ctx, input.AppID)
 	if err != nil {
@@ -349,8 +376,10 @@ func (s *PointsStoreService) RevokeUnlock(ctx context.Context, appID, userID, un
 // 没开启时不报错，回 enabled=false 与空列表：客户端据此隐藏入口，
 // 报错的话「没开」和「接口坏了」在客户端上长得一样。
 func (s *PointsStoreService) Store(ctx context.Context, appID, userID int64) (*pointstore.ClientStore, error) {
-	now := time.Now()
-	store := &pointstore.ClientStore{Categories: []string{}, Items: []pointstore.ClientItem{}, ServerTime: now.UTC()}
+	clock := s.clock()
+	now := clock.Now
+	store := &pointstore.ClientStore{Categories: []string{}, Items: []pointstore.ClientItem{}, ServerTime: now.UTC(),
+		Timezone: clock.Location.String()}
 	settings, err := s.pg.GetPointsStoreSettings(ctx, appID)
 	if err != nil {
 		return nil, err
@@ -369,7 +398,11 @@ func (s *PointsStoreService) Store(ctx context.Context, appID, userID int64) (*p
 	if err != nil {
 		return nil, err
 	}
-	usage, err := s.pg.PointsStoreUsage(ctx, appID, userID, pointstore.WindowsAt(now, timeutil.DefaultLocation()))
+	usage, err := s.pg.PointsStoreUsage(ctx, appID, userID, clock.Windows)
+	if err != nil {
+		return nil, err
+	}
+	global, err := s.pg.PointsStoreGlobalUsage(ctx, appID, clock.Windows)
 	if err != nil {
 		return nil, err
 	}
@@ -379,7 +412,9 @@ func (s *PointsStoreService) Store(ctx context.Context, appID, userID int64) (*p
 		if item.EndsAt != nil && !now.Before(*item.EndsAt) {
 			continue
 		}
-		view := clientItem(item, *facts, usage[item.ID], now)
+		itemUsage := usage[item.ID]
+		itemUsage.Global = global[item.ID]
+		view := clientItem(item, *facts, itemUsage, clock)
 		store.Items = append(store.Items, view)
 		if view.Category != "" && !seen[view.Category] {
 			seen[view.Category] = true
@@ -389,28 +424,49 @@ func (s *PointsStoreService) Store(ctx context.Context, appID, userID int64) (*p
 	return store, nil
 }
 
-func clientItem(item pointstore.Item, facts pointstore.UserFacts, usage pointstore.Usage, now time.Time) pointstore.ClientItem {
+func clientItem(item pointstore.Item, facts pointstore.UserFacts, usage pointstore.Usage, clock pointstore.Clock) pointstore.ClientItem {
 	rewards := pointstore.NormalizeRewards(item.Rewards)
+	stock, _ := item.CurrentStock(clock.Windows)
 	view := pointstore.ClientItem{
-		ID:           item.ID,
-		Title:        item.Title,
-		Subtitle:     item.Subtitle,
-		Description:  item.Description,
-		Category:     item.Category,
-		Badge:        item.Badge,
-		Cost:         item.Cost,
-		OriginalCost: item.OriginalCost,
-		Rewards:      make([]pointstore.ClientReward, 0, len(rewards)),
-		Stock:        item.Stock,
-		SoldCount:    item.SoldCount,
-		LimitPeriod:  item.LimitPeriod,
-		LimitCount:   item.LimitCount,
-		Used:         usage.In(item.LimitPeriod),
-		Audience:     item.Audience,
-		MinLevel:     item.MinLevel,
-		StartsAt:     item.StartsAt,
-		EndsAt:       item.EndsAt,
-		Availability: pointstore.Evaluate(item, facts, usage, now),
+		ID:                item.ID,
+		Title:             item.Title,
+		Subtitle:          item.Subtitle,
+		Description:       item.Description,
+		Category:          item.Category,
+		Badge:             item.Badge,
+		Cost:              item.Cost,
+		OriginalCost:      item.OriginalCost,
+		Rewards:           make([]pointstore.ClientReward, 0, len(rewards)),
+		Stock:             stock,
+		SoldCount:         item.SoldCount,
+		RestockPeriod:     item.RestockPeriod,
+		RestockQuantity:   item.RestockQuantity,
+		NextRestockAt:     item.NextRestockAt(clock.Windows),
+		GlobalLimitPeriod: item.GlobalLimitPeriod,
+		GlobalLimitCount:  item.GlobalLimitCount,
+		LimitPeriod:       item.LimitPeriod,
+		LimitCount:        item.LimitCount,
+		Used:              usage.In(item.LimitPeriod),
+		UserTotalLimit:    item.UserTotalLimit,
+		UsedTotal:         usage.Total,
+		OpenHours:         item.OpenHoursLabel(),
+		OpenNow:           item.OpenAt(clock),
+		NextOpenAt:        item.NextOpenAt(clock),
+		Audience:          item.Audience,
+		MinLevel:          item.MinLevel,
+		StartsAt:          item.StartsAt,
+		EndsAt:            item.EndsAt,
+		Availability:      pointstore.Evaluate(item, facts, usage, clock),
+	}
+	if view.RestockPeriod == "" {
+		view.RestockPeriod = pointstore.RestockNone
+	}
+	if item.LimitCount > 0 {
+		view.LimitResetsAt = clock.Windows.Next(item.LimitPeriod)
+	}
+	if item.GlobalLimited() {
+		view.GlobalUsed = usage.Global.In(item.GlobalLimitPeriod)
+		view.GlobalResetsAt = clock.Windows.Next(item.GlobalLimitPeriod)
 	}
 	for _, reward := range rewards {
 		view.Rewards = append(view.Rewards, pointstore.DescribeReward(reward, facts.Plans, facts.Features))
@@ -444,7 +500,8 @@ func (s *PointsStoreService) Redeem(ctx context.Context, input pointstore.Redeem
 	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法兑换"}); err != nil {
 		return nil, err
 	}
-	input.Windows = pointstore.WindowsAt(time.Now(), timeutil.DefaultLocation())
+	clock := s.clock()
+	input.Windows, input.Location = clock.Windows, clock.Location
 	result, err := s.pg.RedeemPointsStoreItem(ctx, input)
 	if err != nil {
 		return nil, s.translate(err)
@@ -486,6 +543,11 @@ func userRedemption(item pointstore.Redemption) pointstore.Redemption {
 }
 
 // ── 内部 ──
+
+// clock 判定所用的此刻：周期边界与开放时段一律按应用默认时区算。
+func (s *PointsStoreService) clock() pointstore.Clock {
+	return pointstore.ClockAt(time.Now(), timeutil.DefaultLocation())
+}
 
 func (s *PointsStoreService) notify(redemption *pointstore.Redemption, title, content, level string) {
 	if s.notifier == nil {
@@ -558,7 +620,8 @@ func (s *PointsStoreService) translate(err error) error {
 // pointsStoreReasonCode 判据 → 错误码。
 func pointsStoreReasonCode(reason string) int {
 	switch reason {
-	case pointstore.ReasonSoldOut:
+	case pointstore.ReasonSoldOut, pointstore.ReasonQuotaReached:
+		// 名额已满与已兑完对用户是同一件事：现在没有了，等下个周期
 		return errCodePointsStoreSoldOut
 	case pointstore.ReasonLimitReached:
 		return errCodePointsStoreLimitReached

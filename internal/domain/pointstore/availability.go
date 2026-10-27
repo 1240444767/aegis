@@ -2,7 +2,6 @@ package pointstore
 
 import (
 	"strconv"
-	"time"
 
 	vipdomain "aegis/internal/domain/vip"
 )
@@ -16,7 +15,9 @@ var reasonMessages = map[string]string{
 	ReasonInactive:           "商品已下架",
 	ReasonNotStarted:         "尚未开始兑换",
 	ReasonEnded:              "兑换已结束",
+	ReasonClosedNow:          "当前不在兑换时段",
 	ReasonSoldOut:            "已兑完",
+	ReasonQuotaReached:       "名额已满",
 	ReasonLimitReached:       "已达到兑换次数上限",
 	ReasonLevelRequired:      "等级不足",
 	ReasonVipOnly:            "仅限会员兑换",
@@ -34,19 +35,36 @@ func ReasonMessage(reason string) string { return reasonMessages[reason] }
 // 判据顺序即优先级，从「商品本身」到「这个人」：下架的商品先说下架，
 // 而不是先说「你积分不够」—— 后者会让用户去攒积分，攒够了才发现兑不了。
 // 「积分不足」排在最后：它是唯一一个用户自己能马上解决的原因。
-func Evaluate(item Item, facts UserFacts, usage Usage, now time.Time) Availability {
-	reason := evaluateReason(item, facts, usage, now)
+//
+// 库存按补货周期换算后再判（item.CurrentStock），调用方不必先换算。
+// 会过去的原因（不在时段、已兑完待补货、名额已满、本周期次数用完）在说明里带上何时恢复。
+func Evaluate(item Item, facts UserFacts, usage Usage, clock Clock) Availability {
+	item.Stock, _ = item.CurrentStock(clock.Windows)
+	reason := evaluateReason(item, facts, usage, clock)
 	availability := Availability{Redeemable: reason == ReasonOK, Reason: reason, Message: ReasonMessage(reason)}
-	if reason == ReasonLevelRequired {
+	switch reason {
+	case ReasonLevelRequired:
 		availability.Message = "需要达到 Lv." + strconv.Itoa(item.MinLevel)
-	}
-	if reason == ReasonLimitReached {
-		availability.Message = limitMessage(item.LimitPeriod)
+	case ReasonLimitReached:
+		if item.LimitCount > 0 && usage.In(item.LimitPeriod) >= int64(item.LimitCount) {
+			availability.Message = limitMessage(item.LimitPeriod)
+		} else {
+			availability.Message = "已达到累计兑换次数上限"
+		}
+	case ReasonClosedNow:
+		availability.Message = "每日 " + item.OpenHoursLabel() + " 开放兑换"
+	case ReasonSoldOut:
+		if item.Restocks() {
+			availability.Message = "已兑完，" + restockHint(item.RestockPeriod)
+		}
+	case ReasonQuotaReached:
+		availability.Message = quotaMessage(item.GlobalLimitPeriod)
 	}
 	return availability
 }
 
-func evaluateReason(item Item, facts UserFacts, usage Usage, now time.Time) string {
+func evaluateReason(item Item, facts UserFacts, usage Usage, clock Clock) string {
+	now := clock.Now
 	switch {
 	case item.Status != StatusActive:
 		return ReasonInactive
@@ -56,9 +74,15 @@ func evaluateReason(item Item, facts UserFacts, usage Usage, now time.Time) stri
 		return ReasonEnded
 	case !rewardsResolvable(item.Rewards, facts):
 		return ReasonRewardUnavailable
+	case !item.OpenAt(clock):
+		return ReasonClosedNow
 	case item.Stock != nil && *item.Stock <= 0:
 		return ReasonSoldOut
+	case item.GlobalLimited() && usage.Global.In(item.GlobalLimitPeriod) >= int64(item.GlobalLimitCount):
+		return ReasonQuotaReached
 	case item.LimitCount > 0 && usage.In(item.LimitPeriod) >= int64(item.LimitCount):
+		return ReasonLimitReached
+	case item.UserTotalLimit > 0 && usage.Total >= int64(item.UserTotalLimit):
 		return ReasonLimitReached
 	case item.Audience == AudienceVip && !facts.IsVip:
 		return ReasonVipOnly
@@ -129,6 +153,32 @@ func Owned(rewards []Reward, facts UserFacts) bool {
 		}
 	}
 	return false
+}
+
+// restockHint 「明日补货」这类恢复提示。
+func restockHint(period string) string {
+	switch period {
+	case RestockDay:
+		return "明日补货"
+	case RestockWeek:
+		return "下周补货"
+	case RestockMonth:
+		return "下月补货"
+	}
+	return "等待补货"
+}
+
+func quotaMessage(period string) string {
+	switch period {
+	case PeriodDay:
+		return "今日名额已满"
+	case PeriodWeek:
+		return "本周名额已满"
+	case PeriodMonth:
+		return "本月名额已满"
+	default:
+		return reasonMessages[ReasonQuotaReached]
+	}
 }
 
 func limitMessage(period string) string {

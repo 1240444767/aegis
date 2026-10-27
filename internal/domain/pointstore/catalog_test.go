@@ -146,7 +146,7 @@ func TestEvaluateReasons(t *testing.T) {
 			if tc.facts != nil {
 				tc.facts(&facts)
 			}
-			got := Evaluate(item, facts, tc.usage, now)
+			got := Evaluate(item, facts, tc.usage, ClockAt(now, time.UTC))
 			if got.Reason != tc.reason || got.Redeemable != (tc.reason == ReasonOK) || got.Message == "" {
 				t.Fatalf("期望 %s，实际 %+v", tc.reason, got)
 			}
