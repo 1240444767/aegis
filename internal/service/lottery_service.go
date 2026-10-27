@@ -588,7 +588,7 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 		out.Prizes = append(out.Prizes, lotterydomain.ClientPrize{
 			ID: prize.ID, Name: prize.Name, Kind: lotterydomain.ClientKind(prize.Kind), RewardType: prize.Kind,
 			Detail:   lotterydomain.DescribeReward(prize.Reward, plans, features).Detail,
-			ImageURL: prize.ImageURL, Position: prize.Position, Probability: probabilities[index],
+			ImageURL: prize.ImageURL, Position: prize.Position, Probability: lotterydomain.PublicProbability(probabilities[index]),
 			SoldOut: !prize.InStock(),
 			Swap:    lotterydomain.DescribeSwap(rule, coverage, prize, plans),
 		})

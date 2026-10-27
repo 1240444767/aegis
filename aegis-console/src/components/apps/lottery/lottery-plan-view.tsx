@@ -2,6 +2,7 @@
 
 import { Badge } from "@/components/ui/badge";
 import { FACTOR_LABEL } from "@/components/apps/lottery/lottery-strategy-form";
+import { formatProbability } from "@/components/apps/lottery/lottery-shared";
 import type { LotteryBehaviorScore, LotteryDrawPlan, LotterySignalSpec } from "@/lib/api/lottery";
 import { cn } from "@/lib/utils";
 
@@ -10,7 +11,9 @@ import { cn } from "@/lib/utils";
  * 抽奖记录的 trace 与模拟里「此人下一次」共用。
  */
 
-export const percent = (value: number, digits = 2) => `${(value * 100).toFixed(digits)}%`;
+/** 0–1 的比例按百分比显示；不传 digits 时按公示概率取整，十万分之一显示 0.001% 而不是 0.00% */
+export const percent = (value: number, digits?: number) =>
+  digits === undefined ? formatProbability(value * 100) : `${(value * 100).toFixed(digits)}%`;
 
 function factorText(value: number) {
   if (value === 0) return "0";

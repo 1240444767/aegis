@@ -401,7 +401,8 @@ type ClientPrize struct {
 	Detail     string `json:"detail"`
 	ImageURL   string `json:"imageUrl,omitempty"`
 	Position   int    `json:"position"`
-	// Probability 常规抽取下抽中它的概率（百分比，保留到 0.01），不含保底与库存的影响
+	// Probability 常规抽取下抽中它的概率（百分比，PublicProbability 取整：不小于 1% 保留两位小数、
+	// 小于 1% 保留两位有效数字，抽得到的不会是 0），不含保底与库存的影响
 	Probability float64 `json:"probability"`
 	SoldOut     bool    `json:"soldOut,omitempty"`
 	// Swap 对当前用户来说这一格会怎样（已拥有时改发什么 / 不会抽到）；照常发放时没有

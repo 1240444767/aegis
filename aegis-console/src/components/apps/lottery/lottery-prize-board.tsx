@@ -71,6 +71,9 @@ import { cn } from "@/lib/utils";
 const SWAP_POLICY = "__policy";
 
 const PERCENT_FORMAT = { minimumFractionDigits: 2, maximumFractionDigits: 2 } as const;
+// 小于 1% 的按两位有效数字（与公示概率同一规则），十万分之一显示 0.001% 而不是 0.00%
+const SMALL_PERCENT_FORMAT = { maximumSignificantDigits: 2 } as const;
+const percentFormat = (value: number) => (value > 0 && value < 1 ? SMALL_PERCENT_FORMAT : PERCENT_FORMAT);
 
 /**
  * 奖盘编辑：左边是盘面，右边改选中的一格。
@@ -369,7 +372,7 @@ function PrizeCellFace({
         {context.displayName(prize)}
       </span>
       <span className="font-data text-[10px] tabular-nums text-muted-foreground">
-        <NumberFlow value={probability} format={PERCENT_FORMAT} suffix="%" />
+        <NumberFlow value={probability} format={percentFormat(probability)} suffix="%" />
       </span>
       <span className="absolute inset-x-0 bottom-0 h-0.5 bg-muted">
         <span className={cn("block h-full transition-[width] duration-300", visual.fill)} style={{ width: `${Math.min(100, probability)}%` }} />
@@ -570,7 +573,7 @@ function WheelRow({
           <CellMarks prize={prize} isPity={prize.key === context.pityKey} />
         </span>
         <span className="shrink-0 font-data text-[11px] tabular-nums text-muted-foreground">
-          <NumberFlow value={context.probabilities[index] ?? 0} format={PERCENT_FORMAT} suffix="%" />
+          <NumberFlow value={context.probabilities[index] ?? 0} format={percentFormat(context.probabilities[index] ?? 0)} suffix="%" />
         </span>
       </button>
       <button
@@ -916,7 +919,7 @@ function PrizeInspector({
         title="概率"
         aside={
           <span className="font-data text-sm font-semibold tabular-nums text-foreground">
-            <NumberFlow value={probability} format={PERCENT_FORMAT} suffix="%" />
+            <NumberFlow value={probability} format={percentFormat(probability)} suffix="%" />
           </span>
         }
       >

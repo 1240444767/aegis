@@ -112,6 +112,25 @@ func TestPickAndProbabilities(t *testing.T) {
 	}
 }
 
+// 线上出过的事：十万分之一的永久会员按 0.01 取整成 0，App 上公示 0%。
+func TestTinyProbabilityIsNotZero(t *testing.T) {
+	board := []Prize{
+		{ID: 1, Kind: KindVipLifetime, Weight: 1, Quantity: 3, Position: 0},
+		{ID: 2, Kind: KindExperience, Weight: 99_999, Quantity: -1, Position: 1},
+	}
+	probabilities := Probabilities(board)
+	if probabilities[0] <= 0 || PublicProbability(probabilities[0]) != 0.001 {
+		t.Fatalf("1/100000 应公示 0.001%%，得到 %v → %v", probabilities[0], PublicProbability(probabilities[0]))
+	}
+	for percent, want := range map[float64]float64{
+		0: 0, 28: 28, 100: 100, 100.0 / 3: 33.33, 1.6: 1.6, 0.999: 1, 0.0125: 0.013, 0.08: 0.08, 0.000123: 0.00012,
+	} {
+		if got := PublicProbability(percent); got != want {
+			t.Errorf("PublicProbability(%v) = %v，应为 %v", percent, got, want)
+		}
+	}
+}
+
 func TestFallbackPrize(t *testing.T) {
 	list := prizes()
 	if got, _ := FallbackPrize(list); got.ID != 1 {

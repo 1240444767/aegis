@@ -2,6 +2,7 @@ package lottery
 
 import (
 	"fmt"
+	"math"
 	"slices"
 	"strings"
 	"unicode/utf8"
@@ -450,8 +451,11 @@ func validatePrizes(input ActivityInput) error {
 	return nil
 }
 
-// Probabilities 常规抽取下每个奖品的公示概率（百分比，保留两位小数），按 prizes 的顺序。
+// Probabilities 常规抽取下每个奖品的公示概率（百分比，不取整），按 prizes 的顺序。
 // 售罄的奖品不参与抽取，概率为 0。
+//
+// 不在这里取整：积分账、策略、模拟都拿它算期望，十万分之一的大奖取整到 0.01 会被当成 0
+// （公示成 0%，也不进积分账）。给用户看的数用 PublicProbability。
 func Probabilities(prizes []Prize) []float64 {
 	total := 0
 	for _, prize := range prizes {
@@ -467,10 +471,22 @@ func Probabilities(prizes []Prize) []float64 {
 		if !prize.InStock() || prize.Weight == 0 {
 			continue
 		}
-		percent := float64(prize.Weight) * 100 / float64(total)
-		out[index] = float64(int64(percent*100+0.5)) / 100
+		out[index] = float64(prize.Weight) * 100 / float64(total)
 	}
 	return out
+}
+
+// PublicProbability 公示概率的取整（百分比）：不小于 1% 的保留两位小数，小于 1% 的保留两位有效数字。
+// 抽得到的奖品永远不会显示成 0：28 → 28，33.3333 → 33.33，0.0125 → 0.013，0.001 → 0.001。
+func PublicProbability(percent float64) float64 {
+	if percent <= 0 || math.IsNaN(percent) || math.IsInf(percent, 0) {
+		return 0
+	}
+	if percent >= 1 {
+		return math.Round(percent*100) / 100
+	}
+	scale := math.Pow(10, 1-math.Floor(math.Log10(percent)))
+	return math.Round(percent*scale) / scale
 }
 
 // Candidates 常规抽取的候选：有库存、权重大于 0。

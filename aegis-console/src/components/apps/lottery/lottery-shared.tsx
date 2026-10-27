@@ -121,20 +121,32 @@ function inStock(prize: WeightedPrize) {
 }
 
 /**
- * 常规抽取下每个奖品的公示概率（百分比，两位小数），按传入顺序。
+ * 常规抽取下每个奖品的概率（百分比，不取整），按传入顺序。
  * 与后端 `lottery.Probabilities` 同一算法：分母是有库存奖品的权重合计，售罄或权重为 0 的为 0。
+ * 显示用 formatProbability。
  */
 export function prizeProbabilities(prizes: WeightedPrize[]) {
   const total = prizes.reduce((sum, prize) => (inStock(prize) ? sum + Math.max(0, prize.weight) : sum), 0);
   return prizes.map((prize) => {
     if (total === 0 || !inStock(prize) || prize.weight <= 0) return 0;
-    const percent = (prize.weight * 100) / total;
-    return Math.floor(percent * 100 + 0.5) / 100;
+    return (prize.weight * 100) / total;
   });
 }
 
+/**
+ * 公示概率的取整（百分比），与后端 `lottery.PublicProbability` 同一规则：
+ * 不小于 1% 的保留两位小数，小于 1% 的保留两位有效数字，抽得到的不会显示成 0。
+ */
+export function publicProbability(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  if (value >= 1) return Math.round(value * 100) / 100;
+  const scale = 10 ** (1 - Math.floor(Math.log10(value)));
+  return Math.round(value * scale) / scale;
+}
+
+/** 百分比显示：28%、33.33%、0.013%、0.001% */
 export function formatProbability(value: number) {
-  return `${value.toFixed(2)}%`;
+  return `${publicProbability(value).toLocaleString("zh-CN", { maximumFractionDigits: 20 })}%`;
 }
 
 /** 奖品类型的中文名（目录里查不到时原样显示 type） */
