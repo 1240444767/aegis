@@ -62,6 +62,6 @@ async def test_versions(backend, call):
     await call("releases_versions", {"app": "demo", "channel_id": 2})
     assert backend.last().query == {"channel_id": "2", "page": "1", "limit": "20"}
     await call("releases_save_version", {"app": "demo", "version": "1.0", "version_code": 1, "platform": "android", "force_update": True})
-    assert backend.last().json == {"version": "1.0", "version_code": 1, "platform": "android", "force_update": True}
+    assert backend.last().json == {"appid": 42, "version": "1.0", "version_code": 1, "platform": "android", "force_update": True}
     await call("releases_version_control", {"app": "demo", "version_id": 4, "action": "revoke"})
     assert backend.last().path == f"{A}/versions/4/revoke"

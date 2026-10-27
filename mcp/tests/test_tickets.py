@@ -13,7 +13,7 @@ async def test_get_create_update(backend, call):
     await call("tickets_get", {"ticket_id": 7})
     assert backend.last().path == "/api/admin/tickets/7"
     await call("tickets_create", {"app": "12", "title": "t", "content": "c", "requester_user_id": 5})
-    assert backend.last().json == {"appid": 12, "title": "t", "content": "c", "requesterUserId": 5, "requesterType": "user", "source": "mcp"}
+    assert backend.last().json == {"appid": 12, "title": "t", "content": "c", "requesterUserId": 5, "requesterType": "user", "source": "api"}
     await call("tickets_update", {"ticket_id": 7, "priority": "high", "locked": True})
     assert (backend.last().method, backend.last().json) == ("PATCH", {"priority": "high", "locked": True})
 
@@ -50,12 +50,12 @@ async def test_stats_and_config(backend, call):
 
 
 async def test_save_configs(backend, call):
-    await call("tickets_save_category", {"name": "退款"})
+    await call("tickets_save_category", {"name": "退款", "key": "refund"})
     assert (backend.last().method, backend.last().path) == ("POST", "/api/admin/tickets/categories")
-    await call("tickets_save_category", {"name": "退款", "category_id": 4, "default_priority": "high"})
+    await call("tickets_save_category", {"name": "退款", "key": "refund", "category_id": 4, "default_priority": "high"})
     assert (backend.last().method, backend.last().path, backend.last().json["defaultPriority"]) == ("PUT", "/api/admin/tickets/categories/4", "high")
     backend.reply("POST", "/api/admin/tickets/groups", {"id": 11})
-    data = await call("tickets_save_group", {"name": "一线", "members": [{"adminId": 2, "role": "member"}]})
+    data = await call("tickets_save_group", {"name": "一线", "key": "tier1", "members": [{"adminId": 2, "role": "member"}]})
     assert backend.last().path == "/api/admin/tickets/groups/11/members" and data["group"] == {"id": 11}
     await call("tickets_save_sla_policy", {"name": "默认", "first_response_minutes": {"urgent": 30}, "policy_id": 2})
     assert (backend.last().path, backend.last().json["firstResponseMinutes"]) == ("/api/admin/tickets/sla-policies/2", {"urgent": 30})

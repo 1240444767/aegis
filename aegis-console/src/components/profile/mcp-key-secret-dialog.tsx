@@ -132,7 +132,7 @@ export function McpKeySecretDialog({
               </TabsContent>
               <TabsContent value="env" className="space-y-2">
                 <p className="text-xs text-muted-foreground">
-                  自行部署 aegis-mcp（pip install 或 HTTP 模式 aegis-mcp --transport streamable-http）时使用。
+                  自行部署 aegis-mcp（pip install，或 HTTP 模式 aegis-mcp --transport http）时使用。
                 </p>
                 <CopyBlock value={configs.env} label="环境变量" />
               </TabsContent>

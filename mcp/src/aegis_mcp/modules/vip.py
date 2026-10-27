@@ -139,7 +139,7 @@ async def features(app: AppRef) -> Any:
 async def save_feature(
     app: AppRef,
     tag: Annotated[str, Field(pattern=FEATURE_TAG, description="功能标识：小写字母开头，可含数字、点、下划线、连字符，2–64 位。已存在即修改，否则新建；创建后不可改")],
-    name: Annotated[str | None, Field(description="显示名称（新建时建议填写）")] = None,
+    name: Annotated[str | None, Field(description="显示名称（新建时必填，修改时可省略）")] = None,
     description: Annotated[str | None, Field(description="说明")] = None,
     is_active: Annotated[bool | None, Field(description="是否启用")] = None,
     sort_order: Annotated[int | None, Field(description="排序，小的在前")] = None,

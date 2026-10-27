@@ -97,12 +97,18 @@ MCP 服务自述（AdminAuth，密钥与会话都能调）：
 | `internal/middleware/admin_mcp_key.go` | 分流、AdminAuth 白名单、路由级约束 |
 | `internal/transport/http/admin_mcp_key_handlers.go`、`router_mcp.go` | 管理接口与自述接口 |
 | `aegis-console/src/components/profile/*mcp-key*` | 控制台「个人资料 → MCP 密钥」 |
-| `mcp/` | Python MCP 服务（`mcp` SDK 2.x 的 `MCPServer`） |
+| `mcp/` | Python MCP 服务：FastMCP 4（mcp SDK 2.3），`core/` 内核 + `modules/` 23 个领域模块、358 个工具，清单见 `mcp/TOOLS.md` |
 
 ## 测法
 
-- 单元：`go test ./internal/middleware/ -run MCP`、`go test ./internal/service/ -run MCP`；`cd mcp && python -m pytest`。
+- 单元：`go test ./internal/middleware/ -run MCP`、`go test ./internal/service/ -run MCP`；`cd mcp && .venv/bin/python -m pytest`（267 个，含对 routes.golden 与 route_permissions.json 的约束检查）。
 - 端到端（2026-10-28 跑通）：本地 compose 起 postgres / redis / nats，`aegis-server migrate` 后以 `HTTP_PORT=8099` 启动；
   用 `ADMIN_BOOTSTRAP_*` 登录拿会话令牌，签发一把只读限定应用的密钥与一把 `*` 可写密钥，
   逐项验证 40160–40167 的触发；再用 `mcp.Client(StdioServerParameters(command="aegis-mcp", env=...))`
   走 stdio 调工具，`aegis-mcp --transport streamable-http` 下用不同的 `Authorization` 头验证按客户端分密钥。
+- 全量冒烟（2026-10-28）：用一把 `*` 可写密钥建一次性应用，按每个工具的 input schema 自动填参逐个真实调用（影响全站的写工具跳过），
+  把「后端报参数格式 / 缺字段 / 500」的结果挑出来逐条对 Go 源码核实；再用只读密钥跑全部只读工具，确认没有 40166 / 40164。
+  首轮查出并修掉：旧版本保存缺 appid、工单来源取值、工单分类 / 处理组 key 必填。
+- 核心链路（同日）：本地库插一个用户，走资料修改 → 积分与经验调整与流水 → 钱包调整 → 建套餐与功能标识 → 会员预览 / 发放 / 权益 / 收回 / 流水 →
+  功能解锁 → 抽奖建活动（8 奖品）/ 修改 / 启用 / 统计 / 删除 → 封禁 / 解封 → 审计按 mcp:<前缀> 回查，全部通过后删除测试数据。
+  注意：用户检索走后端全文索引，SQL 直接插入的用户检索不到，属正常。已知后端缺陷：发布渠道成员接口在渠道不存在时返回 500（外键）而不是 404。

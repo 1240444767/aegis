@@ -112,7 +112,7 @@ async def create(
     requester_name: str = "",
     requester_contact: str = "",
     tags: list[str] | None = None,
-    source: Annotated[str, Field(description="来源，如 phone / email / mcp")] = "mcp",
+    source: Annotated[Literal["api", "console", "email", "bot", "import", "app"], Field(description="来源渠道")] = "api",
 ) -> Any:
     """代用户或以管理员身份新建工单。"""
     return await TICKET_CREATE(body=body(
@@ -255,9 +255,9 @@ async def config(
 @server.tool(**WRITE("tickets"))
 async def save_category(
     name: Annotated[str, Field(min_length=1)],
+    key: Annotated[str, Field(min_length=1, description="分类代码（英文短标识，如 refund）")],
     category_id: Annotated[int | None, Field(gt=0, description="给 ID 即修改，不给即新建")] = None,
     app: AppFilter = "",
-    key: str = "",
     kind: Kind | None = None,
     description: str = "",
     parent_id: int | None = None,
@@ -271,7 +271,7 @@ async def save_category(
 ) -> Any:
     """新建或修改工单分类。"""
     payload = body(
-        appid=await _appid(app), key=key or None, kind=kind, name=name, description=description, parentId=parent_id,
+        appid=await _appid(app), key=key, kind=kind, name=name, description=description, parentId=parent_id,
         defaultGroupId=default_group_id, defaultPriority=default_priority, slaPolicyId=sla_policy_id, sort=sort,
         enabled=enabled, userSubmittable=user_submittable, formSchema=form_schema,
     )
@@ -281,16 +281,16 @@ async def save_category(
 @server.tool(**WRITE("tickets"))
 async def save_group(
     name: Annotated[str, Field(min_length=1)],
+    key: Annotated[str, Field(min_length=1, description="处理组代码（英文短标识，如 tier1）")],
     group_id: Annotated[int | None, Field(gt=0, description="给 ID 即修改，不给即新建")] = None,
     app: AppFilter = "",
-    key: str = "",
     description: str = "",
     assign_strategy: Annotated[Literal["manual", "round_robin", "least_open"], Field(description="分配策略")] = "manual",
     enabled: bool = True,
     members: Annotated[list[dict[str, Any]] | None, Field(description="同时整体设置成员：[{adminId, role}]")] = None,
 ) -> Any:
     """新建或修改工单处理组，可同时设置成员。"""
-    payload = body(appid=await _appid(app), key=key or None, name=name, description=description, assignStrategy=assign_strategy, enabled=enabled)
+    payload = body(appid=await _appid(app), key=key, name=name, description=description, assignStrategy=assign_strategy, enabled=enabled)
     saved = await (GROUP_UPDATE(id=group_id, body=payload) if group_id else GROUP_CREATE(body=payload))
     if members is not None:
         target = group_id or (saved or {}).get("id")

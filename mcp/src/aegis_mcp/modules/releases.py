@@ -8,7 +8,7 @@ from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 from pydantic import Field
 
-from ..core import DELETE, DESTRUCTIVE, GET, POST, PUT, READ, WRITE, AppRef, IsoTime, Limit, Page, body, q
+from ..core import DELETE, DESTRUCTIVE, GET, POST, PUT, READ, WRITE, AppRef, IsoTime, Limit, Page, app_id_of, body, q
 
 NAMESPACE = "releases"
 server = FastMCP("releases")
@@ -265,6 +265,7 @@ async def save_version(
 ) -> Any:
     """新建或修改旧版本记录。"""
     payload = body(
+        appid=await app_id_of(app),
         version=version, version_code=version_code, platform=platform, download_url=download_url or None,
         release_notes=release_notes or None, description=description or None, force_update=force_update,
         update_type=update_type or None, channel_id=channel_id, min_os_version=min_os_version or None,
