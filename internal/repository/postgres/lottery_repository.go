@@ -1015,7 +1015,8 @@ func (r *Repository) grantLotteryPrizeTx(ctx context.Context, tx pgx.Tx, grant l
 		if err != nil {
 			return nil, err
 		}
-		result.Detail += "（剩余 " + strconv.FormatInt(balance, 10) + " 次）"
+		// 写明是存进了次数余额：次数交给用户自己抽，不是「再来一次」那样当场又抽了
+		result.Detail += "，已存入抽奖次数（现有 " + strconv.FormatInt(balance, 10) + " 次）"
 
 	case lotterydomain.KindManual:
 		result.Pending = true
