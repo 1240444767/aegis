@@ -8387,5 +8387,19 @@
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/mcp/endpoints",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/mcp/whoami",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
   }
 ]

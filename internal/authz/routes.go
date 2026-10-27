@@ -144,6 +144,12 @@ func splitPath(path string) []string {
 // 加一条新的管理端路由时往这里补一行即可；忘了补的表现是 40315
 // 「该管理端接口尚未登记权限规则」，而不是静默放行。
 var adminRouteRules = []RouteRule{
+	// ── MCP 服务端自述（docs/mcp.md）──
+	//
+	// 实际挂的是 AdminAuth：「我是谁、我能调哪些接口」对任何凭证都该答得上来，
+	// 判定结果本身就是按调用者的权限与密钥范围算出来的。登记在这里是为了不让它落进默认拒绝。
+	{Methods: readMethods, Pattern: "/api/admin/mcp/*", Note: "自述接口，内容按调用者的权限与密钥范围裁剪"},
+
 	// ── 工作台 ──
 	{Pattern: "/api/admin/dashboard", Note: "任意已登录管理员可见，内容按身份裁剪"},
 

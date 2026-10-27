@@ -80,6 +80,16 @@ func registerAdminAuthRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		adminProfile.DELETE("/passkey/:credentialId", h.DeleteAdminPasskey)
 		adminProfile.GET("/roles", h.AdminRoleCatalog)
 		adminProfile.GET("/roles/permissions", h.AdminRolePermissionTree)
+		// MCP 密钥：只接受控制台会话（AdminAuth 对密钥的白名单里没有这一组），见 docs/mcp.md
+		adminProfile.GET("/mcp-keys", h.AdminListMCPKeys)
+		adminProfile.POST("/mcp-keys", h.AdminCreateMCPKey)
+		adminProfile.GET("/mcp-keys/catalog", h.AdminMCPKeyCatalog)
+		adminProfile.GET("/mcp-keys/:keyId", h.AdminGetMCPKey)
+		adminProfile.PUT("/mcp-keys/:keyId", h.AdminUpdateMCPKey)
+		adminProfile.DELETE("/mcp-keys/:keyId", h.AdminRevokeMCPKey)
+		adminProfile.POST("/mcp-keys/:keyId/rotate", h.AdminRotateMCPKey)
+		adminProfile.POST("/mcp-keys/:keyId/enable", h.AdminEnableMCPKey)
+		adminProfile.POST("/mcp-keys/:keyId/disable", h.AdminDisableMCPKey)
 	}
 
 	adminAvatarCompat := router.Group("/api/admin/avatar")

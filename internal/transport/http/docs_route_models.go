@@ -336,6 +336,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/profile"):                                                                            AdminProfileUpdateRequest{},              // UpdateAdminProfile
 		routeKey("POST", "/api/admin/profile/account"):                                                                   AdminAccountChangeRequest{},              // ChangeAdminAccount
 		routeKey("GET", "/api/admin/profile/account/availability"):                                                       AdminAccountAvailabilityQuery{},          // AdminAccountAvailability
+		routeKey("GET", "/api/admin/profile/mcp-keys"):                                                                   mcpKeyListQuery{},                        // AdminListMCPKeys
+		routeKey("POST", "/api/admin/profile/mcp-keys"):                                                                  mcpKeyRequest{},                          // AdminCreateMCPKey
+		routeKey("PUT", "/api/admin/profile/mcp-keys/{keyId}"):                                                           mcpKeyRequest{},                          // AdminUpdateMCPKey
 		routeKey("POST", "/api/admin/profile/passkey/register"):                                                          PasskeyRegistrationFinishRequest{},       // FinishAdminPasskeyRegistration
 		routeKey("POST", "/api/admin/profile/password"):                                                                  AdminPasswordChangeRequest{},             // ChangeAdminPassword
 		routeKey("POST", "/api/admin/profile/two-factor/disable"):                                                        TOTPDisableRequest{},                     // DisableAdminTOTP

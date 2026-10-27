@@ -33,6 +33,9 @@ func (h *Handler) AdminApps(c *gin.Context) {
 	if ok && session != nil && !session.IsSuperAdmin {
 		items = filterAppsByAssignments(items, session.Assignments)
 	}
+	if ok && session != nil {
+		items = filterAppsByMCPKey(items, session.MCPKey)
+	}
 	response.Success(c, 200, "获取成功", items)
 }
 

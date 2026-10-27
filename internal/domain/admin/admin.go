@@ -91,6 +91,8 @@ type Session struct {
 type AccessContext struct {
 	Session
 	Assignments []Assignment `json:"assignments"`
+	// MCPKey 本次请求经 MCP 密钥认证时非空：判定在管理员权限之上再叠加密钥范围（见 mcp_key.go）。
+	MCPKey *MCPKeyScope `json:"mcpKey,omitempty"`
 }
 
 // PermissionSnapshot 一次会话展开后的**生效**权限集，供控制台决定哪些入口该显示。

@@ -51,6 +51,7 @@ DELETE	/api/admin/notify/templates/:id	AdminDeleteNotifyTemplate
 DELETE	/api/admin/platform/storage/configs/:configId/redirect	AdminClearStorageRedirect
 DELETE	/api/admin/platform/storage/pools/:poolId	AdminDeleteStoragePool
 DELETE	/api/admin/profile/avatar	RemoveAdminAvatar
+DELETE	/api/admin/profile/mcp-keys/:keyId	AdminRevokeMCPKey
 DELETE	/api/admin/profile/passkey/:credentialId	DeleteAdminPasskey
 DELETE	/api/admin/system/ai/configs/:configId	AdminPlatformAIConfigDelete
 DELETE	/api/admin/system/ai/mcp-servers/:serverId	AdminPlatformAIMCPDelete
@@ -322,6 +323,8 @@ GET	/api/admin/auth/saml/metadata	AdminSAMLMetadata
 GET	/api/admin/auth/self-service	AdminSelfServiceConfig
 GET	/api/admin/captcha/config	AdminCaptchaPublicConfig
 GET	/api/admin/dashboard	AdminDashboard
+GET	/api/admin/mcp/endpoints	mcpEndpointsHandler.func1
+GET	/api/admin/mcp/whoami	AdminMCPWhoAmI
 GET	/api/admin/notifications	ListAdminInbox
 GET	/api/admin/notifications/unread-count	AdminInboxUnreadCount
 GET	/api/admin/notify/catalog	AdminNotifyCatalog
@@ -347,6 +350,9 @@ GET	/api/admin/platform/storage/pools	AdminStoragePools
 GET	/api/admin/platform/storage/pools/:poolId	AdminStoragePool
 GET	/api/admin/profile	AdminProfile
 GET	/api/admin/profile/account/availability	AdminAccountAvailability
+GET	/api/admin/profile/mcp-keys	AdminListMCPKeys
+GET	/api/admin/profile/mcp-keys/:keyId	AdminGetMCPKey
+GET	/api/admin/profile/mcp-keys/catalog	AdminMCPKeyCatalog
 GET	/api/admin/profile/passkey	ListAdminPasskeys
 GET	/api/admin/profile/roles	AdminRoleCatalog
 GET	/api/admin/profile/roles/permissions	AdminRolePermissionTree
@@ -959,6 +965,10 @@ POST	/api/admin/platform/storage/pools/:poolId/simulate	AdminSimulateStoragePool
 POST	/api/admin/platform/storage/usage/collect	AdminCollectStorageUsage
 POST	/api/admin/profile/account	ChangeAdminAccount
 POST	/api/admin/profile/avatar	UploadAdminAvatar
+POST	/api/admin/profile/mcp-keys	AdminCreateMCPKey
+POST	/api/admin/profile/mcp-keys/:keyId/disable	AdminDisableMCPKey
+POST	/api/admin/profile/mcp-keys/:keyId/enable	AdminEnableMCPKey
+POST	/api/admin/profile/mcp-keys/:keyId/rotate	AdminRotateMCPKey
 POST	/api/admin/profile/passkey/register	FinishAdminPasskeyRegistration
 POST	/api/admin/profile/passkey/register/options	BeginAdminPasskeyRegistration
 POST	/api/admin/profile/password	ChangeAdminPassword
@@ -1393,6 +1403,7 @@ PUT	/api/admin/notify/templates/:id	AdminSaveNotifyTemplate
 PUT	/api/admin/platform/storage/configs/:configId/cors	AdminSetStorageCORS
 PUT	/api/admin/platform/storage/pools/:poolId	AdminUpdateStoragePool
 PUT	/api/admin/profile	UpdateAdminProfile
+PUT	/api/admin/profile/mcp-keys/:keyId	AdminUpdateMCPKey
 PUT	/api/admin/system/admins/:adminId/access	AdminUpdateAccountAccess
 PUT	/api/admin/system/admins/:adminId/status	AdminUpdateAccountStatus
 PUT	/api/admin/system/ai/configs/:configId	AdminPlatformAIConfigUpdate

@@ -27,7 +27,14 @@ func AdminAuth(adminService *service.AdminService) gin.HandlerFunc {
 			c.Abort()
 			return
 		}
-		access, err := adminService.ValidateAccessToken(c.Request.Context(), token)
+		// 只挂 AdminAuth 的路由是「管理员自己」的那一组（资料、密码、两步验证、MCP 密钥管理……）。
+		// MCP 密钥只能进白名单里的几条只读路由，其余一律要控制台会话。
+		if isMCPKeyToken(token) && !mcpKeySessionRouteAllowed(c) {
+			response.Error(c, http.StatusForbidden, 40167, "该接口仅限控制台登录会话调用，不接受 MCP 密钥")
+			c.Abort()
+			return
+		}
+		access, err := authenticateAdmin(c, adminService, token)
 		if err != nil {
 			writeAdminError(c, err)
 			c.Abort()
@@ -47,7 +54,7 @@ func AdminAccess(adminService *service.AdminService, appService *service.AppServ
 			c.Abort()
 			return
 		}
-		access, err := adminService.ValidateAccessToken(c.Request.Context(), token)
+		access, err := authenticateAdmin(c, adminService, token)
 		if err != nil {
 			writeAdminError(c, err)
 			c.Abort()
@@ -80,6 +87,11 @@ func AdminAccess(adminService *service.AdminService, appService *service.AppServ
 			}
 			// 处理函数用这个值，保证改的就是鉴权通过的那个应用
 			c.Set(AdminScopeAppIDKey, *appID)
+		}
+		if err := enforceMCPKeyRoute(c, access, permission, appScoped); err != nil {
+			writeAdminError(c, err)
+			c.Abort()
+			return
 		}
 		if err := adminService.Authorize(c.Request.Context(), access, permission, appID); err != nil {
 			writeAdminError(c, err)
@@ -156,6 +168,14 @@ func RequireSuperAdmin() gin.HandlerFunc {
 		session, ok := adminSession(c)
 		if !ok || session == nil || !session.IsSuperAdmin {
 			response.Error(c, http.StatusForbidden, 40301, "需要超级管理员权限")
+			c.Abort()
+			return
+		}
+		// 超管签发的密钥只有授予「全部权限」才能进超管专属接口：
+		// 这些接口不走权限点，密钥的权限范围在这里没有别的落点。
+		if session.MCPKey != nil && !session.MCPKey.AllowsAll() {
+			response.Error(c, http.StatusForbidden, 40164,
+				"该接口仅限超级管理员，MCP 密钥需授予「全部权限」才能调用")
 			c.Abort()
 			return
 		}

@@ -50,6 +50,8 @@ type AdminService struct {
 	risk        *RiskService     // 风控服务（通过 SetRiskService 注入）
 	// settings 平台设置（通过 SetPlatformSettings 注入）：自助注册开关与建应用配额存在这里
 	settings *PlatformSettingsService
+	// mcpUsage MCP 密钥使用记录的节流写入（见 admin_mcp_key_service.go）
+	mcpUsage mcpKeyUsage
 }
 
 // SetRiskService 注入风控服务

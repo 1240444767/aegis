@@ -212,6 +212,7 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 	registerAdminSystemRoutes(router, h, deps)
 	registerPlatformBannerActiveRoute(router, h, deps)
 	registerOAuth2Routes(router, h, deps)
+	registerMCPRoutes(router, h, deps)
 
 	docsOptions := DefaultDocsOptions()
 	docsOptions.PortalURL = h.docsURL
