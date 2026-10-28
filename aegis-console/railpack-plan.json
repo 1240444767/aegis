@@ -1,0 +1,223 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "caches": {
+    "apt": {
+      "directory": "/var/cache/apt",
+      "type": "locked"
+    },
+    "apt-lists": {
+      "directory": "/var/lib/apt/lists",
+      "type": "locked"
+    },
+    "bun-install": {
+      "directory": "/root/.bun/install/cache",
+      "type": "shared"
+    },
+    "next": {
+      "directory": "/app/.next/cache",
+      "type": "shared"
+    },
+    "node-modules": {
+      "directory": "/app/node_modules/.cache",
+      "type": "shared"
+    }
+  },
+  "deploy": {
+    "base": {
+      "step": "packages:apt:runtime"
+    },
+    "inputs": [
+      {
+        "include": [
+          "/mise/shims",
+          "/mise/installs",
+          "/usr/local/bin/mise",
+          "/etc/mise/config.toml",
+          "/root/.local/state/mise"
+        ],
+        "step": "packages:mise"
+      },
+      {
+        "include": [
+          "/app/node_modules"
+        ],
+        "step": "build"
+      },
+      {
+        "exclude": [
+          "node_modules",
+          ".yarn"
+        ],
+        "include": [
+          "/root/.cache",
+          "."
+        ],
+        "step": "build"
+      }
+    ],
+    "startCommand": "bun run start",
+    "variables": {
+      "BUN_INSTALL_GLOBAL_STORE": "0",
+      "CI": "true",
+      "NODE_ENV": "production",
+      "NPM_CONFIG_FETCH_RETRIES": "5",
+      "NPM_CONFIG_FUND": "false",
+      "NPM_CONFIG_PRODUCTION": "false",
+      "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+      "RAILPACK_VERSION": "0.43.0"
+    }
+  },
+  "exclude": [
+    "node_modules",
+    ".next",
+    "out",
+    ".turbo",
+    "*.tsbuildinfo",
+    ".env",
+    ".env.*",
+    "!.env.example",
+    "Dockerfile",
+    ".dockerignore",
+    "CLAUDE.md",
+    "AGENTS.md",
+    ".eslintcache"
+  ],
+  "secrets": [
+    "BUN_CONFIG_REGISTRY",
+    "NEXT_PUBLIC_AEGIS_CONSOLE_NAME",
+    "NEXT_PUBLIC_AEGIS_ENVIRONMENT",
+    "NPM_CONFIG_REGISTRY"
+  ],
+  "steps": [
+    {
+      "assets": {
+        "generated-mise-toml": "[tools]\n  bun = \"1.4.1\"\n  node = \"24.22.0\"\n\n[settings]\n  idiomatic_version_file_enable_tools = [\"python\", \"node\", \"ruby\", \"elixir\", \"go\", \"java\", \"yarn\", \"pnpm\", \"bun\", \"deno\", \"dotnet\", \"rust\"]\n  minimum_release_age = \"14d\"\n  paranoid = true\n  trusted_config_paths = [\"/app\"]\n  [settings.node]\n    verify = false\n"
+      },
+      "commands": [
+        {
+          "path": "/mise/shims"
+        },
+        {
+          "customName": "create mise config",
+          "name": "generated-mise-toml",
+          "path": "/etc/mise/config.toml"
+        },
+        {
+          "cmd": "mise install",
+          "customName": "install mise packages: bun, node"
+        }
+      ],
+      "inputs": [
+        {
+          "image": "ghcr.io/railwayapp/railpack-builder:mise-2026.10.14"
+        }
+      ],
+      "name": "packages:mise",
+      "variables": {
+        "MISE_CACHE_DIR": "/mise/cache",
+        "MISE_CONFIG_DIR": "/mise",
+        "MISE_DATA_DIR": "/mise",
+        "MISE_INSTALLS_DIR": "/mise/installs",
+        "MISE_SHIMS_DIR": "/mise/shims"
+      }
+    },
+    {
+      "caches": [
+        "bun-install"
+      ],
+      "commands": [
+        {
+          "path": "/app/node_modules/.bin"
+        },
+        {
+          "cmd": "mkdir -p /app/node_modules/.cache"
+        },
+        {
+          "dest": "bun.lock",
+          "src": "bun.lock"
+        },
+        {
+          "dest": "bunfig.toml",
+          "src": "bunfig.toml"
+        },
+        {
+          "dest": "package.json",
+          "src": "package.json"
+        },
+        {
+          "dest": "src/app/package.json",
+          "src": "src/app/package.json"
+        },
+        {
+          "cmd": "bun install --frozen-lockfile"
+        }
+      ],
+      "inputs": [
+        {
+          "step": "packages:mise"
+        }
+      ],
+      "name": "install",
+      "secrets": [
+        "NPM_CONFIG_REGISTRY",
+        "BUN_CONFIG_REGISTRY"
+      ],
+      "variables": {
+        "BUN_INSTALL_GLOBAL_STORE": "0",
+        "CI": "true",
+        "NODE_ENV": "production",
+        "NPM_CONFIG_FETCH_RETRIES": "5",
+        "NPM_CONFIG_FUND": "false",
+        "NPM_CONFIG_PRODUCTION": "false",
+        "NPM_CONFIG_UPDATE_NOTIFIER": "false"
+      }
+    },
+    {
+      "caches": [
+        "node-modules",
+        "next"
+      ],
+      "commands": [
+        {
+          "cmd": "bun run build"
+        }
+      ],
+      "inputs": [
+        {
+          "step": "install"
+        },
+        {
+          "include": [
+            "."
+          ],
+          "local": true
+        }
+      ],
+      "name": "build",
+      "secrets": [
+        "*"
+      ],
+      "variables": {
+        "NEXT_TELEMETRY_DISABLED": "1"
+      }
+    },
+    {
+      "caches": [
+        "apt",
+        "apt-lists"
+      ],
+      "commands": [
+        {
+          "cmd": "sh -c 'apt-get update \u0026\u0026 apt-get install -y libatomic1'",
+          "customName": "install apt packages: libatomic1"
+        }
+      ],
+      "inputs": [
+        {
+          "image": "ghcr.io/railwayapp/railpack-runtime:mise-2026.10.14"
+        }
+      ],
+      "name": "packages:apt:runtime"
+    }
+  ]
+}
