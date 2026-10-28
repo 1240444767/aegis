@@ -226,6 +226,9 @@ GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminGetLotteryActivity
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId/audit	AdminLotteryAudit
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune	AdminLotteryFortune
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls	AdminListLotteryFortuneControls
+GET	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId	AdminLotteryFortuneUser
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId/stats	AdminLotteryStats
 GET	/api/admin/apps/:appkey/lottery/catalog	AdminLotteryCatalog
 GET	/api/admin/apps/:appkey/lottery/draws	AdminListLotteryDraws
@@ -866,6 +869,9 @@ POST	/api/admin/apps/:appkey/leaderboard/exclusions	AdminAddLeaderboardExclusion
 POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
 POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
+POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls	AdminCreateLotteryFortuneControls
+POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/preview	AdminPreviewLotteryFortuneControl
+POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/revoke	AdminRevokeLotteryFortuneControls
 POST	/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill	AdminFulfillLotteryDraw
 POST	/api/admin/apps/:appkey/lottery/simulate	AdminSimulateLottery
 POST	/api/admin/apps/:appkey/notices	CreateAdminNotice
@@ -1376,6 +1382,7 @@ PUT	/api/admin/apps/:appkey/invite/codes/:codeId/status	AdminSetInviteCodeStatus
 PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
 PUT	/api/admin/apps/:appkey/leaderboard/settings	AdminSaveLeaderboardSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminUpdateLotteryActivity
+PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings	AdminSetLotteryFortuneSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/status	AdminSetLotteryActivityStatus
 PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider	AdminUpdateAppOAuthProvider

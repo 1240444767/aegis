@@ -162,6 +162,13 @@ func init() {
 		View("GET /api/admin/apps/:appkey/lottery/draws", "查看抽奖记录", ""),
 		Write("POST /api/admin/apps/:appkey/lottery/draws/:drawId/fulfill", "标记抽奖奖品已发放", "抽奖记录", SeverityMedium),
 		View("POST /api/admin/apps/:appkey/lottery/simulate", "模拟抽奖出奖策略", ""),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/fortune", "查看抽奖运气总览", "抽奖活动"),
+		Write("PUT /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings", "调整抽奖运气差异", "抽奖活动", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId", "查看用户今日运气", "用户"),
+		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls", "查看运气干预记录", "抽奖活动"),
+		Write("POST /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls", "干预用户运气", "抽奖活动", SeverityHigh),
+		View("POST /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/preview", "预演运气干预", ""),
+		Write("POST /api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/revoke", "撤销运气干预", "抽奖活动", SeverityMedium),
 
 		// AI 中转网关（docs/ai-gateway.md）：退款与赠送额度调整直接动用户的钱，按高风险记
 		View("GET /api/admin/apps/:appkey/ai-gateway/catalog", "查看 AI 中转目录", ""),

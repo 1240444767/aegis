@@ -196,6 +196,10 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots/{snapshotId}/entries"):                           LeaderboardEntryQuery{},                  // AdminLeaderboardSnapshotEntries
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                                  LotteryActivityRequest{},                 // AdminCreateLotteryActivity
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}"):                                      LotteryActivityRequest{},                 // AdminUpdateLotteryActivity
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls"):                    LotteryFortuneControlRequest{},           // AdminCreateLotteryFortuneControls
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls/preview"):            LotteryFortuneControlRequest{},           // AdminPreviewLotteryFortuneControl
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls/revoke"):             LotteryFortuneRevokeRequest{},            // AdminRevokeLotteryFortuneControls
+		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/settings"):                     LotteryFortuneSettingsRequest{},          // AdminSetLotteryFortuneSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/status"):                               LotteryStatusRequest{},                   // AdminSetLotteryActivityStatus
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/draws/{drawId}/fulfill"):                                      LotteryFulfillRequest{},                  // AdminFulfillLotteryDraw
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/simulate"):                                                    LotterySimulateRequest{},                 // AdminSimulateLottery

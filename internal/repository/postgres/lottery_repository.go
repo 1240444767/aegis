@@ -662,7 +662,15 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 		}
 	}
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
-	fortune := lotterydomain.FortuneOf(activity.Strategy.Fortune, activity.ID, input.UserID, input.DayStart)
+	// 今日运气计入管理员干预（全站与本人的），与活动页同一个解析
+	var fortune float64 = 1
+	if f := activity.Strategy.Fortune; f != nil && f.Spread > 0 {
+		controls, err := lotteryFortuneControlsQ(ctx, tx, activity.ID, input.UserID, now)
+		if err != nil {
+			return nil, err
+		}
+		fortune = lotterydomain.FortuneFactor(f, activity.ID, input.UserID, input.DayStart, now, controls)
+	}
 	personal := lotterydomain.FortunePrizes(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)), fortune)
 	// 无套利：原价折算会让积分买次数稳赚时，已拥有格子的改发按刚好回本的比例缩减（正常奖盘照原价）
 	storePrice, err := lotteryStoreDrawPriceQ(ctx, tx, input.AppID)

@@ -495,7 +495,10 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	plans, features := s.catalogRefs(ctx, appID, prizes)
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
-	fortune := lotterydomain.ReadFortune(activity.Strategy.Fortune, activity.ID, userID, lotteryDayStart(now))
+	fortune, err := s.readFortune(ctx, *activity, userID, now)
+	if err != nil {
+		return nil, err
+	}
 	factor := 1.0
 	if fortune != nil {
 		factor = fortune.Factor
@@ -514,6 +517,20 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 		Viewer:     lotterydomain.ClientViewer{Lifetime: coverage.Lifetime},
 		ServerTime: now.UTC(),
 	}, nil
+}
+
+// readFortune 这个人此刻的今日运气（计入管理员干预）；没开每日运气时为 nil。
+func (s *LotteryService) readFortune(ctx context.Context, activity lotterydomain.Activity, userID int64, now time.Time) (
+	*lotterydomain.FortuneReading, error) {
+	fortune := activity.Strategy.Fortune
+	if fortune == nil || fortune.Spread <= 0 {
+		return nil, nil
+	}
+	controls, err := s.pg.LotteryFortuneControls(ctx, activity.ID, userID, now)
+	if err != nil {
+		return nil, err
+	}
+	return lotterydomain.ReadFortuneControlled(fortune, activity.ID, userID, lotteryDayStart(now), now, controls), nil
 }
 
 // lotteryShares 抽中兜底奖以外奖品的概率（百分比）：乘今日运气之前与之后。

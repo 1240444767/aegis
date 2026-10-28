@@ -499,6 +499,13 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.GET("/apps/:appkey/lottery/draws", h.AdminListLotteryDraws)
 		admin.POST("/apps/:appkey/lottery/draws/:drawId/fulfill", h.AdminFulfillLotteryDraw)
 		admin.POST("/apps/:appkey/lottery/simulate", h.AdminSimulateLottery)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId/fortune", h.AdminLotteryFortune)
+		admin.PUT("/apps/:appkey/lottery/activities/:activityId/fortune/settings", h.AdminSetLotteryFortuneSettings)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId", h.AdminLotteryFortuneUser)
+		admin.GET("/apps/:appkey/lottery/activities/:activityId/fortune/controls", h.AdminListLotteryFortuneControls)
+		admin.POST("/apps/:appkey/lottery/activities/:activityId/fortune/controls", h.AdminCreateLotteryFortuneControls)
+		admin.POST("/apps/:appkey/lottery/activities/:activityId/fortune/controls/preview", h.AdminPreviewLotteryFortuneControl)
+		admin.POST("/apps/:appkey/lottery/activities/:activityId/fortune/controls/revoke", h.AdminRevokeLotteryFortuneControls)
 
 		// 版本发布管理 RESTful 路由
 		admin.GET("/apps/:appkey/versions", h.AdminListVersions)

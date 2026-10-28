@@ -84,33 +84,35 @@ type FortuneReading struct {
 	ResetsAt time.Time `json:"resetsAt"`
 }
 
-// ReadFortune 这个人今天的运气解读；没开每日运气时为 nil。胜率由调用方按个人奖盘填。
+// ReadFortune 这个人今天的运气解读（不计管理员干预）；没开每日运气时为 nil。胜率由调用方按个人奖盘填。
 func ReadFortune(fortune *Fortune, activityID, userID int64, day time.Time) *FortuneReading {
 	if fortune == nil || fortune.Spread <= 0 || userID <= 0 {
 		return nil
 	}
-	u := fortuneUniform(fortuneHash(activityID, userID, day))
-	z := math.Max(-fortuneClampZ, math.Min(fortuneClampZ, distuv.UnitNormal.Quantile(u)))
+	return readingOf(fortune, fortuneZ(fortuneHash(activityID, userID, day)), day)
+}
+
+// readingOf 按 z 拼出运气解读：系数、超过多少人、档位与文案。
+func readingOf(fortune *Fortune, z float64, day time.Time) *FortuneReading {
 	low, high := FortuneRange(fortune)
 	reading := &FortuneReading{
 		Factor:     fortuneAt(fortune.Spread, z),
-		Percentile: max(1, min(99, int(math.Round(u*100)))),
+		Percentile: PercentileOfZ(z),
+		Level:      LevelOfZ(z),
 		Low:        low,
 		High:       high,
 		ResetsAt:   day.AddDate(0, 0, 1).UTC(),
 	}
-	switch {
-	case z >= fortuneBurstZ:
-		reading.Level, reading.Title = FortuneBurst, "运气大爆发"
-	case z >= fortuneLuckyZ:
-		reading.Level, reading.Title = FortuneLucky, "鸿运当头"
-	case z > fortuneSteadyZ:
-		reading.Level, reading.Title = FortuneSteady, "运势平稳"
-	default:
-		reading.Level, reading.Title = FortuneQuiet, "手气平淡"
-	}
+	reading.Title = fortuneTitles[reading.Level]
 	reading.Message = fmt.Sprintf("今日手气超过 %d%% 的用户，奖品权重 ×%s", reading.Percentile, trimFloat(reading.Factor))
 	return reading
+}
+
+var fortuneTitles = map[string]string{
+	FortuneBurst:  "运气大爆发",
+	FortuneLucky:  "鸿运当头",
+	FortuneSteady: "运势平稳",
+	FortuneQuiet:  "手气平淡",
 }
 
 // RealPrizeShare 抽中兜底奖与谢谢参与以外的奖品的概率（百分比）。

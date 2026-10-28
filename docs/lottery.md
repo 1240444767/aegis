@@ -161,6 +161,34 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 （抽中兜底奖以外奖品的概率，乘运气之后与之前）、`resetsAt`（次日零点）。每个奖品另有 `baseProbability`：活动公示的原概率
 （只去掉对他不参与抽取的已拥有奖品，不乘中奖加成与运气），与 `probability` 一比就是他今天比公示高还是低。
 
+### 运气控制
+
+管理员可以干预每日运气（`fortune_control.go`，表 `lottery_fortune_controls`，迁移 000135）。干预按人（每人一条）或全站，
+带生效时间窗（默认从现在到明天零点），可撤销，全部留痕（操作人、备注、撤销人）。三种干预都作用在 z 上，最后仍截在 ±2，
+所以系数永远在 `FortuneRange` 之内，积分账与无套利的最坏情况照旧成立：
+
+| kind | 作用 |
+|---|---|
+| `reroll` | 重抽：哈希里加一段随机盐，换一个新的 z（分布不变，只是换了手气）。全站重抽就是所有人今天重新摇一次 |
+| `pin` | 定档：z 定在 `level`（运气大爆发 1.75 / 鸿运当头 1 / 运势平稳 0 / 手气平淡 −1），或按 `factor` 用当前差异反算 |
+| `shift` | 偏移：z 加减 `shift`（±4 以内），全站 +0.5 就是整体走运一点 |
+
+合成顺序：全站与本人的 reroll 依次加盐算出 z → 有 pin 时取 pin（个人优先于全站，同层取最新）→ 没有 pin 时加上全部 shift →
+截在 ±2。活动页（`ReadFortuneControlled`）、抽奖事务（`FortuneFactor`，在事务连接里取干预）与单人模拟都走 `ResolveFortune`，
+用户看到的与抽到的是同一个系数；用户端看不到有没有被干预。
+
+管理端接口（`/api/admin/apps/{appKey}/lottery/activities/{id}/fortune…`）：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/fortune` | 总览：是否开启、差异、范围、各档位（定档 z、系数、理论占比）、今天抽过奖的人（最多 5000）干预前后的档位分布与平均系数、全站干预、干预数 |
+| PUT | `/fortune/settings` | `{spread}` 调整运气差异（0 关闭），只改策略里这一项，其余原样过保存校验 |
+| GET | `/fortune/users/{userId}` | 一个人此刻的运气：干预前后的读数与 z、生效的干预、他名下的干预 |
+| GET | `/fortune/controls` | 干预记录（`userId` / `kind` / `status`：active / scheduled / expired / revoked） |
+| POST | `/fortune/controls` | 下干预：`{userIds | allUsers, kind, level | factor | shift, startsAt?, endsAt?, note}`；没开每日运气、跨应用用户都会被拒 |
+| POST | `/fortune/controls/preview` | 预演：同样的请求体，按今天抽过奖的人（或所选用户）算干预之后的分布，不落库 |
+| POST | `/fortune/controls/revoke` | `{ids}` 撤销几条，`{all: true}` 撤销全部生效中与待生效的（恢复自然运气） |
+
 ### 精确分析与审计
 
 - **首中分布**（`markov.go`）：把「已连续未中 k 次」看成马尔可夫链的状态，每个状态的中奖率 h_k（风险函数）由同一套
@@ -393,6 +421,10 @@ free → bonus → points 选，所以免费、次数余额、积分可以混在
 `TestLotteryPerksIntegration`：永久会员奖品（老客户端看到 `vip_plan`）与再抽中的折算、永久会员特权（4 次视频全部免看广告并进免费次数、
 额外免费、积分 5 折与额外次数、保底提前、提示卡并入说明、trace 记特权）、签到条件、功能时长奖品、免广告时长（顺延、功能时长免扣、
 开屏免除、`ad_free` 人群）、永久会员抽中免广告 / 功能时长的折算、模拟里的特权身份。单元测试在 `perks_test.go`（含免看广告判定的稳定性与比例校准）。
+
+`TestLotteryFortuneControlIntegration`：定档后活动页与抽奖事务的系数一致、个人定档优先于全站偏移、全站 −4 落到最低系数、
+总览的今日分布、预演不落库、记录与状态、全部撤销恢复自然运气、重复撤销 40404、重抽、跨应用用户 40401、关闭 / 重开运气差异不动奖盘。
+合成规则的单元测试在 `fortune_control_test.go`。
 
 `TestLotteryBatchIntegration`：十连抽在 3 次免费后停下并写明 42915、同一 requestId 重试原样返回且不多扣、一次都抽不了时报错、
 次数上限；活动页的今日运气与出奖系数一致、`baseProbability`、`viewer`。今日运气档位占比的单元测试在 `fortune_reading_test.go`。
