@@ -232,6 +232,10 @@ GET	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId/stats	AdminLotteryStats
 GET	/api/admin/apps/:appkey/lottery/catalog	AdminLotteryCatalog
 GET	/api/admin/apps/:appkey/lottery/draws	AdminListLotteryDraws
+GET	/api/admin/apps/:appkey/lottery/tickets	AdminLotteryTicketOverview
+GET	/api/admin/apps/:appkey/lottery/tickets/accounts	AdminListLotteryTicketAccounts
+GET	/api/admin/apps/:appkey/lottery/tickets/ledger	AdminListLotteryTicketLedger
+GET	/api/admin/apps/:appkey/lottery/tickets/users/:userId	AdminLotteryTicketAccount
 GET	/api/admin/apps/:appkey/notices	AdminNotices
 GET	/api/admin/apps/:appkey/notices/export	ExportAdminNotices
 GET	/api/admin/apps/:appkey/notifications	AdminAppNotifications
@@ -653,6 +657,7 @@ GET	/api/v1/apps/:appkey/leaderboard/summary	LeaderboardSummary
 GET	/api/v1/apps/:appkey/lottery	AppLotteryActivities
 GET	/api/v1/apps/:appkey/lottery/activities/:activityId	AppLotteryState
 GET	/api/v1/apps/:appkey/lottery/draws	AppLotteryDraws
+GET	/api/v1/apps/:appkey/lottery/tickets	AppLotteryTickets
 GET	/api/v1/apps/:appkey/me	AppMe
 GET	/api/v1/apps/:appkey/me/2fa/recovery-codes	ListRecoveryCodes
 GET	/api/v1/apps/:appkey/me/audits/login	UserLoginAudits
@@ -874,6 +879,7 @@ POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/pre
 POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/revoke	AdminRevokeLotteryFortuneControls
 POST	/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill	AdminFulfillLotteryDraw
 POST	/api/admin/apps/:appkey/lottery/simulate	AdminSimulateLottery
+POST	/api/admin/apps/:appkey/lottery/tickets/users/:userId/adjust	AdminAdjustLotteryTickets
 POST	/api/admin/apps/:appkey/notices	CreateAdminNotice
 POST	/api/admin/apps/:appkey/notifications/bulk	AdminBulkNotifyUsers
 POST	/api/admin/apps/:appkey/notifications/delete-by-filter	DeleteAdminAppNotificationsByFilter

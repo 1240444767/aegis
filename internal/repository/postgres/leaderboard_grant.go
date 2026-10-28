@@ -11,6 +11,7 @@ import (
 
 	"aegis/internal/domain/invite"
 	"aegis/internal/domain/leaderboard"
+	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
@@ -140,7 +141,10 @@ func (r *Repository) grantLeaderboardRewardsTx(ctx context.Context, tx pgx.Tx, g
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case pointstore.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginLeaderboard,
+				Ref: key, Title: grant.Title,
+			})
 			if err != nil {
 				return nil, err
 			}

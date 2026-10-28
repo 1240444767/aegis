@@ -192,12 +192,39 @@ func TestEvaluateChances(t *testing.T) {
 	if _, reason := ResolveSource(chances, SourceFree); reason != ReasonFreeExhausted {
 		t.Fatalf("指定免费时报免费用完，得到 %q", reason)
 	}
-	none := EvaluateChances(Activity{FreeDaily: 1}, UserFacts{Integral: 999}, VideoChances{})
+	none := EvaluateChances(Activity{FreeDaily: 1}, UserFacts{FreeUsedToday: 1, Integral: 999}, VideoChances{})
 	if _, reason := ResolveSource(none, SourcePoints); reason != ReasonPointsUnavailable {
 		t.Fatalf("未开放积分抽奖，得到 %q", reason)
 	}
 	if _, reason := ResolveSource(none, "video"); reason != ReasonUnknownSource {
 		t.Fatalf("video 不是来源（视频抽奖到账的是 bonus），得到 %q", reason)
+	}
+}
+
+// 指定的来源只是上限：免费、赠送的次数还有剩时，传 bonus / points 也先扣它们。
+func TestResolveSourceFreeFirst(t *testing.T) {
+	activity := Activity{FreeDaily: 2, PointsCost: 10}
+	chances := EvaluateChances(activity, UserFacts{FreeUsedToday: 1, Bonus: 4, BonusPurchased: 3, Integral: 100}, VideoChances{})
+	if chances.Tickets != (TicketBalance{Gift: 1, Purchased: 3}) {
+		t.Fatalf("次数按档拆开，得到 %+v", chances.Tickets)
+	}
+	for _, requested := range []string{"", SourceFree, SourceBonus, SourcePoints} {
+		if source, reason := ResolveSource(chances, requested); source != SourceFree || reason != ReasonOK {
+			t.Fatalf("还有免费次数时指定 %q 也先用免费，得到 %q %q", requested, source, reason)
+		}
+	}
+	chances = EvaluateChances(activity, UserFacts{FreeUsedToday: 2, Bonus: 1, Integral: 100}, VideoChances{})
+	if source, _ := ResolveSource(chances, SourcePoints); source != SourceBonus {
+		t.Fatalf("免费用完、还有次数时指定积分也先用次数，得到 %q", source)
+	}
+	if _, reason := ResolveSource(chances, SourceFree); reason != ReasonFreeExhausted {
+		t.Fatalf("指定免费时不越级去用次数，得到 %q", reason)
+	}
+	if source, _ := ResolveSource(chances, SourceBonus); source != SourceBonus {
+		t.Fatalf("指定次数时用次数，得到 %q", source)
+	}
+	if split := SplitTickets(2, 5); split != (TicketBalance{Gift: 0, Purchased: 2}) {
+		t.Fatalf("买来的不会超过总数，得到 %+v", split)
 	}
 }
 

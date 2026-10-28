@@ -13,13 +13,15 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 {"source": "free" | "bonus" | "points" | "", "requestId": "<uuid>"}
 ```
 
+`source` 是「最多用到这一档」，不是「必须用这一档」，见[扣除顺序](#扣除顺序)。
+
 抽中哪一格、发什么、发多少，全部在**同一个数据库事务**里决定并到账（`Repository.DrawLottery`）：
 
 1. 读活动（`FOR SHARE`，与「改奖盘」互斥）、判状态与时间窗；
 2. 锁用户行 —— 今天用了几次、次数余额、积分余额、连续未中次数都是这个人的事实，同一个人的抽奖从这里开始串行；
 3. `requestId` 回放：同一个键再来一次，原样返回第一次的记录（`replayed: true`）；
 4. 判定用哪一种次数（`lottery.EvaluateChances` / `ResolveSource`，与活动页显示的剩余次数同一个函数）；
-5. 扣次数：bonus 用条件 UPDATE（`balance > 0`）；积分在落记录之后按记录 ID 记账；
+5. 扣次数：bonus 按[使用顺序](#抽奖次数)取一批、记一条流水，与汇总行同一把锁；积分在落记录之后按记录 ID 记账；
 6. 选奖品：按[出奖策略](#出奖策略)算出这个人这一次每个奖品的最终概率；到了保底且保底奖有资格时直接给它，
    否则按最终概率抽（gonum `sampleuv` 加权抽样，随机源是每次用 `crypto/rand` 播种的 ChaCha8）；
 7. 占名额：设了全站每日限量的先占当天名额（`lottery_prize_daily` 条件 UPSERT），限量奖品再扣库存（`used < quantity`），
@@ -33,10 +35,22 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 | 来源 | 是什么 | 限制 |
 |---|---|---|
 | `free` | 每人每天的免费次数（活动的 `freeDaily`） | 按应用时区的自然日 |
-| `bonus` | 应用级的抽奖次数余额（`lottery_draw_grants`），任意活动可用 | 余额 |
+| `bonus` | 应用级的抽奖次数，分批记账（见[抽奖次数](#抽奖次数)），任意活动可用 | 余额 |
 | `points` | 每次消耗 `pointsCost` 积分 | `pointsDaily`（0 不限）与积分余额 |
 
-`source` 留空时按 free → bonus → points 自动选；活动页的 `chances.next` 就是这个顺序的结论。
+### 扣除顺序
+
+从头到尾只有一条，单抽、十连抽、视频抽奖之后的抽奖、管理员扣减都一样（`lottery.ConsumptionOrder`）：
+
+```
+今日免费次数 → 赠送的抽奖次数（先到先用）→ 兑换的抽奖次数（先到先用）→ 积分
+```
+
+活动页的 `chances.next` 就是这个顺序的结论；`chances.tickets` 把 `bonus` 拆成 `gift`（赠送的）与 `purchased`（兑换的）。
+
+客户端指定 `source` 时，`ResolveSource` 按这个顺序走到它为止、取第一个可用的：活动页可能是零点前、签到前拉的，
+按缓存的 `next` 传上来的 `bonus` / `points` 不会跳过已经可用的免费次数（实际用的写在 `draw.source` 与 `draw.ticket`）。
+走到指定的那一档仍不可用时报那一档自己的错误：指定 `free` 而免费已用完时报 `42913`，不会越级去用次数或积分。
 
 ### 视频抽奖
 
@@ -44,10 +58,35 @@ POST /api/v1/apps/{appKey}/lottery/activities/{activityId}/draw
 
 1. 活动页的 `chances.video` 给出场景、广告位、签名用户标识（与 `/ads/rewarded` 的 `userId` 相同）、今天还能看几次、冷却；
 2. 客户端按激励广告的流程加载、播放、上报（见 [激励广告](rewarded-ads.md)）—— 看没看完由 Apex 的**服务端回调**说了算；
-3. 结算后次数进 bonus，客户端再用 `source: "bonus"` 抽。
+3. 结算后次数进 bonus（一批来源为 `rewarded_ad` 的赠送次数），客户端再点抽奖（`source` 留空），按扣除顺序用掉。
 
 因此视频抽奖的每日次数、冷却都在激励广告的场景里配；保存活动时会核对场景存在且发「抽奖次数」。
 广告看完但回调还没到时（`pending`），次数会在回调到达的那一刻补发，客户端下次进页面就能看到。
+
+## 抽奖次数
+
+`bonus` 是应用级的、任意活动可用。每一次发放是一批（`lottery_draw_lots`：来源、是否兑换所得 `paid`、数量、剩余、来源单号），
+每一次增减一条流水（`lottery_draw_ledger`：`grant` 获得 / `consume` 抽奖使用 / `deduct` 系统扣减，带变动后余额）；
+`lottery_draw_grants` 是这个人全部批次的汇总，发放与扣减都先锁它这一行。抽奖记录的 `ticket_lot_id` / `ticket_origin` / `ticket_paid`
+记下这一次用的是哪一批。
+
+| 来源 `origin` | 发放处 | 档 |
+|---|---|---|
+| `rewarded_ad` | 激励广告场景的「抽奖次数」（视频抽奖） | 赠送 |
+| `lottery` | 抽中的「抽奖次数」、已拥有奖品改发的次数 | 赠送 |
+| `invite` / `leaderboard` | 邀请奖励、排行榜结算 | 赠送 |
+| `cardkey` | 卡密：一卡一用（卖给一个人的码）算兑换，活动码（`maxUses > 1`）算赠送 | 兑换 / 赠送 |
+| `points_store` | 积分商城：花了积分的算兑换，0 积分的福利商品算赠送 | 兑换 / 赠送 |
+| `admin` | 管理员发放（可选按兑换所得记） | 赠送 / 兑换 |
+| `legacy` | 分批记账之前的余额（000136 与事务内对齐补的一批） | 赠送 |
+
+使用顺序 `paid ASC, id ASC`：赠送的先于兑换的，同一档先到先用。用户付过代价的部分留到最后，对账、撤销兑换时它们还在。
+
+对齐（`lotteryLockTicketsTx`）：汇总比批次多（分批记账之前的余额、滚动发布期间旧版本发的）时补一批 `legacy`；
+汇总比批次少（旧版本直接扣了汇总）时按使用顺序从批次里扣掉差额。对齐之后两边恒等。
+
+用户端 `GET /lottery/tickets?page=&limit=`：`account`（`balance`、`tickets.gift` / `tickets.purchased`、累计、还有剩余的批次 `lots`
+按使用顺序、`order` 扣除顺序文案）与流水 `ledger`（不回显操作人）。管理端见[接口](#管理端appread--appwrite)。
 
 ## 人群特权
 
@@ -353,7 +392,8 @@ k 已拥有格子的发放比例。
 | `lotteryState` | GET | `/lottery/activities/{activityId}` | 活动与奖品、`chances`、`pity` |
 | `lotteryDraw` | POST | `/lottery/activities/{activityId}/draw` | 抽一次，返回 `draw`（含 `position`）、抽完后的 `chances` 与 `pity` |
 | `lotteryDrawBatch` | POST | `/lottery/activities/{activityId}/draw/batch` | 连抽（`count` 1–10），见下 |
-| `lotteryDraws` | GET | `/lottery/draws?activityId=&page=&limit=` | 我的抽奖记录 |
+| `lotteryDraws` | GET | `/lottery/draws?activityId=&page=&limit=` | 我的抽奖记录（`source = bonus` 的带 `ticket`：来源与是否兑换所得） |
+| `lotteryTickets` | GET | `/lottery/tickets?page=&limit=` | 我的抽奖次数与流水，见[抽奖次数](#抽奖次数) |
 
 错误码：`40402` 活动不存在或已下线 / `40923` 未开始 / `40924` 已结束 / `42913` 今日免费次数已用完 /
 `42914` 今日积分抽奖次数已用完 / `42915` 没有可用次数 / `40307` 积分不足 / `40928` 该方式未开放 /
@@ -364,8 +404,8 @@ k 已拥有格子的发放比例。
 连抽（十连抽，`DrawBatch`）逐次调用与单抽相同的 `DrawLottery`：每一次一个事务、各自到账，保底、每日运气、库存与奖品限额在十次之间照常推进，
 不是一次算好十个结果。第 i 次的 requestId 是 `requestId#i`（所以 requestId 不超过 61 位），重试时已抽过的原样返回、没抽到的接着抽；
 全部是回放时 `replayed = true`。中途抽不了（次数用完、积分不够、活动刚好结束）时停下，返回已抽到的 `draws` 与 `stopped`
-（`code` 与单抽报的错误码相同、`message`）；第一次就抽不了时整个请求报那个错误。风控只在开始时评估一次。`source` 留空时每一次各自按
-free → bonus → points 选，所以免费、次数余额、积分可以混在一次十连里。
+（`code` 与单抽报的错误码相同、`message`）；第一次就抽不了时整个请求报那个错误。风控只在开始时评估一次。每一次各自按扣除顺序选，
+所以一次十连里先用完今天的免费、再用赠送的、兑换的次数，最后才花积分。
 
 抽中积分或花了积分时向用户的其它在线设备推 `points.changed`；抽中人工发放的奖品发站内信（类型 `lottery`，跳转路由 `lottery`）。
 
@@ -382,6 +422,11 @@ free → bonus → points 选，所以免费、次数余额、积分可以混在
 | POST | `/api/admin/apps/{appKey}/lottery/draws/{drawId}/fulfill` | 人工发放的奖品标记已发放（`{note}` 写进站内信；重复标记 `40926`） |
 | POST | `/api/admin/apps/{appKey}/lottery/simulate` | 出奖策略模拟（见上文「模拟」），附首中精确分析 `analytic` |
 | GET | `/api/admin/apps/{appKey}/lottery/activities/{activityId}/audit?days=14` | 出奖审计（见上文「精确分析与审计」） |
+| GET | `/api/admin/apps/{appKey}/lottery/tickets` | 抽奖次数总览：持有人数、未用次数（两档）、今天发放与使用、各来源累计与剩余 |
+| GET | `/api/admin/apps/{appKey}/lottery/tickets/accounts?keyword=` | 有次数账户的人，余额多的在前 |
+| GET | `/api/admin/apps/{appKey}/lottery/tickets/ledger` | 次数流水（userId / kind / origin / keyword） |
+| GET | `/api/admin/apps/{appKey}/lottery/tickets/users/{userId}` | 一个人的账户与批次 |
+| POST | `/api/admin/apps/{appKey}/lottery/tickets/users/{userId}/adjust` | `{amount, reason, paid}`：正数发放（发站内信）、负数按扣除顺序扣减（不够扣 `40000`） |
 
 活动的保存体：
 
@@ -411,12 +456,18 @@ free → bonus → points 选，所以免费、次数余额、积分可以混在
 旧奖品 `points` / `experience` 且值为数字的照搬，名字像「谢谢参与」的搬成 `none`，其余搬成 `manual`；
 旧记录补单号与快照，`claimed` 记为已发放，用户已被删除的记录清掉。`lottery_participants` 与 `lottery_seed_commitments` 删除。
 
+`000136_lottery_draw_lots` 建批次表与流水表、给抽奖记录加批次列，并把每个人汇总里多出批次的部分补成一批 `legacy`（带一条流水）；
+差额为 0 时不再补，所以可重复执行。
+
 ## 验证
 
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
 积分抽奖与每日上限、保底、限量奖品并发只出库存数、同一 requestId 并发只抽一次、会员 / 功能 / 人工发放、
 已拥有的奖品（四种处理方式、单奖品改发、剔除后的概率与保底、已永久解锁的功能、统计）、删除与统计，
-最后在旧表形状上跑 000110 + 000114 + 000124 + 000125 + 000130 两遍核对搬迁。
+最后在旧表形状上跑 000110 + 000114 + 000124 + 000125 + 000130 + 000136 两遍核对搬迁。
+
+`TestLotteryTicketsIntegration`：早期余额对齐成一批、管理员发放两档、活动页拆分、过时页面传 `points` 也先扣免费、
+指定 `free` 不越级、单抽与十连抽都按「免费 → 赠送 → 兑换 → 积分」、流水与累计、扣减先扣赠送的且跨批记两条、总览与账户搜索。
 
 `TestLotteryPerksIntegration`：永久会员奖品（老客户端看到 `vip_plan`）与再抽中的折算、永久会员特权（4 次视频全部免看广告并进免费次数、
 额外免费、积分 5 折与额外次数、保底提前、提示卡并入说明、trace 记特权）、签到条件、功能时长奖品、免广告时长（顺延、功能时长免扣、

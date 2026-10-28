@@ -14,6 +14,7 @@ import (
 	"aegis/internal/domain/aigateway"
 	cardkeydomain "aegis/internal/domain/cardkey"
 	"aegis/internal/domain/featuretime"
+	lotterydomain "aegis/internal/domain/lottery"
 	rewardedad "aegis/internal/domain/rewardedad"
 	vipdomain "aegis/internal/domain/vip"
 )
@@ -437,7 +438,10 @@ func (r *Repository) grantAdRewardsTx(ctx context.Context, tx pgx.Tx, view *rewa
 			result.TransactionNo = expResult.TransactionNo
 
 		case cardkeydomain.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, view.AppID, view.UserID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: view.AppID, UserID: view.UserID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginRewardedAd,
+				Ref: view.TransID, Title: source,
+			})
 			if err != nil {
 				return nil, err
 			}

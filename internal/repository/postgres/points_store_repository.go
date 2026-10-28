@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 
+	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
@@ -413,13 +414,13 @@ func (r *Repository) assemblePointsStoreFacts(ctx context.Context, q queryExecut
 		return nil, err
 	}
 	return &pointstore.UserFacts{
-		Integral:         integral,
-		Level:            r.resolveLevelState(levels, experience).CurrentLevel,
-		IsVip:            entitlement.IsVIP,
-		IsLifetime:       entitlement.IsLifetime,
-		Holdings:         vipdomain.HoldingsOf(*entitlementFacts, now),
-		Plans:            plans,
-		Features:         features,
+		Integral:   integral,
+		Level:      r.resolveLevelState(levels, experience).CurrentLevel,
+		IsVip:      entitlement.IsVIP,
+		IsLifetime: entitlement.IsLifetime,
+		Holdings:   vipdomain.HoldingsOf(*entitlementFacts, now),
+		Plans:      plans,
+		Features:   features,
 	}, nil
 }
 
@@ -707,7 +708,11 @@ func (r *Repository) grantPointsStoreRewardsTx(ctx context.Context, tx pgx.Tx, r
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case pointstore.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginPointsStore,
+				// 花了积分换的排在赠送的之后用；0 积分的福利商品算赠送
+				Paid: redemption.Cost > 0, Ref: redemption.RedemptionNo, Title: source,
+			})
 			if err != nil {
 				return nil, err
 			}

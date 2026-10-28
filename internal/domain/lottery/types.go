@@ -7,8 +7,11 @@
 // 次数有三种来源，各自计数、互不挤占：
 //
 //   - free   每人每天的免费次数（活动配置）
-//   - bonus  应用级的抽奖次数余额（lottery_draw_grants）：看激励广告、卡密、积分商城、邀请等发的「抽奖次数」
+//   - bonus  应用级的抽奖次数余额：看激励广告、卡密、积分商城、邀请等发的「抽奖次数」，分批记账（见 tickets.go）
 //   - points 每次消耗若干积分（活动配置，可设每日上限）
+//
+// 扣除顺序只有一条：今日免费 → 赠送的次数 → 兑换的次数 → 积分（ConsumptionOrder）。客户端指定 source 时
+// 它只是「最多用到这一档」，排在它前面、更便宜的还有剩就先用那个，免费次数永远先扣。
 //
 // 「视频抽奖」不是第四种来源：活动指定一个激励广告场景，那个场景发的是抽奖次数，
 // 广告看完、两方确认之后次数进 bonus，客户端再用 bonus 抽。看没看完由广告平台的服务端回调说了算。
@@ -236,10 +239,12 @@ type Draw struct {
 	PrizeName    string `json:"prizeName"`
 	PrizeKind    string `json:"prizeKind"`
 	// RewardType 用户端：奖品的真实类型（PrizeKind 对老客户端按 ClientKind 映射过）
-	RewardType string         `json:"rewardType,omitempty"`
-	Reward     Reward         `json:"reward"`
-	Position   int            `json:"position"`
-	Source     string         `json:"source"`
+	RewardType string `json:"rewardType,omitempty"`
+	Reward     Reward `json:"reward"`
+	Position   int    `json:"position"`
+	Source     string `json:"source"`
+	// Ticket source = bonus 时用的是哪一批次数（来源、是否兑换所得）
+	Ticket     *DrawTicket    `json:"ticket,omitempty"`
 	PointsCost int64          `json:"pointsCost,omitempty"`
 	Pity       bool           `json:"pity,omitempty"`
 	Status     string         `json:"status"`
@@ -287,7 +292,7 @@ type DrawInput struct {
 	AppID      int64
 	UserID     int64
 	ActivityID int64
-	// Source 指定用哪一种次数；为空时按 free → bonus → points 的顺序自动选
+	// Source 最多用到哪一种次数；为空时不设上限。两种情况都按 free → bonus → points 的顺序取第一个可用的
 	Source    string
 	RequestID string
 	DeviceID  string
@@ -319,17 +324,21 @@ type UserFacts struct {
 	FreeUsedToday   int
 	PointsUsedToday int
 	Bonus           int64
-	Integral        int64
-	MissStreak      int
-	TotalDraws      int64
+	// BonusPurchased Bonus 里用积分或钱换来的那部分（排在赠送的之后用）
+	BonusPurchased int64
+	Integral       int64
+	MissStreak     int
+	TotalDraws     int64
 }
 
 // Chances 一个人在一个活动里现在能抽几次。
 type Chances struct {
-	Free   FreeChances   `json:"free"`
-	Bonus  int64         `json:"bonus"`
-	Points PointsChances `json:"points"`
-	Video  VideoChances  `json:"video"`
+	Free  FreeChances `json:"free"`
+	Bonus int64       `json:"bonus"`
+	// Tickets Bonus 按档拆开：赠送的先用、兑换的后用
+	Tickets TicketBalance `json:"tickets"`
+	Points  PointsChances `json:"points"`
+	Video   VideoChances  `json:"video"`
 	// Next 「点一下抽奖」会用哪一种次数，空表示没有可用次数（客户端引导去看视频或明天再来）
 	Next string `json:"next"`
 }

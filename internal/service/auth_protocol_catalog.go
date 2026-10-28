@@ -205,16 +205,19 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsStoreRedemptions", Method: "GET", Path: "/points/store/redemptions", Auth: true, Summary: "我的兑换记录"},
 	// 抽奖：抽中什么只由服务端决定并在同一个事务里到账，客户端只说用哪一种次数抽一次。
 	// 次数三种来源：每日免费（free）、抽奖次数余额（bonus，看激励广告 / 卡密 / 积分商城等发放）、积分（points）。
+	// 扣除顺序只有一条：今日免费 → 赠送的次数 → 兑换的次数 → 积分；source 只是「最多用到这一档」，免费永远先扣。
 	// 视频抽奖 = 活动页 chances.video 给出的激励广告场景：按激励广告流程看完并上报，到账的是抽奖次数，再用 bonus 抽。
 	{Key: "lotteryActivities", Method: "GET", Path: "/lottery", Auth: true,
 		Summary: "进行中的抽奖活动（没有时为空列表，入口应当隐藏）"},
 	{Key: "lotteryState", Method: "GET", Path: "/lottery/activities/{activityId}", Auth: true,
 		Summary: "抽奖活动页：奖品与公示概率、我的各种次数（含视频抽奖的广告场景）、保底进度"},
 	{Key: "lotteryDraw", Method: "POST", Path: "/lottery/activities/{activityId}/draw", Auth: true,
-		Summary: "抽一次（source: free / bonus / points，留空自动选；requestId 幂等）；返回结果与抽完后的次数"},
+		Summary: "抽一次（source: free / bonus / points 为最多用到哪一档，留空不设上限，都先扣免费；requestId 幂等）；返回结果与抽完后的次数"},
 	{Key: "lotteryDrawBatch", Method: "POST", Path: "/lottery/activities/{activityId}/draw/batch", Auth: true,
 		Summary: "连抽（十连抽，count 1–10）：逐次抽、逐次到账；中途次数用完时停下并返回已抽到的（stopped 写明原因）"},
 	{Key: "lotteryDraws", Method: "GET", Path: "/lottery/draws", Auth: true, Summary: "我的抽奖记录（activityId 可选）"},
+	{Key: "lotteryTickets", Method: "GET", Path: "/lottery/tickets", Auth: true,
+		Summary: "我的抽奖次数：余额、赠送与兑换两档、还有剩余的批次（按使用顺序）与次数流水（page / limit）"},
 	// 邀请：未开启时 /invite 回 enabled=false（不报错），入口整个隐藏。注册表单上的邀请码字段由
 	// /config 的 auth.invite 决定，填了的码随 /auth/register 的 inviteCode 一起提交。
 	{Key: "invite", Method: "GET", Path: "/invite", Auth: true,

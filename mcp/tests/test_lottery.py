@@ -98,3 +98,20 @@ async def test_draws_and_fulfill(backend, call):
     assert backend.last().query == {"page": "1", "limit": "20"}
     await call("lottery_fulfill", {"app": "demo", "draw_id": 8, "note": "兑换码 ABC"})
     assert (backend.last().method, backend.last().path, backend.last().json) == ("POST", f"{BASE}/draws/8/fulfill", {"note": "兑换码 ABC"})
+
+
+async def test_tickets(backend, call, call_error):
+    await call("lottery_tickets", {"app": "demo"})
+    assert backend.last().path == f"{BASE}/tickets"
+    await call("lottery_tickets", {"app": "demo", "user_id": 7})
+    assert backend.last().path == f"{BASE}/tickets/users/7"
+    await call("lottery_ticket_accounts", {"app": "demo", "keyword": "fay"})
+    assert backend.last().path == f"{BASE}/tickets/accounts" and backend.last().query["keyword"] == "fay"
+    await call("lottery_ticket_ledger", {"app": "demo", "user_id": 7, "kind": "consume"})
+    assert backend.last().query["userId"] == "7" and backend.last().query["kind"] == "consume"
+    await call("lottery_adjust_tickets", {"app": "demo", "user_id": 7, "amount": -2, "reason": "多发"})
+    req = backend.last()
+    assert (req.method, req.path) == ("POST", f"{BASE}/tickets/users/7/adjust")
+    assert req.json == {"amount": -2, "reason": "多发"}
+    await call_error("lottery_adjust_tickets", {"app": "demo", "user_id": 7, "amount": 0, "reason": "x"})
+

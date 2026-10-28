@@ -211,6 +211,11 @@ ON CONFLICT (appid, user_id) DO UPDATE SET balance = lottery_draw_grants.balance
 	if _, err := lottery.UpdateActivity(ctx, activity.ID, main); err != nil {
 		t.Fatal(err)
 	}
+	// 指定积分只是「最多用到积分」：今天的免费次数还在时先扣免费
+	if freeFirst := mustDraw(bob, activity.ID, lotterydomain.SourcePoints, ""); freeFirst.Draw.Source != lotterydomain.SourceFree {
+		t.Fatalf("还有免费次数时指定积分也先扣免费，得到 %s", freeFirst.Draw.Source)
+	}
+	setIntegral(bob, 0)
 	if _, err := draw(bob, activity.ID, lotterydomain.SourcePoints, ""); errCode(err) != errCodePointsInsufficient {
 		t.Fatalf("积分不足应报 40307，得到 %v", err)
 	}
@@ -391,8 +396,8 @@ ON CONFLICT (appid, user_id) DO UPDATE SET balance = lottery_draw_grants.balance
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Summary.TotalDraws != 4 || stats.Summary.PointsSpent != 20 || len(stats.Trend) != 7 || len(stats.Prizes) != 8 {
-		t.Fatalf("主活动共 4 次（免费 1、视频 1、积分 2），得到 %+v", stats.Summary)
+	if stats.Summary.TotalDraws != 5 || stats.Summary.PointsSpent != 20 || len(stats.Trend) != 7 || len(stats.Prizes) != 8 {
+		t.Fatalf("主活动共 5 次（免费 2、视频 1、积分 2），得到 %+v", stats.Summary)
 	}
 
 	testLotteryLegacyMigration(t, ctx, pool, appID, alice)
@@ -647,6 +652,9 @@ VALUES ($1, $2, $3, '{"name":"5积分"}', 'awarded'), ($1, $2, $4, '{"name":"马
 		}
 		if _, err := pool.Exec(ctx, read("000130_lottery_perks.up.sql")); err != nil {
 			t.Fatalf("round %d 000130: %v", round+1, err)
+		}
+		if _, err := pool.Exec(ctx, read("000136_lottery_draw_lots.up.sql")); err != nil {
+			t.Fatalf("round %d 000136: %v", round+1, err)
 		}
 	}
 	pg := pgrepo.New(pool)

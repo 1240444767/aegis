@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"aegis/internal/domain/invite"
+	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
@@ -892,7 +893,10 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case pointstore.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginInvite,
+				Ref: ref, Title: grant.Title,
+			})
 			if err != nil {
 				return nil, err
 			}

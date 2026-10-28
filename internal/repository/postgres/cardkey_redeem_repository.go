@@ -11,6 +11,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	cardkeydomain "aegis/internal/domain/cardkey"
+	lotterydomain "aegis/internal/domain/lottery"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
 )
@@ -543,7 +544,11 @@ func (r *Repository) grantCardRewardsTx(ctx context.Context, tx pgx.Tx, appID in
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case cardkeydomain.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginCardKey,
+				// 一卡一用的码是卖给一个人的（激活码、礼品卡），排在赠送的之后用；活动码是群发福利，算赠送
+				Paid: card.MaxUses <= 1, Ref: card.Code, Title: source,
+			})
 			if err != nil {
 				return nil, err
 			}

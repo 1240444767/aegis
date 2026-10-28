@@ -852,7 +852,8 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
      * 抽一次。抽中什么由服务端决定并在同一个事务里到账，返回 `draw`（含 `position`，奖盘上的格子）、
      * 抽完后的 `chances` 与 `pity`。
      *
-     * [source] 为 `free` / `bonus` / `points`，为空时按 free → bonus → points 自动选。
+     * [source] 为 `free` / `bonus` / `points`，是「最多用到这一档」：为空时不设上限，两种情况都按
+     * 今日免费 → 赠送的次数 → 兑换的次数 → 积分 取第一个可用的，免费次数永远先扣。实际用的在 `draw.source` / `draw.ticket`。
      * [requestId] 由调用方生成（建议 UUID），网络重试时带同一个值：服务端原样返回第一次的结果
      * （`replayed = true`），不会多抽一次。失败码：40402 活动不存在 / 40923 未开始 / 40924 已结束 /
      * 42913 免费次数用完 / 42914 积分抽奖今日已满 / 42915 没有可用次数 / 40307 积分不足 /
@@ -898,6 +899,17 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
         if (activityId != null) query["activityId"] = activityId.toString()
         return client.call("GET", "/lottery/draws", query = query, requireAuth = true)
     }
+
+    /**
+     * 我的抽奖次数：`account`（余额 `balance`、`tickets.gift` 赠送的 / `tickets.purchased` 兑换的、累计、
+     * 还有剩余的批次 `lots`，排在前面的先用）与次数流水 `ledger`（分页，新的在前）。
+     *
+     * 扣除顺序只有一条：今日免费 → 赠送的次数 → 兑换的次数 → 积分（`account.order`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun lotteryTickets(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/lottery/tickets", query = pageQuery(page, limit), requireAuth = true)
 
     /**
      * 邀请页：我的邀请码（`code`，不满足邀请条件时为空、原因在 `inviteMessage`）、分享文案与链接、

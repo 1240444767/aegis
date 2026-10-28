@@ -118,7 +118,7 @@ func scanLotteryPrize(row interface{ Scan(dest ...any) error }) (*lotterydomain.
 const lotteryDrawColumns = `d.id, d.draw_no, d.appid, d.activity_id, COALESCE(a.name, ''), d.user_id, COALESCE(u.account, ''),
 COALESCE(up.nickname, ''), d.prize_id, d.prize_name, d.prize_kind, d.reward, d.position, d.source, d.points_cost, d.pity,
 d.status, d.results, d.conversion, COALESCE(d.note, ''), COALESCE(d.handled_by, ''), d.handled_at, COALESCE(d.request_id, ''),
-COALESCE(d.device_id, ''), COALESCE(d.client_ip, ''), d.trace, d.created_at`
+COALESCE(d.device_id, ''), COALESCE(d.client_ip, ''), d.trace, d.created_at, d.ticket_lot_id, d.ticket_origin, d.ticket_paid`
 
 const lotteryDrawJoins = `FROM lottery_draws d
 LEFT JOIN lottery_activities a ON a.id = d.activity_id
@@ -128,14 +128,29 @@ LEFT JOIN user_profiles up ON up.user_id = d.user_id`
 func scanLotteryDraw(row interface{ Scan(dest ...any) error }) (*lotterydomain.Draw, error) {
 	var item lotterydomain.Draw
 	var reward, results, conversion, trace []byte
+	var ticketLot *int64
+	var ticketOrigin string
+	var ticketPaid bool
 	if err := row.Scan(&item.ID, &item.DrawNo, &item.AppID, &item.ActivityID, &item.ActivityName, &item.UserID,
 		&item.Account, &item.Nickname, &item.PrizeID, &item.PrizeName, &item.PrizeKind, &reward, &item.Position,
 		&item.Source, &item.PointsCost, &item.Pity, &item.Status, &results, &conversion, &item.Note, &item.HandledBy,
-		&item.HandledAt, &item.RequestID, &item.DeviceID, &item.ClientIP, &trace, &item.CreatedAt); err != nil {
+		&item.HandledAt, &item.RequestID, &item.DeviceID, &item.ClientIP, &trace, &item.CreatedAt,
+		&ticketLot, &ticketOrigin, &ticketPaid); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrLotteryDrawNotFound
 		}
 		return nil, err
+	}
+	if item.Source == lotterydomain.SourceBonus {
+		// 分批记账之前的记录没有批次：只知道用的是次数
+		origin := ticketOrigin
+		if origin == "" {
+			origin = lotterydomain.TicketOriginLegacy
+		}
+		item.Ticket = &lotterydomain.DrawTicket{Origin: origin, OriginLabel: lotterydomain.TicketOriginLabel(origin), Paid: ticketPaid}
+		if ticketLot != nil {
+			item.Ticket.LotID = *ticketLot
+		}
 	}
 	if err := json.Unmarshal(reward, &item.Reward); err != nil || item.Reward.Type == "" {
 		item.Reward = lotterydomain.Reward{Type: item.PrizeKind}
@@ -444,11 +459,8 @@ FROM lottery_draws WHERE activity_id = $1 AND user_id = $2 AND created_at >= $3`
 		activityID, userID, dayStart).Scan(&facts.FreeUsedToday, &facts.PointsUsedToday); err != nil {
 		return facts, err
 	}
-	grantSQL := `SELECT balance FROM lottery_draw_grants WHERE appid = $1 AND user_id = $2`
-	if lock {
-		grantSQL += ` FOR UPDATE`
-	}
-	if err := q.QueryRow(ctx, grantSQL, appID, userID).Scan(&facts.Bonus); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	var err error
+	if facts.Bonus, facts.BonusPurchased, err = lotteryTicketFactsQ(ctx, q, appID, userID, lock); err != nil {
 		return facts, err
 	}
 	if err := q.QueryRow(ctx, `SELECT integral FROM users WHERE id = $1 AND appid = $2`, userID, appID).
@@ -637,15 +649,16 @@ ON CONFLICT (activity_id, user_id) DO NOTHING`, activity.ID, input.UserID); err 
 		return nil, lotteryUnavailable(reason)
 	}
 
+	drawNo := lotteryDrawNo(now)
+	// 次数按使用顺序取一批：赠送的先于兑换的，同一档先到先用（lotterydomain.TicketConsumeOrder）
+	var ticket lotteryTicketUse
 	if source == lotterydomain.SourceBonus {
-		tag, err := tx.Exec(ctx, `UPDATE lottery_draw_grants
-SET balance = balance - 1, total_consumed = total_consumed + 1, updated_at = NOW()
-WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
+		ticket, err = consumeLotteryTicketTx(ctx, tx, input.AppID, input.UserID, drawNo, "抽奖 "+activity.Name)
+		if errors.Is(err, ErrLotteryTicketsInsufficient) {
+			return nil, lotteryUnavailable(lotterydomain.ReasonBonusExhausted)
+		}
 		if err != nil {
 			return nil, err
-		}
-		if tag.RowsAffected() == 0 {
-			return nil, lotteryUnavailable(lotterydomain.ReasonBonusExhausted)
 		}
 	}
 
@@ -716,15 +729,18 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	}
 	prizeID := prize.ID
 	var drawID int64
-	drawNo := lotteryDrawNo(now)
+	var ticketLot *int64
+	if ticket.LotID > 0 {
+		ticketLot = &ticket.LotID
+	}
 	if err := tx.QueryRow(ctx, `INSERT INTO lottery_draws
 (draw_no, appid, activity_id, user_id, prize_id, prize_name, prize_kind, reward, position, source, points_cost, pity,
- status, request_id, device_id, client_ip, user_agent, created_at, trace)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+ status, request_id, device_id, client_ip, user_agent, created_at, trace, ticket_lot_id, ticket_origin, ticket_paid)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22) RETURNING id`,
 		drawNo, input.AppID, activity.ID, input.UserID, prizeID, truncateColumn(prize.Name, 64), prize.Kind, reward,
 		prize.Position, source, pointsCost, pity, status, nullableString(input.RequestID),
 		nullableString(truncateColumn(input.DeviceID, 128)), nullableString(truncateColumn(input.ClientIP, 64)),
-		nullableString(truncateColumn(input.UserAgent, 256)), now, trace).Scan(&drawID); err != nil {
+		nullableString(truncateColumn(input.UserAgent, 256)), now, trace, ticketLot, ticket.Origin, ticket.Paid).Scan(&drawID); err != nil {
 		return nil, err
 	}
 
@@ -1023,7 +1039,10 @@ func (r *Repository) grantLotteryPrizeTx(ctx context.Context, tx pgx.Tx, grant l
 		result.ExpireAt = &expires
 
 	case lotterydomain.KindLotteryDraws:
-		balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+		balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+			AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginLottery,
+			Ref: grant.DrawNo, Title: strings.TrimSpace(grant.Title + " " + grant.Source),
+		})
 		if err != nil {
 			return nil, err
 		}

@@ -1450,6 +1450,41 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/accounts",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/ledger",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/users/:userId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/users/:userId/adjust",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune",
     "permission": "app:read",
     "appScoped": true,

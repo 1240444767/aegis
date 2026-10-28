@@ -1,4 +1,4 @@
-"""抽奖：表单目录、活动与奖品（新建、修改、启停、删除）、策略模拟、统计与出奖审计、抽奖记录与人工奖品发放。
+"""抽奖：表单目录、活动与奖品（新建、修改、启停、删除）、策略模拟、统计与出奖审计、抽奖记录与人工奖品发放、抽奖次数。
 
 权限：读需要 app:read，其余（含模拟）需要 app:write。
 """
@@ -28,6 +28,11 @@ ACTIVITY_AUDIT = GET("/api/admin/apps/:appkey/lottery/activities/:activityId/aud
 SIMULATE = POST("/api/admin/apps/:appkey/lottery/simulate")
 DRAWS = GET("/api/admin/apps/:appkey/lottery/draws")
 DRAW_FULFILL = POST("/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill")
+TICKETS = GET("/api/admin/apps/:appkey/lottery/tickets")
+TICKET_ACCOUNTS = GET("/api/admin/apps/:appkey/lottery/tickets/accounts")
+TICKET_LEDGER = GET("/api/admin/apps/:appkey/lottery/tickets/ledger")
+TICKET_ACCOUNT = GET("/api/admin/apps/:appkey/lottery/tickets/users/:userId")
+TICKET_ADJUST = POST("/api/admin/apps/:appkey/lottery/tickets/users/:userId/adjust")
 
 ActivityID = Annotated[int, Field(gt=0, description="抽奖活动 ID（lottery_activities 结果里的 id）")]
 Days = Annotated[int, Field(ge=1, le=90, description="统计最近 N 天")]
@@ -307,3 +312,60 @@ async def fulfill(
 ) -> Any:
     """把一条人工发放的奖品标记为已发放，并给用户发站内信（含 note）。消息发出后无法撤回，执行前先向用户确认 note 内容。"""
     return await DRAW_FULFILL(appkey=app, drawId=draw_id, body=body(note=note))
+
+
+@server.tool(**READ("lottery"))
+async def tickets(
+    app: AppRef,
+    user_id: Annotated[int | None, Field(gt=0, description="查这个用户的次数账户与批次（管理端用户 ID）；留空为全应用总览")] = None,
+) -> Any:
+    """抽奖次数：留空 user_id 时为总览（持有人数、未用次数分赠送 / 兑换两档、今天发放与使用、各来源累计与剩余）；
+    给了 user_id 时为这个人的余额、两档拆分、累计与还有剩余的批次（排在前面的先用）。
+
+    扣除顺序：今日免费次数 → 赠送的抽奖次数（先到先用）→ 兑换的抽奖次数（先到先用）→ 积分。
+    """
+    if user_id:
+        return await TICKET_ACCOUNT(appkey=app, userId=user_id)
+    return await TICKETS(appkey=app)
+
+
+@server.tool(**READ("lottery"))
+async def ticket_accounts(
+    app: AppRef,
+    keyword: Annotated[str, Field(description="账号、昵称或用户 ID")] = "",
+    page: Page = 1,
+    limit: Limit = 20,
+) -> Any:
+    """有抽奖次数账户的用户（余额多的在前），含赠送 / 兑换两档与累计发放、使用。"""
+    return await TICKET_ACCOUNTS(appkey=app, query=q(keyword=keyword, page=page, limit=limit))
+
+
+@server.tool(**READ("lottery"))
+async def ticket_ledger(
+    app: AppRef,
+    user_id: Annotated[int | None, Field(gt=0, description="只看这个用户（管理端用户 ID）")] = None,
+    kind: Annotated[Literal["", "grant", "consume", "deduct"], Field(description="grant 获得 / consume 抽奖使用 / deduct 系统扣减，留空为全部")] = "",
+    origin: Annotated[Literal["", "rewarded_ad", "points_store", "cardkey", "invite", "leaderboard", "lottery", "admin", "legacy"],
+                      Field(description="次数来源，留空为全部")] = "",
+    keyword: Annotated[str, Field(description="账号、昵称、单号或说明")] = "",
+    page: Page = 1,
+    limit: Limit = 20,
+) -> Any:
+    """抽奖次数流水（新的在前）：每一次发放、抽奖使用、扣减，带变动后余额与来源单号。"""
+    return await TICKET_LEDGER(appkey=app, query=q(
+        userId=user_id, kind=kind, origin=origin, keyword=keyword, page=page, limit=limit,
+    ))
+
+
+@server.tool(**WRITE("lottery"))
+async def adjust_tickets(
+    app: AppRef,
+    user_id: Annotated[int, Field(gt=0, description="管理端用户 ID")],
+    amount: Annotated[int, Field(ge=-10000, le=10000, description="正数为发放、负数为扣减（按扣除顺序先扣赠送的），不能为 0")],
+    reason: Annotated[str, Field(min_length=1, max_length=100, description="原因：发放时写进给用户的站内信")],
+    paid: Annotated[bool, Field(description="发放的次数按兑换所得记（排在赠送的之后用），用于补发用户买的次数")] = False,
+) -> Any:
+    """给一个用户发放或扣减抽奖次数，返回调整后的账户。发放会给用户发站内信，扣减不可撤回：执行前先向用户确认数量与原因。"""
+    if amount == 0:
+        raise ToolError("amount 不能为 0")
+    return await TICKET_ADJUST(appkey=app, userId=user_id, body=body(amount=amount, reason=reason, paid=paid or None))

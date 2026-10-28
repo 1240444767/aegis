@@ -71,8 +71,9 @@ func EvaluateChances(activity Activity, facts UserFacts, video VideoChances) Cha
 			Daily: activity.FreeDaily,
 			Used:  facts.FreeUsedToday,
 		},
-		Bonus: max(facts.Bonus, 0),
-		Video: video,
+		Bonus:   max(facts.Bonus, 0),
+		Tickets: SplitTickets(facts.Bonus, facts.BonusPurchased),
+		Video:   video,
 	}
 	chances.Free.Remaining = max(activity.FreeDaily-facts.FreeUsedToday, 0)
 
@@ -128,7 +129,11 @@ func CheckSource(chances Chances, source string) string {
 	return ReasonOK
 }
 
-// ResolveSource 客户端指定的来源（空为自动）落到具体哪一种次数。
+// ResolveSource 客户端指定的来源（空为不设上限）落到具体哪一种次数。
+//
+// 指定的来源是「最多用到这一档」而不是「必须用这一档」：按 free → bonus → points 走到它为止，取第一个可用的。
+// 客户端的活动页可能是过了零点、签到之前拉的，按它缓存的 next 传上来的 bonus / points 不能跳过已经可用的免费次数。
+// 走到指定的那一档仍不可用时，报那一档自己的原因（与只看那一档时相同）。
 func ResolveSource(chances Chances, requested string) (string, string) {
 	if requested == "" {
 		if chances.Next == "" {
@@ -136,8 +141,13 @@ func ResolveSource(chances Chances, requested string) (string, string) {
 		}
 		return chances.Next, ReasonOK
 	}
-	if reason := CheckSource(chances, requested); reason != ReasonOK {
-		return "", reason
+	for _, source := range Sources() {
+		if CheckSource(chances, source) == ReasonOK {
+			return source, ReasonOK
+		}
+		if source == requested {
+			return "", CheckSource(chances, requested)
+		}
 	}
-	return requested, ReasonOK
+	return "", ReasonUnknownSource
 }

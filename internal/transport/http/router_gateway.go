@@ -205,6 +205,7 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/lottery/activities/:activityId/draw", h.AppLotteryDraw)
 		appGatewayAuthed.POST("/lottery/activities/:activityId/draw/batch", h.AppLotteryDrawBatch)
 		appGatewayAuthed.GET("/lottery/draws", h.AppLotteryDraws)
+		appGatewayAuthed.GET("/lottery/tickets", h.AppLotteryTickets)
 		// 邀请：邀请页 / 我邀请的人 / 注册后限时补填 / 换我的邀请码
 		appGatewayAuthed.GET("/invite", h.AppInviteCenter)
 		appGatewayAuthed.GET("/invite/invitees", h.AppInvitees)
