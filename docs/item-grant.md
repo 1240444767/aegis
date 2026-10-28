@@ -31,6 +31,9 @@
 ## 画布
 
 形状与 React Flow 相同（`nodes[].id/type/position/data`、`edges[].source/sourceHandle/target`），原样保存原样取回。
+控制台的画布是 Flowgram 自由布局编辑器（`item-grant-workspace.tsx`），载入与保存时在 `item-grant-graph.ts` 里换算：
+节点位置左上角 ↔ 顶边中点（卡片宽 280）、`sourceHandle` ↔ `sourcePortID`（没写端口的旧连线补成目录里的第一个输出端口），
+连线标识按 `源:端口->目标` 生成，校验问题的 `edgeId` 据此定位回画布上的线。
 
 | 节点 | 端口 | 作用 |
 |---|---|---|

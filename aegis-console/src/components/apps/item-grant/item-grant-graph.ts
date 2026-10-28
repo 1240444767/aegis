@@ -1,67 +1,97 @@
-import dagre from "dagre";
-import { MarkerType, type Edge, type EdgeMarker, type Node, type Viewport } from "@xyflow/react";
 import type { ItemGrantCatalog, ItemGrantGraph, ItemGrantItem, ItemGrantNodeType } from "@/lib/api/item-grant";
 
 /**
- * 画布模型：后端的画布（nodes / edges / viewport）与 React Flow 的节点、连线之间的往返，
- * 新节点的默认配置、自动排版（dagre，从左到右）、连线合法性（不成环、不连回触发器）。
+ * 画布模型：后端的画布（nodes / edges，节点位置是左上角）与 Flowgram 文档（节点位置是顶边中点、
+ * 连线是 sourceNodeID / sourcePortID / targetNodeID）之间的往返，新节点的默认配置，连线合法性（不成环）。
  *
- * React Flow 节点的 `data` 就是后端节点的配置本身，运行期的叠加信息（问题、预演命中、追踪路径）
- * 不放进 data，而是走编辑器上下文 —— 否则撤销历史里会混进这些与配置无关的变化。
+ * Flowgram 节点的 `data` 就是后端节点的配置本身；运行期的叠加信息（问题、预演命中、追踪路径）
+ * 不放进 data，而是走编辑器上下文，否则撤销历史里会混进这些与配置无关的变化。
  */
 
 export type FlowNodeData = Record<string, unknown>;
-export type FlowNode = Node<FlowNodeData, ItemGrantNodeType>;
-export type FlowEdge = Edge;
 
-export const NODE_WIDTH = 264;
+/** Flowgram 文档的节点与连线（只取这里用到的字段）。 */
+export type CanvasNodeJSON = {
+  id: string;
+  type: string | number;
+  meta?: { position?: { x: number; y: number } };
+  data?: FlowNodeData;
+};
 
-/** 连线终点的箭头（载入的与新连的都带上） */
-export const EDGE_MARKER: EdgeMarker = { type: MarkerType.ArrowClosed, width: 16, height: 16 };
-const NODE_BASE_HEIGHT = 112;
+export type CanvasEdgeJSON = {
+  sourceNodeID: string;
+  targetNodeID: string;
+  sourcePortID?: string | number;
+  targetPortID?: string | number;
+};
 
-export function toFlow(graph?: ItemGrantGraph | null): { nodes: FlowNode[]; edges: FlowEdge[] } {
-  const nodes: FlowNode[] = (graph?.nodes ?? []).map((node) => ({
-    id: node.id,
-    type: node.type,
-    position: { x: node.position?.x ?? 0, y: node.position?.y ?? 0 },
-    data: { ...(node.data ?? {}) }
-  }));
-  const edges: FlowEdge[] = (graph?.edges ?? []).map((edge) => ({
-    id: edge.id || `${edge.source}:${edge.sourceHandle ?? ""}->${edge.target}`,
-    source: edge.source,
-    sourceHandle: edge.sourceHandle || null,
-    target: edge.target,
-    type: "grant",
-    markerEnd: EDGE_MARKER
-  }));
-  return { nodes, edges };
+export type CanvasJSON = { nodes: CanvasNodeJSON[]; edges: CanvasEdgeJSON[] };
+
+/** 节点卡片宽度：位置换算（左上角 ↔ 顶边中点）与排版都按它。 */
+export const NODE_WIDTH = 280;
+
+/** 没写端口的旧连线按目录里的第一个输出端口处理（与后端 defaultHandle 一致）。 */
+function defaultPort(type: string, catalog?: ItemGrantCatalog) {
+  return catalog?.nodes.find((spec) => spec.type === type)?.outputs[0]?.id ?? "next";
 }
 
-export function fromFlow(nodes: FlowNode[], edges: FlowEdge[], viewport?: Viewport): ItemGrantGraph {
+export function toCanvas(graph: ItemGrantGraph | null | undefined, catalog?: ItemGrantCatalog): CanvasJSON {
+  const nodes = graph?.nodes ?? [];
+  const typeOf = new Map(nodes.map((node) => [node.id, node.type]));
   return {
     nodes: nodes.map((node) => ({
       id: node.id,
-      type: node.type as ItemGrantNodeType,
-      position: { x: Math.round(node.position.x), y: Math.round(node.position.y) },
-      data: node.data
+      type: node.type,
+      meta: { position: { x: (node.position?.x ?? 0) + NODE_WIDTH / 2, y: node.position?.y ?? 0 } },
+      data: { ...(node.data ?? {}) }
     })),
-    edges: edges.map((edge) => ({
-      id: edge.id,
-      source: edge.source,
-      sourceHandle: edge.sourceHandle ?? undefined,
-      target: edge.target
-    })),
-    viewport: viewport ? { x: Math.round(viewport.x), y: Math.round(viewport.y), zoom: Number(viewport.zoom.toFixed(3)) } : undefined
+    edges: (graph?.edges ?? [])
+      .filter((edge) => typeOf.has(edge.source) && typeOf.has(edge.target))
+      .map((edge) => ({
+        sourceNodeID: edge.source,
+        sourcePortID: edge.sourceHandle || defaultPort(typeOf.get(edge.source) as string, catalog),
+        targetNodeID: edge.target
+      }))
   };
 }
 
-/** 只比较配置与结构（选中、拖动中、量出来的尺寸都不算改动）：撤销历史与「未保存」提示都用它。 */
-export function graphSignature(nodes: FlowNode[], edges: FlowEdge[]) {
-  return JSON.stringify([
-    nodes.map((node) => [node.id, node.type, Math.round(node.position.x), Math.round(node.position.y), node.data]),
-    edges.map((edge) => [edge.id, edge.source, edge.sourceHandle ?? "", edge.target])
-  ]);
+/** 连线标识由端点与端口拼成：同一端口到同一节点只会有一条线，校验问题按它定位回画布上的线。 */
+export function edgeId(source: string, port: string, target: string) {
+  return `${source}:${port}->${target}`;
+}
+
+export function fromCanvas(json: CanvasJSON): ItemGrantGraph {
+  return {
+    nodes: json.nodes.map((node) => ({
+      id: node.id,
+      type: node.type as ItemGrantNodeType,
+      position: {
+        x: Math.round((node.meta?.position?.x ?? 0) - NODE_WIDTH / 2),
+        y: Math.round(node.meta?.position?.y ?? 0)
+      },
+      data: { ...(node.data ?? {}) }
+    })),
+    edges: json.edges
+      .filter((edge) => edge.sourceNodeID && edge.targetNodeID)
+      .map((edge) => {
+        const port = edge.sourcePortID === undefined || edge.sourcePortID === "" ? "" : String(edge.sourcePortID);
+        return {
+          id: edgeId(edge.sourceNodeID, port, edge.targetNodeID),
+          source: edge.sourceNodeID,
+          sourceHandle: port || undefined,
+          target: edge.targetNodeID
+        };
+      })
+  };
+}
+
+/** 只比较配置与结构（与顺序无关）：「未保存」提示与预演失效都用它。 */
+export function graphSignature(graph: ItemGrantGraph) {
+  const nodes = graph.nodes
+    .map((node) => [node.id, node.type, node.position.x, node.position.y, node.data] as const)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  const edges = graph.edges.map((edge) => edge.id).sort();
+  return JSON.stringify([nodes, edges]);
 }
 
 let counter = 0;
@@ -136,40 +166,8 @@ export function defaultNodeData(type: ItemGrantNodeType, catalog?: ItemGrantCata
   }
 }
 
-/** 估算节点高度（排版用）：摘要行数与输出端口数取大者。 */
-function estimateHeight(node: FlowNode) {
-  const measured = node.measured?.height;
-  if (measured) return measured;
-  const data = node.data as Record<string, unknown>;
-  const rows = Array.isArray(data.items) ? data.items.length : Array.isArray(data.options) ? data.options.length + 1 : 1;
-  const outputs = Array.isArray(data.branches) ? data.branches.length : 2;
-  return NODE_BASE_HEIGHT + Math.max(rows, outputs) * 18;
-}
-
-/** 自动排版：dagre 从左到右分层，端口顺序靠 sourceHandle 在同一层里排开。 */
-export function autoLayout(nodes: FlowNode[], edges: FlowEdge[]): FlowNode[] {
-  const graph = new dagre.graphlib.Graph();
-  graph.setGraph({ rankdir: "LR", nodesep: 36, ranksep: 96, marginx: 24, marginy: 24 });
-  graph.setDefaultEdgeLabel(() => ({}));
-  for (const node of nodes) {
-    graph.setNode(node.id, { width: node.measured?.width ?? NODE_WIDTH, height: estimateHeight(node) });
-  }
-  for (const edge of edges) {
-    if (graph.hasNode(edge.source) && graph.hasNode(edge.target)) graph.setEdge(edge.source, edge.target);
-  }
-  dagre.layout(graph);
-  return nodes.map((node) => {
-    const position = graph.node(node.id);
-    if (!position) return node;
-    return {
-      ...node,
-      position: { x: position.x - position.width / 2, y: position.y - position.height / 2 }
-    };
-  });
-}
-
 /** 从 target 出发沿连线能不能走回 source（连上这条线会不会成环）。 */
-export function wouldCycle(edges: FlowEdge[], source: string, target: string) {
+export function wouldCycle(edges: Array<{ source: string; target: string }>, source: string, target: string) {
   if (source === target) return true;
   const next = new Map<string, string[]>();
   for (const edge of edges) next.set(edge.source, [...(next.get(edge.source) ?? []), edge.target]);

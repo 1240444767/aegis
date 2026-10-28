@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useNodeRender, type WorkflowNodeEntity } from "@flowgram.ai/free-layout-editor";
 import { Copy, Plus, Trash2, X } from "lucide-react";
 import {
   Collapsible,
@@ -17,7 +18,6 @@ import {
   parseMinute,
   rulesExpr
 } from "@/components/apps/item-grant/item-grant-meta";
-import { useEditor } from "@/components/apps/item-grant/item-grant-store";
 import { ToneIcon } from "@/components/users/detail/kit";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +46,7 @@ import { cn } from "@/lib/utils";
 
 /**
  * 节点检查器：选中一个节点时右侧显示它的配置表单。每种节点一张表单，字段与取值范围来自后端目录。
- * 改动立刻写回画布状态（撤销历史把连续输入合成一步）。
+ * 改动立刻写回节点表单（Flowgram 的撤销历史记录每次变更）。
  */
 
 const CRON_PRESETS = [
@@ -58,31 +58,31 @@ const CRON_PRESETS = [
 ];
 
 export function NodeInspector({
-  nodeId,
+  node,
   catalog,
-  issues
+  issues,
+  triggerEvent,
+  onDuplicate,
+  onDelete,
+  onRemoveBranch
 }: {
-  nodeId: string;
+  node: WorkflowNodeEntity;
   catalog: ItemGrantCatalog;
   issues: ItemGrantIssue[];
+  /** 触发器是事件触发时的事件键（条件里可以引用事件字段） */
+  triggerEvent?: string;
+  onDuplicate: () => void;
+  onDelete: () => void;
+  /** 随机分流删分支时，先删掉从这个分支端口连出去的线 */
+  onRemoveBranch: (branchId: string) => void;
 }) {
-  const node = useEditor((state) => state.nodes.find((candidate) => candidate.id === nodeId));
-  const updateData = useEditor((state) => state.updateData);
-  const replaceData = useEditor((state) => state.replaceData);
-  const removeNodes = useEditor((state) => state.removeNodes);
-  const duplicate = useEditor((state) => state.duplicate);
-  const dropHandleEdges = useEditor((state) => state.dropHandleEdges);
-  const triggerEvent = useEditor((state) => {
-    const trigger = state.nodes.find((candidate) => candidate.type === "trigger");
-    return trigger ? ((trigger.data as ItemGrantTriggerData).kind === "event" ? (trigger.data as ItemGrantTriggerData).event : undefined) : undefined;
-  });
-
-  if (!node) return null;
-  const type = node.type as ItemGrantNodeType;
+  // data 是节点表单的当前值；updateData 整体写回（Flowgram 的撤销历史记录这次变更）
+  const { data: rawData, updateData } = useNodeRender(node);
+  const type = node.flowNodeType as ItemGrantNodeType;
   const spec = catalog.nodes.find((candidate) => candidate.type === type);
   const visual = NODE_VISUAL[type];
-  const data = node.data as Record<string, unknown>;
-  const patch = (next: Record<string, unknown>) => updateData(nodeId, next);
+  const data = (rawData ?? {}) as Record<string, unknown>;
+  const patch = (next: Record<string, unknown>) => updateData({ ...data, ...next });
 
   return (
     <div className="space-y-5">
@@ -94,7 +94,7 @@ export function NodeInspector({
         </div>
         <div className="flex shrink-0 gap-1">
           {type !== "trigger" ? (
-            <Button size="icon" variant="ghost" className="size-7" onClick={() => duplicate([nodeId])} aria-label="复制节点">
+            <Button size="icon" variant="ghost" className="size-7" onClick={onDuplicate} aria-label="复制节点">
               <Copy className="size-3.5" />
             </Button>
           ) : null}
@@ -102,7 +102,7 @@ export function NodeInspector({
             size="icon"
             variant="ghost"
             className="size-7 hover:text-destructive"
-            onClick={() => removeNodes([nodeId])}
+            onClick={onDelete}
             aria-label="删除节点"
           >
             <Trash2 className="size-3.5" />
@@ -161,7 +161,7 @@ export function NodeInspector({
         <SplitForm
           data={data as ItemGrantSplitData}
           patch={patch}
-          onRemoveBranch={(branchId) => dropHandleEdges(nodeId, [branchId])}
+          onRemoveBranch={onRemoveBranch}
         />
       ) : null}
       {type === "limit" ? <LimitForm data={data as ItemGrantLimitData} catalog={catalog} patch={patch} /> : null}
@@ -170,7 +170,7 @@ export function NodeInspector({
           <ItemListEditor
             catalog={catalog}
             items={(data as ItemGrantGrantData).items ?? []}
-            onChange={(items) => replaceData(nodeId, { ...data, items })}
+            onChange={(items) => updateData({ ...data, items })}
           />
         </FieldGroup>
       ) : null}

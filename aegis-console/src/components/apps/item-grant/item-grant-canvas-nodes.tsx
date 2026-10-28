@@ -1,44 +1,54 @@
 "use client";
 
-import { createContext, memo, useContext } from "react";
+import { createContext, useContext, useEffect } from "react";
 import {
-  BaseEdge,
-  EdgeLabelRenderer,
-  getSmoothStepPath,
-  Handle,
-  Position,
-  useReactFlow,
-  type EdgeProps,
-  type NodeProps
-} from "@xyflow/react";
-import { AlertTriangle, CircleAlert, X } from "lucide-react";
+  WorkflowNodePortsData,
+  WorkflowPortRender,
+  useNodeRender,
+  type WorkflowNodeEntity,
+  type WorkflowPortEntity
+} from "@flowgram.ai/free-layout-editor";
+import { AlertTriangle, CircleAlert, Copy, Footprints, Trash2 } from "lucide-react";
+import { NODE_WIDTH } from "@/components/apps/item-grant/item-grant-graph";
 import {
   HANDLE_TONE,
+  ITEM_ICON,
   NODE_VISUAL,
+  describeItem,
   nodeOutputs,
   summarizeNode
 } from "@/components/apps/item-grant/item-grant-meta";
-import type { FlowNode } from "@/components/apps/item-grant/item-grant-graph";
 import { ToneIcon } from "@/components/users/detail/kit";
-import type { ItemGrantCatalog, ItemGrantEstimate, ItemGrantIssue, ItemGrantNodeType, ItemGrantOutcome } from "@/lib/api/item-grant";
+import type {
+  ItemGrantCatalog,
+  ItemGrantEstimate,
+  ItemGrantGrantData,
+  ItemGrantIssue,
+  ItemGrantNodeType,
+  ItemGrantOutcome
+} from "@/lib/api/item-grant";
 import { cn } from "@/lib/utils";
 
 /**
- * 画布上的节点与连线。
+ * 画布上的节点卡片（Flowgram 的 renderDefaultNode）。
  *
- * 节点：左侧一个输入端口，右侧按目录列出输出端口（带名称与语义色），正文是配置的一句话摘要；
- * 叠加层来自编辑器上下文 —— 校验问题（红 / 黄角标）、抽样预演的到达人数、单人追踪走过的路径（其余节点变淡）。
+ * 左侧一个输入端口（触发器没有），右侧按目录列出输出端口：每个端口是卡片里带 `data-port-id` 的元素，
+ * Flowgram 按它的位置算连线端点（useDynamicPort），随机分流增删分支时端口跟着变。
+ * 叠加层来自编辑器上下文：校验问题（红 / 黄角标）、抽样预演的到达人数、单人追踪走过的路径（其余节点变淡）。
  */
 
 export type CanvasOverlay = {
   catalog?: ItemGrantCatalog;
   issues: Map<string, ItemGrantIssue[]>;
-  edgeIssues: Set<string>;
   estimate?: ItemGrantEstimate | null;
   trace?: ItemGrantOutcome | null;
+  /** 点输出端口：在点击处弹出「接一个节点」 */
+  onPortClick?: (port: WorkflowPortEntity, event: React.MouseEvent) => void;
+  onDuplicate?: (node: WorkflowNodeEntity) => void;
+  onDelete?: (node: WorkflowNodeEntity) => void;
 };
 
-export const CanvasOverlayContext = createContext<CanvasOverlay>({ issues: new Map(), edgeIssues: new Set() });
+export const CanvasOverlayContext = createContext<CanvasOverlay>({ issues: new Map() });
 
 function percent(part: number, total: number) {
   if (!total) return "0%";
@@ -46,191 +56,205 @@ function percent(part: number, total: number) {
   return `${value >= 10 || value === 0 ? value.toFixed(0) : value.toFixed(1)}%`;
 }
 
-function GrantNodeView({ id, type, data, selected }: NodeProps<FlowNode>) {
+export function GrantNodeCard() {
   const overlay = useContext(CanvasOverlayContext);
-  const nodeType = type as ItemGrantNodeType;
-  const visual = NODE_VISUAL[nodeType];
+  const { node, data: rawData, selected, startDrag, ports, selectNode, nodeRef, onFocus, onBlur, readonly } = useNodeRender();
+  const data = (rawData ?? {}) as Record<string, unknown>;
+  const nodeType = node.flowNodeType as ItemGrantNodeType;
+  const visual = NODE_VISUAL[nodeType] ?? NODE_VISUAL.end;
   const spec = overlay.catalog?.nodes.find((candidate) => candidate.type === nodeType);
   const outputs = nodeOutputs(nodeType, data, overlay.catalog);
   const summary = summarizeNode(nodeType, data, overlay.catalog);
-  const issues = overlay.issues.get(id) ?? [];
+  const issues = overlay.issues.get(node.id) ?? [];
   const hasError = issues.some((issue) => issue.level === "error");
   const label = (data.label as string | undefined) || spec?.label || nodeType;
+  const note = (data.note as string | undefined)?.trim();
 
   const estimate = overlay.estimate;
-  const hits = estimate?.nodeHits[id] ?? 0;
-  const traceStep = overlay.trace?.steps.find((step) => step.nodeId === id);
+  const hits = estimate?.nodeHits[node.id] ?? 0;
+  const traceStep = overlay.trace?.steps.find((step) => step.nodeId === node.id);
   const dimmed = Boolean(overlay.trace) && !traceStep;
   const traced = Boolean(traceStep);
 
-  return (
-    <div
-      className={cn(
-        "group relative w-[264px] rounded-2xl border bg-card text-card-foreground shadow-sm transition-[box-shadow,opacity,border-color] duration-200",
-        selected ? "border-primary shadow-[0_0_0_3px_color-mix(in_oklab,var(--primary)_18%,transparent)]" : "border-border",
-        hasError && !selected && "border-red-400/70 dark:border-red-500/60",
-        traced && "border-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,0.18)]",
-        dimmed && "opacity-40"
-      )}
-    >
-      <div className="h-1 rounded-t-2xl" style={{ background: visual.accent }} />
-      {spec?.noInput ? null : (
-        <Handle
-          type="target"
-          position={Position.Left}
-          className="!size-3 !border-2 !border-background !bg-muted-foreground/70 transition-colors hover:!bg-primary"
-        />
-      )}
+  // 分支增删、改名后让 Flowgram 重新读一遍端口元素
+  const portKey = outputs.map((output) => output.id).join("|");
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => node.getData(WorkflowNodePortsData).updateDynamicPorts());
+    return () => window.cancelAnimationFrame(frame);
+  }, [node, portKey]);
 
-      <div className="flex items-start gap-2.5 px-3 pt-2.5">
-        <ToneIcon icon={visual.icon} tone={visual.tone} size="sm" />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="truncate text-[13px] font-semibold leading-5">{label}</span>
-            {issues.length ? (
-              hasError ? (
-                <CircleAlert className="size-3.5 shrink-0 text-red-500" aria-label="有错误" />
-              ) : (
-                <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-label="有提醒" />
-              )
-            ) : null}
-          </div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">{spec?.label ?? nodeType}</div>
-        </div>
-        {estimate ? (
-          <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-muted-foreground">
-            {hits} 人（{percent(hits, estimate.sampled)}）
-          </span>
-        ) : null}
-      </div>
-
-      <div className="space-y-0.5 px-3 pt-1.5 pb-2.5">
-        {summary.map((line, index) => (
-          <div
-            key={index}
-            className={cn(
-              "truncate text-[11px] leading-[18px]",
-              index === 0 ? "text-foreground/80" : "text-muted-foreground",
-              nodeType === "condition" && (data.mode as string) === "expr" && "font-mono"
-            )}
-            title={line}
-          >
-            {line}
-          </div>
-        ))}
-        {traceStep ? (
-          <div className="mt-1.5 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] leading-4 text-emerald-700 dark:text-emerald-300">
-            {traceStep.detail}
-          </div>
-        ) : null}
-      </div>
-
-      {outputs.length ? (
-        <div className="border-t border-dashed px-3 py-1.5">
-          {outputs.map((output) => {
-            const tone = HANDLE_TONE[output.tone] ?? HANDLE_TONE.neutral;
-            const taken = traceStep?.handle === output.id;
-            const handleHits = estimate?.handleHits[`${id}/${output.id}`] ?? 0;
-            return (
-              <div key={output.id} className="relative flex h-6 items-center justify-end gap-1.5 pr-1">
-                {estimate ? (
-                  <span className="text-[10px] tabular-nums text-muted-foreground">{handleHits}</span>
-                ) : null}
-                <span className={cn("truncate text-[11px] font-medium", tone.text, taken && "underline underline-offset-2")}>
-                  {output.label}
-                </span>
-                <Handle
-                  type="source"
-                  id={output.id}
-                  position={Position.Right}
-                  className="!-right-[13px] !size-3 !border-2 !border-background transition-transform hover:!scale-125"
-                  style={{ background: tone.stroke }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-export const GrantNode = memo(GrantNodeView);
-
-export const nodeTypes = {
-  trigger: GrantNode,
-  audience: GrantNode,
-  condition: GrantNode,
-  window: GrantNode,
-  split: GrantNode,
-  limit: GrantNode,
-  grant: GrantNode,
-  random: GrantNode,
-  notify: GrantNode,
-  end: GrantNode
-};
-
-/** 连线：颜色跟随出发端口的语义，追踪路径上的线流动；选中时中点出现删除按钮，预演时标人数。 */
-function GrantEdgeView(props: EdgeProps) {
-  const { id, source, sourceHandleId, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected } = props;
-  const overlay = useContext(CanvasOverlayContext);
-  const { deleteElements, getNode } = useReactFlow();
-  const [path, labelX, labelY] = getSmoothStepPath({
-    sourceX,
-    sourceY,
-    targetX,
-    targetY,
-    sourcePosition,
-    targetPosition,
-    borderRadius: 14,
-    offset: 18
-  });
-  const sourceNode = getNode(source);
-  const outputs = sourceNode ? nodeOutputs(sourceNode.type as ItemGrantNodeType, sourceNode.data, overlay.catalog) : [];
-  const output = outputs.find((candidate) => candidate.id === sourceHandleId) ?? outputs[0];
-  const tone = HANDLE_TONE[output?.tone ?? "neutral"] ?? HANDLE_TONE.neutral;
-  const traced = overlay.trace?.steps.some((step) => step.nodeId === source && step.handle === (sourceHandleId ?? output?.id));
-  const invalid = overlay.edgeIssues.has(id);
-  const hits = overlay.estimate?.handleHits[`${source}/${sourceHandleId ?? output?.id ?? ""}`];
+  const toneOf = new Map(outputs.map((output) => [output.id, output.tone]));
+  const items = nodeType === "grant" ? ((data as ItemGrantGrantData).items ?? []) : [];
 
   return (
     <>
-      <BaseEdge
-        id={id}
-        path={path}
-        markerEnd={props.markerEnd}
-        style={{
-          stroke: invalid ? "#ef4444" : tone.stroke,
-          strokeWidth: selected || traced ? 2.6 : 1.8,
-          strokeDasharray: traced ? "6 4" : undefined,
-          animation: traced ? "item-grant-dash 0.8s linear infinite" : undefined,
-          opacity: overlay.trace && !traced ? 0.3 : 1
-        }}
-      />
-      <EdgeLabelRenderer>
-        {selected ? (
-          <button
-            type="button"
-            className="nodrag nopan pointer-events-auto absolute flex size-5 items-center justify-center rounded-full border bg-background text-muted-foreground shadow-sm hover:text-destructive"
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-            onClick={() => void deleteElements({ edges: [{ id }] })}
-            aria-label="删除连线"
-          >
-            <X className="size-3" />
-          </button>
-        ) : hits !== undefined && overlay.estimate ? (
-          <span
-            className="pointer-events-none absolute rounded-md border bg-background/90 px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
-            style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
-          >
-            {hits} 人
-          </span>
+      <div
+        ref={nodeRef}
+        draggable
+        onDragStart={startDrag}
+        onClick={selectNode}
+        onFocus={onFocus}
+        onBlur={onBlur}
+        data-node-selected={String(selected)}
+        style={{ width: NODE_WIDTH }}
+        className={cn(
+          "group/node relative cursor-default rounded-2xl border bg-card text-card-foreground shadow-[0_1px_2px_rgba(15,23,42,0.06),0_4px_16px_-6px_rgba(15,23,42,0.12)] transition-[box-shadow,opacity,border-color] duration-200",
+          selected ? "border-primary ring-4 ring-primary/15" : "border-border hover:border-foreground/20",
+          hasError && !selected && "border-red-400/80 dark:border-red-500/60",
+          traced && "border-emerald-500 ring-4 ring-emerald-500/15",
+          dimmed && "opacity-35"
+        )}
+      >
+        <span className="absolute inset-x-5 top-0 h-[3px] rounded-b-full" style={{ background: visual.accent }} />
+
+        {selected && !readonly && nodeType !== "trigger" ? (
+          <div className="absolute -top-10 right-0 flex items-center gap-0.5 rounded-xl border bg-popover p-0.5 shadow-md">
+            <NodeAction label="复制" onClick={() => overlay.onDuplicate?.(node)}>
+              <Copy />
+            </NodeAction>
+            <NodeAction label="删除" danger onClick={() => overlay.onDelete?.(node)}>
+              <Trash2 />
+            </NodeAction>
+          </div>
+        ) : selected && !readonly ? (
+          <div className="absolute -top-10 right-0 flex items-center gap-0.5 rounded-xl border bg-popover p-0.5 shadow-md">
+            <NodeAction label="删除" danger onClick={() => overlay.onDelete?.(node)}>
+              <Trash2 />
+            </NodeAction>
+          </div>
         ) : null}
-      </EdgeLabelRenderer>
+
+        <div className="flex items-start gap-2.5 px-3.5 pt-3.5">
+          <ToneIcon icon={visual.icon} tone={visual.tone} size="md" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-[13px] font-semibold leading-5">{label}</span>
+              {issues.length ? (
+                hasError ? (
+                  <CircleAlert className="size-3.5 shrink-0 text-red-500" aria-label="有错误" />
+                ) : (
+                  <AlertTriangle className="size-3.5 shrink-0 text-amber-500" aria-label="有提醒" />
+                )
+              ) : null}
+            </div>
+            <div className="truncate text-[11px] leading-4 text-muted-foreground">{spec?.label ?? nodeType}</div>
+          </div>
+          {estimate ? (
+            <span className="shrink-0 rounded-lg bg-primary/10 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-primary">
+              {hits} 人
+              <span className="ml-1 font-normal text-primary/70">{percent(hits, estimate.sampled)}</span>
+            </span>
+          ) : null}
+        </div>
+
+        <div className="space-y-1 px-3.5 pt-2 pb-3">
+          {items.length ? (
+            <div className="flex flex-wrap gap-1">
+              {items.slice(0, 6).map((item, index) => {
+                const Icon = ITEM_ICON[item.type] ?? ITEM_ICON.manual;
+                return (
+                  <span
+                    key={index}
+                    className="inline-flex max-w-full items-center gap-1 rounded-lg bg-emerald-500/10 px-1.5 py-0.5 text-[11px] leading-4 text-emerald-700 dark:text-emerald-300"
+                  >
+                    <Icon className="size-3 shrink-0" />
+                    <span className="truncate">{describeItem(item, overlay.catalog)}</span>
+                  </span>
+                );
+              })}
+              {items.length > 6 ? <span className="px-1 text-[11px] text-muted-foreground">另 {items.length - 6} 项</span> : null}
+            </div>
+          ) : (
+            summary.map((line, index) => (
+              <div
+                key={index}
+                className={cn(
+                  "truncate text-xs leading-[18px]",
+                  index === 0 ? "text-foreground/85" : "text-muted-foreground",
+                  nodeType === "condition" && (data.mode as string) === "expr" && "font-mono text-[11px]"
+                )}
+                title={line}
+              >
+                {line}
+              </div>
+            ))
+          )}
+          {note ? <div className="line-clamp-2 pt-0.5 text-[11px] leading-4 text-muted-foreground/80">{note}</div> : null}
+          {traceStep ? (
+            <div className="mt-1.5 flex items-start gap-1.5 rounded-lg bg-emerald-500/10 px-2 py-1 text-[11px] leading-4 text-emerald-700 dark:text-emerald-300">
+              <Footprints className="mt-px size-3 shrink-0" />
+              {traceStep.detail}
+            </div>
+          ) : null}
+        </div>
+
+        {outputs.length ? (
+          <div className="border-t border-dashed py-1">
+            {outputs.map((output) => {
+              const tone = HANDLE_TONE[output.tone] ?? HANDLE_TONE.neutral;
+              const taken = traceStep?.handle === output.id;
+              const handleHits = estimate?.handleHits[`${node.id}/${output.id}`] ?? 0;
+              return (
+                <div key={output.id} className="relative flex h-7 items-center justify-end gap-1.5 pr-3.5 pl-3">
+                  {estimate ? <span className="text-[11px] tabular-nums text-muted-foreground">{handleHits} 人</span> : null}
+                  <span className={cn("size-1.5 shrink-0 rounded-full", tone.dot)} />
+                  <span className={cn("truncate text-xs font-medium", tone.text, taken && "underline underline-offset-2")}>{output.label}</span>
+                  <span
+                    data-port-id={output.id}
+                    data-port-type="output"
+                    data-port-location="right"
+                    className="absolute top-1/2 -right-2.5 size-5 -translate-y-1/2"
+                  />
+                </div>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+      {ports.map((port) => {
+        const tone = HANDLE_TONE[port.portType === "input" ? "neutral" : (toneOf.get(String(port.portID)) ?? "neutral")] ?? HANDLE_TONE.neutral;
+        return (
+          <WorkflowPortRender
+            key={port.id}
+            entity={port}
+            primaryColor={tone.stroke}
+            secondaryColor={port.portType === "input" ? "var(--muted-foreground)" : tone.stroke}
+            backgroundColor="var(--card)"
+            onClick={!readonly && port.portType === "output" ? (event, entity) => overlay.onPortClick?.(entity, event) : undefined}
+          />
+        );
+      })}
     </>
   );
 }
 
-export const GrantEdge = memo(GrantEdgeView);
-
-export const edgeTypes = { grant: GrantEdge };
+function NodeAction({
+  label,
+  danger,
+  onClick,
+  children
+}: {
+  label: string;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onClick();
+      }}
+      className={cn(
+        "flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-accent [&>svg]:size-3.5",
+        danger ? "hover:text-destructive" : "hover:text-foreground"
+      )}
+    >
+      {children}
+    </button>
+  );
+}
