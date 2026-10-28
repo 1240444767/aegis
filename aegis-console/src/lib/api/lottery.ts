@@ -566,6 +566,8 @@ export type LotteryDraw = {
   reward: LotteryReward;
   position: number;
   source: LotterySource;
+  /** source = bonus 时用的是哪一批次数 */
+  ticket?: LotteryDrawTicket;
   pointsCost?: number;
   pity?: boolean;
   status: LotteryDrawStatus;
@@ -899,3 +901,147 @@ export function revokeLotteryFortuneControls(
     body: JSON.stringify(input)
   });
 }
+
+// ── 抽奖次数（docs/lottery.md「抽奖次数」）──
+//
+// bonus 分批记账：每次发放一批（来源、是否兑换所得），每次增减一条流水。
+// 扣除顺序只有一条：今日免费 → 赠送的次数（先到先用）→ 兑换的次数（先到先用）→ 积分。
+
+export type LotteryTicketOrigin =
+  | "rewarded_ad"
+  | "points_store"
+  | "cardkey"
+  | "invite"
+  | "leaderboard"
+  | "lottery"
+  | "admin"
+  | "legacy";
+
+export type LotteryLedgerKind = "grant" | "consume" | "deduct";
+
+export type LotteryDrawTicket = {
+  lotId?: number;
+  origin: LotteryTicketOrigin;
+  originLabel: string;
+  paid: boolean;
+};
+
+/** 余额按档拆开：gift 赠送的（先用）、purchased 兑换的（后用） */
+export type LotteryTicketBalance = { gift: number; purchased: number };
+
+export type LotteryTicketLot = {
+  id: number;
+  origin: LotteryTicketOrigin;
+  originLabel: string;
+  paid: boolean;
+  title: string;
+  ref?: string;
+  amount: number;
+  remaining: number;
+  createdAt: string;
+};
+
+export type LotteryTicketAccount = {
+  userId?: number;
+  account?: string;
+  nickname?: string;
+  balance: number;
+  tickets: LotteryTicketBalance;
+  totalGranted: number;
+  totalConsumed: number;
+  /** 扣除顺序文案 */
+  order: string[];
+  /** 还有剩余的批次，排在前面的先用 */
+  lots: LotteryTicketLot[];
+  updatedAt?: string;
+};
+
+export type LotteryTicketEntry = {
+  id: number;
+  userId?: number;
+  account?: string;
+  nickname?: string;
+  lotId?: number | null;
+  kind: LotteryLedgerKind;
+  kindLabel: string;
+  origin: LotteryTicketOrigin;
+  originLabel: string;
+  paid: boolean;
+  delta: number;
+  balanceAfter: number;
+  title: string;
+  ref?: string;
+  operator?: string;
+  createdAt: string;
+};
+
+export type LotteryTicketOriginStat = {
+  origin: LotteryTicketOrigin;
+  originLabel: string;
+  paid: boolean;
+  granted: number;
+  remaining: number;
+  users: number;
+};
+
+export type LotteryTicketOverview = {
+  holders: number;
+  outstanding: number;
+  tickets: LotteryTicketBalance;
+  grantedToday: number;
+  usedToday: number;
+  origins: LotteryTicketOriginStat[];
+  order: string[];
+};
+
+export type LotteryTicketLedgerParams = {
+  userId?: number;
+  kind?: LotteryLedgerKind;
+  origin?: LotteryTicketOrigin;
+  keyword?: string;
+  page?: number;
+  limit?: number;
+};
+
+export type LotteryTicketAdjustPayload = {
+  /** 正数发放、负数扣减（按扣除顺序先扣赠送的） */
+  amount: number;
+  /** 发放的次数按兑换所得记（排在赠送的之后用） */
+  paid?: boolean;
+  reason: string;
+};
+
+const ticketsBase = (appKey: string) => `${base(appKey)}/tickets`;
+
+export function getLotteryTicketOverview(token: string, appKey: string) {
+  return apiRequest<LotteryTicketOverview>(ticketsBase(appKey), { token });
+}
+
+export function listLotteryTicketAccounts(
+  token: string,
+  appKey: string,
+  params?: { keyword?: string; page?: number; limit?: number }
+) {
+  return apiRequest<LotteryPage<LotteryTicketAccount>>(`${ticketsBase(appKey)}/accounts${buildQuery(params ?? {})}`, {
+    token
+  });
+}
+
+export function listLotteryTicketLedger(token: string, appKey: string, params?: LotteryTicketLedgerParams) {
+  return apiRequest<LotteryPage<LotteryTicketEntry>>(`${ticketsBase(appKey)}/ledger${buildQuery(params ?? {})}`, {
+    token
+  });
+}
+
+export function getLotteryTicketAccount(token: string, appKey: string, userId: number) {
+  return apiRequest<LotteryTicketAccount>(`${ticketsBase(appKey)}/users/${userId}`, { token });
+}
+
+export function adjustLotteryTickets(token: string, appKey: string, userId: number, payload: LotteryTicketAdjustPayload) {
+  return apiRequest<LotteryTicketAccount>(`${ticketsBase(appKey)}/users/${userId}/adjust`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+

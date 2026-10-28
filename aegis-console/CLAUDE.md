@@ -715,7 +715,7 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
 | `components/apps/leaderboard/` | 排行榜区块：概览 / 设置 / 奖励 / 实时榜 / 移出名单 / 结算记录（见下节） |
 | `lib/api/leaderboard.ts` / `lib/leaderboard-hooks.ts` | 排行榜域 API 与 React Query hooks |
-| `components/apps/lottery/` | 抽奖区块：活动 / 统计 / 抽奖记录（见下节） |
+| `components/apps/lottery/` | 抽奖区块：活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数（见下节） |
 | `lib/api/lottery.ts` / `lib/lottery-hooks.ts` | 抽奖域 API 与 React Query hooks |
 | `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
 | `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
@@ -1113,7 +1113,7 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 | 文件 | 职责 |
 |---|---|
-| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 抽奖记录 / 运气控制四个视图的切换，跨视图带活动与「待发放」筛选 |
+| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数五个视图的切换，跨视图带活动与「待发放」筛选 |
 | `components/apps/lottery/lottery-activities-panel.tsx` | 活动卡片：状态与形态、抽奖方式、奖品与公示概率、累计 / 今日 / 待发放；上线 / 暂停 / 结束、编辑、删除 |
 | `components/apps/lottery/lottery-activity-editor.tsx` | 活动编辑抽屉：基本信息与时间、三种次数与视频抽奖场景、奖盘、保底、规则；底部列出奖盘的待修正项 |
 | `components/apps/lottery/lottery-prize-board.tsx` | 奖盘：九宫格是 3×3 的盘（外圈顺时针 0–7 从左上角起，中心 GO），转盘是可增删、上下移的列表；右侧改选中的一格 |
@@ -1121,6 +1121,7 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/apps/lottery/lottery-stats-panel.tsx` | 单活动统计：8 个数字、趋势（次数与中奖为柱、人数为线）、次数来源、奖品抽中数与库存 |
 | `components/apps/lottery/lottery-draws-panel.tsx` | 抽奖记录：活动 / 用户 / 状态 / 来源 / 只看中奖 / 关键词 / 时间筛选；待发放的「标记已发放」写给用户的话 |
 | `components/apps/lottery/lottery-fortune-panel.tsx` | 运气控制：每日运气的差异（σ 滑杆、开关）、今日分布（理论 / 干预前 / 干预后三列）、下干预（指定用户或全站 × 重抽 / 定档 / 偏移 × 时间窗，先预演再执行）、查一个人（干预前后读数与一键重抽 / 定档 / 撤销）、干预记录（状态与方式筛选、逐条撤销、全部恢复自然运气）。规则见 docs/lottery.md「运气控制」 |
+| `components/apps/lottery/lottery-tickets-panel.tsx` | 抽奖次数（bonus 分批账本）：总览（持有人数、赠送 / 兑换两档、今日发放与使用、扣除顺序、各来源累计与剩余）、账户列表、一个人的批次（按使用顺序）与发放 / 扣减（确认后执行）、次数流水（种类 / 来源筛选）。规则见 docs/lottery.md「抽奖次数」 |
 | `components/apps/lottery/lottery-shared.tsx` | 状态 / 形态 / 来源文案、徽标、九宫格位置表、公示概率、奖品摘要与默认名 |
 
 五条硬约束：

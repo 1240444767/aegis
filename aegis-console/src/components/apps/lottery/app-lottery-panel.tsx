@@ -1,12 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { BarChart3, Clover, Dices, ReceiptText } from "lucide-react";
+import { BarChart3, Clover, Dices, ReceiptText, Ticket } from "lucide-react";
 import { NoAppSelected } from "@/components/apps/app-config-primitives";
 import { LotteryActivitiesPanel } from "@/components/apps/lottery/lottery-activities-panel";
 import { LotteryDrawsPanel } from "@/components/apps/lottery/lottery-draws-panel";
 import { LotteryFortunePanel } from "@/components/apps/lottery/lottery-fortune-panel";
 import { LotteryStatsPanel } from "@/components/apps/lottery/lottery-stats-panel";
+import { LotteryTicketsPanel } from "@/components/apps/lottery/lottery-tickets-panel";
 import type { LotteryDrawStatus } from "@/lib/api/lottery";
 import { cn } from "@/lib/utils";
 
@@ -19,6 +20,7 @@ import { cn } from "@/lib/utils";
  * | 统计 | 一个活动每天抽多少、中多少、次数从哪来、每个奖品出了多少 |
  * | 抽奖记录 | 谁在什么时候抽中了什么、实际发出去了什么；人工发放在这里标记已发放 |
  * | 运气控制 | 每日运气的差异与今日分布；对指定用户或全站重抽、定档、偏移，预演、撤销与记录 |
+ * | 抽奖次数 | 次数从哪来、谁手上有多少（赠送 / 兑换两档）、每一次获得与使用；给人发放或扣减 |
  *
  * 视图状态不进 URL，理由同积分商城：`?tab=` 已经被应用区块占用。
  * 结果只在服务端产生，控制台没有「试抽」入口：抽一次就是真的发了奖。
@@ -27,7 +29,8 @@ const VIEWS = [
   { key: "activities", label: "活动", icon: Dices },
   { key: "stats", label: "统计", icon: BarChart3 },
   { key: "draws", label: "抽奖记录", icon: ReceiptText },
-  { key: "fortune", label: "运气控制", icon: Clover }
+  { key: "fortune", label: "运气控制", icon: Clover },
+  { key: "tickets", label: "抽奖次数", icon: Ticket }
 ] as const;
 
 type ViewKey = (typeof VIEWS)[number]["key"];
@@ -92,6 +95,7 @@ export function AppLotteryPanel({ appKey }: { appKey?: string | null }) {
       {view === "fortune" ? (
         <LotteryFortunePanel appKey={appKey} activityId={activityId} onActivityChange={setActivityId} />
       ) : null}
+      {view === "tickets" ? <LotteryTicketsPanel appKey={appKey} /> : null}
       {view === "draws" ? (
         <LotteryDrawsPanel
           appKey={appKey}

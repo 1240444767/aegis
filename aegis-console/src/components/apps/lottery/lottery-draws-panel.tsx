@@ -300,6 +300,12 @@ export function LotteryDrawsPanel({
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs">
                     {SOURCE_LABEL[draw.source] ?? draw.source}
+                    {draw.ticket ? (
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {draw.ticket.originLabel}
+                        {draw.ticket.paid ? "（兑换）" : ""}
+                      </p>
+                    ) : null}
                     {draw.pointsCost ? (
                       <p className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
                         {formatCount(draw.pointsCost)} 积分

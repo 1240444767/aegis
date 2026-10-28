@@ -2,6 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  adjustLotteryTickets,
+  getLotteryTicketAccount,
+  getLotteryTicketOverview,
+  listLotteryTicketAccounts,
+  listLotteryTicketLedger,
+  type LotteryTicketAdjustPayload,
+  type LotteryTicketLedgerParams,
   createLotteryActivity,
   createLotteryFortuneControls,
   getLotteryFortune,
@@ -45,7 +52,11 @@ const KEY = {
   audit: "admin-lottery-audit",
   fortune: "admin-lottery-fortune",
   fortuneUser: "admin-lottery-fortune-user",
-  fortuneControls: "admin-lottery-fortune-controls"
+  fortuneControls: "admin-lottery-fortune-controls",
+  tickets: "admin-lottery-tickets",
+  ticketAccounts: "admin-lottery-ticket-accounts",
+  ticketAccount: "admin-lottery-ticket-account",
+  ticketLedger: "admin-lottery-ticket-ledger"
 } as const;
 
 const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats];
@@ -268,3 +279,71 @@ export function useSetLotteryFortuneSpreadMutation(appKey?: string | null, activ
     }
   });
 }
+
+// ── 抽奖次数 ──
+
+const TICKET_SCOPE = [KEY.tickets, KEY.ticketAccounts, KEY.ticketAccount, KEY.ticketLedger];
+
+export function useLotteryTicketOverviewQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.tickets, token, appKey],
+    queryFn: () => getLotteryTicketOverview(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useLotteryTicketAccountsQuery(
+  appKey?: string | null,
+  params?: { keyword?: string; page?: number; limit?: number }
+) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.ticketAccounts, token, appKey, params?.keyword ?? "", params?.page ?? 1, params?.limit ?? 20],
+    queryFn: () => listLotteryTicketAccounts(token as string, appKey as string, params),
+    enabled: Boolean(token && appKey),
+    placeholderData: (previous) => previous
+  });
+}
+
+export function useLotteryTicketAccountQuery(appKey?: string | null, userId?: number | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.ticketAccount, token, appKey, userId],
+    queryFn: () => getLotteryTicketAccount(token as string, appKey as string, userId as number),
+    enabled: Boolean(token && appKey && userId)
+  });
+}
+
+export function useLotteryTicketLedgerQuery(appKey?: string | null, params?: LotteryTicketLedgerParams) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [
+      KEY.ticketLedger,
+      token,
+      appKey,
+      params?.userId ?? 0,
+      params?.kind ?? "",
+      params?.origin ?? "",
+      params?.keyword ?? "",
+      params?.page ?? 1,
+      params?.limit ?? 20
+    ],
+    queryFn: () => listLotteryTicketLedger(token as string, appKey as string, params),
+    enabled: Boolean(token && appKey),
+    placeholderData: (previous) => previous
+  });
+}
+
+export function useAdjustLotteryTicketsMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ userId, payload }: { userId: number; payload: LotteryTicketAdjustPayload }) =>
+      adjustLotteryTickets(token as string, appKey as string, userId, payload),
+    onSuccess: async () => {
+      await Promise.all(TICKET_SCOPE.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+    }
+  });
+}
+
