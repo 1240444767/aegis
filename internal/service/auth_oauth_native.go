@@ -317,6 +317,7 @@ func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile 
 	}
 
 	userID := user.ID
+	s.trackAccountSetup(ctx, appID, userID, appdomain.AccountSetupSourceOAuth, profile.Provider)
 	s.runDetached("register.oauth.audit", 3*time.Second, func(actx context.Context) {
 		_ = s.pg.InsertLoginAudit(actx, appID, userID, "register", profile.Provider, "",
 			ip, deviceID, userAgent, "success", map[string]any{

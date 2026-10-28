@@ -132,6 +132,7 @@ GET	/api/admin/apps/:appkey/account-deletion/requests/:requestId	AdminGetAccount
 GET	/api/admin/apps/:appkey/account-deletion/settings	AdminAccountDeletionSettings
 GET	/api/admin/apps/:appkey/account-deletion/stats	AdminAccountDeletionStats
 GET	/api/admin/apps/:appkey/account-deletion/tombstones	AdminListAccountDeletionTombstones
+GET	/api/admin/apps/:appkey/account-setup	AdminAppAccountSetup
 GET	/api/admin/apps/:appkey/ad-policy/config	AdminAdPolicy
 GET	/api/admin/apps/:appkey/ad-policy/consent-logs	AdminListAdConsentLogs
 GET	/api/admin/apps/:appkey/ad-policy/consents	AdminListAdConsents
@@ -296,6 +297,7 @@ GET	/api/admin/apps/:appkey/stats/user-trend	AdminAppUserTrend
 GET	/api/admin/apps/:appkey/users	AdminAppUsers
 GET	/api/admin/apps/:appkey/users/:userId	AdminAppUser
 GET	/api/admin/apps/:appkey/users/:userId/account-deletion	AdminUserAccountDeletion
+GET	/api/admin/apps/:appkey/users/:userId/account-setup	AdminAppUserAccountSetup
 GET	/api/admin/apps/:appkey/users/:userId/ad-policy	AdminUserAdPolicy
 GET	/api/admin/apps/:appkey/users/:userId/audits/login	AdminAppUserLoginAudits
 GET	/api/admin/apps/:appkey/users/:userId/audits/sessions	AdminAppUserSessionAudits
@@ -671,6 +673,7 @@ GET	/api/v1/apps/:appkey/lottery/draws	AppLotteryDraws
 GET	/api/v1/apps/:appkey/lottery/tickets	AppLotteryTickets
 GET	/api/v1/apps/:appkey/me	AppMe
 GET	/api/v1/apps/:appkey/me/2fa/recovery-codes	ListRecoveryCodes
+GET	/api/v1/apps/:appkey/me/account-setup	AppAccountSetupStatus
 GET	/api/v1/apps/:appkey/me/audits/login	UserLoginAudits
 GET	/api/v1/apps/:appkey/me/audits/sessions	UserSessionAudits
 GET	/api/v1/apps/:appkey/me/auto-sign	AppAutoSignStatus
@@ -925,6 +928,7 @@ POST	/api/admin/apps/:appkey/rewarded-ads/views/:viewId/grant	AdminGrantRewarded
 POST	/api/admin/apps/:appkey/signin-reward/reset	ResetAdminAppSignInReward
 POST	/api/admin/apps/:appkey/signin-reward/test	TestAdminAppSignInReward
 POST	/api/admin/apps/:appkey/users/:userId/account-deletion	AdminCreateUserAccountDeletion
+POST	/api/admin/apps/:appkey/users/:userId/account-setup/reset	AdminResetAppUserAccountSetup
 POST	/api/admin/apps/:appkey/users/:userId/avatar	AdminUploadAppUserAvatar
 POST	/api/admin/apps/:appkey/users/:userId/bans	CreateAdminAppUserBan
 POST	/api/admin/apps/:appkey/users/:userId/bans/:banId/revoke	RevokeAdminAppUserBan
@@ -1332,6 +1336,10 @@ POST	/api/v1/apps/:appkey/me/2fa/recovery-codes/regenerate	RegenerateRecoveryCod
 POST	/api/v1/apps/:appkey/me/2fa/totp/disable	DisableTOTP
 POST	/api/v1/apps/:appkey/me/2fa/totp/enable	EnableTOTP
 POST	/api/v1/apps/:appkey/me/2fa/totp/enroll	BeginTOTPEnrollment
+POST	/api/v1/apps/:appkey/me/account-setup	AppCompleteAccountSetup
+POST	/api/v1/apps/:appkey/me/account-setup/check	AppAccountSetupCheck
+POST	/api/v1/apps/:appkey/me/account-setup/dismiss	AppAccountSetupDismiss
+POST	/api/v1/apps/:appkey/me/account-setup/prompted	AppAccountSetupPrompted
 POST	/api/v1/apps/:appkey/me/avatar	UploadUserAvatar
 POST	/api/v1/apps/:appkey/me/avatar/restore	RestoreUserAvatar
 POST	/api/v1/apps/:appkey/me/deletion	AppSubmitAccountDeletion
@@ -1378,6 +1386,7 @@ POST	/oauth2/login/mfa	OAuth2SecondFactorSubmit
 POST	/oauth2/logout	OAuth2LogoutSubmit
 PUT	/api/admin/apps/:appkey	UpdateAdminApp
 PUT	/api/admin/apps/:appkey/account-deletion/settings	AdminSaveAccountDeletionSettings
+PUT	/api/admin/apps/:appkey/account-setup	UpdateAdminAppAccountSetup
 PUT	/api/admin/apps/:appkey/ad-policy/config	AdminSaveAdPolicy
 PUT	/api/admin/apps/:appkey/ai-gateway/keys/:keyId/status	AdminSetAIGatewayKeyStatus
 PUT	/api/admin/apps/:appkey/ai-gateway/models/:modelId	AdminUpdateAIGatewayModel
@@ -1426,6 +1435,7 @@ PUT	/api/admin/apps/:appkey/releases/:rid	AdminUpdateRelease
 PUT	/api/admin/apps/:appkey/releases/:rid/rollout	AdminSetReleaseRollout
 PUT	/api/admin/apps/:appkey/rewarded-ads/config	AdminSaveRewardedAdConfig
 PUT	/api/admin/apps/:appkey/signin-reward	UpdateAdminAppSignInReward
+PUT	/api/admin/apps/:appkey/users/:userId/account	AdminRenameAppUser
 PUT	/api/admin/apps/:appkey/users/:userId/cloud-storage	AdminSaveCloudStorageUser
 PUT	/api/admin/apps/:appkey/users/:userId/profile	AdminUpdateUserProfile
 PUT	/api/admin/apps/:appkey/users/:userId/status	UpdateAdminAppUserStatus

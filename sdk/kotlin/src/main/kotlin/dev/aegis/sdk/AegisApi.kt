@@ -582,6 +582,56 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun security(): JsonElement = client.call("GET", "/me/security", requireAuth = true)
 
+    // ── 账号初始化 ──
+    //
+    // 第三方 / 短信 / 卡密快速登录建的号：账号名由系统生成、也没有密码。登录后读 [accountSetupStatus]，
+    // prompt = dialog 时弹窗一次并调 [markAccountSetupPrompted]，之后只出横幅（prompt = banner）；
+    // 用户关掉横幅调 [dismissAccountSetup]，按应用策略隔一段时间再出现。
+
+    /** 账号初始化状态：还缺用户名 / 密码、现在该怎么提醒、可直接选用的用户名与用户名规则。 */
+    @Throws(IOException::class)
+    fun accountSetupStatus(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("GET", "/me/account-setup", requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
+    /**
+     * 设置用户名与（或）密码，两项可以分开提交，传 null 表示这次不设。
+     *
+     * 用户名只能自助设一次（之后 40964），被占用 40963；已有密码时设密码 40967，改走 [changePassword]。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun completeAccountSetup(account: String? = null, password: String? = null): AegisAccountSetupResult =
+        client.decodeAs(
+            client.call(
+                "POST", "/me/account-setup",
+                buildBody("account" to account, "password" to password), requireAuth = true,
+            ),
+            AegisAccountSetupResult.serializer(),
+        )
+
+    /** 检查用户名能不能用：规则、占用、注销后的保留期。 */
+    @Throws(IOException::class)
+    fun checkAccountSetupUsername(account: String): AegisUsernameCheck = client.decodeAs(
+        client.call("POST", "/me/account-setup/check", mapOf("account" to account), requireAuth = true),
+        AegisUsernameCheck.serializer(),
+    )
+
+    /** 首次弹窗已展示：之后只出横幅。返回新的状态。 */
+    @Throws(IOException::class)
+    fun markAccountSetupPrompted(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("POST", "/me/account-setup/prompted", emptyMap<String, Any?>(), requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
+    /** 关掉横幅：按应用策略隔一段时间再出现（策略不许关时状态不变）。返回新的状态。 */
+    @Throws(IOException::class)
+    fun dismissAccountSetup(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("POST", "/me/account-setup/dismiss", emptyMap<String, Any?>(), requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
     // ── 账号注销 ──
 
     /**

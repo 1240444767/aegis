@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/mail"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -327,13 +328,14 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 			return nil
 		})
 	}
+	var candidates []*userdomain.User
 	g.Go(func() error {
-		loaded, err := s.pg.GetUserByAppAndAccount(gctx, appID, account)
+		loaded, err := s.resolveLoginCandidates(gctx, appID, account)
 		if err != nil {
 			userErr = err
 			return err
 		}
-		user = loaded
+		candidates = loaded
 		return nil
 	})
 	_ = g.Wait()
@@ -346,6 +348,28 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	}
 
 	// 阶段 2 —— 凭据校验（bcrypt 为全链路最重 CPU 操作，置于所有快速检查之后）
+	if len(candidates) > 1 {
+		// 邮箱或手机号挂在多个账号上：密码对得上的那个就是要登录的人，对不上的都不透露存在与否
+		for _, candidate := range candidates {
+			if s.verifyCredential(candidate.PasswordHash, password) {
+				user = candidate
+				break
+			}
+		}
+		if user == nil {
+			if s.loginGuard != nil {
+				s.loginGuard.RegisterFailure(ctx, appID, account, ip)
+			}
+			return nil, nil, "", apperrors.New(40101, http.StatusUnauthorized, "账号或密码错误")
+		}
+		if err := s.ensureUserLoginState(ctx, user); err != nil {
+			return nil, nil, "", err
+		}
+		return app, user, account, nil
+	}
+	if len(candidates) == 1 {
+		user = candidates[0]
+	}
 	if user == nil {
 		// 时序均衡：账号不存在也执行一次等价 bcrypt 比较，并与密码错误统一计失败（防账号枚举）
 		_ = bcrypt.CompareHashAndPassword(s.timingDummyHash, []byte(password))
@@ -1895,4 +1919,90 @@ func randomInviteCode(length int) (string, error) {
 		buffer[i] = inviteCodeCharset[int(randomBytes[i])%len(inviteCodeCharset)]
 	}
 	return string(buffer), nil
+}
+
+// loginCandidateLimit 一个邮箱 / 手机号最多认几个账号（逐个比对密码，bcrypt 次数的上限）。
+const loginCandidateLimit = 5
+
+// resolveLoginCandidates 按应用允许的登录标识（接入策略 identifiers）把输入认成账号。
+//
+// 顺序：账号名 → 用户 ID（16 位对外 ID）→ 邮箱 → 手机号。账号名永远优先且总是可用 ——
+// 老账号可能就叫一个邮箱或一串数字，不能因为新开了标识就登不上。自助设的用户名不许纯数字、
+// 不含 @（userdomain.ValidateUsername），所以新账号不会和另外几种标识撞在一起。
+// 邮箱、手机号可能挂在多个账号上，全部返回，由密码决定是哪一个。
+func (s *AuthService) resolveLoginCandidates(ctx context.Context, appID int64, identifier string) ([]*userdomain.User, error) {
+	if identifier == "" {
+		return nil, nil
+	}
+	user, err := s.pg.GetUserByAppAndAccount(ctx, appID, identifier)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil {
+		return []*userdomain.User{user}, nil
+	}
+	identifiers, err := s.loginIdentifiers(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	switch {
+	case strings.Contains(identifier, "@"):
+		if slices.Contains(identifiers, "email") {
+			ids, err = s.pg.ListUserIDsByProfileEmail(ctx, appID, identifier, loginCandidateLimit)
+		}
+	case isPublicUserIDText(identifier):
+		if slices.Contains(identifiers, "id") {
+			publicID, _ := strconv.ParseInt(identifier, 10, 64)
+			var id int64
+			id, err = s.pg.FindUserIDByPublicID(ctx, appID, publicID)
+			if id > 0 {
+				ids = []int64{id}
+			}
+		}
+	case looksLikePhone(identifier):
+		if slices.Contains(identifiers, "phone") {
+			ids, err = s.pg.ListUserIDsByProfilePhone(ctx, appID, normalizePhone(identifier), loginCandidateLimit)
+		}
+	}
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	users := make([]*userdomain.User, 0, len(ids))
+	for _, id := range ids {
+		loaded, err := s.pg.GetUserByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if loaded != nil && loaded.AppID == appID {
+			users = append(users, loaded)
+		}
+	}
+	return users, nil
+}
+
+// loginIdentifiers 应用接入策略里开放的登录标识；没配置过时用默认策略。
+func (s *AuthService) loginIdentifiers(ctx context.Context, appID int64) ([]string, error) {
+	policy, err := s.pg.GetAppAuthProtocolPolicy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil {
+		return defaultAuthProtocolPolicy(appID).Identifiers, nil
+	}
+	return policy.Identifiers, nil
+}
+
+// isPublicUserIDText 16 位对外用户 ID 的文本形式（[10^15, 2^53−1]，见 docs/user-public-id.md）。
+func isPublicUserIDText(value string) bool {
+	if len(value) != 16 {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	return err == nil && id >= 1_000_000_000_000_000 && id <= 1<<53-1
 }

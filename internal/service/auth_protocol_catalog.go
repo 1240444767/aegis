@@ -148,6 +148,18 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "autoSignUpdate", Method: "PUT", Path: "/me/auto-sign", Auth: true,
 		Summary: "修改自动签到设置（只改传了的字段）；从关到开时校验开放策略，返回修改后的状态"},
 	{Key: "security", Method: "GET", Path: "/me/security", Auth: true, Summary: "账户安全概览"},
+	// 账号初始化：第三方 / 短信 / 卡密快速登录建的号补设用户名与密码（docs/account-setup.md）。
+	// prompt 为 dialog 时弹窗一次并上报 prompted，之后为 banner；用户关掉横幅上报 dismiss
+	{Key: "accountSetupStatus", Method: "GET", Path: "/me/account-setup", Auth: true,
+		Summary: "账号初始化状态：还缺用户名 / 密码、现在该弹窗还是出横幅、可选用户名与规则"},
+	{Key: "accountSetupComplete", Method: "POST", Path: "/me/account-setup", Auth: true,
+		Summary: "设置用户名（只能自助设一次）与密码（没有密码时），两项可分开提交，返回新的状态"},
+	{Key: "accountSetupCheck", Method: "POST", Path: "/me/account-setup/check", Auth: true,
+		Summary: "检查用户名是否可用（规则、占用、注销保留期）"},
+	{Key: "accountSetupPrompted", Method: "POST", Path: "/me/account-setup/prompted", Auth: true,
+		Summary: "首次弹窗已展示：之后只出横幅"},
+	{Key: "accountSetupDismiss", Method: "POST", Path: "/me/account-setup/dismiss", Auth: true,
+		Summary: "关掉横幅：按应用策略隔一段时间再出现（策略不许关时状态不变）"},
 	// 账号注销：enabled=false（且没有进行中的申请）时入口应当整个隐藏；verification 说明提交时要带哪些凭据
 	{Key: "deletion", Method: "GET", Path: "/me/deletion", Auth: true,
 		Summary: "注销页：可选方式、须知、原因、要过的验证、前置条件与进行中的申请"},
@@ -515,6 +527,13 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /card-keys/mine"},
 	{Code: errCodeCardKeyTooManyAttempts, Name: "CARD_KEY_TOO_MANY_ATTEMPTS", Message: "输错卡密的次数过多",
 		Recovery: authprotocol.RecoveryNone, Hint: "只数「卡密不存在」；按账号与 IP 计，锁定 15 分钟，message 里带剩余分钟数"},
+	// ── 账号初始化 ──
+	{Code: errCodeUsernameTaken, Name: "USERNAME_TAKEN", Message: "该用户名已被使用",
+		Recovery: authprotocol.RecoveryNone, Hint: "也用于注销后仍在保留期内的用户名；换一个或选用状态里的 suggestions"},
+	{Code: errCodeAccountSetupDone, Name: "ACCOUNT_SETUP_DONE", Message: "用户名已设置",
+		Recovery: authprotocol.RecoveryNone, Hint: "自助只能设一次，之后由管理员在控制台修改"},
+	{Code: errCodePasswordAlreadySet, Name: "PASSWORD_ALREADY_SET", Message: "已设置过密码",
+		Recovery: authprotocol.RecoveryNone, Hint: "改走 /auth/password/change"},
 	// ── 自动签到 ──
 	// 与 /me/auto-sign 的 reason 一一对应：状态里说「为什么不能开」，开启时报同一句话。
 	{Code: errCodeAutoSignDisabled, Name: "AUTO_SIGN_DISABLED", Message: "自动签到暂未开放",

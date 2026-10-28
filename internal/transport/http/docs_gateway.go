@@ -75,14 +75,16 @@ func gatewayRequestModels() map[string]any {
 		"passkeyRegister": PasskeyRegistrationFinishRequest{},
 
 		// 资料与设置
-		"profileUpdate":  UpdateProfileRequest{},
-		"profileConfirm": ConfirmProfileChangeRequest{},
-		"settings":       SettingsCategoryQuery{},
-		"settingsUpdate": UpdateSettingsRequest{},
-		"autoSignUpdate": AutoSignUpdateRequest{},
-		"deletionCode":   AccountDeletionCodeRequest{},
-		"deletionSubmit": AccountDeletionSubmitRequest{},
-		"avatarRestore":  AvatarRestoreRequest{},
+		"profileUpdate":        UpdateProfileRequest{},
+		"profileConfirm":       ConfirmProfileChangeRequest{},
+		"settings":             SettingsCategoryQuery{},
+		"settingsUpdate":       UpdateSettingsRequest{},
+		"autoSignUpdate":       AutoSignUpdateRequest{},
+		"accountSetupComplete": AccountSetupRequest{},
+		"accountSetupCheck":    AccountSetupCheckRequest{},
+		"deletionCode":         AccountDeletionCodeRequest{},
+		"deletionSubmit":       AccountDeletionSubmitRequest{},
+		"avatarRestore":        AvatarRestoreRequest{},
 
 		// 二次认证
 		"totpEnable":              TOTPEnableRequest{},

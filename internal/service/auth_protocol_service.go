@@ -657,7 +657,7 @@ func (s *AuthProtocolService) resolveApp(ctx context.Context, appKey string) (*a
 func defaultAuthProtocolPolicy(appID int64) *authprotocol.Policy {
 	return &authprotocol.Policy{
 		AppID: appID, ProtocolVersion: authprotocol.ProtocolVersion,
-		Identifiers:     []string{"username", "email"},
+		Identifiers:     []string{"username", "email", "id"},
 		LoginMethods:    []string{"password"},
 		RegisterMethods: []string{"password"},
 		RegistrationSchema: []authprotocol.RegistrationField{
@@ -677,7 +677,7 @@ func validateAuthProtocolPolicy(policy *authprotocol.Policy) error {
 	if !authprotocol.ValidSecurityLevel(policy.SecurityLevel) {
 		return apperrors.New(40085, http.StatusBadRequest, "安全等级只能是 standard / signed / sealed")
 	}
-	allowedIdentifiers := map[string]bool{"username": true, "email": true, "phone": true}
+	allowedIdentifiers := map[string]bool{"username": true, "email": true, "phone": true, "id": true}
 	for _, value := range policy.Identifiers {
 		if !allowedIdentifiers[value] {
 			return apperrors.New(40081, http.StatusBadRequest, "包含不支持的认证标识符")

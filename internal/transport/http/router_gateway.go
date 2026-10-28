@@ -148,6 +148,12 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/me/auto-sign", h.AppAutoSignStatus)
 		appGatewayAuthed.PUT("/me/auto-sign", h.AppUpdateAutoSign)
 		appGatewayAuthed.GET("/me/security", h.Security)
+		// 账号初始化：快速登录建的号补设用户名与密码；首次弹窗、之后横幅（docs/account-setup.md）
+		appGatewayAuthed.GET("/me/account-setup", h.AppAccountSetupStatus)
+		appGatewayAuthed.POST("/me/account-setup", h.AppCompleteAccountSetup)
+		appGatewayAuthed.POST("/me/account-setup/check", h.AppAccountSetupCheck)
+		appGatewayAuthed.POST("/me/account-setup/prompted", h.AppAccountSetupPrompted)
+		appGatewayAuthed.POST("/me/account-setup/dismiss", h.AppAccountSetupDismiss)
 		// 账号注销：注销页（enabled=false 时入口隐藏）/ 发验证码 / 提交 / 撤销
 		appGatewayAuthed.GET("/me/deletion", h.AppAccountDeletion)
 		appGatewayAuthed.POST("/me/deletion/code", h.AppAccountDeletionCode)

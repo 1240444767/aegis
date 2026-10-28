@@ -378,6 +378,29 @@ func (r *SessionRepository) ListUserSessions(ctx context.Context, appID int64, u
 	return items, nil
 }
 
+// RenameSessionAccount 账号改名后同步已签发会话里的账号名，剩余有效期不变。
+// 令牌本身的 account 声明改不了，以会话里的为准；下次刷新签发的新令牌自然是新名字。
+func (r *SessionRepository) RenameSessionAccount(ctx context.Context, appID int64, userID int64, account string) error {
+	items, err := r.ListUserSessions(ctx, appID, userID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		session := item.Session
+		session.Account = account
+		data, err := json.Marshal(session)
+		if err != nil {
+			return err
+		}
+		// XX：会话恰好在这期间过期就不再写回来
+		if err := r.client.SetArgs(ctx, r.sessionKeyByHash(item.TokenHash), data,
+			redislib.SetArgs{KeepTTL: true, Mode: "XX"}).Err(); err != nil && err != redislib.Nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (r *SessionRepository) setJSON(ctx context.Context, key string, value any, ttl time.Duration) error {
 	data, err := json.Marshal(value)
 	if err != nil {

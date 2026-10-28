@@ -496,3 +496,59 @@ object AegisFeatureTimeCodes {
     /** 租约不存在或不属于当前用户。 */
     const val FEATURE_TIME_LEASE_NOT_FOUND: Int = 40406
 }
+
+/** `GET /me/account-setup`：快速登录建的号还缺什么、现在该怎么提醒。 */
+@Serializable
+data class AegisAccountSetupStatus(
+    /** 还有没完成的项（按应用策略要求的算）。 */
+    val required: Boolean = false,
+    /** 用户名还是系统生成的，需要设置。 */
+    val accountRequired: Boolean = false,
+    /** 还没有密码，需要设置。 */
+    val passwordRequired: Boolean = false,
+    /** none / dialog / banner。dialog 只出现一次，展示后调 markAccountSetupPrompted。 */
+    val prompt: String = PROMPT_NONE,
+    /** 横幅能不能关闭。 */
+    val dismissible: Boolean = true,
+    val account: String = "",
+    /** 建号方式：oauth / sms / cardkey；自己注册的账号为空串。 */
+    val source: String = "",
+    /** 第三方渠道（source = oauth 时），如 qq。 */
+    val provider: String = "",
+    val snoozedUntil: String? = null,
+    val completedAt: String? = null,
+    /** 可直接选用的用户名（服务端已确认未被占用）。 */
+    val suggestions: List<String> = emptyList(),
+    val rules: AegisUsernameRules = AegisUsernameRules(),
+) {
+    companion object {
+        const val PROMPT_NONE = "none"
+        const val PROMPT_DIALOG = "dialog"
+        const val PROMPT_BANNER = "banner"
+    }
+}
+
+/** 用户名规则：长度按字符计，[hint] 可直接显示在输入框下方。 */
+@Serializable
+data class AegisUsernameRules(
+    val minLength: Int = 4,
+    val maxLength: Int = 24,
+    val hint: String = "",
+)
+
+/** `POST /me/account-setup` 的结果。 */
+@Serializable
+data class AegisAccountSetupResult(
+    val status: AegisAccountSetupStatus = AegisAccountSetupStatus(),
+    /** 现在的账号名。 */
+    val account: String = "",
+    val accountChanged: Boolean = false,
+    val passwordSet: Boolean = false,
+)
+
+/** `POST /me/account-setup/check`：[message] 是不可用的原因。 */
+@Serializable
+data class AegisUsernameCheck(
+    val available: Boolean = false,
+    val message: String = "",
+)

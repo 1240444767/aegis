@@ -181,6 +181,7 @@ func (s *AuthService) createPhoneUser(ctx context.Context, input SMSLoginInput, 
 
 	userID := user.ID
 	appID := input.AppID
+	s.trackAccountSetup(ctx, appID, userID, appdomain.AccountSetupSourceSMS, "")
 	s.runDetached("register.sms.audit", 3*time.Second, func(actx context.Context) {
 		_ = s.pg.InsertLoginAudit(actx, appID, userID, "register", "sms", "",
 			input.IP, input.DeviceID, input.UserAgent, "success", map[string]any{

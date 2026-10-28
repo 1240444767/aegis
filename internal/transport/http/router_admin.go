@@ -150,6 +150,9 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/signin-reward/test", h.TestAdminAppSignInReward)
 		admin.POST("/apps/:appkey/signin-reward/reset", h.ResetAdminAppSignInReward)
 		admin.GET("/apps/:appkey/auto-sign", h.AdminAppAutoSign)
+		// 账号初始化策略：快速登录建的号怎么引导补设用户名与密码
+		admin.GET("/apps/:appkey/account-setup", h.AdminAppAccountSetup)
+		admin.PUT("/apps/:appkey/account-setup", h.UpdateAdminAppAccountSetup)
 		// 应用级 Passkey 依赖方（RP ID、网页来源、安卓包与证书），见 domain/app/passkey.go
 		admin.GET("/apps/:appkey/passkey", h.AdminAppPasskeyPolicy)
 		admin.PUT("/apps/:appkey/passkey", h.UpdateAdminAppPasskeyPolicy)
@@ -405,6 +408,9 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.GET("/apps/:appkey/users/:userId/oauth2-grants", h.AdminListUserOAuth2Grants)
 		admin.DELETE("/apps/:appkey/users/:userId/oauth2-grants", h.AdminRevokeUserOAuth2Grants)
 		admin.PUT("/apps/:appkey/users/:userId/profile", h.AdminUpdateUserProfile)
+		admin.PUT("/apps/:appkey/users/:userId/account", h.AdminRenameAppUser)
+		admin.GET("/apps/:appkey/users/:userId/account-setup", h.AdminAppUserAccountSetup)
+		admin.POST("/apps/:appkey/users/:userId/account-setup/reset", h.AdminResetAppUserAccountSetup)
 		admin.POST("/apps/:appkey/users/:userId/avatar", h.AdminUploadAppUserAvatar)
 		admin.DELETE("/apps/:appkey/users/:userId/avatar", h.AdminRemoveAppUserAvatar)
 		admin.POST("/apps/:appkey/users/:userId/reset-password", h.AdminResetUserPassword)

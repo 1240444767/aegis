@@ -204,6 +204,7 @@ func (s *AuthService) afterCardKeyRegister(ctx context.Context, input CardKeyLog
 	appID := input.AppID
 	account := user.Account
 
+	s.trackAccountSetup(ctx, appID, userID, appdomain.AccountSetupSourceCardKey, "")
 	s.runDetached("register.cardkey.audit", 3*time.Second, func(actx context.Context) {
 		_ = s.pg.InsertLoginAudit(actx, appID, userID, "register", "cardkey", "",
 			input.IP, input.DeviceID, input.UserAgent, "success", map[string]any{

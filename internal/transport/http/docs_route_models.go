@@ -110,6 +110,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/reject"):                        AccountDeletionNoteRequest{},             // AdminRejectAccountDeletion
 		routeKey("POST", "/api/admin/apps/{appkey}/account-deletion/requests/{requestId}/reschedule"):                    AccountDeletionRescheduleRequest{},       // AdminRescheduleAccountDeletion
 		routeKey("PUT", "/api/admin/apps/{appkey}/account-deletion/settings"):                                            AccountDeletionSettingsRequest{},         // AdminSaveAccountDeletionSettings
+		routeKey("PUT", "/api/admin/apps/{appkey}/account-setup"):                                                        AdminAccountSetupPolicyRequest{},         // UpdateAdminAppAccountSetup
 		routeKey("PUT", "/api/admin/apps/{appkey}/ad-policy/config"):                                                     SaveAdPolicyRequest{},                    // AdminSaveAdPolicy
 		routeKey("PUT", "/api/admin/apps/{appkey}/ai-gateway/keys/{keyId}/status"):                                       AIGatewayKeyStatusRequest{},              // AdminSetAIGatewayKeyStatus
 		routeKey("POST", "/api/admin/apps/{appkey}/ai-gateway/models"):                                                   aigateway.ModelInput{},                   // AdminCreateAIGatewayModel
@@ -271,7 +272,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/users/bans/batch"):                                                    AdminUserBanBatchCreateRequest{},         // BatchCreateAdminAppUserBan
 		routeKey("GET", "/api/admin/apps/{appkey}/users/export"):                                                         AdminUserListQuery{},                     // ExportAdminAppUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/users/status/batch"):                                                   AdminUserBatchStatusRequest{},            // BatchUpdateAdminAppUserStatus
+		routeKey("PUT", "/api/admin/apps/{appkey}/users/{userId}/account"):                                               AdminRenameUserRequest{},                 // AdminRenameAppUser
 		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/account-deletion"):                                     AccountDeletionAdminCreateRequest{},      // AdminCreateUserAccountDeletion
+		routeKey("POST", "/api/admin/apps/{appkey}/users/{userId}/account-setup/reset"):                                  AdminResetAccountSetupRequest{},          // AdminResetAppUserAccountSetup
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/audits/login"):                                          AdminUserLoginAuditQuery{},               // AdminAppUserLoginAudits
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/audits/sessions"):                                       AdminUserSessionAuditQuery{},             // AdminAppUserSessionAudits
 		routeKey("GET", "/api/admin/apps/{appkey}/users/{userId}/bans"):                                                  AdminUserBanListQuery{},                  // AdminAppUserBans
@@ -300,8 +303,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant"):                                                           AdminVipGrantRequest{},                   // AdminGrantAppUserVip
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant/preview"):                                                   AdminVipGrantRequest{},                   // AdminPreviewAppUserVipGrant
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/plans"):                                                           AdminVipPlanRequest{},                    // AdminSaveAppVipPlan
-		routeKey("POST", "/api/admin/apps/{appkey}/vip/tiers"):                                                           AdminVipTierRequest{},                    // AdminSaveAppVipTier
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/revoke"):                                                          AdminVipRevokeRequest{},                  // AdminRevokeAppUserVip
+		routeKey("POST", "/api/admin/apps/{appkey}/vip/tiers"):                                                           AdminVipTierRequest{},                    // AdminSaveAppVipTier
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/trial/claims"):                                                    AdminVipTrialClaimRequest{},              // AdminClaimAppVipTrial
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/adjust"):                                                       AdminWalletAdjustRequest{},               // AdminAdjustAppUserWallet
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/receipt"):                                                      AdminWalletReceiptRequest{},              // AdminAppWalletReceipt
@@ -730,6 +733,8 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes/regenerate"):                                       RecoveryCodesRegenerateRequest{},         // RegenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/totp/disable"):                                                    TOTPDisableRequest{},                     // DisableTOTP
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/totp/enable"):                                                     TOTPEnableRequest{},                      // EnableTOTP
+		routeKey("POST", "/api/v1/apps/{appkey}/me/account-setup"):                                                       AccountSetupRequest{},                    // AppCompleteAccountSetup
+		routeKey("POST", "/api/v1/apps/{appkey}/me/account-setup/check"):                                                 AccountSetupCheckRequest{},               // AppAccountSetupCheck
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/login"):                                                         UserLoginAuditQuery{},                    // UserLoginAudits
 		routeKey("GET", "/api/v1/apps/{appkey}/me/audits/sessions"):                                                      UserSessionAuditQuery{},                  // UserSessionAudits
 		routeKey("PUT", "/api/v1/apps/{appkey}/me/auto-sign"):                                                            AutoSignUpdateRequest{},                  // AppUpdateAutoSign

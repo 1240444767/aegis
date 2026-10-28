@@ -151,6 +151,8 @@ func init() {
 		View("POST /api/admin/apps/:appkey/signin-reward/test", "试算签到奖励", ""),
 		View("GET /api/admin/apps/:appkey/auto-sign", "查看自动签到策略", ""),
 		Write("PUT /api/admin/apps/:appkey/auto-sign", "修改自动签到策略", "", SeverityMedium),
+		View("GET /api/admin/apps/:appkey/account-setup", "查看账号初始化策略", ""),
+		Write("PUT /api/admin/apps/:appkey/account-setup", "修改账号初始化策略", "", SeverityMedium),
 
 		// 抽奖
 		View("GET /api/admin/apps/:appkey/lottery/catalog", "查看抽奖奖品目录", ""),
