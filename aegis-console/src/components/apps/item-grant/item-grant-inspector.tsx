@@ -180,7 +180,7 @@ export function NodeInspector({
   );
 }
 
-type FormProps<T> = { data: T; patch: (next: Record<string, unknown>) => void };
+export type FormProps<T> = { data: T; patch: (next: Record<string, unknown>) => void };
 
 function TriggerForm({ data, catalog, patch }: FormProps<ItemGrantTriggerData> & { catalog: ItemGrantCatalog }) {
   const event = catalog.events.find((candidate) => candidate.key === data.event);
@@ -341,12 +341,22 @@ function groupFields(fields: ItemGrantFieldSpec[]) {
   return Array.from(groups.entries());
 }
 
-function ConditionForm({
+/** 条件构建器（可视化规则 / 表达式）。等级体系的晋级条件也用它，`newRule` 是「添加条件」时的默认一行。 */
+export function ConditionForm({
   data,
   catalog,
   patch,
-  triggerEvent
-}: FormProps<ItemGrantConditionData> & { catalog: ItemGrantCatalog; triggerEvent?: string }) {
+  triggerEvent,
+  title = "条件",
+  newRule = { field: "user.level", op: "gte", value: [1] },
+  exprPlaceholder = "user.signStreak >= 7 && now.weekday in [6, 7]"
+}: FormProps<ItemGrantConditionData> & {
+  catalog: ItemGrantCatalog;
+  triggerEvent?: string;
+  title?: string;
+  newRule?: ItemGrantConditionRule;
+  exprPlaceholder?: string;
+}) {
   const eventFields = new Set(catalog.events.find((event) => event.key === triggerEvent)?.fields.map((field) => field.key) ?? []);
   const fields = catalog.fields.filter((field) => !field.key.startsWith("event.") || eventFields.has(field.key));
   const grouped = useMemo(() => groupFields(fields), [fields]);
@@ -355,7 +365,7 @@ function ConditionForm({
   const generated = data.mode === "expr" ? "" : rulesExpr(data.mode, rules);
 
   return (
-    <FieldGroup title="条件">
+    <FieldGroup title={title}>
       <ToggleGroup
         type="single"
         variant="outline"
@@ -396,7 +406,7 @@ function ConditionForm({
             size="sm"
             className="h-8 w-full justify-start border-dashed text-xs font-normal text-muted-foreground"
             disabled={rules.length >= (catalog.limits.maxConditionRules ?? 20)}
-            onClick={() => setRules([...rules, { field: "user.level", op: "gte", value: [1] }])}
+            onClick={() => setRules([...rules, newRule])}
           >
             <Plus className="size-3.5" /> 添加条件
           </Button>
@@ -413,7 +423,7 @@ function ConditionForm({
             className="min-h-28 font-mono text-xs"
             value={data.expr ?? ""}
             spellCheck={false}
-            placeholder="user.signStreak >= 7 && now.weekday in [6, 7]"
+            placeholder={exprPlaceholder}
             onChange={(event) => patch({ expr: event.target.value })}
           />
           <p className="text-[11px] leading-4 text-muted-foreground">
