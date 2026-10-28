@@ -32,7 +32,7 @@ ItemID = Annotated[int, Field(gt=0, description="商品 ID（store_items 结果�
 RedemptionID = Annotated[int, Field(gt=0, description="兑换记录 ID（store_redemptions 结果里的 id）")]
 Period = Literal["total", "day", "week", "month"]
 RestockPeriod = Literal["none", "day", "week", "month"]
-Audience = Literal["all", "vip", "non_vip"]
+Audience = Literal["all", "vip", "non_vip", "lifetime"]
 
 
 class Reward(BaseModel):
@@ -131,7 +131,7 @@ async def create_item(
     user_total_limit: Annotated[int | None, Field(ge=0, description="每人累计上限，0 为不限（limit_period=total 时无意义）")] = None,
     daily_open_minute: Annotated[int | None, Field(ge=0, le=1440, description="每日开放时刻（自零点起的分钟数，应用默认时区）")] = None,
     daily_close_minute: Annotated[int | None, Field(ge=0, le=1440, description="每日关闭时刻（分钟数，1440 即 24:00；早于开放表示跨零点）")] = None,
-    audience: Annotated[Audience | None, Field(description="兑换对象：all / vip 仅会员 / non_vip 仅非会员")] = None,
+    audience: Annotated[Audience | None, Field(description="兑换对象：all / vip 仅会员 / non_vip 仅非会员 / lifetime 仅永久会员")] = None,
     min_level: Annotated[int | None, Field(ge=0, le=1000, description="等级门槛，0 为不限")] = None,
     starts_at: Annotated[str | None, Field(description="上架开始时间（ISO 8601），不传为立即")] = None,
     ends_at: Annotated[str | None, Field(description="下架时间（ISO 8601），不传为长期")] = None,

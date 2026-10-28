@@ -527,7 +527,7 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "按商品的 limitPeriod 计：total 为累计，day / week / month 按应用时区的自然日、周、月"},
 	{Code: errCodePointsInsufficient, Name: "POINTS_INSUFFICIENT", Message: "积分不足", Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRequirement, Name: "POINTS_STORE_REQUIREMENT_UNMET", Message: "不满足兑换条件",
-		Recovery: authprotocol.RecoveryNone, Hint: "等级门槛（minLevel）或兑换对象（audience: vip / non_vip）不符，message 说明具体是哪一条"},
+		Recovery: authprotocol.RecoveryNone, Hint: "等级门槛（minLevel）或兑换对象（audience: vip / non_vip / lifetime）不符，message 说明具体是哪一条"},
 	{Code: errCodePointsStoreOwned, Name: "POINTS_STORE_OWNED", Message: "已拥有该权益，无需兑换",
 		Recovery: authprotocol.RecoveryNone, Hint: "永久会员已包含所兑的会员，或所兑功能已永久解锁"},
 	{Code: errCodePointsStoreItemNotFound, Name: "POINTS_STORE_ITEM_NOT_FOUND", Message: "商品不存在或已删除",

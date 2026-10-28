@@ -39,6 +39,8 @@ const (
 	AudienceAll    = "all"
 	AudienceVip    = "vip"     // 仅会员
 	AudienceNonVip = "non_vip" // 仅非会员
+	// AudienceLifetime 仅永久会员：永久会员已拥有全部会员与功能权益，给他们专属的兑换项
+	AudienceLifetime = "lifetime"
 )
 
 // 兑换记录状态。
@@ -433,6 +435,7 @@ const (
 	ReasonLevelRequired      = "level_required"
 	ReasonVipOnly            = "vip_only"
 	ReasonNonVipOnly         = "non_vip_only"
+	ReasonLifetimeOnly       = "lifetime_only"
 	ReasonOwned              = "owned"
 	ReasonInsufficientPoints = "insufficient_points"
 	ReasonRewardUnavailable  = "reward_unavailable"

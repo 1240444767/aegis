@@ -531,7 +531,7 @@ function EditorBody({ appKey, target, onClose }: { appKey: string; target: Edito
                 onValueChange={(value) => value && patch("audience", value as PointsStoreAudience)}
                 className="w-full"
               >
-                {(catalogQuery.data?.audiences ?? ["all", "vip", "non_vip"]).map((audience) => (
+                {(catalogQuery.data?.audiences ?? ["all", "vip", "non_vip", "lifetime"]).map((audience) => (
                   <ToggleGroupItem key={audience} value={audience} className="flex-1 text-xs">
                     {AUDIENCE_LABEL[audience]}
                   </ToggleGroupItem>

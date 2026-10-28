@@ -130,6 +130,11 @@ func TestEvaluateReasons(t *testing.T) {
 		{"本周未满", func(i *Item) { i.LimitPeriod, i.LimitCount = PeriodWeek, 2 }, nil, Usage{Total: 5, Week: 1}, ReasonOK},
 		{"仅会员", func(i *Item) { i.Audience = AudienceVip }, nil, Usage{}, ReasonVipOnly},
 		{"仅非会员", func(i *Item) { i.Audience = AudienceNonVip }, func(f *UserFacts) { f.IsVip = true }, Usage{}, ReasonNonVipOnly},
+		{"仅永久会员（限时会员）", func(i *Item) { i.Audience = AudienceLifetime }, func(f *UserFacts) { f.IsVip = true }, Usage{}, ReasonLifetimeOnly},
+		{"仅永久会员", func(i *Item) {
+			i.Audience, i.Rewards = AudienceLifetime, []Reward{{Type: RewardLotteryDraws, Amount: 30}}
+		},
+			func(f *UserFacts) { f.IsVip, f.IsLifetime, f.Holdings.Lifetime = true, true, true }, Usage{}, ReasonOK},
 		{"等级不足", func(i *Item) { i.MinLevel = 5 }, nil, Usage{}, ReasonLevelRequired},
 		{"已永久解锁", nil, func(f *UserFacts) { f.Holdings.PermanentUnlocks = []string{"online_music"} }, Usage{}, ReasonOwned},
 		{"永久会员已含该功能", nil, func(f *UserFacts) {

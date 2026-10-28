@@ -48,7 +48,8 @@ export const CURRENT_PERIOD_LABEL: Record<PointsStoreLimitPeriod, string> = {
 export const AUDIENCE_LABEL: Record<PointsStoreAudience, string> = {
   all: "所有用户",
   vip: "仅会员",
-  non_vip: "仅非会员"
+  non_vip: "仅非会员",
+  lifetime: "仅永久会员"
 };
 
 const REDEMPTION_STATUS_META: Record<

@@ -12,7 +12,7 @@ export type PointsStoreRewardValue = "amount" | "money" | "ref" | "feature" | "t
 export type PointsStoreLimitPeriod = "total" | "day" | "week" | "month";
 /** 补货周期：每到新的自然日 / ISO 周 / 自然月，剩余库存回到补货数量 */
 export type PointsStoreRestockPeriod = "none" | "day" | "week" | "month";
-export type PointsStoreAudience = "all" | "vip" | "non_vip";
+export type PointsStoreAudience = "all" | "vip" | "non_vip" | "lifetime";
 export type PointsStoreItemStatus = "active" | "inactive";
 export type PointsStoreRedemptionStatus = "completed" | "pending" | "cancelled";
 

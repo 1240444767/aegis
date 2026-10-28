@@ -67,7 +67,7 @@
 | `sold_out` | 40305 | 库存为 0（按补货周期换算后；开了补货时提示「已兑完，明日补货」） |
 | `quota_reached` | 40305 | 全站名额已满（提示「今日名额已满」） |
 | `limit_reached` | 40306 | 每人限兑：`limitCount` 次 / `limitPeriod`（total / 自然日 / ISO 周 / 自然月，应用默认时区），或每人累计上限 `userTotalLimit` |
-| `vip_only` / `non_vip_only` / `level_required` | 40308 | 兑换对象或等级门槛不符 |
+| `vip_only` / `non_vip_only` / `lifetime_only` / `level_required` | 40308 | 兑换对象或等级门槛不符 |
 | `owned` | 40309 | 永久会员已包含所兑会员（会员天数、功能已全包含的套餐），或功能已永久解锁 |
 | `insufficient_points` | 40307 | 积分不足 —— 排最后：它是唯一一个用户自己马上能解决的原因 |
 

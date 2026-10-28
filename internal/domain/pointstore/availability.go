@@ -22,6 +22,7 @@ var reasonMessages = map[string]string{
 	ReasonLevelRequired:      "等级不足",
 	ReasonVipOnly:            "仅限会员兑换",
 	ReasonNonVipOnly:         "仅限非会员兑换",
+	ReasonLifetimeOnly:       "仅限永久会员兑换",
 	ReasonOwned:              "已拥有该权益，无需兑换",
 	ReasonInsufficientPoints: "积分不足",
 	ReasonRewardUnavailable:  "商品配置的权益已失效",
@@ -88,6 +89,8 @@ func evaluateReason(item Item, facts UserFacts, usage Usage, clock Clock) string
 		return ReasonVipOnly
 	case item.Audience == AudienceNonVip && facts.IsVip:
 		return ReasonNonVipOnly
+	case item.Audience == AudienceLifetime && !facts.IsLifetime:
+		return ReasonLifetimeOnly
 	case item.MinLevel > 0 && facts.Level < item.MinLevel:
 		return ReasonLevelRequired
 	case Owned(item.Rewards, facts):

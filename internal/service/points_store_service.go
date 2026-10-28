@@ -627,7 +627,7 @@ func pointsStoreReasonCode(reason string) int {
 		return errCodePointsStoreLimitReached
 	case pointstore.ReasonInsufficientPoints:
 		return errCodePointsInsufficient
-	case pointstore.ReasonLevelRequired, pointstore.ReasonVipOnly, pointstore.ReasonNonVipOnly:
+	case pointstore.ReasonLevelRequired, pointstore.ReasonVipOnly, pointstore.ReasonNonVipOnly, pointstore.ReasonLifetimeOnly:
 		return errCodePointsStoreRequirement
 	case pointstore.ReasonOwned:
 		return errCodePointsStoreOwned

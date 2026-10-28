@@ -155,7 +155,7 @@ func LimitPeriods() []string {
 
 // Audiences 兑换对象，顺序即控制台的展示顺序。
 func Audiences() []string {
-	return []string{AudienceAll, AudienceVip, AudienceNonVip}
+	return []string{AudienceAll, AudienceVip, AudienceNonVip, AudienceLifetime}
 }
 
 // ValidateRewards 校验一件商品的权益清单（只校验形状，引用的套餐与功能是否存在由服务层查）。
