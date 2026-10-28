@@ -83,6 +83,7 @@
     ".eslintcache"
   ],
   "secrets": [
+    "AEGIS_API_BACKEND",
     "NEXT_PUBLIC_AEGIS_CONSOLE_NAME",
     "NEXT_PUBLIC_AEGIS_ENVIRONMENT"
   ],
