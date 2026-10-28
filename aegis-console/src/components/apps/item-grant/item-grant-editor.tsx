@@ -707,6 +707,7 @@ function NodePalette({
             {specs.map((spec) => {
               const visual = NODE_VISUAL[spec.type];
               const disabled = spec.singleton && hasTrigger;
+              const outputs = spec.outputs ?? [];
               return (
                 <Tooltip key={spec.type}>
                   <TooltipTrigger asChild>
@@ -728,7 +729,7 @@ function NodePalette({
                       <div className="min-w-0">
                         <div className="truncate text-xs font-medium">{spec.label}</div>
                         <div className="truncate text-[10px] text-muted-foreground">
-                          {disabled ? "已有触发器" : spec.outputs.length ? spec.outputs.map((output) => output.label).join(" / ") : spec.dynamicOutputs ? "多个分支" : "终点"}
+                          {disabled ? "已有触发器" : outputs.length ? outputs.map((output) => output.label).join(" / ") : spec.dynamicOutputs ? "多个分支" : "终点"}
                         </div>
                       </div>
                     </button>

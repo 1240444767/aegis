@@ -85,7 +85,8 @@ var nodeSpecs = []NodeSpec{
 			{ID: HandleIn, Label: "窗口内", Tone: "positive"},
 			{ID: HandleOut, Label: "窗口外", Tone: "negative"},
 		}},
-	{Type: NodeSplit, Label: "随机分流", Category: CategoryFlow, DynamicOutputs: true,
+	// 端口由分支决定；Outputs 仍给空切片：nil 会序列化成 null，控制台按数组读会崩
+	{Type: NodeSplit, Label: "随机分流", Category: CategoryFlow, DynamicOutputs: true, Outputs: []HandleSpec{},
 		Hint: "按权重把人分到不同分支（A/B 测试）；固定分配时同一个人每次都进同一个分支"},
 	{Type: NodeLimit, Label: "频次限额", Category: CategoryFlow,
 		Hint: "每人在周期内最多经过几次、全站在周期内最多几人次；超出的走「超出」分支",

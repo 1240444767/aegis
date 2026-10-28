@@ -3,6 +3,7 @@ package itemgrant
 import (
 	"encoding/json"
 	"math/rand/v2"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -288,5 +289,21 @@ func TestEventFieldsDefaultToZero(t *testing.T) {
 	outcome, _ = compiled.Evaluate(subject(1), &fakeFacts{}, nil)
 	if outcome.Granting() {
 		t.Error("没有事件数据时 event.amount 按 0 处理，不满足条件")
+	}
+}
+
+// 控制台把目录里的数组字段直接当数组读（.length / .map）：任何一处 nil 切片序列化成 null 都会让画布编辑器崩溃。
+func TestCatalogHasNoNullArrays(t *testing.T) {
+	payload := map[string]any{
+		"items": ItemCatalog(), "itemGroups": ItemGroups(), "nodes": NodeCatalog(), "categories": NodeCategories(),
+		"triggers": TriggerCatalog(), "events": EventCatalog(), "fields": FieldCatalog(), "operators": OperatorCatalog(),
+		"scopes": Scopes(), "periods": Periods(), "routes": NotifyRoutes(), "templates": Templates(), "starter": StarterGraph(),
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, match := range regexp.MustCompile(`.{0,80}:null`).FindAll(raw, -1) {
+		t.Errorf("目录里有 null 字段：…%s", match)
 	}
 }
