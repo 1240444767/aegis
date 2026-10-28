@@ -58,15 +58,19 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	defer func() {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		_ = system.Stop(stopCtx)
-	}()
 
 	system.API.Logger.Info("aegis api starting", zap.Int("port", system.API.Config.HTTPPort))
-	bootstrap.PrintReadyBanner(ctx, system.API.BannerRuntimeOf(bootstrap.RoleAPI, time.Since(started)))
-	if err := system.Run(ctx); err != nil {
+	if err := system.StartWithTimeout(ctx); err != nil {
+		_ = system.StopWithTimeout()
 		panic(err)
+	}
+	bootstrap.PrintReadyBanner(ctx, system.API.BannerRuntimeOf(bootstrap.RoleAPI, time.Since(started)))
+
+	runErr := system.Wait(ctx)
+	if err := system.StopWithTimeout(); err != nil {
+		system.API.Logger.Warn("graceful shutdown incomplete", zap.Error(err))
+	}
+	if runErr != nil {
+		panic(runErr)
 	}
 }

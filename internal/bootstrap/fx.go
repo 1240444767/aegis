@@ -18,6 +18,9 @@ type RuntimeSystem struct {
 	API     *APIApp
 	Worker  *WorkerApp
 	Unified *UnifiedApp
+
+	stopOnce sync.Once
+	stopErr  error
 }
 
 type runtimeMode string
@@ -65,35 +68,54 @@ func (s *RuntimeSystem) Start(ctx context.Context) error {
 	return s.app.Start(ctx)
 }
 
+// Stop 只执行一次：入口的 defer 与 Run 的收尾都可能调用它。
 func (s *RuntimeSystem) Stop(ctx context.Context) error {
 	if s == nil || s.app == nil {
 		return nil
 	}
-	return s.app.Stop(ctx)
+	s.stopOnce.Do(func() {
+		s.stopErr = s.app.Stop(ctx)
+	})
+	return s.stopErr
 }
 
-func (s *RuntimeSystem) Run(ctx context.Context) error {
-	if s == nil {
-		return fmt.Errorf("runtime system is not initialized")
-	}
-	startCtx, cancelStart := context.WithTimeout(ctx, s.shutdownTimeout())
-	defer cancelStart()
-	if err := s.Start(startCtx); err != nil {
-		return err
-	}
+// StartWithTimeout 按 ShutdownTimeout 为启动设上限：依赖迟迟连不上时让进程失败退出，
+// 交给编排系统重启，而不是一直卡在半启动状态。
+func (s *RuntimeSystem) StartWithTimeout(ctx context.Context) error {
+	startCtx, cancel := context.WithTimeout(ctx, s.shutdownTimeout())
+	defer cancel()
+	return s.Start(startCtx)
+}
 
-	defer func() {
-		stopCtx, cancelStop := context.WithTimeout(context.Background(), s.shutdownTimeout())
-		defer cancelStop()
-		_ = s.Stop(stopCtx)
-	}()
-
+// Wait 阻塞到收到停止信号（ctx 取消）或任一组件上报致命错误。
+func (s *RuntimeSystem) Wait(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return nil
 	case err := <-s.errors:
 		return err
 	}
+}
+
+// StopWithTimeout 在 ShutdownTimeout 内完成优雅关停。
+func (s *RuntimeSystem) StopWithTimeout() error {
+	stopCtx, cancel := context.WithTimeout(context.Background(), s.shutdownTimeout())
+	defer cancel()
+	return s.Stop(stopCtx)
+}
+
+// Run = 启动 → 等待 → 关停。需要在启动完成后做事（打印就绪横幅等）时，
+// 分开调用 StartWithTimeout / Wait / StopWithTimeout。
+func (s *RuntimeSystem) Run(ctx context.Context) error {
+	if s == nil {
+		return fmt.Errorf("runtime system is not initialized")
+	}
+	if err := s.StartWithTimeout(ctx); err != nil {
+		_ = s.StopWithTimeout()
+		return err
+	}
+	defer func() { _ = s.StopWithTimeout() }()
+	return s.Wait(ctx)
 }
 
 func (s *RuntimeSystem) shutdownTimeout() time.Duration {
@@ -156,7 +178,9 @@ func newRuntimeSystem(mode runtimeMode, constructCtx context.Context, cl *crashl
 					}
 				},
 			),
-			fx.Invoke(registerAPIRuntimeLifecycle, registerWorkerRuntimeLifecycle),
+			// fx 按注册顺序启动、逆序停止：Worker 先起、API 最后开始接流量；
+			// 关停时 API 先停止接新请求，Worker 再把在途任务收尾。
+			fx.Invoke(registerWorkerRuntimeLifecycle, registerAPIRuntimeLifecycle),
 			fx.Populate(&system.API, &system.Worker, &system.Unified),
 		)
 	default:

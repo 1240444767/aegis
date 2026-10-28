@@ -1,80 +1,9 @@
 package bootstrap
 
-import (
-	"context"
-	"errors"
-	"fmt"
-
-	"aegis/internal/config"
-	"aegis/pkg/crashlog"
-)
-
+// UnifiedApp 是单进程同时承载 API 与 Worker 时两者的句柄。
+// 启停由 RuntimeSystem（fx 生命周期）统一编排，见 NewUnifiedSystem：
+// Worker 先启动、API 最后开始接流量；关停逆序，且每个组件的 Close 只执行一次。
 type UnifiedApp struct {
 	API    *APIApp
 	Worker *WorkerApp
-}
-
-func NewUnifiedApp(ctx context.Context, cl *crashlog.Logger) (*UnifiedApp, error) {
-	manager, err := config.NewManager()
-	if err != nil {
-		return nil, err
-	}
-
-	api, err := NewAPIAppWithConfigManager(ctx, cl, manager)
-	if err != nil {
-		return nil, err
-	}
-
-	worker, err := NewWorkerAppWithConfigManager(ctx, cl, manager)
-	if err != nil {
-		api.Close(context.Background())
-		return nil, err
-	}
-
-	return &UnifiedApp{
-		API:    api,
-		Worker: worker,
-	}, nil
-}
-
-func (u *UnifiedApp) Run(ctx context.Context) error {
-	if u.API != nil {
-		if err := u.API.Start(ctx); err != nil {
-			return err
-		}
-	}
-
-	errCh := make(chan error, 2)
-
-	go func() {
-		if err := u.Worker.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			errCh <- fmt.Errorf("worker run failed: %w", err)
-		}
-	}()
-
-	report := func(err error) {
-		select {
-		case errCh <- err:
-		default:
-		}
-	}
-	if err := u.API.Serve(report); err != nil {
-		return err
-	}
-
-	select {
-	case <-ctx.Done():
-		return nil
-	case err := <-errCh:
-		return err
-	}
-}
-
-func (u *UnifiedApp) Close(ctx context.Context) {
-	if u.Worker != nil {
-		u.Worker.Close(ctx)
-	}
-	if u.API != nil {
-		u.API.Close(ctx)
-	}
 }
