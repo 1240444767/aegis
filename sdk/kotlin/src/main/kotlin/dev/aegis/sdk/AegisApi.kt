@@ -598,7 +598,7 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     /**
      * 设置用户名与（或）密码，两项可以分开提交，传 null 表示这次不设。
      *
-     * 用户名只能自助设一次（之后 40964），被占用 40963；已有密码时设密码 40967，改走 [changePassword]。
+     * 用户名只能自助设一次（之后 40964），被占用 40963；已有密码时设密码 40967，改走 [AegisAuthApi.changePassword]。
      */
     @Throws(IOException::class)
     @JvmOverloads

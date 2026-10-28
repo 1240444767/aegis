@@ -19,7 +19,7 @@
 
 ## 应用策略
 
-`apps.settings.accountSetup`，控制台「用户 → 账号初始化」。没配置过时用默认策略。
+`apps.settings.accountSetup`，控制台应用详情「认证与安全 → 账号初始化」（`?tab=account-setup`）。没配置过时用默认策略。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
