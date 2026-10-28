@@ -137,7 +137,12 @@ func (h *Handler) PointsOverview(c *gin.Context) {
 }
 
 func (h *Handler) PointsLevels(c *gin.Context) {
-	levels, err := h.points.ListLevels(c.Request.Context())
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
+		return
+	}
+	levels, err := h.points.ListLevels(c.Request.Context(), session.AppID, session.UserID)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -146,7 +151,9 @@ func (h *Handler) PointsLevels(c *gin.Context) {
 }
 
 func (h *Handler) LegacyLevelConfig(c *gin.Context) {
-	levels, err := h.points.ListLevels(c.Request.Context())
+	var query AppIDQuery
+	_ = bind(c, &query)
+	levels, err := h.points.ListLevels(c.Request.Context(), query.AppID, 0)
 	if err != nil {
 		h.writeError(c, err)
 		return

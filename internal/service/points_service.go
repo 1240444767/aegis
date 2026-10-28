@@ -53,8 +53,9 @@ func (s *PointsService) ListExperienceTransactions(ctx context.Context, session 
 	return s.pg.ListExperienceTransactions(ctx, session.UserID, session.AppID, page, limit)
 }
 
-func (s *PointsService) ListLevels(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	return s.pg.ListLevelConfigs(ctx)
+// ListLevels 应用的全部等级（docs/levels.md）；userID 不为 0 时标出已达到的等级、按体系隐藏未达到的。
+func (s *PointsService) ListLevels(ctx context.Context, appID, userID int64) ([]pointdomain.LevelConfig, error) {
+	return s.pg.ListLevelConfigs(ctx, appID, userID)
 }
 
 func (s *PointsService) GetMyLevel(ctx context.Context, session *authdomain.Session) (*pointdomain.LevelProfile, error) {

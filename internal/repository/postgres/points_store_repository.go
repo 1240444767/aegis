@@ -405,7 +405,7 @@ func (r *Repository) assemblePointsStoreFacts(ctx context.Context, q queryExecut
 	integral, experience int64, entitlementFacts *vipdomain.EvalInput) (*pointstore.UserFacts, error) {
 	now := time.Now()
 	entitlement := vipdomain.Evaluate(*entitlementFacts, now)
-	levels, err := r.getActiveLevels(ctx)
+	level, _, err := r.userLevelQ(ctx, q, appID, userID, experience)
 	if err != nil {
 		return nil, err
 	}
@@ -415,7 +415,7 @@ func (r *Repository) assemblePointsStoreFacts(ctx context.Context, q queryExecut
 	}
 	return &pointstore.UserFacts{
 		Integral:   integral,
-		Level:      r.resolveLevelState(levels, experience).CurrentLevel,
+		Level:      level,
 		IsVip:      entitlement.IsVIP,
 		IsLifetime: entitlement.IsLifetime,
 		Holdings:   vipdomain.HoldingsOf(*entitlementFacts, now),

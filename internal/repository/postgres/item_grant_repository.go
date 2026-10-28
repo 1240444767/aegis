@@ -415,14 +415,13 @@ WHERE g.id = $1`, id), true)
 const itemGrantBasicsSelect = `SELECT u.id, u.account, COALESCE(up.nickname, ''), u.created_at,
 (COALESCE(u.vip_expire_at > NOW(), FALSE) OR u.vip_lifetime_at IS NOT NULL),
 u.vip_lifetime_at IS NOT NULL,
-COALESCE(lv.level, 0),
+COALESCE(lv.current_level, 1),
 GREATEST((SELECT MAX(d.last_seen_at) FROM user_login_devices d WHERE d.appid = u.appid AND d.user_id = u.id),
          (SELECT MAX(o.updated_at) FROM user_online_daily o WHERE o.user_id = u.id)),
 ` + leaderboardEligibleSQL + `
 FROM users u
 LEFT JOIN user_profiles up ON up.user_id = u.id
-LEFT JOIN LATERAL (SELECT MAX(level) AS level FROM user_levels
-                   WHERE is_active AND experience_required <= u.experience) lv ON true`
+LEFT JOIN user_level_records lv ON lv.user_id = u.id AND lv.appid = u.appid`
 
 func scanItemGrantBasics(row interface{ Scan(dest ...any) error }) (itemgrant.Basics, error) {
 	var b itemgrant.Basics
@@ -464,10 +463,10 @@ func itemGrantAudienceWhere(audience *itemgrant.AudienceConfig, args *[]any) str
 			audience.ActiveWithinDays))
 	}
 	if audience.MinLevel > 0 {
-		where = append(where, add("COALESCE(lv.level, 0) >= ?", audience.MinLevel))
+		where = append(where, add("COALESCE(lv.current_level, 1) >= ?", audience.MinLevel))
 	}
 	if audience.MaxLevel > 0 {
-		where = append(where, add("COALESCE(lv.level, 0) <= ?", audience.MaxLevel))
+		where = append(where, add("COALESCE(lv.current_level, 1) <= ?", audience.MaxLevel))
 	}
 	if len(audience.UserIDs) > 0 {
 		where = append(where, add("u.id = ANY(?)", audience.UserIDs))
@@ -504,8 +503,7 @@ func (r *Repository) CountItemGrantCandidates(ctx context.Context, appID int64, 
 	where := itemGrantAudienceWhere(audience, &args)
 	var total int64
 	err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users u
-LEFT JOIN LATERAL (SELECT MAX(level) AS level FROM user_levels
-                   WHERE is_active AND experience_required <= u.experience) lv ON true
+LEFT JOIN user_level_records lv ON lv.user_id = u.id AND lv.appid = u.appid
 WHERE u.appid = $1 AND `+where, args...).Scan(&total)
 	return total, err
 }

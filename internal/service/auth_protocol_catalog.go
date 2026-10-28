@@ -206,6 +206,10 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsOverview", Method: "GET", Path: "/points/overview", Auth: true, Summary: "积分与经验概览"},
 	{Key: "pointsLevel", Method: "GET", Path: "/points/level", Auth: true, Summary: "我的等级"},
 	{Key: "pointsLevels", Method: "GET", Path: "/points/levels", Auth: true, Summary: "等级配置"},
+	// 达成奖励（docs/levels.md）：升级经过的每一级各一份，claimable 的由用户在这里领取
+	{Key: "pointsLevelRewards", Method: "GET", Path: "/points/level/rewards", Auth: true, Summary: "我的等级达成奖励"},
+	{Key: "pointsLevelRewardClaim", Method: "POST", Path: "/points/level/rewards/{rewardId}/claim", Auth: true, Summary: "领取等级达成奖励"},
+	{Key: "pointsLevelHistory", Method: "GET", Path: "/points/level/history", Auth: true, Summary: "我的升级记录"},
 	{Key: "integralTransactions", Method: "GET", Path: "/points/integral-transactions", Auth: true, Summary: "积分流水"},
 	{Key: "experienceTransactions", Method: "GET", Path: "/points/experience-transactions", Auth: true, Summary: "经验流水"},
 	// 积分商城：每件商品随附 availability（能不能兑、为什么不能），与兑换失败的错误码同一套判据。

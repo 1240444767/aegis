@@ -38,22 +38,54 @@ type Overview struct {
 	RecentExperienceRecords []Transaction `json:"recentExperienceRecords"`
 }
 
+// LevelConfig 一级的展示配置（GET /points/levels）。来自应用的等级体系（docs/levels.md）。
 type LevelConfig struct {
-	ID                 int64          `json:"id"`
-	Level              int            `json:"level"`
-	LevelName          string         `json:"levelName"`
-	ExperienceRequired int64          `json:"experienceRequired"`
-	ExperienceNext     *int64         `json:"experienceNext,omitempty"`
-	ExpMultiplier      float64        `json:"expMultiplier"`
-	Icon               string         `json:"icon,omitempty"`
-	Color              string         `json:"color,omitempty"`
-	Privileges         []any          `json:"privileges,omitempty"`
-	Rewards            map[string]any `json:"rewards,omitempty"`
-	Description        string         `json:"description,omitempty"`
-	IsActive           bool           `json:"isActive"`
-	SortOrder          int            `json:"sortOrder"`
-	CreatedAt          time.Time      `json:"createdAt"`
-	UpdatedAt          time.Time      `json:"updatedAt"`
+	ID                 int64   `json:"id"`
+	Level              int     `json:"level"`
+	LevelName          string  `json:"levelName"`
+	ExperienceRequired int64   `json:"experienceRequired"`
+	ExperienceNext     *int64  `json:"experienceNext,omitempty"`
+	ExpMultiplier      float64 `json:"expMultiplier"`
+	Icon               string  `json:"icon,omitempty"`
+	Color              string  `json:"color,omitempty"`
+	// Privileges 这一级上配置的权益（不含继承）；Effective 到达这一级时实际享有的全部权益
+	Privileges  []LevelPrivilege  `json:"privileges"`
+	Effective   []LevelPrivilege  `json:"effective"`
+	Rewards     []LevelRewardInfo `json:"rewards"`
+	Gate        *LevelGateInfo    `json:"gate,omitempty"`
+	Description string            `json:"description,omitempty"`
+	IsActive    bool              `json:"isActive"`
+	SortOrder   int               `json:"sortOrder"`
+	// Reached 当前用户是否已达到（列表按用户返回时才有意义）
+	Reached   bool      `json:"reached"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+// LevelPrivilege 一条等级权益。Kind：exp_boost / integral_boost / display / custom（App 按 Key 判断）。
+type LevelPrivilege struct {
+	Kind  string  `json:"kind"`
+	Label string  `json:"label"`
+	Key   string  `json:"key,omitempty"`
+	Value float64 `json:"value,omitempty"`
+	Text  string  `json:"text,omitempty"`
+	Icon  string  `json:"icon,omitempty"`
+	// Level 权益来自哪一级
+	Level int `json:"level"`
+}
+
+// LevelRewardInfo 一份达成奖励。Claim：auto 升级自动到账 / manual 在 App 里领取。
+type LevelRewardInfo struct {
+	NodeID string   `json:"nodeId"`
+	Label  string   `json:"label"`
+	Items  []string `json:"items"`
+	Claim  string   `json:"claim"`
+}
+
+// LevelGateInfo 晋级条件（给用户看的说明）。
+type LevelGateInfo struct {
+	Label string `json:"label,omitempty"`
+	Hint  string `json:"hint,omitempty"`
 }
 
 type LevelInfo struct {
@@ -75,6 +107,20 @@ type LevelInfo struct {
 	CurrentLevelConfig *LevelConfig `json:"currentLevelConfig,omitempty"`
 	NextLevelConfig    *LevelConfig `json:"nextLevelConfig,omitempty"`
 	IsMaxLevel         bool         `json:"isMaxLevel"`
+	Icon               string       `json:"icon,omitempty"`
+	Color              string       `json:"color,omitempty"`
+	Description        string       `json:"description,omitempty"`
+	MaxLevel           int          `json:"maxLevel"`
+	// Privileges 当前实际享有的全部等级权益（含继承）
+	Privileges []LevelPrivilege `json:"privileges"`
+	// ClaimableRewards 待领取的达成奖励数
+	ClaimableRewards int `json:"claimableRewards"`
+	// BlockedBy 经验已够、但卡在下一级的晋级条件上
+	BlockedBy     *LevelGateInfo `json:"blockedBy,omitempty"`
+	SchemeName    string         `json:"schemeName,omitempty"`
+	SchemeVersion int            `json:"schemeVersion"`
+	// HideLocked 体系要求 App 不展示还没达到的等级
+	HideLocked bool `json:"hideLocked,omitempty"`
 }
 
 type LevelUserInfo struct {

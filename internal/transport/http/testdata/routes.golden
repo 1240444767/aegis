@@ -233,6 +233,18 @@ GET	/api/admin/apps/:appkey/leaderboard/settings	AdminLeaderboardSettings
 GET	/api/admin/apps/:appkey/leaderboard/snapshots	AdminLeaderboardSnapshots
 GET	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/entries	AdminLeaderboardSnapshotEntries
 GET	/api/admin/apps/:appkey/leaderboard/stats	AdminLeaderboardStats
+GET	/api/admin/apps/:appkey/levels/catalog	AdminLevelCatalog
+GET	/api/admin/apps/:appkey/levels/events	AdminListLevelEvents
+GET	/api/admin/apps/:appkey/levels/jobs	AdminListLevelJobs
+GET	/api/admin/apps/:appkey/levels/jobs/:jobId	AdminGetLevelJob
+GET	/api/admin/apps/:appkey/levels/overview	AdminLevelOverview
+GET	/api/admin/apps/:appkey/levels/rewards	AdminListLevelRewards
+GET	/api/admin/apps/:appkey/levels/rewards/:rewardId	AdminGetLevelReward
+GET	/api/admin/apps/:appkey/levels/scheme	AdminGetLevelScheme
+GET	/api/admin/apps/:appkey/levels/users	AdminListLevelUsers
+GET	/api/admin/apps/:appkey/levels/users/:userId	AdminGetLevelUser
+GET	/api/admin/apps/:appkey/levels/versions	AdminListLevelVersions
+GET	/api/admin/apps/:appkey/levels/versions/:version	AdminGetLevelVersion
 GET	/api/admin/apps/:appkey/login-baseline/:userid	AdminAppLoginBaseline
 GET	/api/admin/apps/:appkey/lottery/activities	AdminListLotteryActivities
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminGetLotteryActivity
@@ -582,6 +594,8 @@ GET	/api/pay/receipts/:appid/:billId/download	DownloadSignedPaymentReceipt
 GET	/api/points/experience-transactions	ExperienceTransactions
 GET	/api/points/integral-transactions	IntegralTransactions
 GET	/api/points/level	MyLevel
+GET	/api/points/level/history	MyLevelHistory
+GET	/api/points/level/rewards	MyLevelRewards
 GET	/api/points/levels	PointsLevels
 GET	/api/points/overview	PointsOverview
 GET	/api/points/rankings	PointsRankings
@@ -698,6 +712,8 @@ GET	/api/v1/apps/:appkey/pay/orders/:orderNo	PaymentOrderDetail
 GET	/api/v1/apps/:appkey/points/experience-transactions	ExperienceTransactions
 GET	/api/v1/apps/:appkey/points/integral-transactions	IntegralTransactions
 GET	/api/v1/apps/:appkey/points/level	MyLevel
+GET	/api/v1/apps/:appkey/points/level/history	MyLevelHistory
+GET	/api/v1/apps/:appkey/points/level/rewards	MyLevelRewards
 GET	/api/v1/apps/:appkey/points/levels	PointsLevels
 GET	/api/v1/apps/:appkey/points/overview	PointsOverview
 GET	/api/v1/apps/:appkey/points/store	AppPointsStore
@@ -894,6 +910,16 @@ POST	/api/admin/apps/:appkey/item-grants/validate	AdminValidateItemGrant
 POST	/api/admin/apps/:appkey/leaderboard/exclusions	AdminAddLeaderboardExclusions
 POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
 POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
+POST	/api/admin/apps/:appkey/levels/jobs	AdminStartLevelJob
+POST	/api/admin/apps/:appkey/levels/jobs/:jobId/cancel	AdminCancelLevelJob
+POST	/api/admin/apps/:appkey/levels/publish	AdminPublishLevelScheme
+POST	/api/admin/apps/:appkey/levels/rewards/:rewardId/fulfill	AdminFulfillLevelReward
+POST	/api/admin/apps/:appkey/levels/rewards/:rewardId/retry	AdminRetryLevelReward
+POST	/api/admin/apps/:appkey/levels/rewards/backfill	AdminBackfillLevelReward
+POST	/api/admin/apps/:appkey/levels/simulate	AdminSimulateLevel
+POST	/api/admin/apps/:appkey/levels/users/:userId/adjust	AdminAdjustLevelUser
+POST	/api/admin/apps/:appkey/levels/validate	AdminValidateLevelScheme
+POST	/api/admin/apps/:appkey/levels/versions/:version/restore	AdminRestoreLevelVersion
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity
 POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls	AdminCreateLotteryFortuneControls
 POST	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/preview	AdminPreviewLotteryFortuneControl
@@ -1235,6 +1261,7 @@ POST	/api/oauth2/hooks/token	OAuth2TokenHook
 POST	/api/pay/orders/:orderNo/bill	ExportPaymentBill
 POST	/api/pay/orders/:orderNo/receipt/email	EmailPaymentReceipt
 POST	/api/pay/orders/create	CreatePaymentOrder
+POST	/api/points/level/rewards/:rewardId/claim	ClaimLevelReward
 POST	/api/public/pay/callback/:method	PaymentCallback
 POST	/api/public/pay/callback/:method/:appid	PaymentCallback
 POST	/api/public/pay/epay	EpayCallback
@@ -1358,6 +1385,7 @@ POST	/api/v1/apps/:appkey/notifications/read-all	ReadAllNotifications
 POST	/api/v1/apps/:appkey/notifications/read-batch	ReadNotificationsBatch
 POST	/api/v1/apps/:appkey/notifications/unread	UnreadNotification
 POST	/api/v1/apps/:appkey/pay/orders	CreatePaymentOrder
+POST	/api/v1/apps/:appkey/points/level/rewards/:rewardId/claim	ClaimLevelReward
 POST	/api/v1/apps/:appkey/points/store/redeem	AppRedeemPointsStoreItem
 POST	/api/v1/apps/:appkey/releases/channels/:code/join	AppReleaseChannelJoin
 POST	/api/v1/apps/:appkey/releases/channels/:code/leave	AppReleaseChannelLeave
@@ -1417,6 +1445,7 @@ PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
 PUT	/api/admin/apps/:appkey/item-grants/rules/:ruleId	AdminUpdateItemGrantRule
 PUT	/api/admin/apps/:appkey/item-grants/rules/:ruleId/status	AdminSetItemGrantRuleStatus
 PUT	/api/admin/apps/:appkey/leaderboard/settings	AdminSaveLeaderboardSettings
+PUT	/api/admin/apps/:appkey/levels/scheme	AdminSaveLevelScheme
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminUpdateLotteryActivity
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings	AdminSetLotteryFortuneSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/status	AdminSetLotteryActivityStatus

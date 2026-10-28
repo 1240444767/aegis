@@ -51,7 +51,7 @@ SELECT
   COALESCE((SELECT SUM(amount) FROM payment_orders WHERE user_id = $1 AND appid = $2 AND status = 'paid'), 0),
   (SELECT COUNT(*) FROM payment_orders WHERE user_id = $1 AND appid = $2 AND status = 'paid'),
   u.experience,
-  COALESCE((SELECT MAX(level) FROM user_levels WHERE is_active AND experience_required <= u.experience), 0),
+  COALESCE((SELECT current_level FROM user_level_records WHERE user_id = $1 AND appid = $2), 1),
   u.integral,
   COALESCE((SELECT SUM(amount) FROM integral_transactions
             WHERE user_id = $1 AND appid = $2 AND amount > 0 AND created_at >= $3::timestamptz - INTERVAL '30 days'), 0),

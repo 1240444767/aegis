@@ -56,6 +56,7 @@ const (
 	TypeCardKey         = "cardkey"
 	TypeTicket          = "ticket"
 	TypeItemGrant       = "item_grant"
+	TypeLevel           = "level"
 )
 
 // typeCategories 旧 type → 分类。没登记的 type 一律落 system。
@@ -88,6 +89,7 @@ var typeCategories = map[string]string{
 	"rewarded_ad":  CategoryReward,
 	"cardkey":      CategoryReward,
 	"item_grant":   CategoryReward,
+	"level":        CategoryReward,
 
 	"ticket":   CategoryTicket,
 	"feedback": CategoryTicket,
@@ -237,6 +239,7 @@ const (
 	RouteInvite      = "invite"
 	RouteTickets     = "tickets"
 	RouteProfile     = "profile"
+	RouteLevel       = "level"
 )
 
 var routes = []RouteSpec{
@@ -252,6 +255,7 @@ var routes = []RouteSpec{
 	{Key: RouteInvite, Label: "邀请"},
 	{Key: RouteTickets, Label: "工单"},
 	{Key: RouteProfile, Label: "个人资料"},
+	{Key: RouteLevel, Label: "我的等级"},
 }
 
 // Routes 全部路由键（副本）。

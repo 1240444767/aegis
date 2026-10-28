@@ -227,6 +227,31 @@ type LeaderboardQuery struct {
 	CountAdminAdjust bool
 	// IncludeExcluded 管理端：被移出的人也列出来（标 excluded、不参与排名）
 	IncludeExcluded bool
+	// LevelNames 应用等级体系的各级名称（下标 0 是 Lv.1），由仓储在取数前填好
+	LevelNames []string
+}
+
+// withLevelNames 经验榜与等级榜要显示等级名：按应用的等级体系填好。
+func (r *Repository) withLevelNames(ctx context.Context, q LeaderboardQuery) (LeaderboardQuery, error) {
+	if q.Board.Metric != leaderboard.MetricExperience && q.Board.Metric != leaderboard.MetricLevel {
+		return q, nil
+	}
+	scheme, _, err := r.LevelScheme(ctx, q.AppID)
+	if err != nil {
+		return q, err
+	}
+	q.LevelNames = make([]string, 0, len(scheme.Levels))
+	for _, level := range scheme.Levels {
+		q.LevelNames = append(q.LevelNames, level.Name)
+	}
+	return q, nil
+}
+
+// leaderboardLevelRankScale 等级榜的排名键：先比等级再比经验（有晋级条件时等级不再只由经验决定）。
+const leaderboardLevelRankScale = 10_000_000_000_000
+
+func leaderboardLevelName(args *sqlArgs, q LeaderboardQuery) string {
+	return `COALESCE((` + args.add(q.LevelNames) + `::text[])[COALESCE(lv.current_level, 1)], '')`
 }
 
 // LeaderboardRow 榜上的一行原始事实（含真实账号，只在服务端内部流转）。
@@ -256,11 +281,8 @@ const leaderboardEligibleSQL = `(u.enabled = true
         WHERE b.appid = u.appid AND b.user_id = u.id AND b.status = 'active'
           AND b.start_at <= NOW() AND (b.end_at IS NULL OR b.end_at > NOW())))`
 
-// leaderboardLevelJoin 当前等级（与旧等级榜同一口径：经验达到的最高启用等级，默认 1 级「新手」）。
-const leaderboardLevelJoin = `LEFT JOIN LATERAL (
-    SELECT level, level_name FROM user_levels
-    WHERE is_active = true AND experience_required <= u.experience
-    ORDER BY level DESC LIMIT 1) lv ON true`
+// leaderboardLevelJoin 当前等级：按应用的等级记录（docs/levels.md），没有记录按 Lv.1。
+const leaderboardLevelJoin = `LEFT JOIN user_level_records lv ON lv.user_id = u.id AND lv.appid = u.appid`
 
 type sqlArgs struct{ values []any }
 
@@ -304,15 +326,16 @@ func leaderboardScoredCTE(args *sqlArgs, q LeaderboardQuery) string {
 )`
 	case q.Board.Metric == leaderboard.MetricExperience:
 		base = `base AS (
-    SELECT u.id AS user_id, u.account, u.experience AS value, u.experience, COALESCE(lv.level, 1) AS level,
-        COALESCE(lv.level_name, '新手')::text AS level_name, NULL::timestamptz AS last_at, u.experience AS rank_key
+    SELECT u.id AS user_id, u.account, u.experience AS value, u.experience, COALESCE(lv.current_level, 1) AS level,
+        ` + leaderboardLevelName(args, q) + `::text AS level_name, NULL::timestamptz AS last_at, u.experience AS rank_key
     FROM users u ` + leaderboardLevelJoin + `
     WHERE u.appid = $1 AND ` + leaderboardEligibleSQL + `
 )`
 	default: // 等级榜
 		base = `base AS (
-    SELECT u.id AS user_id, u.account, COALESCE(lv.level, 1)::BIGINT AS value, u.experience, COALESCE(lv.level, 1) AS level,
-        COALESCE(lv.level_name, '新手')::text AS level_name, NULL::timestamptz AS last_at, u.experience AS rank_key
+    SELECT u.id AS user_id, u.account, COALESCE(lv.current_level, 1)::BIGINT AS value, u.experience, COALESCE(lv.current_level, 1) AS level,
+        ` + leaderboardLevelName(args, q) + `::text AS level_name, NULL::timestamptz AS last_at,
+        COALESCE(lv.current_level, 1)::BIGINT * ` + strconv.FormatInt(leaderboardLevelRankScale, 10) + ` + u.experience AS rank_key
     FROM users u ` + leaderboardLevelJoin + `
     WHERE u.appid = $1 AND ` + leaderboardEligibleSQL + `
 )`
@@ -342,6 +365,10 @@ type LeaderboardSlice struct {
 
 // LeaderboardRows 按展示顺序取一段（名次 RANK 并列；同名次内周期榜先到先得，再按用户 ID）。
 func (r *Repository) LeaderboardRows(ctx context.Context, q LeaderboardQuery, limit, offset int) (*LeaderboardSlice, error) {
+	q, err := r.withLevelNames(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	return leaderboardRows(ctx, r.pool, q, limit, offset)
 }
 
@@ -393,6 +420,10 @@ FROM ranked ORDER BY position LIMIT `+limitArg+` OFFSET `+offsetArg, args.values
 // LeaderboardStanding 一个人在这个榜这个周期的实时位置：取值、名次（比我大的人数 + 1）、距上一名的差距。
 // 用户不存在时返回 ErrUserNotFound。
 func (r *Repository) LeaderboardStanding(ctx context.Context, q LeaderboardQuery, userID int64) (*leaderboard.Standing, error) {
+	q, err := r.withLevelNames(ctx, q)
+	if err != nil {
+		return nil, err
+	}
 	args := &sqlArgs{values: []any{q.AppID}}
 	userArg := args.add(userID)
 	valueExpr, rankKeyExpr := "u.integral", "u.integral"
@@ -404,13 +435,14 @@ func (r *Repository) LeaderboardStanding(ctx context.Context, q LeaderboardQuery
 	case q.Board.Metric == leaderboard.MetricExperience:
 		valueExpr, rankKeyExpr = "u.experience", "u.experience"
 	case q.Board.Metric == leaderboard.MetricLevel:
-		valueExpr, rankKeyExpr = "COALESCE(lv.level, 1)::BIGINT", "u.experience"
+		valueExpr = "COALESCE(lv.current_level, 1)::BIGINT"
+		rankKeyExpr = "COALESCE(lv.current_level, 1)::BIGINT * " + strconv.FormatInt(leaderboardLevelRankScale, 10) + " + u.experience"
 	}
 	standing := leaderboard.Standing{UserID: userID}
 	var rankKey int64
-	err := r.pool.QueryRow(ctx, `SELECT u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''),
+	err = r.pool.QueryRow(ctx, `SELECT u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''),
     COALESCE(pref.anonymous, false), (x.user_id IS NOT NULL), `+leaderboardEligibleSQL+`,
-    `+valueExpr+`, u.experience, COALESCE(lv.level_name, '新手'), COALESCE(lv.level, 1), `+rankKeyExpr+`
+    `+valueExpr+`, u.experience, `+leaderboardLevelName(args, q)+`, COALESCE(lv.current_level, 1), `+rankKeyExpr+`
 FROM users u
 LEFT JOIN user_profiles p ON p.user_id = u.id
 LEFT JOIN leaderboard_preferences pref ON pref.appid = $1 AND pref.user_id = u.id
@@ -444,6 +476,10 @@ WHERE u.id = `+userArg+` AND u.appid = $1`, args.values...).Scan(&standing.Accou
 	standing.Rank = &rank
 	if ahead > 0 {
 		standing.GapToPrev = nextKey - rankKey
+		if q.Board.Metric == leaderboard.MetricLevel {
+			// 排名键里叠着等级：差距只算经验（上一名等级更高时，差距是追平他所需的经验，不出现负数）
+			standing.GapToPrev = max(nextKey%leaderboardLevelRankScale-rankKey%leaderboardLevelRankScale, 0)
+		}
 	}
 	return &standing, nil
 }
@@ -488,7 +524,10 @@ func scanLeaderboardSnapshot(row interface{ Scan(dest ...any) error }, extra ...
 // SettleLeaderboardPeriod 结算一期：抢到快照行（ON CONFLICT DO NOTHING）的实例在同一个事务里写完前 topLimit 名、
 // 按档位写入应发的奖励（pending），再把快照置为 settled。已有快照时原样返回它（created = false）。
 func (r *Repository) SettleLeaderboardPeriod(ctx context.Context, in LeaderboardSettleInput) (*leaderboard.Snapshot, bool, error) {
-	q := in.Query
+	q, err := r.withLevelNames(ctx, in.Query)
+	if err != nil {
+		return nil, false, err
+	}
 	tiersJSON, err := json.Marshal(nonNilTiers(in.Tiers))
 	if err != nil {
 		return nil, false, err

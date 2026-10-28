@@ -86,6 +86,7 @@ type RouterDeps struct {
 	Points       *service.PointsService
 	Lottery      *service.LotteryService
 	ItemGrant    *service.ItemGrantService
+	Level        *service.LevelService
 	Wallet       *service.WalletService
 	Vip          *service.VipService
 	Payment      *service.PaymentService
@@ -185,6 +186,7 @@ func (d RouterDeps) newHandler() *Handler {
 		location:           d.Location,
 		lottery:            d.Lottery,
 		itemGrant:          d.ItemGrant,
+		level:              d.Level,
 		announcement:       d.Announcement,
 		ldapSvc:            d.LDAP,
 		oidcSvc:            d.OIDC,

@@ -53,13 +53,10 @@ func (r *Repository) applyExperienceChangeTxNo(ctx context.Context, tx pgx.Tx, u
 		return nil, &BalanceError{Err: pointdomain.ErrBalanceOverflow, Kind: pointdomain.KindExperience, Balance: experienceBefore}
 	}
 
-	levels, err := r.getActiveLevels(ctx)
+	levelBefore, _, err := r.userLevelQ(ctx, tx, appID, userID, experienceBefore)
 	if err != nil {
 		return nil, err
 	}
-
-	beforeState := r.resolveLevelState(levels, experienceBefore)
-	afterState := r.resolveLevelState(levels, experienceAfter)
 	now := time.Now().UTC()
 
 	if _, err := tx.Exec(ctx,
@@ -67,18 +64,20 @@ func (r *Repository) applyExperienceChangeTxNo(ctx context.Context, tx pgx.Tx, u
 		experienceAfter, userID, appID); err != nil {
 		return nil, err
 	}
-	if _, err := r.syncUserLevelRecord(ctx, tx, userID, appID, experienceAfter, now); err != nil {
+	levelInfo, err := r.syncUserLevelRecord(ctx, tx, userID, appID, experienceAfter, now)
+	if err != nil {
 		return nil, err
 	}
+	levelAfter := levelInfo.CurrentLevel
 
 	if transactionNo == "" {
 		transactionNo = generateTransactionNo("EXP")
 	}
-	isLevelUp := afterState.CurrentLevel > beforeState.CurrentLevel
+	isLevelUp := levelAfter > levelBefore
 
 	payload := map[string]any{
-		"oldLevel": beforeState.CurrentLevel,
-		"newLevel": afterState.CurrentLevel,
+		"oldLevel": levelBefore,
+		"newLevel": levelAfter,
 	}
 	for key, value := range extra {
 		payload[key] = value
@@ -94,8 +93,8 @@ VALUES ($1, $2, $3, 'earn', $4, $5, $6, $7, $8, $9, 'completed', $10, $11, $12, 
 		amount,
 		experienceBefore,
 		experienceAfter,
-		beforeState.CurrentLevel,
-		afterState.CurrentLevel,
+		levelBefore,
+		levelAfter,
 		title,
 		description,
 		sourceID,
@@ -120,8 +119,8 @@ VALUES ($1, $2, $3, 'earn', $4, $5, $6, $7, $8, $9, 'completed', $10, $11, $12, 
 		OperationType: "add",
 		TransactionNo: transactionNo,
 		LevelChanged:  isLevelUp,
-		OldLevel:      beforeState.CurrentLevel,
-		NewLevel:      afterState.CurrentLevel,
+		OldLevel:      levelBefore,
+		NewLevel:      levelAfter,
 		CreatedAt:     now,
 	}, nil
 }

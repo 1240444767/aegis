@@ -77,6 +77,8 @@ type APIApp struct {
 	Leaderboard *service.LeaderboardService
 	// ItemGrant 物品发放：后台循环执行到点的定时规则、接管中断的执行，退出时必须 Stop
 	ItemGrant *service.ItemGrantService
+	// Level 等级体系：后台循环发放达成奖励、发送升级通知、接管中断的重算任务，退出时必须 Stop
+	Level *service.LevelService
 	// AIGateway AI 中转网关：后台循环放回超时未结算的暂扣，退出时必须 Stop
 	AIGateway *service.AIGatewayService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
@@ -476,6 +478,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	itemGrantService := service.NewItemGrantService(log, pg)
 	itemGrantService.SetNotifier(notificationService)
 	itemGrantService.SetEventPublisher(realtimeService)
+	levelService := service.NewLevelService(log, pg)
+	levelService.SetNotifier(notificationService)
+	levelService.SetEventPublisher(realtimeService)
 	signInService.SetSignInObserver(itemGrantService.OnSignIn)
 	authService.SetLoginObserver(itemGrantService.OnLogin)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
@@ -729,6 +734,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Points:       pointsService,
 		Lottery:      lotteryService,
 		ItemGrant:    itemGrantService,
+		Level:        levelService,
 		Wallet:       walletService,
 		Vip:          vipService,
 		Payment:      paymentService,
@@ -827,6 +833,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AccountDeletion:    accountDeletionService,
 		Leaderboard:        leaderboardService,
 		ItemGrant:          itemGrantService,
+		Level:              levelService,
 		AIGateway:          aiGatewayService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
@@ -870,6 +877,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	}
 	if a.ItemGrant != nil {
 		a.ItemGrant.Start(ctx)
+	}
+	if a.Level != nil {
+		a.Level.Start(ctx)
 	}
 	if a.AIGateway != nil {
 		a.AIGateway.Start(ctx)
@@ -927,6 +937,9 @@ func (a *APIApp) close(ctx context.Context) {
 	}
 	if a.ItemGrant != nil {
 		a.ItemGrant.Stop()
+	}
+	if a.Level != nil {
+		a.Level.Stop()
 	}
 	if a.AIGateway != nil {
 		a.AIGateway.Stop()

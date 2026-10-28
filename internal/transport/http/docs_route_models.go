@@ -201,6 +201,14 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/leaderboard/settle"):                                                  LeaderboardSettleRequest{},               // AdminSettleLeaderboard
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots"):                                                LeaderboardSnapshotQuery{},               // AdminLeaderboardSnapshots
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/snapshots/{snapshotId}/entries"):                           LeaderboardEntryQuery{},                  // AdminLeaderboardSnapshotEntries
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/jobs"):                                                         LevelRecalcRequest{},                     // AdminStartLevelJob
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/publish"):                                                      LevelPublishRequest{},                    // AdminPublishLevelScheme
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/rewards/backfill"):                                             LevelBackfillRequest{},                   // AdminBackfillLevelReward
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/rewards/{rewardId}/fulfill"):                                   LevelFulfillRequest{},                    // AdminFulfillLevelReward
+		routeKey("PUT", "/api/admin/apps/{appkey}/levels/scheme"):                                                        LevelDraftRequest{},                      // AdminSaveLevelScheme
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/simulate"):                                                     LevelSimulateRequest{},                   // AdminSimulateLevel
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/users/{userId}/adjust"):                                        LevelAdjustRequest{},                     // AdminAdjustLevelUser
+		routeKey("POST", "/api/admin/apps/{appkey}/levels/validate"):                                                     LevelGraphRequest{},                      // AdminValidateLevelScheme
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities"):                                                  LotteryActivityRequest{},                 // AdminCreateLotteryActivity
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}"):                                      LotteryActivityRequest{},                 // AdminUpdateLotteryActivity
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls"):                    LotteryFortuneControlRequest{},           // AdminCreateLotteryFortuneControls
@@ -638,6 +646,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/user/dailyRank"):                                                                          LegacyRankingRequest{},                   // LegacyDailyRank
 		routeKey("DELETE", "/api/user/delete-site"):                                                                      SiteDeleteRequest{},                      // DeleteSite
 		routeKey("POST", "/api/user/integralRank"):                                                                       LegacyRankingRequest{},                   // LegacyIntegralRank
+		routeKey("GET", "/api/user/level/config"):                                                                        AppIDQuery{},                             // LegacyLevelConfig
 		routeKey("POST", "/api/user/level/info"):                                                                         LegacyRankingRequest{},                   // LegacyMyLevel
 		routeKey("POST", "/api/user/level/ranking"):                                                                      LegacyRankingRequest{},                   // LegacyLevelRanking
 		routeKey("POST", "/api/user/my-site"):                                                                            SiteListQuery{},                          // MySites

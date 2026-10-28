@@ -327,11 +327,10 @@ func (r *Repository) GetInviteUserFacts(ctx context.Context, appID, userID int64
 		return nil, err
 	}
 	facts.IsVip = vipdomain.Evaluate(*entitlement, time.Now()).IsVIP
-	levels, err := r.getActiveLevels(ctx)
+	facts.Level, _, err = r.userLevelQ(ctx, r.pool, appID, userID, experience)
 	if err != nil {
 		return nil, err
 	}
-	facts.Level = r.resolveLevelState(levels, experience).CurrentLevel
 	return &facts, nil
 }
 
@@ -580,11 +579,11 @@ func (r *Repository) inviterEligibleTx(ctx context.Context, tx pgx.Tx, cfg invit
 		if err := tx.QueryRow(ctx, `SELECT experience FROM users WHERE id = $1`, inviterID).Scan(&experience); err != nil {
 			return false, err
 		}
-		levels, err := r.getActiveLevels(ctx)
+		var err error
+		level, _, err = r.userLevelQ(ctx, tx, appID, inviterID, experience)
 		if err != nil {
 			return false, err
 		}
-		level = r.resolveLevelState(levels, experience).CurrentLevel
 	}
 	ok, _ := invite.EvaluateInviter(cfg, isVip, level)
 	return ok, nil

@@ -325,6 +325,10 @@ func DescribeItem(item Item, refs Refs) string {
 	case ItemLicenseDays:
 		return "授权 " + TermLabel(int(item.Amount), false)
 	}
+	if spec.Unit == spec.Label {
+		// 「积分 10 积分」读着重复：单位就是名称时只写数量与单位
+		return strconv.FormatInt(item.Amount, 10) + " " + spec.Unit
+	}
 	return spec.Label + " " + strconv.FormatInt(item.Amount, 10) + " " + spec.Unit
 }
 

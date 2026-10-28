@@ -50,6 +50,7 @@ type Handler struct {
 	location        *service.LocationService
 	lottery         *service.LotteryService
 	itemGrant       *service.ItemGrantService
+	level           *service.LevelService
 	announcement    *service.AnnouncementService
 	ldapSvc         *service.LDAPService
 	oidcSvc         *service.OIDCService

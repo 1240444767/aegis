@@ -840,6 +840,26 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun levels(): JsonElement = client.call("GET", "/points/levels", requireAuth = true)
 
+    /**
+     * 我的等级达成奖励（升级经过的每一级各一份）。[status] 可选 `claimable` 待领取 / `granted` 已到账 /
+     * `queued` 发放中 / `pending` 人工处理中 / `failed`；为空时全部（待领取在前）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun levelRewards(status: String? = null): JsonElement =
+        client.call("GET", "/points/level/rewards", query = status?.let { mapOf("status" to it) } ?: emptyMap(), requireAuth = true)
+
+    /** 领取一份待领取（`claimable`）的达成奖励。已领取过为 40900。 */
+    @Throws(IOException::class)
+    fun claimLevelReward(rewardId: Long): JsonElement =
+        client.call("POST", "/points/level/rewards/$rewardId/claim", requireAuth = true)
+
+    /** 我的升级记录。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun levelHistory(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/points/level/history", query = pageQuery(page, limit), requireAuth = true)
+
     @Throws(IOException::class)
     @JvmOverloads
     fun integralTransactions(page: Int = 1, limit: Int = 20): JsonElement =

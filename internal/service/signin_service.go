@@ -384,7 +384,11 @@ func (s *SignInService) calculateReward(ctx context.Context, now time.Time, user
 			Settings: app.Settings,
 		})
 	}
-	resolved, _, _, err := calculateSignInRewardWithPolicy(ctx, s.pg, policy, now, user.Experience, consecutiveDays, totalSignIns)
+	appID, userID := user.AppID, user.ID
+	multipliers := func(ctx context.Context, experience int64) (float64, float64, error) {
+		return s.pg.LevelMultipliers(ctx, appID, userID, experience)
+	}
+	resolved, _, _, err := calculateSignInRewardWithPolicy(ctx, multipliers, policy, now, user.Experience, consecutiveDays, totalSignIns)
 	if err != nil {
 		return userdomain.SignInReward{}, err
 	}

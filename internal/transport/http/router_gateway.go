@@ -198,6 +198,9 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/points/overview", h.PointsOverview)
 		appGatewayAuthed.GET("/points/level", h.MyLevel)
 		appGatewayAuthed.GET("/points/levels", h.PointsLevels)
+		appGatewayAuthed.GET("/points/level/rewards", h.MyLevelRewards)
+		appGatewayAuthed.POST("/points/level/rewards/:rewardId/claim", h.ClaimLevelReward)
+		appGatewayAuthed.GET("/points/level/history", h.MyLevelHistory)
 		appGatewayAuthed.GET("/points/integral-transactions", h.IntegralTransactions)
 		appGatewayAuthed.GET("/points/experience-transactions", h.ExperienceTransactions)
 		// 积分商城：首页（含每件商品的可兑换判定）/ 兑换 / 我的兑换记录

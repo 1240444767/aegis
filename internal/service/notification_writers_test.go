@@ -110,6 +110,7 @@ func TestNotificationWriterTypesAreCategorized(t *testing.T) {
 		"notificationdomain.TypeSecurity":        notificationdomain.TypeSecurity,
 		"notificationdomain.TypeAccountDeletion": notificationdomain.TypeAccountDeletion,
 		"notificationdomain.TypeItemGrant":       notificationdomain.TypeItemGrant,
+		"notificationdomain.TypeLevel":           notificationdomain.TypeLevel,
 		"notificationdomain.TypeSignIn":          notificationdomain.TypeSignIn,
 		"notificationdomain.TypeAutoSign":        notificationdomain.TypeAutoSign,
 		"notificationdomain.TypePointsStore":     notificationdomain.TypePointsStore,

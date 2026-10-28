@@ -10,12 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
+	"aegis/internal/domain/levels"
 	pointdomain "aegis/internal/domain/points"
 	userdomain "aegis/internal/domain/user"
 	"github.com/jackc/pgx/v5"
@@ -24,17 +24,14 @@ import (
 )
 
 type Repository struct {
-	pool              *pgxpool.Pool
-	levelCacheMu      sync.RWMutex
-	levelCache        []pointdomain.LevelConfig
-	levelCacheExpires time.Time
+	pool *pgxpool.Pool
+	// levels 按应用缓存的等级体系（level_repository.go）
+	levels levelSchemeCache
 }
 
 func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
-
-const levelCacheTTL = 5 * time.Minute
 
 // daily_signins 各列的 VARCHAR 上限，与迁移里的宽度一一对应。
 //
@@ -69,23 +66,6 @@ type levelRecordRow struct {
 	HighestLevel        int
 	LevelUpCount        int
 	LastLevelUpAt       *time.Time
-}
-
-type levelState struct {
-	Config             *pointdomain.LevelConfig
-	NextConfig         *pointdomain.LevelConfig
-	CurrentLevel       int
-	CurrentLevelName   string
-	NextLevelName      string
-	ExpMultiplier      float64
-	TotalExperience    int64
-	ExpInCurrentLevel  int64
-	ExpRangeForLevel   int64
-	ExpToNextLevel     int64
-	CurrentLevelMinExp int64
-	NextLevelMinExp    *int64
-	LevelProgress      float64
-	IsMaxLevel         bool
 }
 
 func (r *Repository) GetUserByAppAndAccount(ctx context.Context, appID int64, account string) (*userdomain.User, error) {
@@ -1474,6 +1454,7 @@ var adminUserFastSortColumns = map[string]string{
 //   - **末位 id 兜底**：按非唯一列（如 integral，绝大多数用户都是 0）排序时，
 //     没有确定性 tiebreaker 会让分页在页与页之间重复或漏掉行 ——
 //     这不是排序不好看，是数据错了。
+//
 // prefix 用于给未限定的列名补表别名（快路径外层查询按 `page_users u` 取列）；
 // 列名本就限定过的（普通路径）传空串。
 func buildAdminUserOrderBy(sort string, order string, columns map[string]string, prefix string, idColumn string) string {
@@ -2468,265 +2449,6 @@ ON CONFLICT (id) DO UPDATE SET
 	return err
 }
 
-func (r *Repository) ListLevelConfigs(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	return r.getActiveLevels(ctx)
-}
-
-func (r *Repository) GetExperienceMultiplier(ctx context.Context, experience int64) (float64, error) {
-	levels, err := r.getActiveLevels(ctx)
-	if err != nil {
-		return 1, err
-	}
-	return r.resolveLevelState(levels, experience).ExpMultiplier, nil
-}
-
-func (r *Repository) GetUserLevelProfile(ctx context.Context, userID int64, appID int64) (*pointdomain.LevelProfile, error) {
-	user, err := r.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil || user.AppID != appID {
-		return nil, nil
-	}
-
-	profile, err := r.GetUserProfileByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	levelInfo, err := r.syncUserLevelRecord(ctx, r.pool, userID, appID, user.Experience, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-
-	result := &pointdomain.LevelProfile{
-		UserInfo: pointdomain.LevelUserInfo{
-			// 只出现在用户端「我的等级」里：给对外 ID（docs/user-public-id.md）
-			ID:         user.PublicID,
-			Account:    user.Account,
-			Integral:   user.Integral,
-			Experience: user.Experience,
-		},
-		LevelInfo: *levelInfo,
-	}
-	if profile != nil {
-		result.UserInfo.Nickname = profile.Nickname
-		result.UserInfo.Avatar = profile.Avatar
-	}
-	return result, nil
-}
-
-func (r *Repository) getActiveLevels(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	now := time.Now()
-	r.levelCacheMu.RLock()
-	if now.Before(r.levelCacheExpires) && len(r.levelCache) > 0 {
-		levels := append([]pointdomain.LevelConfig(nil), r.levelCache...)
-		r.levelCacheMu.RUnlock()
-		return levels, nil
-	}
-	r.levelCacheMu.RUnlock()
-
-	levels, err := r.loadActiveLevels(ctx, r.pool)
-	if err != nil {
-		return nil, err
-	}
-
-	r.levelCacheMu.Lock()
-	r.levelCache = append([]pointdomain.LevelConfig(nil), levels...)
-	r.levelCacheExpires = now.Add(levelCacheTTL)
-	r.levelCacheMu.Unlock()
-
-	return append([]pointdomain.LevelConfig(nil), levels...), nil
-}
-
-func (r *Repository) loadActiveLevels(ctx context.Context, q queryExecutor) ([]pointdomain.LevelConfig, error) {
-	rows, err := q.Query(ctx, `SELECT id, level, level_name, experience_required, experience_next, exp_multiplier, COALESCE(icon, ''), COALESCE(color, ''), COALESCE(privileges, '[]'::jsonb), COALESCE(rewards, '{}'::jsonb), COALESCE(description, ''), is_active, sort_order, created_at, updated_at FROM user_levels WHERE is_active = true ORDER BY level ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	levels := make([]pointdomain.LevelConfig, 0, 16)
-	for rows.Next() {
-		var item pointdomain.LevelConfig
-		var experienceNext *int64
-		var privilegesJSON []byte
-		var rewardsJSON []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.Level,
-			&item.LevelName,
-			&item.ExperienceRequired,
-			&experienceNext,
-			&item.ExpMultiplier,
-			&item.Icon,
-			&item.Color,
-			&privilegesJSON,
-			&rewardsJSON,
-			&item.Description,
-			&item.IsActive,
-			&item.SortOrder,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		item.ExperienceNext = experienceNext
-		_ = json.Unmarshal(privilegesJSON, &item.Privileges)
-		_ = json.Unmarshal(rewardsJSON, &item.Rewards)
-		levels = append(levels, item)
-	}
-	return levels, rows.Err()
-}
-
-func (r *Repository) syncUserLevelRecord(ctx context.Context, q queryExecutor, userID int64, appID int64, totalExperience int64, updatedAt time.Time) (*pointdomain.LevelInfo, error) {
-	levels, err := r.getActiveLevels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	state := r.resolveLevelState(levels, totalExperience)
-
-	query := `SELECT user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at FROM user_level_records WHERE user_id = $1 AND appid = $2`
-	if _, isTx := q.(pgx.Tx); isTx {
-		query += ` FOR UPDATE`
-	}
-	record, err := scanLevelRecord(q.QueryRow(ctx, query, userID, appID))
-	if err != nil {
-		return nil, err
-	}
-
-	levelDelta := 0
-	highestLevel := state.CurrentLevel
-	levelUpCount := 0
-	lastLevelUpAt := (*time.Time)(nil)
-
-	if record != nil {
-		levelDelta = state.CurrentLevel - record.CurrentLevel
-		if levelDelta < 0 {
-			levelDelta = 0
-		}
-		highestLevel = maxInt(record.HighestLevel, state.CurrentLevel)
-		levelUpCount = record.LevelUpCount + levelDelta
-		lastLevelUpAt = record.LastLevelUpAt
-		if levelDelta > 0 {
-			ts := updatedAt.UTC()
-			lastLevelUpAt = &ts
-		}
-	} else {
-		highestLevel = state.CurrentLevel
-	}
-
-	var nextLevelExperience any
-	if state.IsMaxLevel {
-		nextLevelExperience = nil
-	} else {
-		nextLevelExperience = state.ExpToNextLevel
-	}
-	nextLevel := 0
-	if state.NextConfig != nil {
-		nextLevel = state.NextConfig.Level
-	}
-
-	upsertQuery := `INSERT INTO user_level_records (user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $11)
-ON CONFLICT (user_id, appid) DO UPDATE SET
-    current_level = EXCLUDED.current_level,
-    current_experience = EXCLUDED.current_experience,
-    total_experience = EXCLUDED.total_experience,
-    next_level_experience = EXCLUDED.next_level_experience,
-    level_progress = EXCLUDED.level_progress,
-    highest_level = EXCLUDED.highest_level,
-    level_up_count = EXCLUDED.level_up_count,
-    last_level_up_at = EXCLUDED.last_level_up_at,
-    updated_at = EXCLUDED.updated_at`
-	if _, err := q.Exec(ctx, upsertQuery, userID, appID, state.CurrentLevel, state.ExpInCurrentLevel, totalExperience, nextLevelExperience, state.LevelProgress, highestLevel, levelUpCount, lastLevelUpAt, updatedAt.UTC()); err != nil {
-		return nil, err
-	}
-
-	return &pointdomain.LevelInfo{
-		CurrentLevel:       state.CurrentLevel,
-		CurrentLevelName:   state.CurrentLevelName,
-		ExpMultiplier:      state.ExpMultiplier,
-		TotalExperience:    totalExperience,
-		ExpInCurrentLevel:  state.ExpInCurrentLevel,
-		ExpRangeForLevel:   state.ExpRangeForLevel,
-		ExpToNextLevel:     state.ExpToNextLevel,
-		LevelProgress:      state.LevelProgress,
-		CurrentLevelMinExp: state.CurrentLevelMinExp,
-		HighestLevel:       highestLevel,
-		LevelUpCount:       levelUpCount,
-		LastLevelUpAt:      lastLevelUpAt,
-		CurrentLevelConfig: state.Config,
-		NextLevelConfig:    state.NextConfig,
-		IsMaxLevel:         state.IsMaxLevel,
-		NextLevel:          nextLevel,
-		NextLevelMinExp:    state.NextLevelMinExp,
-		NextLevelName:      state.NextLevelName,
-	}, nil
-}
-
-func (r *Repository) resolveLevelState(levels []pointdomain.LevelConfig, experience int64) levelState {
-	if experience < 0 {
-		experience = 0
-	}
-	if len(levels) == 0 {
-		return levelState{
-			CurrentLevel:       1,
-			CurrentLevelName:   "新手",
-			ExpMultiplier:      1,
-			TotalExperience:    experience,
-			ExpInCurrentLevel:  experience,
-			CurrentLevelMinExp: 0,
-			LevelProgress:      0,
-			IsMaxLevel:         true,
-		}
-	}
-
-	current := levels[0]
-	currentIndex := 0
-	for index, level := range levels {
-		if experience >= level.ExperienceRequired {
-			current = level
-			currentIndex = index
-			continue
-		}
-		break
-	}
-
-	state := levelState{
-		Config:             &current,
-		CurrentLevel:       current.Level,
-		CurrentLevelName:   current.LevelName,
-		ExpMultiplier:      current.ExpMultiplier,
-		TotalExperience:    experience,
-		ExpInCurrentLevel:  maxInt64(experience-current.ExperienceRequired, 0),
-		CurrentLevelMinExp: current.ExperienceRequired,
-		IsMaxLevel:         currentIndex == len(levels)-1,
-	}
-
-	if !state.IsMaxLevel {
-		next := levels[currentIndex+1]
-		state.NextConfig = &next
-		state.NextLevelMinExp = &next.ExperienceRequired
-		state.NextLevelName = next.LevelName
-		state.ExpRangeForLevel = next.ExperienceRequired - current.ExperienceRequired
-		state.ExpToNextLevel = maxInt64(next.ExperienceRequired-experience, 0)
-		if state.ExpRangeForLevel > 0 {
-			state.LevelProgress = math.Round((float64(state.ExpInCurrentLevel)/float64(state.ExpRangeForLevel))*10000) / 100
-		}
-	} else {
-		state.LevelProgress = 100
-	}
-	if state.LevelProgress < 0 {
-		state.LevelProgress = 0
-	}
-	if state.LevelProgress > 100 {
-		state.LevelProgress = 100
-	}
-
-	return state
-}
-
 func (r *Repository) GetLatestDailySign(ctx context.Context, userID int64, appID int64) (*userdomain.DailySignIn, error) {
 	query := `SELECT id, user_id, appid, signed_at, sign_date, integral_reward, experience_reward, integral_before, integral_after, experience_before, experience_after, consecutive_days, reward_multiplier, COALESCE(bonus_type, ''), COALESCE(bonus_description, ''), sign_in_source, COALESCE(device_info, ''), COALESCE(ip_address, ''), COALESCE(location, ''), created_at FROM daily_signins WHERE user_id = $1 AND appid = $2 ORDER BY sign_date DESC, id DESC LIMIT 1`
 	return scanDailySign(r.pool.QueryRow(ctx, query, userID, appID))
@@ -3307,24 +3029,26 @@ ON CONFLICT (month_key, appid, user_id) DO UPDATE SET
 		return nil, err
 	}
 
-	levels, err := r.getActiveLevels(ctx)
+	levelBefore, scheme, err := r.userLevelQ(ctx, tx, appID, userID, record.ExperienceBefore)
 	if err != nil {
 		return nil, err
 	}
-	levelBefore := r.resolveLevelState(levels, record.ExperienceBefore)
 	levelAfterInfo, err := r.syncUserLevelRecord(ctx, tx, userID, appID, record.ExperienceAfter, signDate.UTC())
 	if err != nil {
 		return nil, err
 	}
-	isLevelUp := levelAfterInfo.CurrentLevel > levelBefore.CurrentLevel
-	levelRewards := collectLevelUpRewards(levels, levelBefore.CurrentLevel, levelAfterInfo.CurrentLevel)
+	isLevelUp := levelAfterInfo.CurrentLevel > levelBefore
+	levelRewards := []map[string]any{}
+	for _, reward := range scheme.RewardsBetween(levelBefore, levelAfterInfo.CurrentLevel) {
+		levelRewards = append(levelRewards, map[string]any{"level": reward.Level, "label": reward.Label, "claim": reward.Claim})
+	}
 	experienceExtra, _ := json.Marshal(map[string]any{
 		"sign_date":         record.SignDate,
 		"consecutive_days":  record.ConsecutiveDays,
 		"bonus_type":        record.BonusType,
 		"bonus_description": record.BonusDescription,
 		"source":            record.SignInSource,
-		"level_before":      levelBefore.CurrentLevel,
+		"level_before":      levelBefore,
 		"level_after":       levelAfterInfo.CurrentLevel,
 		"level_rewards":     levelRewards,
 	})
@@ -3339,12 +3063,12 @@ ON CONFLICT (month_key, appid, user_id) DO UPDATE SET
 		record.ExperienceReward,
 		record.ExperienceBefore,
 		record.ExperienceAfter,
-		levelBefore.CurrentLevel,
+		levelBefore,
 		levelAfterInfo.CurrentLevel,
 		experienceTitle,
 		record.BonusDescription,
 		record.ID,
-		levelBefore.ExpMultiplier,
+		scheme.Multiplier(levelBefore, levels.PrivilegeExpBoost),
 		isLevelUp,
 		nullableString(record.IPAddress),
 		nullableString(record.DeviceInfo),
@@ -3673,8 +3397,6 @@ ORDER BY day ASC`, appID, startDate.UTC(), timezone)
 	return result, nil
 }
 
-
-
 func (r *Repository) GetIntegralRankings(ctx context.Context, appID int64, page int, limit int, currentUserID int64) (*pointdomain.RankingResponse, error) {
 	return r.getUserMetricRankings(ctx, appID, page, limit, currentUserID, "integral")
 }
@@ -3698,46 +3420,18 @@ func (r *Repository) GetLevelRankings(ctx context.Context, appID int64, page int
 	}
 
 	query := `
-WITH ranked AS (
-    SELECT
-        u.id,
-        u.account,
-        u.experience,
-        COALESCE(p.nickname, '') AS nickname,
-        COALESCE(p.avatar, '') AS avatar,
-        COALESCE(curr.level, 1) AS current_level,
-        COALESCE(curr.level_name, '新手') AS level_name,
-        CASE
-            WHEN next_level.experience_required IS NULL THEN 100.00
-            WHEN next_level.experience_required = COALESCE(curr.experience_required, 0) THEN 0.00
-            ELSE ROUND(
-                ((u.experience - COALESCE(curr.experience_required, 0))::numeric / NULLIF((next_level.experience_required - COALESCE(curr.experience_required, 0)), 0)::numeric) * 100.00,
-                2
-            )
-        END AS level_progress
-    FROM users u
-    LEFT JOIN user_profiles p ON p.user_id = u.id
-    LEFT JOIN LATERAL (
-        SELECT level, level_name, experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    LEFT JOIN LATERAL (
-        SELECT experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required > u.experience
-        ORDER BY level ASC
-        LIMIT 1
-    ) next_level ON true
-    WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
-)
-SELECT id, account, current_level, level_name, experience, nickname, avatar, level_progress
-FROM ranked
-ORDER BY current_level DESC, experience DESC, id ASC
+SELECT u.id, u.account, COALESCE(lr.current_level, 1), u.experience, COALESCE(p.nickname, ''), COALESCE(p.avatar, '')
+FROM users u
+LEFT JOIN user_profiles p ON p.user_id = u.id
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
+ORDER BY COALESCE(lr.current_level, 1) DESC, u.experience DESC, u.id ASC
 LIMIT $2 OFFSET $3`
 
+	scheme, _, err := r.LevelScheme(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.pool.Query(ctx, query, appID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -3747,12 +3441,15 @@ LIMIT $2 OFFSET $3`
 	items := make([]pointdomain.RankingItem, 0, limit)
 	for rows.Next() {
 		var item pointdomain.RankingItem
-		var currentLevel int64
-		if err := rows.Scan(&item.UserID, &item.Account, &currentLevel, &item.LevelName, &item.Experience, &item.Nickname, &item.Avatar, &item.Progress); err != nil {
+		var currentLevel int
+		if err := rows.Scan(&item.UserID, &item.Account, &currentLevel, &item.Experience, &item.Nickname, &item.Avatar); err != nil {
 			return nil, err
 		}
+		state := scheme.StateOf(currentLevel, item.Experience)
+		item.LevelName = state.Config.Name
+		item.Progress = state.Progress
 		item.Type = "level"
-		item.Value = currentLevel
+		item.Value = int64(state.Level)
 		item.Rank = offset + len(items) + 1
 		items = append(items, item)
 	}
@@ -4064,98 +3761,39 @@ func (r *Repository) getMyMetricRank(ctx context.Context, appID int64, userID in
 }
 
 func (r *Repository) getMyLevelRank(ctx context.Context, appID int64, userID int64) (*pointdomain.RankingItem, error) {
-	query := `
-WITH target AS (
-    SELECT
-        u.id,
-        u.account,
-        u.experience,
-        COALESCE(p.nickname, '') AS nickname,
-        COALESCE(p.avatar, '') AS avatar,
-        COALESCE(curr.level, 1) AS current_level,
-        COALESCE(curr.level_name, '新手') AS level_name,
-        CASE
-            WHEN next_level.experience_required IS NULL THEN 100.00
-            WHEN next_level.experience_required = COALESCE(curr.experience_required, 0) THEN 0.00
-            ELSE ROUND(
-                ((u.experience - COALESCE(curr.experience_required, 0))::numeric / NULLIF((next_level.experience_required - COALESCE(curr.experience_required, 0)), 0)::numeric) * 100.00,
-                2
-            )
-        END AS level_progress
-    FROM users u
-    LEFT JOIN user_profiles p ON p.user_id = u.id
-    LEFT JOIN LATERAL (
-        SELECT level, level_name, experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    LEFT JOIN LATERAL (
-        SELECT experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required > u.experience
-        ORDER BY level ASC
-        LIMIT 1
-    ) next_level ON true
-    WHERE u.id = $2 AND u.appid = $1
-    LIMIT 1
-)
-SELECT id, account, current_level, level_name, experience, nickname, avatar, level_progress
-FROM target`
-
+	scheme, _, err := r.LevelScheme(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
 	var item pointdomain.RankingItem
-	var currentLevel int64
-	if err := r.pool.QueryRow(ctx, query, appID, userID).Scan(&item.UserID, &item.Account, &currentLevel, &item.LevelName, &item.Experience, &item.Nickname, &item.Avatar, &item.Progress); err != nil {
+	var currentLevel int
+	if err := r.pool.QueryRow(ctx, `SELECT u.id, u.account, COALESCE(lr.current_level, 1), u.experience, COALESCE(p.nickname, ''), COALESCE(p.avatar, '')
+FROM users u
+LEFT JOIN user_profiles p ON p.user_id = u.id
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.id = $2 AND u.appid = $1`, appID, userID).Scan(&item.UserID, &item.Account, &currentLevel, &item.Experience, &item.Nickname, &item.Avatar); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	rankQuery := `
-WITH target_user AS (
-    SELECT
-        COALESCE(curr.level, 1) AS current_level,
-        u.experience
-    FROM users u
-    LEFT JOIN LATERAL (
-        SELECT level
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    WHERE u.id = $2 AND u.appid = $1
-    LIMIT 1
-),
-all_users AS (
-    SELECT
-        COALESCE(curr.level, 1) AS current_level,
-        u.experience
-    FROM users u
-    LEFT JOIN LATERAL (
-        SELECT level
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
-)
-SELECT COUNT(*) + 1
-FROM all_users au, target_user cu
-WHERE au.current_level > cu.current_level
-   OR (au.current_level = cu.current_level AND au.experience > cu.experience)`
-
 	var rank int64
-	if err := r.pool.QueryRow(ctx, rankQuery, appID, userID).Scan(&rank); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) + 1
+FROM users u
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
+  AND (COALESCE(lr.current_level, 1) > $2 OR (COALESCE(lr.current_level, 1) = $2 AND u.experience > $3))`,
+		appID, currentLevel, item.Experience).Scan(&rank); err != nil {
 		return nil, err
 	}
 
+	state := scheme.StateOf(currentLevel, item.Experience)
+	item.LevelName = state.Config.Name
+	item.Progress = state.Progress
 	item.Rank = int(rank)
 	item.Type = "level"
-	item.Value = currentLevel
+	item.Value = int64(state.Level)
 	return &item, nil
 }
 
@@ -5050,25 +4688,6 @@ func randomDigits(length int) string {
 		buf[i] = digits[rand.IntN(len(digits))]
 	}
 	return string(buf)
-}
-
-func collectLevelUpRewards(levels []pointdomain.LevelConfig, fromLevel int, toLevel int) []map[string]any {
-	if toLevel <= fromLevel {
-		return nil
-	}
-	items := make([]map[string]any, 0, toLevel-fromLevel)
-	for _, level := range levels {
-		if level.Level <= fromLevel || level.Level > toLevel {
-			continue
-		}
-		items = append(items, map[string]any{
-			"level":      level.Level,
-			"level_name": level.LevelName,
-			"rewards":    level.Rewards,
-			"privileges": level.Privileges,
-		})
-	}
-	return items
 }
 
 func maxInt(a int, b int) int {

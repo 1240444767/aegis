@@ -105,7 +105,7 @@ func (s *AppService) PreviewSignInReward(ctx context.Context, appID int64, input
 	if input.UserExperience < 0 {
 		input.UserExperience = 0
 	}
-	resolved, appliedRules, env, err := calculateSignInRewardWithPolicy(ctx, s.pg, policy, occurredAt, input.UserExperience, input.ConsecutiveDays, input.TotalSignIns)
+	resolved, appliedRules, env, err := calculateSignInRewardWithPolicy(ctx, s.levelMultipliers(appID, 0), policy, occurredAt, input.UserExperience, input.ConsecutiveDays, input.TotalSignIns)
 	if err != nil {
 		return nil, err
 	}
@@ -121,7 +121,7 @@ func (s *AppService) PreviewSignInReward(ctx context.Context, appID int64, input
 		Draft:        draft,
 	}
 	if input.SimulateDays > 0 {
-		simulation, err := simulateSignInRewards(ctx, s.pg, policy, occurredAt, input)
+		simulation, err := simulateSignInRewards(ctx, s.levelMultipliers(appID, 0), policy, occurredAt, input)
 		if err != nil {
 			return nil, err
 		}
@@ -134,7 +134,7 @@ func (s *AppService) PreviewSignInReward(ctx context.Context, appID int64, input
 //
 // 每过一天：连签 +1、累计签到 +1、当天拿到的经验加回用户经验（等级经验倍率会随等级变化）。
 // 日期按策略时区推进，周末、月初这类按日期判断的规则因此会在对应的那天命中。
-func simulateSignInRewards(ctx context.Context, pg experienceMultiplierProvider, policy appdomain.SignInRewardPolicy, start time.Time, input appdomain.SignInRewardPreviewInput) (*appdomain.SignInRewardSimulation, error) {
+func simulateSignInRewards(ctx context.Context, pg levelMultiplierFunc, policy appdomain.SignInRewardPolicy, start time.Time, input appdomain.SignInRewardPreviewInput) (*appdomain.SignInRewardSimulation, error) {
 	days := input.SimulateDays
 	if days > appdomain.SignInRewardMaxSimulateDays {
 		days = appdomain.SignInRewardMaxSimulateDays
@@ -226,7 +226,7 @@ func resolveSignInRewardPolicy(app *appdomain.App) appdomain.SignInRewardPolicy 
 	return normalized
 }
 
-func calculateSignInRewardWithPolicy(ctx context.Context, pg experienceMultiplierProvider, policy appdomain.SignInRewardPolicy, now time.Time, userExperience int64, consecutiveDays int, totalSignIns int64) (appdomain.SignInRewardResolved, []appdomain.SignInRewardAppliedRule, map[string]any, error) {
+func calculateSignInRewardWithPolicy(ctx context.Context, pg levelMultiplierFunc, policy appdomain.SignInRewardPolicy, now time.Time, userExperience int64, consecutiveDays int, totalSignIns int64) (appdomain.SignInRewardResolved, []appdomain.SignInRewardAppliedRule, map[string]any, error) {
 	if reflect.DeepEqual(policy, appdomain.SignInRewardPolicy{}) {
 		policy = defaultSignInRewardPolicy()
 	}
@@ -336,12 +336,18 @@ func calculateSignInRewardWithPolicy(ctx context.Context, pg experienceMultiplie
 		experienceReward = 0
 	}
 
-	if policy.ApplyLevelExperienceMultiplier && pg != nil {
-		levelMultiplier, err := pg.GetExperienceMultiplier(ctx, userExperience)
+	// 等级权益（docs/levels.md）：签到经验加成受策略开关控制（沿用旧口径），签到积分加成只要配置了就生效
+	if pg != nil {
+		levelExp, levelIntegral, err := pg(ctx, userExperience)
 		if err != nil {
 			return appdomain.SignInRewardResolved{}, nil, env, err
 		}
-		experienceReward = int64(math.Floor(float64(experienceReward) * levelMultiplier))
+		if policy.ApplyLevelExperienceMultiplier {
+			experienceReward = int64(math.Floor(float64(experienceReward) * levelExp))
+		}
+		if levelIntegral > 1 {
+			integralReward = int64(math.Floor(float64(integralReward) * levelIntegral))
+		}
 	}
 
 	if integralReward < 1 {
@@ -368,8 +374,17 @@ func calculateSignInRewardWithPolicy(ctx context.Context, pg experienceMultiplie
 	}, appliedRules, env, nil
 }
 
-type experienceMultiplierProvider interface {
-	GetExperienceMultiplier(ctx context.Context, experience int64) (float64, error)
+// levelMultiplierFunc 签到时按等级取经验 / 积分倍率（等级权益）。nil 表示不加成（单测）。
+type levelMultiplierFunc func(ctx context.Context, experience int64) (float64, float64, error)
+
+// levelMultipliers 某个应用里某个人的等级倍率；userID 为 0（预览、推演）时按经验现算等级。
+func (s *AppService) levelMultipliers(appID, userID int64) levelMultiplierFunc {
+	if s == nil || s.pg == nil {
+		return nil
+	}
+	return func(ctx context.Context, experience int64) (float64, float64, error) {
+		return s.pg.LevelMultipliers(ctx, appID, userID, experience)
+	}
 }
 
 func evaluateSignInRewardExpression(expression string, env map[string]any) (bool, error) {
