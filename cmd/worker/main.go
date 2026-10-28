@@ -10,6 +10,8 @@ import (
 	"aegis/internal/bootstrap"
 	"aegis/internal/config"
 	"aegis/pkg/crashlog"
+
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -33,15 +35,23 @@ func main() {
 
 	bootstrap.PrintBootBanner(cfg, bootstrap.RoleWorker)
 
-	worker, err := bootstrap.NewWorkerApp(ctx, cl)
+	system, err := bootstrap.NewWorkerSystem(ctx, cl)
 	if err != nil {
 		panic(err)
 	}
-	defer worker.Close(context.Background())
-	worker.Logger.Info("aegis worker starting")
-	bootstrap.PrintReadyBanner(ctx, worker.BannerRuntimeOf(bootstrap.RoleWorker, time.Since(started)))
 
-	if err := worker.Run(ctx); err != nil {
+	system.Worker.Logger.Info("aegis worker starting")
+	if err := system.StartWithTimeout(ctx); err != nil {
+		_ = system.StopWithTimeout()
 		panic(err)
+	}
+	bootstrap.PrintReadyBanner(ctx, system.Worker.BannerRuntimeOf(bootstrap.RoleWorker, time.Since(started)))
+
+	runErr := system.Wait(ctx)
+	if err := system.StopWithTimeout(); err != nil {
+		system.Worker.Logger.Warn("graceful shutdown incomplete", zap.Error(err))
+	}
+	if runErr != nil {
+		panic(runErr)
 	}
 }

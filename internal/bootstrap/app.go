@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis/internal/authz"
@@ -84,6 +85,9 @@ type APIApp struct {
 	EgressGateway   *egress.Gateway
 	OwnsEgress      bool
 	ShutdownTracing func(context.Context) error
+
+	// closeOnce 保证 Close 只执行一次（信号路径与 fx OnStop 都可能调用）。
+	closeOnce sync.Once
 }
 
 func NewAPIApp(ctx context.Context, cl *crashlog.Logger) (*APIApp, error) {
@@ -878,6 +882,19 @@ func (a *APIApp) Start(ctx context.Context) error {
 }
 
 func (a *APIApp) Close(ctx context.Context) {
+	a.closeOnce.Do(func() { a.close(ctx) })
+}
+
+// close 先关监听：不再接新请求，在途请求在 ctx（ShutdownTimeout）内跑完；
+// 之后才停后台协程，最后断开 Redis / NATS / Temporal / Postgres。
+// 反过来的顺序会让还在处理的请求撞上已经关掉的连接池。
+func (a *APIApp) close(ctx context.Context) {
+	if a.Secure != nil {
+		_ = a.Secure.Shutdown(ctx)
+	}
+	if a.Server != nil {
+		_ = a.Server.Shutdown(ctx)
+	}
 	if a.Governance != nil {
 		a.Governance.Stop()
 	}
@@ -904,12 +921,6 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Monitor != nil {
 		a.Monitor.StopCollector()
-	}
-	if a.Secure != nil {
-		_ = a.Secure.Shutdown(ctx)
-	}
-	if a.Server != nil {
-		_ = a.Server.Shutdown(ctx)
 	}
 	if a.OnlineLive != nil {
 		a.OnlineLive.Close()
@@ -940,10 +951,7 @@ func (a *APIApp) Close(ctx context.Context) {
 	if a.Redis != nil {
 		_ = a.Redis.Close()
 	}
-	if a.NATSConn != nil {
-		a.NATSConn.Drain()
-		a.NATSConn.Close()
-	}
+	drainNATS(ctx, a.NATSConn)
 	if a.Temporal != nil {
 		a.Temporal.Close()
 	}

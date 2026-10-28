@@ -11,12 +11,15 @@ import (
 
 // SafeGo 启动带 panic 恢复的 goroutine。
 // 如果 fn panic，记录崩溃日志；restartOnPanic 为 true 时自动重启（1 秒退避）。
+// fn 正常返回即视为该协程已完成使命（通常是 ctx 取消、进程关停），不再重启——
+// 否则关停时每个循环都会每秒被拉起一次，去碰已经关掉的连接池。
 func SafeGo(log *zap.Logger, cl *crashlog.Logger, component string, restartOnPanic bool, fn func()) {
 	go func() {
 		for {
-			func() {
+			panicked := func() (panicked bool) {
 				defer func() {
 					if r := recover(); r != nil {
+						panicked = true
 						if cl != nil {
 							cl.Write(component, r, true)
 						}
@@ -28,9 +31,10 @@ func SafeGo(log *zap.Logger, cl *crashlog.Logger, component string, restartOnPan
 					}
 				}()
 				fn()
+				return false
 			}()
 
-			if !restartOnPanic {
+			if !panicked || !restartOnPanic {
 				return
 			}
 			log.Warn("goroutine will restart after backoff",

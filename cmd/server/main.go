@@ -82,28 +82,32 @@ func main() {
 
 	bootstrap.PrintBootBanner(cfg, bootstrap.RoleUnified)
 
-	app, err := bootstrap.NewUnifiedApp(ctx, cl)
+	system, err := bootstrap.NewUnifiedSystem(ctx, cl)
 	if err != nil {
 		panic(err)
 	}
-	defer app.Close(context.Background())
-
-	app.API.Logger.Info("aegis unified runtime starting",
-		zap.Int("port", app.API.Config.HTTPPort),
-		zap.String("mode", "api+worker"),
-	)
-	bootstrap.PrintReadyBanner(ctx, app.API.BannerRuntimeOf(bootstrap.RoleUnified, time.Since(started)))
 
 	// 监听停止信号文件（Windows 无法优雅发送 SIGINT 给后台进程）
 	go watchStopFile(stop, ".runtime/run/server.stop")
 
-	go func() {
-		<-ctx.Done()
-		app.Close(context.Background())
-	}()
-
-	if err := app.Run(ctx); err != nil {
+	system.API.Logger.Info("aegis unified runtime starting",
+		zap.Int("port", system.API.Config.HTTPPort),
+		zap.String("mode", "api+worker"),
+	)
+	if err := system.StartWithTimeout(ctx); err != nil {
+		_ = system.StopWithTimeout()
 		panic(err)
+	}
+	// 就绪横幅在所有组件启动完成、端口已监听之后才打印
+	bootstrap.PrintReadyBanner(ctx, system.API.BannerRuntimeOf(bootstrap.RoleUnified, time.Since(started)))
+
+	runErr := system.Wait(ctx)
+	// 收到信号或组件出错都走同一条关停路径，且只走一次
+	if err := system.StopWithTimeout(); err != nil {
+		system.API.Logger.Warn("graceful shutdown incomplete", zap.Error(err))
+	}
+	if runErr != nil {
+		panic(runErr)
 	}
 }
 

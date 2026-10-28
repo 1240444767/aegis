@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis/internal/config"
@@ -56,6 +57,10 @@ type WorkerApp struct {
 	EgressGateway   *egress.Gateway
 	OwnsEgress      bool
 	ShutdownTracing func(context.Context) error
+
+	// closeOnce 保证 Close 只执行一次：信号路径与 fx OnStop 都可能调用它，
+	// 重复关闭会二次 Stop Temporal Worker（SDK 内部 close 已关闭的 channel 直接 panic）。
+	closeOnce sync.Once
 }
 
 const (
@@ -369,6 +374,19 @@ func (w *WorkerApp) handleJSONMessage(msg *nats.Msg, handler func(context.Contex
 }
 
 func (w *WorkerApp) Close(ctx context.Context) {
+	w.closeOnce.Do(func() { w.close(ctx) })
+}
+
+// close 按"先停入口、再停后台、最后断连接"的顺序释放：
+//  1. Temporal Worker 先停止拉取任务，并等在途 Activity 跑完（它们还要用 DB/Redis）；
+//  2. NATS Drain 停止投递新消息并等在途 handler 处理完、Ack 落地；
+//  3. 后台巡检/治理协程收尾；
+//  4. 最后才关 Temporal 客户端、Redis 与 Postgres，连接池排空在途查询后断开。
+func (w *WorkerApp) close(ctx context.Context) {
+	if w.TemporalWorker != nil {
+		w.TemporalWorker.Stop()
+	}
+	drainNATS(ctx, w.NATSConn)
 	if w.Governance != nil {
 		w.Governance.Stop()
 	}
@@ -381,23 +399,16 @@ func (w *WorkerApp) Close(ctx context.Context) {
 	if w.Database != nil {
 		w.Database.Stop()
 	}
-	if w.PostgresHandle != nil {
-		w.PostgresHandle.Close(ctx)
-	} else if w.Postgres != nil {
-		w.Postgres.Close()
+	if w.Temporal != nil {
+		w.Temporal.Close()
 	}
 	if w.Redis != nil {
 		_ = w.Redis.Close()
 	}
-	if w.NATSConn != nil {
-		w.NATSConn.Drain()
-		w.NATSConn.Close()
-	}
-	if w.TemporalWorker != nil {
-		w.TemporalWorker.Stop()
-	}
-	if w.Temporal != nil {
-		w.Temporal.Close()
+	if w.PostgresHandle != nil {
+		w.PostgresHandle.Close(ctx)
+	} else if w.Postgres != nil {
+		w.Postgres.Close()
 	}
 	if w.ShutdownTracing != nil {
 		_ = w.ShutdownTracing(ctx)
