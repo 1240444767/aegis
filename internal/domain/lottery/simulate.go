@@ -35,6 +35,8 @@ type SimulationInput struct {
 	IsolatedStock bool
 	// Seed 非 0 时结果可复现
 	Seed uint64
+	// FortuneApplied 奖盘已经乘过某个真实用户今天的运气系数；否则每个虚拟用户各抽一个运气系数
+	FortuneApplied bool
 }
 
 // ValidateSimulation 校验模拟规模。
@@ -94,6 +96,8 @@ type SimulationResult struct {
 	ValuePerDraw float64           `json:"valuePerDraw"`
 	Prizes       []SimulationPrize `json:"prizes"`
 	Behavior     *BehaviorScore    `json:"behavior,omitempty"`
+	// Fortune 虚拟用户运气系数的分布（开了每日运气时）
+	Fortune *Distribution `json:"fortune,omitempty"`
 }
 
 type simUser struct {
@@ -148,7 +152,8 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 		dayProgress = now.Sub(dayStart).Hours() / 24
 	}
 
-	for range input.Users {
+	fortunes := []float64{}
+	for userIndex := range input.Users {
 		pool := shared
 		if input.IsolatedStock {
 			pool = clonePrizes(prizes)
@@ -156,6 +161,11 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 			pointsIssued = 0
 		}
 		user := simUser{prizeWins: map[int64]int{}}
+		fortune := 1.0
+		if f := strategy.Fortune; f != nil && f.Spread > 0 && !input.FortuneApplied {
+			fortune = fortuneFactor(f.Spread, seed+uint64(userIndex)*0x9e3779b97f4a7c15)
+			fortunes = append(fortunes, fortune)
+		}
 		for range input.DrawsPerUser {
 			state := DrawState{
 				Now: now, Source: source, MissStreak: user.missStreak, TotalDraws: user.totalDraws,
@@ -166,7 +176,8 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 				ActivityDrawsToday: activityDraws, ActivityWinsToday: activityWins,
 				LuckExpected: user.luckExpected, LuckVariance: user.luckVariance, LuckSkew: user.luckSkew,
 			}
-			plan := PlanDraw(activity, strategy, pool, state)
+			// 运气只改权重；库存、已抽中数量记在 pool 上（下标一一对应）
+			plan := PlanDraw(activity, strategy, FortunePrizes(pool, fortune), state)
 			if result.Behavior == nil {
 				result.Behavior = plan.Behavior
 			}
@@ -251,6 +262,10 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 	result.FirstWin = describe(firstWins)
 	result.MissStreak = describe(longest)
 	result.WinsPerUser = describe(perUser)
+	if len(fortunes) > 0 {
+		distribution := describe(fortunes)
+		result.Fortune = &distribution
+	}
 	if result.Draws > 0 {
 		result.ValuePerDraw = round6(valueIssued / float64(result.Draws))
 	}

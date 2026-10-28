@@ -3,6 +3,7 @@ package lottery
 import (
 	"math"
 	"testing"
+	"time"
 
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
@@ -29,13 +30,13 @@ func productionBoard() ([]Prize, map[int64]pointstore.PlanRef) {
 	}, plans
 }
 
-// 线上现在的 12 格转盘：会员 3 / 7 天、免广告、工具台样式、永久会员，积分奖品期望 7 积分左右。
+// 线上的 12 格转盘：会员 3 / 7 天、免广告、工具台样式、永久会员，积分奖品期望 7 积分左右；15 经验是兜底奖。
 func wheelBoard() ([]Prize, map[int64]pointstore.PlanRef) {
 	plans := map[int64]pointstore.PlanRef{17: {ID: 17, Name: "永久会员", Lifetime: true, Features: []string{"ai"}}}
 	prize := func(position, weight int, reward Reward) Prize {
 		return Prize{ID: int64(position + 1), Name: reward.Type, Kind: reward.Type, Reward: reward, Weight: weight, Quantity: -1, Position: position}
 	}
-	return []Prize{
+	prizes := []Prize{
 		prize(0, 1, Reward{Type: KindVipPlan, RefID: 17}),
 		prize(1, 22000, Reward{Type: KindPoints, Amount: 10}),
 		prize(2, 200, Reward{Type: KindVipDays, Amount: 7}),
@@ -48,7 +49,9 @@ func wheelBoard() ([]Prize, map[int64]pointstore.PlanRef) {
 		prize(9, 6000, Reward{Type: KindLotteryDraws, Amount: 1}),
 		prize(10, 1200, Reward{Type: KindVipDays, Amount: 3}),
 		prize(11, 1000, Reward{Type: KindAdFree, Amount: 3}),
-	}, plans
+	}
+	prizes[3].Fallback = true
+	return prizes, plans
 }
 
 func lifetimeMember() MemberCoverage {
@@ -178,5 +181,130 @@ func TestEconomyRedrawsAndPrice(t *testing.T) {
 	alt, _ := Swap(draws.WithEconomy(economy), prizes[7], plans)
 	if alt.Type != KindPoints || alt.Amount != int64(math.Floor(10*economy.Scale)) || economy.ExpectedReturn(economy.Scale) > 10+1e-9 {
 		t.Fatalf("缩减时改发的次数换成按比例的积分，得到 %+v（%+v）", alt, economy)
+	}
+}
+
+// 每日运气：系数确定（同人同天不变）、人人不同、平均约为 1；只乘真实奖品，兜底奖不变。
+func TestFortune(t *testing.T) {
+	fortune := &Fortune{Spread: 0.3}
+	day := time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
+	if FortuneOf(nil, 1, 7, day) != 1 || FortuneOf(fortune, 1, 0, day) != 1 {
+		t.Fatal("没开每日运气、没有用户时系数为 1")
+	}
+	if FortuneOf(fortune, 1, 7, day) != FortuneOf(fortune, 1, 7, day.Add(15*time.Hour)) {
+		t.Fatal("同一个人同一天的运气不变")
+	}
+	low, high := FortuneRange(fortune)
+	seen := map[float64]bool{}
+	var sum, lucky float64
+	const users = 20000
+	for user := int64(1); user <= users; user++ {
+		factor := FortuneOf(fortune, 1, user, day)
+		if factor < low || factor > high {
+			t.Fatalf("系数 %.4f 超出范围 [%.4f, %.4f]", factor, low, high)
+		}
+		seen[factor] = true
+		sum += factor
+		if factor > 1.2 {
+			lucky++
+		}
+	}
+	if len(seen) < users*9/10 {
+		t.Fatalf("每个人的运气应各不相同，%d 人里只有 %d 种", users, len(seen))
+	}
+	if mean := sum / users; math.Abs(mean-1) > 0.01 {
+		t.Fatalf("平均系数应约为 1，得到 %.4f", mean)
+	}
+	// σ = 0.3：系数 > 1.2 即 z > (ln1.2 + 0.045)/0.3 ≈ 0.76，约 22%
+	if share := lucky / users; share < 0.19 || share > 0.26 {
+		t.Fatalf("走运（系数 > 1.2）的人约占两成，得到 %.3f", share)
+	}
+	if days := map[float64]bool{}; true {
+		for offset := range 30 {
+			days[FortuneOf(fortune, 1, 7, day.AddDate(0, 0, offset))] = true
+		}
+		if len(days) < 28 {
+			t.Fatalf("同一个人每天的运气应不同，30 天里只有 %d 种", len(days))
+		}
+	}
+
+	prizes, _ := wheelBoard()
+	boosted := FortunePrizes(prizes, high)
+	base, after := Probabilities(prizes), Probabilities(boosted)
+	if after[3] >= base[3] || after[8] <= base[8] {
+		t.Fatalf("走运时兜底经验变少、大额积分变多，得到 经验 %.2f→%.2f 188 积分 %.4f→%.4f", base[3], after[3], base[8], after[8])
+	}
+	if ratio := (after[8] / after[1]) / (base[8] / base[1]); math.Abs(ratio-1) > 1e-4 {
+		t.Fatalf("真实奖品之间的相对比例不变，得到 %.6f", ratio)
+	}
+	if &FortunePrizes(prizes, 1)[0] != &prizes[0] {
+		t.Fatal("系数为 1 时不复制奖盘")
+	}
+}
+
+// 10-28 的转盘：去掉永久会员，换成月度 / 季度会员；真实奖品约占 65%，σ = 0.3 时运气最好的永久会员也不套利。
+func fortuneBoard() ([]Prize, map[int64]pointstore.PlanRef) {
+	plans := map[int64]pointstore.PlanRef{
+		14: {ID: 14, Name: "月度会员", DurationDays: 30, Features: []string{"ai"}},
+		15: {ID: 15, Name: "季度会员", DurationDays: 124, Features: []string{"ai"}},
+	}
+	prize := func(position, weight int, reward Reward) Prize {
+		return Prize{ID: int64(position + 1), Name: reward.Type, Kind: reward.Type, Reward: reward, Weight: weight, Quantity: -1, Position: position}
+	}
+	prizes := []Prize{
+		prize(0, 20, Reward{Type: KindVipPlan, RefID: 15}),
+		prize(1, 15000, Reward{Type: KindPoints, Amount: 10}),
+		prize(2, 100, Reward{Type: KindVipPlan, RefID: 14}),
+		prize(3, 34380, Reward{Type: KindExperience, Amount: 20}),
+		prize(4, 4000, Reward{Type: KindAdFree, Amount: 1}),
+		prize(5, 2000, Reward{Type: KindPoints, Amount: 66}),
+		prize(6, 2000, Reward{Type: KindFeature, Tag: "ai", Amount: 3}),
+		prize(7, 30000, Reward{Type: KindPoints, Amount: 5}),
+		prize(8, 300, Reward{Type: KindPoints, Amount: 188}),
+		prize(9, 10000, Reward{Type: KindLotteryDraws, Amount: 1}),
+		prize(10, 1200, Reward{Type: KindVipDays, Amount: 3}),
+		prize(11, 1000, Reward{Type: KindAdFree, Amount: 3}),
+	}
+	prizes[3].Fallback = true
+	return prizes, plans
+}
+
+// 运气最好的永久会员会套利时控制台要提示；10-28 的转盘在 σ = 0.3 时不会。
+func TestAuditEconomyFortune(t *testing.T) {
+	prizes, plans := fortuneBoard()
+	lifetime := lifetimeMember()
+	activity := Activity{LifetimePolicy: LifetimePoints, Strategy: Strategy{Fortune: &Fortune{Spread: 0.3}}}
+	audit := AuditEconomy(activity, prizes, plans, lifetime, 10)
+	if len(audit.Warnings) != 0 || audit.LifetimeScale != 1 {
+		t.Fatalf("σ = 0.3 时不应警告，得到 %+v", audit)
+	}
+	_, high := FortuneRange(activity.Strategy.Fortune)
+	rule := RuleOf(activity, lifetime.Policy)
+	lucky := EconomyOf(rule, lifetime, FortunePrizes(PersonalPrizes(rule, lifetime, prizes, plans), high), plans, 10)
+	t.Logf("普通用户 %.2f，永久会员 %.2f，运气最好（%.2f）的永久会员 %.2f", audit.MemberReturn, audit.LifetimeReturn, high, lucky.ExpectedReturn(1))
+	if lucky.Scaled() || lucky.ExpectedReturn(1) >= 10 {
+		t.Fatalf("运气最好的永久会员也应低于价格，得到 %+v", lucky)
+	}
+	activity.Strategy.Fortune.Spread = 1
+	if audit := AuditEconomy(activity, prizes, plans, lifetime, 10); len(audit.Warnings) != 1 {
+		t.Fatalf("σ = 1 时运气最好的永久会员会套利，应提示，得到 %+v", audit.Warnings)
+	}
+}
+
+// 模拟器给每个虚拟用户各抽一个运气系数：走运的人真实奖品更多，总体中奖率仍接近公示。
+func TestSimulateFortune(t *testing.T) {
+	prizes, _ := fortuneBoard()
+	strategy := Strategy{Fortune: &Fortune{Spread: 0.3}}
+	result := Simulate(Activity{}, strategy, prizes, SimulationInput{Users: 2000, DrawsPerUser: 20, Seed: 7, IsolatedStock: true})
+	if result.Fortune == nil || result.Fortune.P50 >= result.Fortune.P90 || math.Abs(result.Fortune.Mean-1) > 0.03 {
+		t.Fatalf("虚拟用户的运气应各不相同、平均约为 1，得到 %+v", result.Fortune)
+	}
+	real := 1 - result.Prizes[3].Rate
+	if math.Abs(real-0.6562) > 0.02 {
+		t.Fatalf("真实奖品总占比应接近公示的 65.6%%，得到 %.4f", real)
+	}
+	fixed := Simulate(Activity{}, strategy, prizes, SimulationInput{Users: 10, DrawsPerUser: 5, Seed: 7, FortuneApplied: true})
+	if fixed.Fortune != nil {
+		t.Fatal("奖盘已经乘过真实用户的运气时不再抽系数")
 	}
 }

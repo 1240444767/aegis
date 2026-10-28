@@ -194,6 +194,7 @@ export type LotteryStrategyLimits = {
   simulationDraws: number;
   luckStrength?: number;
   controlGain?: number;
+  fortuneSpread?: number;
 };
 
 export type LotteryStrategyRule = {
@@ -226,6 +227,8 @@ export type LotteryStrategy = {
   rules?: LotteryStrategyRule[];
   /** 运气平衡：每 1σ 在对数几率上校正多少 */
   luck?: { strength: number };
+  /** 每日运气：每人每天一个系数乘在真实奖品上，spread 为对数标准差 σ */
+  fortune?: { spread: number };
   /** prd 为伪随机分布（替代软保底）；空为独立抽取 */
   variance?: "" | "prd";
   /** 全站中奖率反馈（Beta 后验） */

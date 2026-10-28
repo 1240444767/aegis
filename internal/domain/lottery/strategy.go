@@ -82,6 +82,8 @@ type Strategy struct {
 	Variance string          `json:"variance,omitempty"`
 	WinRate  *WinRateControl `json:"winRate,omitempty"`
 	Guard    *Guard          `json:"guard,omitempty"`
+	// Fortune 每日运气，见 fortune.go（在个人奖盘上生效，不在出奖方案里）
+	Fortune *Fortune `json:"fortune,omitempty"`
 }
 
 // SoftPity 软保底：连续未中达到 Start 次后，每多一次未中，中奖总概率抬高 Step 个百分点（上限 100%）。
@@ -135,7 +137,7 @@ type StrategyRule struct {
 // Empty 没有任何策略。
 func (s Strategy) Empty() bool {
 	return s.SoftPity == nil && s.Pacing == nil && s.Cooldown == nil && s.Budget == nil && s.Risk == nil &&
-		s.Behavior == nil && len(s.Rules) == 0 && s.Luck == nil && s.Variance == "" && s.WinRate == nil && s.Guard == nil
+		s.Behavior == nil && len(s.Rules) == 0 && s.Luck == nil && s.Variance == "" && s.WinRate == nil && s.Guard == nil && s.Fortune == nil
 }
 
 // NormalizeStrategy 清洗：去掉不生效的项，补默认值。
@@ -342,6 +344,8 @@ type DrawPlan struct {
 	Fallback bool  `json:"fallback,omitempty"`
 	// Perks 这一次生效的人群特权（权重与保底已按它改写）
 	Perks *PerkEffects `json:"perks,omitempty"`
+	// Fortune 这个人今天的运气系数（真实奖品的权重已乘过）；没开每日运气时不写
+	Fortune float64 `json:"fortune,omitempty"`
 }
 
 // PlanDraw 按策略算出这一次每个奖品的最终概率。纯函数：同样的输入永远得到同样的方案。

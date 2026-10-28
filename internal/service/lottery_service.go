@@ -158,6 +158,7 @@ func (s *LotteryService) Catalog(ctx context.Context, appID int64) (map[string]a
 			"prizeLimit": lotterydomain.MaxPrizeLimit, "simulationUsers": lotterydomain.MaxSimulationUsers,
 			"simulationEach": lotterydomain.MaxSimulationEach, "simulationDraws": lotterydomain.MaxSimulationDraws,
 			"luckStrength": lotterydomain.MaxLuckStrength, "controlGain": lotterydomain.MaxControlGain,
+			"fortuneSpread": lotterydomain.MaxFortuneSpread,
 		},
 		// 人群特权：人群、条件表达式的变量与取值上界
 		"perkAudiences": lotterydomain.PerkAudiences(),
@@ -495,7 +496,8 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
 	return &lotterydomain.ClientState{
-		Activity:   s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features),
+		Activity: s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features,
+			lotterydomain.FortuneOf(activity.Strategy.Fortune, activity.ID, userID, lotteryDayStart(now))),
 		Chances:    personal.chances,
 		Pity:       personal.pity,
 		Lifetime:   lotterydomain.MergePerkNotice(lotterydomain.NoticeOf(rule, coverage, prizes, plans), personal.summary, coverage.Lifetime),
@@ -564,13 +566,13 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 	return nil, nil
 }
 
-// clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0），
+// clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0、乘过今天的运气系数），
 // 已拥有的奖品带上「对你来说会怎样」。
 func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
 	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
-	features map[string]pointstore.FeatureRef) lotterydomain.ClientActivity {
+	features map[string]pointstore.FeatureRef, fortune float64) lotterydomain.ClientActivity {
 	rule := lotterydomain.RuleOf(activity, coverage.Policy)
-	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
+	personal := lotterydomain.FortunePrizes(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)), fortune)
 	probabilities := lotterydomain.Probabilities(personal)
 	// 与抽奖事务同一个无套利比例：「转为 N 积分」写的是真会发的数
 	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, activity.AppID)

@@ -186,6 +186,14 @@ func AuditEconomy(activity Activity, prizes []Prize, plans map[int64]pointstore.
 		out.Warnings = append(out.Warnings, fmt.Sprintf(
 			"永久会员抽中已拥有的奖品时按原价折算会让积分买次数稳赚，现按原价的 %.0f%% 发放。请调低会员、功能奖品的概率或时长，让永久会员拿回原价",
 			lifetime.Scale*100))
+	} else if _, high := FortuneRange(activity.Strategy.Fortune); high > 1 {
+		// 每日运气在个人奖盘上生效：运气最好的那天，永久会员的折算会不会被缩减
+		lucky := EconomyOf(rule, coverage, FortunePrizes(lifetimeBoard, high), plans, price)
+		if lucky.Scaled() {
+			out.Warnings = append(out.Warnings, fmt.Sprintf(
+				"每日运气最好（系数 %.2f）的永久会员按原价折算会让积分买次数稳赚，那天按原价的 %.0f%% 发放。可调小运气差异，或调低会员、功能奖品的概率",
+				high, lucky.Scale*100))
+		}
 	}
 	return out
 }

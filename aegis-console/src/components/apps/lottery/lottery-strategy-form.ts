@@ -19,7 +19,8 @@ export const STRATEGY_LIMITS: LotteryStrategyLimits = {
   simulationEach: 1000,
   simulationDraws: 200_000,
   luckStrength: 2,
-  controlGain: 20
+  controlGain: 20,
+  fortuneSpread: 1
 };
 
 export type RuleDraft = {
@@ -63,6 +64,8 @@ export type StrategyDraft = {
   rules: RuleDraft[];
   luck: boolean;
   luckStrength: string;
+  fortune: boolean;
+  fortuneSpread: string;
   /** 伪随机分布（与软保底二选一） */
   prd: boolean;
   winRate: boolean;
@@ -122,6 +125,8 @@ export function seedStrategy(strategy?: LotteryStrategy | null): StrategyDraft {
     })),
     luck: Boolean(s.luck),
     luckStrength: num(s.luck?.strength, 0.3),
+    fortune: Boolean(s.fortune),
+    fortuneSpread: num(s.fortune?.spread, 0.3),
     prd: s.variance === "prd",
     winRate: Boolean(s.winRate),
     winRateTarget: pct(s.winRate?.target, 30),
@@ -173,6 +178,7 @@ export function strategyPayload(draft: StrategyDraft, catalog?: LotteryCatalog |
     }
   }
   if (draft.luck) out.luck = { strength: toNumber(draft.luckStrength) };
+  if (draft.fortune) out.fortune = { spread: toNumber(draft.fortuneSpread) };
   if (draft.prd) out.variance = "prd";
   if (draft.winRate) {
     out.winRate = {
@@ -242,6 +248,11 @@ export function validateStrategy(draft: StrategyDraft, prizeCount: number, limit
     const max = limits.luckStrength ?? 2;
     if (strength <= 0 || strength > max) issues.push(`运气平衡强度需要在 0–${max} 之间`);
   }
+  if (draft.fortune) {
+    const spread = toNumber(draft.fortuneSpread);
+    const max = limits.fortuneSpread ?? 1;
+    if (spread <= 0 || spread > max) issues.push(`每日运气的差异需要在 0–${max} 之间`);
+  }
   if (draft.prd && draft.softPity) issues.push("伪随机分布与软保底只能二选一");
   if (draft.winRate) {
     const target = toNumber(draft.winRateTarget);
@@ -287,6 +298,7 @@ export const FACTOR_LABEL: Record<string, string> = {
   rule: "规则",
   softPity: "软保底",
   luck: "运气平衡",
+  fortune: "每日运气",
   prd: "伪随机分布",
   control: "全站反馈",
   guard: "护栏"

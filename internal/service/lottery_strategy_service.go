@@ -110,6 +110,10 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 			return nil, err
 		}
 		prizes = lotterydomain.PersonalPrizes(lotterydomain.RuleOf(activity, coverage.Policy), coverage, prizes, plans)
+		// 这个人今天的运气（与抽奖事务、活动页同一个系数）
+		prizes = lotterydomain.FortunePrizes(prizes,
+			lotterydomain.FortuneOf(activity.Strategy.Fortune, activity.ID, req.UserID, lotteryDayStart(now)))
+		req.Options.FortuneApplied = true
 		if saved != nil {
 			state, err := s.pg.LotteryPreview(ctx, activity, prizes, req.AppID, req.UserID, profile, now,
 				lotteryDayStart(now), timeutil.DefaultLocation())

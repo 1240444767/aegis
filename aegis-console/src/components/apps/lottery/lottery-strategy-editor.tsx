@@ -69,7 +69,7 @@ const DIMENSIONS: Dimension[] = [
 ];
 
 type Control = {
-  key: "luck" | "prd" | "winRate" | "guard";
+  key: "luck" | "fortune" | "prd" | "winRate" | "guard";
   label: string;
   hint: string;
   icon: LucideIcon;
@@ -78,10 +78,19 @@ type Control = {
 /** 概率控制层：在各维度系数之后整体校正这一次的分布（docs/lottery.md「概率控制层」） */
 const CONTROLS: Control[] = [
   { key: "luck", label: "运气平衡", hint: "按实际与应得中奖次数的偏差校正", icon: Scale },
+  { key: "fortune", label: "每日运气", hint: "每人每天手气不同，平均不变", icon: Sparkles },
   { key: "prd", label: "伪随机分布", hint: "长期中奖率不变，减少连败与连中", icon: Dices },
   { key: "winRate", label: "全站中奖率目标", hint: "按今日全站中奖率闭环调节", icon: Target },
   { key: "guard", label: "护栏", hint: "中奖率区间与期望价值上限", icon: ShieldCheck }
 ];
+
+/** σ → 最倒霉与最走运（±2σ）的人真实奖品权重的倍数，与后端 lottery/fortune.go 同一个式子 */
+function fortuneHint(raw: string) {
+  const spread = Number(raw);
+  if (!Number.isFinite(spread) || spread <= 0) return "每人每天一个系数，乘在兜底奖以外的奖品上";
+  const at = (z: number) => Math.exp(spread * z - (spread * spread) / 2);
+  return `系数 ${at(-2).toFixed(2)}–${at(2).toFixed(2)}，最走运的人真实奖品的权重是最倒霉的 ${(at(2) / at(-2)).toFixed(1)} 倍`;
+}
 
 const MAP_HINT: Record<string, string> = {
   saturate: "越多越高",
@@ -172,6 +181,22 @@ export function LotteryStrategyEditor({
           />
           <p className="self-end text-[11px] text-muted-foreground">
             0.3 时，比应得少中 2σ 的用户中奖率约提高 1.8 倍
+          </p>
+        </DimensionBox>
+      ) : null}
+
+      {value.fortune ? (
+        <DimensionBox title="每日运气">
+          <NumberField
+            label="运气差异"
+            value={value.fortuneSpread}
+            min={0}
+            max={limits.fortuneSpread ?? 1}
+            unit="σ"
+            onChange={(next) => patch({ fortuneSpread: next })}
+          />
+          <p className="self-end text-[11px] text-muted-foreground">
+            {fortuneHint(value.fortuneSpread)}
           </p>
         </DimensionBox>
       ) : null}

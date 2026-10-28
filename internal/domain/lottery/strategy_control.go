@@ -85,6 +85,9 @@ func normalizeControl(s *Strategy) {
 	if s.Luck != nil && s.Luck.Strength <= 0 {
 		s.Luck = nil
 	}
+	if s.Fortune != nil && s.Fortune.Spread <= 0 {
+		s.Fortune = nil
+	}
 	if s.Variance != VariancePRD {
 		s.Variance = ""
 	}
@@ -103,6 +106,9 @@ func normalizeControl(s *Strategy) {
 func validateControl(s Strategy) error {
 	if l := s.Luck; l != nil && l.Strength > MaxLuckStrength {
 		return fmt.Errorf("运气平衡强度需要在 0–%d 之间", MaxLuckStrength)
+	}
+	if f := s.Fortune; f != nil && f.Spread > MaxFortuneSpread {
+		return fmt.Errorf("每日运气的差异需要在 0–%d 之间", MaxFortuneSpread)
 	}
 	if w := s.WinRate; w != nil {
 		if w.Target >= 1 {

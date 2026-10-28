@@ -44,7 +44,7 @@ PRIZES_HELP = (
 )
 STRATEGY_HELP = (
     "多维度出奖策略（整体替换，可选键）：softPity {start, step} / pacing / cooldown / budget / risk / behavior / rules / "
-    "luck / variance（independent | prd）/ winRate / guard。不确定时先用 lottery_simulate 验证"
+    "luck / variance（independent | prd）/ winRate / guard / fortune {spread}（每日运气）。不确定时先用 lottery_simulate 验证"
 )
 PERKS_HELP = (
     "人群特权（整体替换）。每项 {name, disabled?, audience: all | member | lifetime | non_member | non_lifetime | ad_free, "

@@ -662,7 +662,8 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 		}
 	}
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
-	personal := effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans))
+	fortune := lotterydomain.FortuneOf(activity.Strategy.Fortune, activity.ID, input.UserID, input.DayStart)
+	personal := lotterydomain.FortunePrizes(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)), fortune)
 	// 无套利：原价折算会让积分买次数稳赚时，已拥有格子的改发按刚好回本的比例缩减（正常奖盘照原价）
 	storePrice, err := lotteryStoreDrawPriceQ(ctx, tx, input.AppID)
 	if err != nil {
@@ -682,6 +683,9 @@ WHERE appid = $1 AND user_id = $2 AND balance > 0`, input.AppID, input.UserID)
 	}
 	if !effects.Empty() {
 		plan.Perks = &effects
+	}
+	if fortune != 1 {
+		plan.Fortune = fortune
 	}
 	pity := plan.Pity
 	trace, err := json.Marshal(plan)
