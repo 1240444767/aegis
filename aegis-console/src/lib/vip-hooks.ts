@@ -5,10 +5,12 @@ import {
   claimAdminVipTrial,
   deleteAdminVipFeature,
   deleteAdminVipPlan,
+  deleteAdminVipTier,
   getAdminVipConversionPolicy,
   listAdminVipConversions,
   listAdminVipFeatures,
   listAdminVipPlans,
+  listAdminVipTiers,
   listAdminVipTransactions,
   listAdminVipTrialClaims,
   previewAdminVipGrant,
@@ -16,10 +18,12 @@ import {
   saveAdminVipConversionPolicy,
   saveAdminVipFeature,
   saveAdminVipPlan,
+  saveAdminVipTier,
   type VipConversionPolicyPayload,
   type VipFeaturePayload,
   type VipGrantPayload,
-  type VipPlanPayload
+  type VipPlanPayload,
+  type VipTierPayload
 } from "@/lib/api/vip";
 import { useAdminToken } from "@/lib/admin-hooks";
 
@@ -34,6 +38,7 @@ import { useAdminToken } from "@/lib/admin-hooks";
 
 const KEY = {
   plans: "admin-vip-plans",
+  tiers: "admin-vip-tiers",
   features: "admin-vip-features",
   entitlement: "admin-vip-entitlement",
   claims: "admin-vip-trial-claims",
@@ -94,6 +99,36 @@ export function useDeleteAdminVipPlanMutation(appKey?: string | null) {
   const invalidate = useInvalidateVipScope();
   return useMutation({
     mutationFn: (planId: number) => deleteAdminVipPlan(token as string, appKey as string, planId),
+    onSuccess: invalidate
+  });
+}
+
+// ── 会员档位 ──
+
+export function useAdminVipTiersQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.tiers, token, appKey],
+    queryFn: () => listAdminVipTiers(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useSaveAdminVipTierMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateVipScope();
+  return useMutation({
+    mutationFn: (payload: VipTierPayload) => saveAdminVipTier(token as string, appKey as string, payload),
+    onSuccess: invalidate
+  });
+}
+
+export function useDeleteAdminVipTierMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateVipScope();
+  return useMutation({
+    mutationFn: ({ tierId, moveTo }: { tierId: number; moveTo?: number }) =>
+      deleteAdminVipTier(token as string, appKey as string, tierId, moveTo),
     onSuccess: invalidate
   });
 }

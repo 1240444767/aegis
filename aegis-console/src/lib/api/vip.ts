@@ -24,7 +24,10 @@ export type VipPlan = {
   lifetime: boolean;
   /** 仅试用套餐有意义：同一设备只能领一次 */
   trialDeviceLimited: boolean;
-  /** 这个套餐解锁哪些功能标识（引用功能目录的 tag） */
+  /** 套餐卖的会员档位。权益属于档位，套餐只是售卖规格（价格 × 时长 / 永久） */
+  tierId: number;
+  tierName?: string;
+  /** 所属档位当前的功能（只读，改功能请改档位） */
   features: string[];
   durationDays: number;
   price: string;
@@ -35,6 +38,37 @@ export type VipPlan = {
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * 会员档位（docs/vip-tiers.md）：权益的唯一来源。
+ *
+ * 每段会员期记的是档位，权益按档位**当前**的功能算 —— 删套餐、重新上架、调价都不影响已开通的会员；
+ * 档位不能被直接删掉，还有套餐或会员时必须指定迁往的档位。
+ */
+export type VipTier = {
+  id: number;
+  appid: number;
+  name: string;
+  description?: string;
+  features: string[];
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  plans: Array<{ id: number; name: string; kind: VipPlanKind; lifetime: boolean; isActive: boolean }>;
+  /** 此刻有仍生效会员期落在这个档位的人数 */
+  members: number;
+  lifetimeMembers: number;
+  /** 不挂套餐的永久会员（自定义发放、老系统迁入）默认归入的档位 */
+  defaultLifetime: boolean;
+};
+
+export type VipTierPayload = {
+  id?: number;
+  name?: string;
+  description?: string;
+  features?: string[];
+  sortOrder?: number;
 };
 
 // ── 会员权益折算（docs/vip-conversion.md） ──
@@ -135,6 +169,9 @@ export type VipPlanPayload = {
   /** 只在创建时生效；对已有套餐传入不同的值，后端以 40014 拒绝 */
   lifetime?: boolean;
   trialDeviceLimited?: boolean;
+  /** 套餐卖的档位。新建时不传：功能完全相同的档位就并进去，否则按套餐名新建一个 */
+  tierId?: number;
+  /** 改的是所属档位的功能（同档位的套餐一起变） */
   features?: string[];
   /** 永久套餐忽略 */
   durationDays?: number;
@@ -341,6 +378,28 @@ export function deleteAdminVipPlan(token: string, appKey: string, planId: number
   });
 }
 
+// ── 会员档位 ──
+
+export function listAdminVipTiers(token: string, appKey: string) {
+  return apiRequest<VipTier[]>(`/api/admin/apps/${appKey}/vip/tiers`, { token });
+}
+
+export function saveAdminVipTier(token: string, appKey: string, payload: VipTierPayload) {
+  return apiRequest<VipTier>(`/api/admin/apps/${appKey}/vip/tiers`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+/** 档位下还有套餐或在期会员时必须给 moveTo，否则 40996 */
+export function deleteAdminVipTier(token: string, appKey: string, tierId: number, moveTo?: number) {
+  return apiRequest<{ deleted: boolean; movedTo: number }>(
+    `/api/admin/apps/${appKey}/vip/tiers/${tierId}${buildQuery({ moveTo: moveTo || undefined })}`,
+    { method: "DELETE", token }
+  );
+}
+
 // ── 功能标识目录 ──
 
 export function listAdminVipFeatures(token: string, appKey: string) {
@@ -382,6 +441,8 @@ export type VipGrantPayload = {
   quantity?: number;
   days?: number;
   lifetime?: boolean;
+  /** 自定义发放归入的档位（features 是档位之外另给的）。不传：永久会员归入应用的永久档位，限时的只带 features */
+  tierId?: number;
   features?: string[];
   reason?: string;
   bonusIntegral?: number;

@@ -11,6 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { VipFeature, VipSource } from "@/lib/api/vip";
 import { cn } from "@/lib/utils";
@@ -127,6 +128,52 @@ export function FeatureTagList({
     <div className="flex flex-wrap gap-1">
       {tags.map((tag) => (
         <FeatureTag key={tag} tag={tag} catalog={catalog} />
+      ))}
+    </div>
+  );
+}
+
+/** 功能标识多选（档位编辑、新建套餐时顺带建档位共用）。停用的标识照样可选，只是淡一些。 */
+export function FeatureChecklist({
+  catalog,
+  value,
+  onChange
+}: {
+  catalog: VipFeature[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (catalog.length === 0) {
+    return (
+      <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
+        暂无功能标识
+      </p>
+    );
+  }
+  const toggle = (tag: string) =>
+    onChange(value.includes(tag) ? value.filter((item) => item !== tag) : [...value, tag]);
+  return (
+    <div className="space-y-1.5 rounded-xl border border-border p-2">
+      {catalog.map((feature) => (
+        <label
+          key={feature.tag}
+          className={cn(
+            "flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/60",
+            !feature.isActive && "opacity-60"
+          )}
+        >
+          <Checkbox checked={value.includes(feature.tag)} onCheckedChange={() => toggle(feature.tag)} className="mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-xs font-medium">{feature.name}</span>
+              <code className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{feature.tag}</code>
+              {!feature.isActive ? <span className="text-[10px] text-muted-foreground">已停用</span> : null}
+            </div>
+            {feature.description ? (
+              <p className="truncate text-[10px] text-muted-foreground">{feature.description}</p>
+            ) : null}
+          </div>
+        </label>
       ))}
     </div>
   );

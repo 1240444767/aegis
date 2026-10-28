@@ -55,7 +55,7 @@ import {
 } from "@/lib/app-user-hooks";
 import type { VipEntitlement, VipPlan, VipTransaction } from "@/lib/api/types";
 import type { VipConversion, VipGrantPayload, VipGrantPreview, VipOwnedMode, VipUpgradeMode } from "@/lib/api/vip";
-import { useAdminVipConversionsQuery, useAdminVipGrantPreviewQuery } from "@/lib/vip-hooks";
+import { useAdminVipConversionsQuery, useAdminVipGrantPreviewQuery, useAdminVipTiersQuery } from "@/lib/vip-hooks";
 import { cn } from "@/lib/utils";
 import {
   InfoGrid,
@@ -418,6 +418,10 @@ function GrantForm({
   const [customDays, setCustomDays] = useState("");
   const [bonus, setBonus] = useState("");
   const [features, setFeatures] = useState<string[]>([]);
+  // 自定义发放归入的档位；0 为默认（永久会员归入应用的永久档位，限时的不挂档位）
+  const [tierChoice, setTierChoice] = useState(0);
+  const tiersQuery = useAdminVipTiersQuery(appKey);
+  const tiers = useMemo(() => tiersQuery.data ?? [], [tiersQuery.data]);
   const [reason, setReason] = useState("");
   const [confirmOpen, setConfirmOpen] = useState(false);
   // 这一次单独指定的折算处理方式；空为跟随应用策略
@@ -432,6 +436,9 @@ function GrantForm({
   const customLifetime = term === "lifetime";
   const days = term === "custom" ? Number.parseInt(customDays, 10) : customLifetime ? 0 : Number(term);
   const customValid = customLifetime || (Number.isInteger(days) && days > 0 && days <= 36500);
+  const autoTier = customLifetime ? tiers.find((tier) => tier.defaultLifetime) : undefined;
+  const grantTier = tierChoice ? tiers.find((tier) => tier.id === tierChoice) : autoTier;
+  const customFeatureCount = new Set([...(grantTier?.features ?? []), ...features]).size;
   const bonusValue = Number.parseInt(bonus, 10);
   const bonusCount = Number.isFinite(bonusValue) && bonusValue > 0 ? bonusValue : 0;
 
@@ -439,7 +446,7 @@ function GrantForm({
   const grantLifetime = mode === "plan" ? planLifetime : customLifetime;
   const grantDays = mode === "plan" ? (plan ? plan.durationDays * planQuantity : 0) : days;
   const grantBonus = mode === "plan" ? (plan?.bonusIntegral ?? 0) * planQuantity : bonusCount;
-  const grantFeatures = mode === "plan" ? (plan?.features?.length ?? 0) : features.length;
+  const grantFeatures = mode === "plan" ? (plan?.features?.length ?? 0) : customFeatureCount;
   const ready = mode === "plan" ? Boolean(plan) : customValid;
 
   const payload: Omit<VipGrantPayload, "userId"> | null = !ready
@@ -448,6 +455,7 @@ function GrantForm({
       ? { planId: plan.id, quantity: planQuantity, reason: reason.trim() || undefined }
       : {
           ...(customLifetime ? { lifetime: true } : { days }),
+          tierId: tierChoice || undefined,
           bonusIntegral: bonusCount || undefined,
           features: features.length ? features : undefined,
           reason: reason.trim() || undefined
@@ -595,6 +603,44 @@ function GrantForm({
             </div>
           </div>
 
+          {tiers.length ? (
+            <div className="flex flex-col gap-2">
+              <FieldLabel>会员档位</FieldLabel>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { id: 0, label: customLifetime ? `默认（${autoTier?.name ?? "不挂档位"}）` : "不挂档位" },
+                  ...tiers.map((tier) => ({ id: tier.id, label: tier.name }))
+                ].map((option) => {
+                  const selected = tierChoice === option.id;
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={selected}
+                      className={cn(
+                        "inline-flex h-7 items-center gap-1 rounded-md border px-2.5 text-xs transition-colors",
+                        selected
+                          ? "border-primary/40 bg-primary/10 text-foreground"
+                          : "bg-background text-muted-foreground hover:bg-accent hover:text-foreground"
+                      )}
+                      onClick={() => setTierChoice(option.id)}
+                    >
+                      {selected ? <BadgeCheck className="size-3.5" /> : null}
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {grantTier ? (
+                <p className="text-[11px] text-muted-foreground">
+                  权益随档位「{grantTier.name}」变化：{grantTier.features.length
+                    ? grantTier.features.map(featureName).join("、")
+                    : "仅会员身份"}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {featureTags.length ? (
             <div className="flex flex-col gap-2">
               <FieldLabel
@@ -608,7 +654,7 @@ function GrantForm({
                   </button>
                 }
               >
-                附带权益
+                {grantTier ? "档位之外另给" : "附带权益"}
               </FieldLabel>
               <div className="flex flex-wrap gap-1.5">
                 {featureTags.map((tag) => {

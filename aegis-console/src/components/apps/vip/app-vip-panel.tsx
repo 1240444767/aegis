@@ -1,23 +1,25 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Puzzle, Search, Shuffle, Sparkles } from "lucide-react";
+import { Crown, Layers, Puzzle, Search, Shuffle, Sparkles } from "lucide-react";
 import { NoAppSelected } from "@/components/apps/app-config-primitives";
 import { VipConversionPanel } from "@/components/apps/vip/vip-conversion-panel";
 import { VipFeaturesPanel } from "@/components/apps/vip/vip-features-panel";
 import { VipMemberPanel } from "@/components/apps/vip/vip-member-panel";
 import { VipPlansPanel } from "@/components/apps/vip/vip-plans-panel";
+import { VipTiersPanel } from "@/components/apps/vip/vip-tiers-panel";
 import { VipTrialPanel } from "@/components/apps/vip/vip-trial-panel";
 import { cn } from "@/lib/utils";
 
 /**
  * 会员区块。
  *
- * 五个视图回答五个不同的问题，刻意不合并成一张长页面：
+ * 六个视图回答六个不同的问题，刻意不合并成一张长页面：
  *
  * | 视图 | 回答什么 |
  * |---|---|
- * | 套餐 | 卖什么、试用发什么 |
+ * | 套餐 | 卖什么、试用发什么（价格 × 时长 / 永久） |
+ * | 档位 | 会员到底有哪些权益（套餐卖的是档位，删套餐不影响会员） |
  * | 功能标识 | 「会员」细分成哪些能力（接入方服务端按它校验） |
  * | 试用 | 领了多少、转化了多少、某个人还能不能领 |
  * | 折算 | 永久会员收到已包含的权益、开通永久时原有存量怎么办 |
@@ -28,6 +30,7 @@ import { cn } from "@/lib/utils";
  */
 const VIEWS = [
   { key: "plans", label: "套餐", icon: Crown },
+  { key: "tiers", label: "档位", icon: Layers },
   { key: "features", label: "功能标识", icon: Puzzle },
   { key: "trial", label: "试用", icon: Sparkles },
   { key: "conversion", label: "折算", icon: Shuffle },
@@ -65,6 +68,7 @@ export function AppVipPanel({ appKey }: { appKey?: string | null }) {
       </div>
 
       {view === "plans" ? <VipPlansPanel appKey={appKey} /> : null}
+      {view === "tiers" ? <VipTiersPanel appKey={appKey} /> : null}
       {view === "features" ? <VipFeaturesPanel appKey={appKey} /> : null}
       {view === "trial" ? <VipTrialPanel appKey={appKey} /> : null}
       {view === "conversion" ? <VipConversionPanel appKey={appKey} /> : null}
