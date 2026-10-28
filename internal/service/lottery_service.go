@@ -495,16 +495,29 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	plans, features := s.catalogRefs(ctx, appID, prizes)
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
+	fortune := lotterydomain.ReadFortune(activity.Strategy.Fortune, activity.ID, userID, lotteryDayStart(now))
+	factor := 1.0
+	if fortune != nil {
+		factor = fortune.Factor
+	}
+	client, shares := s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features, factor)
+	if fortune != nil {
+		fortune.WinRate, fortune.BaseWinRate = shares.lucky, shares.plain
+	}
 	return &lotterydomain.ClientState{
-		Activity: s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features,
-			lotterydomain.FortuneOf(activity.Strategy.Fortune, activity.ID, userID, lotteryDayStart(now))),
+		Activity:   client,
 		Chances:    personal.chances,
 		Pity:       personal.pity,
 		Lifetime:   lotterydomain.MergePerkNotice(lotterydomain.NoticeOf(rule, coverage, prizes, plans), personal.summary, coverage.Lifetime),
 		Perks:      personal.summary,
+		Fortune:    fortune,
+		Viewer:     lotterydomain.ClientViewer{Lifetime: coverage.Lifetime},
 		ServerTime: now.UTC(),
 	}, nil
 }
+
+// lotteryShares 抽中兜底奖以外奖品的概率（百分比）：乘今日运气之前与之后。
+type lotteryShares struct{ plain, lucky float64 }
 
 // lotteryPersonal 这个人此刻的次数、保底与人群特权（活动页与抽奖结果共用）。
 type lotteryPersonal struct {
@@ -567,13 +580,17 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 }
 
 // clientActivity 用户端的活动：公示概率按这个人眼里的奖盘算（不参与抽取的已拥有奖品为 0、乘过今天的运气系数），
-// 已拥有的奖品带上「对你来说会怎样」。
+// 已拥有的奖品带上「对你来说会怎样」。另给出活动公示的原概率（baseProbability），以及今日运气前后的中奖率。
 func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
 	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
-	features map[string]pointstore.FeatureRef, fortune float64) lotterydomain.ClientActivity {
+	features map[string]pointstore.FeatureRef, fortune float64) (lotterydomain.ClientActivity, lotteryShares) {
 	rule := lotterydomain.RuleOf(activity, coverage.Policy)
-	personal := lotterydomain.FortunePrizes(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)), fortune)
+	owned := lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)
+	boosted := effects.BoostPrizes(owned)
+	personal := lotterydomain.FortunePrizes(boosted, fortune)
 	probabilities := lotterydomain.Probabilities(personal)
+	base := lotterydomain.Probabilities(owned)
+	shares := lotteryShares{plain: lotterydomain.RealPrizeShare(boosted), lucky: lotterydomain.RealPrizeShare(personal)}
 	// 与抽奖事务同一个无套利比例：「转为 N 积分」写的是真会发的数
 	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, activity.AppID)
 	if err != nil {
@@ -591,11 +608,12 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 			ID: prize.ID, Name: prize.Name, Kind: lotterydomain.ClientKind(prize.Kind), RewardType: prize.Kind,
 			Detail:   lotterydomain.DescribeReward(prize.Reward, plans, features).Detail,
 			ImageURL: prize.ImageURL, Position: prize.Position, Probability: lotterydomain.PublicProbability(probabilities[index]),
-			SoldOut: !prize.InStock(),
-			Swap:    lotterydomain.DescribeSwap(rule, coverage, prize, plans),
+			BaseProbability: lotterydomain.PublicProbability(base[index]),
+			SoldOut:         !prize.InStock(),
+			Swap:            lotterydomain.DescribeSwap(rule, coverage, prize, plans),
 		})
 	}
-	return out
+	return out, shares
 }
 
 // videoChances 视频抽奖：活动指定的激励广告场景今天还能看几次。广告没开、场景停用时 enabled=false。
@@ -651,52 +669,135 @@ func (s *LotteryService) Draw(ctx context.Context, req LotteryDrawRequest) (*lot
 	if req.Source != "" && !slices.Contains(lotterydomain.Sources(), req.Source) {
 		return nil, s.translate(lotteryReasonError(lotterydomain.ReasonUnknownSource))
 	}
-	if s.risk != nil {
-		appID, userID := req.AppID, req.UserID
-		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
-			Scene: securitydomain.SceneLottery, AppID: &appID, UserID: &userID,
-			IP: req.ClientIP, DeviceID: req.DeviceID, UserAgent: req.UserAgent,
-			Extra: map[string]any{"activityId": req.ActivityID, "source": req.Source},
-		}, RiskGuardOption{Code: errCodeLotteryRiskBlocked, Message: "当前环境存在风险，暂时无法抽奖"}); err != nil {
-			return nil, err
-		}
+	if err := s.guardDraw(ctx, req); err != nil {
+		return nil, err
 	}
-
-	now := time.Now()
-	input := lotterydomain.DrawInput{
-		AppID: req.AppID, UserID: req.UserID, ActivityID: req.ActivityID, Source: req.Source,
-		RequestID: req.RequestID, DeviceID: strings.TrimSpace(req.DeviceID), ClientIP: strings.TrimSpace(req.ClientIP),
-		UserAgent: req.UserAgent, DayStart: lotteryDayStart(now), Now: now, Location: timeutil.DefaultLocation(),
-	}
-	// 事务外先读一次活动：决定要不要取画像、要不要先问激励广告视频抽奖今天几次（免看广告的判定要用）。
-	// 读不到时照常进事务，由事务报「活动不存在」
-	if activity, err := s.pg.GetLotteryActivity(ctx, req.AppID, req.ActivityID); err == nil {
-		input.Profile = s.drawProfile(ctx, *activity, req.AppID, req.UserID, now)
-		if lotterydomain.PerksAdSkip(activity.Perks) {
-			input.Video = s.videoChances(ctx, *activity, req.AppID, req.UserID)
-		}
-	}
+	input := s.drawInput(ctx, req)
 	outcome, err := s.pg.DrawLottery(ctx, input)
 	if err != nil {
 		return nil, s.translate(err)
 	}
 
 	result := &lotterydomain.DrawResult{Draw: userLotteryDraw(outcome.Draw), Replayed: outcome.Replayed}
-	if facts, err := s.pg.LotteryUserFacts(ctx, req.AppID, outcome.Activity.ID, req.UserID, lotteryDayStart(time.Now())); err == nil {
-		prizes, err := s.pg.ListLotteryPrizes(ctx, outcome.Activity.ID)
-		if err != nil {
-			prizes = outcome.Prizes
-		}
-		personal := s.personalize(ctx, outcome.Activity, prizes, req.AppID, req.UserID, facts, time.Now())
-		result.Chances, result.Pity = personal.chances, personal.pity
-	} else {
-		s.log.Warn("lottery: reload chances failed", zap.Int64("appid", req.AppID), zap.Error(err))
-	}
-
+	result.Chances, result.Pity = s.chancesAfter(ctx, req, outcome)
 	if !outcome.Replayed {
 		s.afterDraw(outcome.Draw)
 	}
 	return result, nil
+}
+
+// LotteryBatchRequest 连抽（十连抽）：Count 次，每一次与单抽相同。
+type LotteryBatchRequest struct {
+	LotteryDrawRequest
+	Count int
+}
+
+// DrawBatch 连抽。逐次抽、逐次到账（每一次一个事务，与单抽同一个 DrawLottery），不是一次算好十个结果：
+// 保底、每日运气、库存、奖品限额在十次之间照常推进。第 i 次的 requestId 是「requestId#i」，
+// 网络重试带同一个 requestId 时已抽过的原样返回，没抽到的接着抽。
+//
+// 中途抽不了（次数用完、积分不够、活动刚好结束）时停下，已抽到的照常返回并写明停下的原因；
+// 第一次就抽不了时报那个错误（与单抽同一个码）。风控只在开始时评估一次。
+func (s *LotteryService) DrawBatch(ctx context.Context, req LotteryBatchRequest) (*lotterydomain.BatchResult, error) {
+	req.RequestID = strings.TrimSpace(req.RequestID)
+	req.Source = strings.TrimSpace(req.Source)
+	if req.Count < 1 || req.Count > lotterydomain.MaxBatchDraws {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "一次最多连抽 "+strconv.Itoa(lotterydomain.MaxBatchDraws)+" 次")
+	}
+	if len(req.RequestID) > lotterydomain.MaxBatchRequestIDLength {
+		return nil, apperrors.New(40000, http.StatusBadRequest,
+			"requestId 不能超过 "+strconv.Itoa(lotterydomain.MaxBatchRequestIDLength)+" 位")
+	}
+	if req.Source != "" && !slices.Contains(lotterydomain.Sources(), req.Source) {
+		return nil, s.translate(lotteryReasonError(lotterydomain.ReasonUnknownSource))
+	}
+	if err := s.guardDraw(ctx, req.LotteryDrawRequest); err != nil {
+		return nil, err
+	}
+
+	input := s.drawInput(ctx, req.LotteryDrawRequest)
+	result := &lotterydomain.BatchResult{Draws: make([]lotterydomain.Draw, 0, req.Count), Requested: req.Count, Replayed: true}
+	var last *pgrepo.LotteryDrawOutcome
+	for index := 0; index < req.Count; index++ {
+		if req.RequestID != "" {
+			input.RequestID = req.RequestID + "#" + strconv.Itoa(index)
+		}
+		input.Now = time.Now()
+		input.DayStart = lotteryDayStart(input.Now)
+		outcome, err := s.pg.DrawLottery(ctx, input)
+		if err != nil {
+			translated := s.translate(err)
+			if index == 0 {
+				return nil, translated
+			}
+			stop := &lotterydomain.BatchStop{Code: errCodeLotterySourceUnavailable, Message: translated.Error()}
+			var appErr *apperrors.AppError
+			if errors.As(translated, &appErr) {
+				stop.Code = appErr.Code
+			}
+			result.Stopped = stop
+			break
+		}
+		last = outcome
+		result.Draws = append(result.Draws, userLotteryDraw(outcome.Draw))
+		result.Replayed = result.Replayed && outcome.Replayed
+		if !outcome.Replayed {
+			s.afterDraw(outcome.Draw)
+		}
+	}
+	result.Chances, result.Pity = s.chancesAfter(ctx, req.LotteryDrawRequest, last)
+	return result, nil
+}
+
+// guardDraw 抽奖前的风控：block / ban 时拒绝。
+func (s *LotteryService) guardDraw(ctx context.Context, req LotteryDrawRequest) error {
+	if s.risk == nil {
+		return nil
+	}
+	appID, userID := req.AppID, req.UserID
+	_, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneLottery, AppID: &appID, UserID: &userID,
+		IP: req.ClientIP, DeviceID: req.DeviceID, UserAgent: req.UserAgent,
+		Extra: map[string]any{"activityId": req.ActivityID, "source": req.Source},
+	}, RiskGuardOption{Code: errCodeLotteryRiskBlocked, Message: "当前环境存在风险，暂时无法抽奖"})
+	return err
+}
+
+// drawInput 抽奖事务的输入。事务外先读一次活动：决定要不要取画像、要不要先问激励广告视频抽奖今天几次
+// （免看广告的判定要用）。读不到时照常进事务，由事务报「活动不存在」。
+func (s *LotteryService) drawInput(ctx context.Context, req LotteryDrawRequest) lotterydomain.DrawInput {
+	now := time.Now()
+	input := lotterydomain.DrawInput{
+		AppID: req.AppID, UserID: req.UserID, ActivityID: req.ActivityID, Source: req.Source,
+		RequestID: req.RequestID, DeviceID: strings.TrimSpace(req.DeviceID), ClientIP: strings.TrimSpace(req.ClientIP),
+		UserAgent: req.UserAgent, DayStart: lotteryDayStart(now), Now: now, Location: timeutil.DefaultLocation(),
+	}
+	if activity, err := s.pg.GetLotteryActivity(ctx, req.AppID, req.ActivityID); err == nil {
+		input.Profile = s.drawProfile(ctx, *activity, req.AppID, req.UserID, now)
+		if lotterydomain.PerksAdSkip(activity.Perks) {
+			input.Video = s.videoChances(ctx, *activity, req.AppID, req.UserID)
+		}
+	}
+	return input
+}
+
+// chancesAfter 抽完之后的次数与保底（按人群特权改写过的活动判，与活动页一致）。取不到时为零值，记日志。
+func (s *LotteryService) chancesAfter(ctx context.Context, req LotteryDrawRequest,
+	outcome *pgrepo.LotteryDrawOutcome) (lotterydomain.Chances, *lotterydomain.Pity) {
+	if outcome == nil {
+		return lotterydomain.Chances{}, nil
+	}
+	facts, err := s.pg.LotteryUserFacts(ctx, req.AppID, outcome.Activity.ID, req.UserID, lotteryDayStart(time.Now()))
+	if err != nil {
+		s.log.Warn("lottery: reload chances failed", zap.Int64("appid", req.AppID), zap.Error(err))
+		return lotterydomain.Chances{}, nil
+	}
+	prizes, err := s.pg.ListLotteryPrizes(ctx, outcome.Activity.ID)
+	if err != nil {
+		prizes = outcome.Prizes
+	}
+	personal := s.personalize(ctx, outcome.Activity, prizes, req.AppID, req.UserID, facts, time.Now())
+	return personal.chances, personal.pity
 }
 
 // MyDraws 我的抽奖记录（activityID 为 0 时不限活动）。

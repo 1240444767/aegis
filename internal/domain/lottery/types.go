@@ -68,6 +68,10 @@ const (
 	MaxPityThreshold    = 1000
 	MaxNoteRunes        = 500
 	MaxRequestIDLength  = 64
+	// MaxBatchDraws 一次连抽最多几次（十连抽）
+	MaxBatchDraws = 10
+	// MaxBatchRequestIDLength 连抽的 requestId 上限：每一抽用「requestId#序号」，要留出后缀
+	MaxBatchRequestIDLength = MaxRequestIDLength - 3
 )
 
 // Reward 奖品发的东西，与积分商城同构（同一套账本、同一套描述）。
@@ -404,7 +408,10 @@ type ClientPrize struct {
 	// Probability 常规抽取下抽中它的概率（百分比，PublicProbability 取整：不小于 1% 保留两位小数、
 	// 小于 1% 保留两位有效数字，抽得到的不会是 0），不含保底与库存的影响
 	Probability float64 `json:"probability"`
-	SoldOut     bool    `json:"soldOut,omitempty"`
+	// BaseProbability 活动公示的概率：只去掉对他不参与抽取的已拥有奖品，不乘人群特权的中奖加成与今日运气。
+	// 与 Probability 相比就是这个人今天的概率比公示高了还是低了
+	BaseProbability float64 `json:"baseProbability"`
+	SoldOut         bool    `json:"soldOut,omitempty"`
 	// Swap 对当前用户来说这一格会怎样（已拥有时改发什么 / 不会抽到）；照常发放时没有
 	Swap *PrizeSwap `json:"swap,omitempty"`
 }
@@ -419,8 +426,38 @@ type ClientState struct {
 	// 有生效的人群特权时，特权说明也并进这里（policy = perk，message 为整句）：老客户端只认这一张提示卡
 	Lifetime *LifetimeNotice `json:"lifetime,omitempty"`
 	// Perks 生效的人群特权
-	Perks      *PerkSummary `json:"perks,omitempty"`
+	Perks *PerkSummary `json:"perks,omitempty"`
+	// Fortune 今日运气；活动没开每日运气时没有
+	Fortune *FortuneReading `json:"fortune,omitempty"`
+	// Viewer 当前用户的身份（客户端按它换永久会员的专属外观）
+	Viewer     ClientViewer `json:"viewer"`
 	ServerTime time.Time    `json:"serverTime"`
+}
+
+// ClientViewer 活动页上当前用户的身份。
+type ClientViewer struct {
+	Lifetime bool `json:"lifetime"`
+}
+
+// BatchResult 连抽的结果：逐次抽，每一次各自是一个事务、各自到账。
+//
+// 中途次数用完（或别的原因抽不了）时停下，已经抽到的照常返回，停下的原因在 Stopped；
+// 第一次就抽不了时整个请求报那个错误，与单抽同一个码。
+type BatchResult struct {
+	Draws   []Draw  `json:"draws"`
+	Chances Chances `json:"chances"`
+	Pity    *Pity   `json:"pity,omitempty"`
+	// Requested 要求抽几次；len(Draws) 是实际抽了几次
+	Requested int        `json:"requested"`
+	Stopped   *BatchStop `json:"stopped,omitempty"`
+	// Replayed 同一个 requestId 的重复提交：每一次都是原样返回第一次的结果
+	Replayed bool `json:"replayed"`
+}
+
+// BatchStop 连抽中途停下的原因：错误码与单抽时报的相同。
+type BatchStop struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
 }
 
 // ClientList 用户端的活动列表。

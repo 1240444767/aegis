@@ -713,6 +713,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/rewards"):                                                     LeaderboardPageQuery{},                   // AppLeaderboardRewards
 		routeKey("GET", "/api/v1/apps/{appkey}/leaderboard/signin/{type}"):                                               LeaderboardListQuery{},                   // LeaderboardSignIn
 		routeKey("POST", "/api/v1/apps/{appkey}/lottery/activities/{activityId}/draw"):                                   LotteryDrawRequest{},                     // AppLotteryDraw
+		routeKey("POST", "/api/v1/apps/{appkey}/lottery/activities/{activityId}/draw/batch"):                             LotteryBatchDrawRequest{},                // AppLotteryDrawBatch
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes"):                                                  RecoveryCodesRegenerateRequest{},         // GenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/recovery-codes/regenerate"):                                       RecoveryCodesRegenerateRequest{},         // RegenerateRecoveryCodes
 		routeKey("POST", "/api/v1/apps/{appkey}/me/2fa/totp/disable"):                                                    TOTPDisableRequest{},                     // DisableTOTP

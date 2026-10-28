@@ -1295,6 +1295,7 @@ POST	/api/v1/apps/:appkey/feedback/attachments	AppUploadFeedbackAttachment
 POST	/api/v1/apps/:appkey/invite/bind	AppBindInvite
 POST	/api/v1/apps/:appkey/invite/preview	AppPreviewInvite
 POST	/api/v1/apps/:appkey/lottery/activities/:activityId/draw	AppLotteryDraw
+POST	/api/v1/apps/:appkey/lottery/activities/:activityId/draw/batch	AppLotteryDrawBatch
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes	GenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/recovery-codes/regenerate	RegenerateRecoveryCodes
 POST	/api/v1/apps/:appkey/me/2fa/totp/disable	DisableTOTP

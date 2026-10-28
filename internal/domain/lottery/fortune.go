@@ -43,9 +43,86 @@ func FortuneOf(fortune *Fortune, activityID, userID int64, day time.Time) float6
 	if fortune == nil || fortune.Spread <= 0 || userID <= 0 {
 		return 1
 	}
+	return fortuneFactor(fortune.Spread, fortuneHash(activityID, userID, day))
+}
+
+func fortuneHash(activityID, userID int64, day time.Time) uint64 {
 	hash := fnv.New64a()
 	_, _ = fmt.Fprintf(hash, "fortune:%d:%d:%s", activityID, userID, day.Format(time.DateOnly))
-	return fortuneFactor(fortune.Spread, hash.Sum64())
+	return hash.Sum64()
+}
+
+// 今日运气的档位，按 z 分：运气大爆发约 7% 的人，鸿运当头约 24%，运势平稳约 38%，手气平淡约 31%。
+const (
+	FortuneBurst  = "burst"
+	FortuneLucky  = "lucky"
+	FortuneSteady = "steady"
+	FortuneQuiet  = "quiet"
+
+	fortuneBurstZ  = 1.5
+	fortuneLuckyZ  = 0.5
+	fortuneSteadyZ = -0.5
+)
+
+// FortuneReading 用户端的今日运气：系数、在所有人里的位置与档位。系数与 FortuneOf 是同一个，
+// 也就是抽奖事务里真正乘在奖盘上的那个，不是另算的一个「好看的数」。
+type FortuneReading struct {
+	Factor float64 `json:"factor"`
+	// Percentile 今天手气不如他的人占多少（1–99）
+	Percentile int `json:"percentile"`
+	// Level burst / lucky / steady / quiet
+	Level   string `json:"level"`
+	Title   string `json:"title"`
+	Message string `json:"message"`
+	// Low / High 运气系数的范围（最倒霉、最走运）
+	Low  float64 `json:"low"`
+	High float64 `json:"high"`
+	// WinRate / BaseWinRate 抽中兜底奖以外的奖品的概率（百分比），乘今日运气之后与之前
+	WinRate     float64 `json:"winRate"`
+	BaseWinRate float64 `json:"baseWinRate"`
+	// ResetsAt 下一次换运气的时刻（明天零点）
+	ResetsAt time.Time `json:"resetsAt"`
+}
+
+// ReadFortune 这个人今天的运气解读；没开每日运气时为 nil。胜率由调用方按个人奖盘填。
+func ReadFortune(fortune *Fortune, activityID, userID int64, day time.Time) *FortuneReading {
+	if fortune == nil || fortune.Spread <= 0 || userID <= 0 {
+		return nil
+	}
+	u := fortuneUniform(fortuneHash(activityID, userID, day))
+	z := math.Max(-fortuneClampZ, math.Min(fortuneClampZ, distuv.UnitNormal.Quantile(u)))
+	low, high := FortuneRange(fortune)
+	reading := &FortuneReading{
+		Factor:     fortuneAt(fortune.Spread, z),
+		Percentile: max(1, min(99, int(math.Round(u*100)))),
+		Low:        low,
+		High:       high,
+		ResetsAt:   day.AddDate(0, 0, 1).UTC(),
+	}
+	switch {
+	case z >= fortuneBurstZ:
+		reading.Level, reading.Title = FortuneBurst, "运气大爆发"
+	case z >= fortuneLuckyZ:
+		reading.Level, reading.Title = FortuneLucky, "鸿运当头"
+	case z > fortuneSteadyZ:
+		reading.Level, reading.Title = FortuneSteady, "运势平稳"
+	default:
+		reading.Level, reading.Title = FortuneQuiet, "手气平淡"
+	}
+	reading.Message = fmt.Sprintf("今日手气超过 %d%% 的用户，奖品权重 ×%s", reading.Percentile, trimFloat(reading.Factor))
+	return reading
+}
+
+// RealPrizeShare 抽中兜底奖与谢谢参与以外的奖品的概率（百分比）。
+func RealPrizeShare(prizes []Prize) float64 {
+	probabilities := Probabilities(prizes)
+	total := 0.0
+	for index, prize := range prizes {
+		if prize.Winning() && !prize.Fallback {
+			total += probabilities[index]
+		}
+	}
+	return PublicProbability(total)
 }
 
 // FortuneRange 运气系数的范围（最倒霉、最走运）。
@@ -57,14 +134,17 @@ func FortuneRange(fortune *Fortune) (low, high float64) {
 }
 
 func fortuneFactor(spread float64, hash uint64) float64 {
-	// FNV 对只差几位数字的输入雪崩不够，再过一遍 splitmix64 的终混
+	return fortuneAt(spread, distuv.UnitNormal.Quantile(fortuneUniform(hash)))
+}
+
+// fortuneUniform 哈希映到 (0, 1)。FNV 对只差几位数字的输入雪崩不够，再过一遍 splitmix64 的终混。
+func fortuneUniform(hash uint64) float64 {
 	hash ^= hash >> 30
 	hash *= 0xbf58476d1ce4e5b9
 	hash ^= hash >> 27
 	hash *= 0x94d049bb133111eb
 	hash ^= hash >> 31
-	u := (float64(hash>>11) + 0.5) / (1 << 53)
-	return fortuneAt(spread, distuv.UnitNormal.Quantile(u))
+	return (float64(hash>>11) + 0.5) / (1 << 53)
 }
 
 func fortuneAt(spread, z float64) float64 {

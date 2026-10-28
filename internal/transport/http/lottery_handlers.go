@@ -128,6 +128,15 @@ type LotteryDrawRequest struct {
 	DeviceID  string `json:"deviceId"`
 }
 
+// LotteryBatchDrawRequest 连抽（十连抽）：count 为 1–10，其余与单抽相同。第 i 次用「requestId#i」幂等，
+// 网络重试时带同一个 requestId：已抽过的原样返回，没抽到的接着抽。
+type LotteryBatchDrawRequest struct {
+	Count     int    `json:"count" binding:"required,min=1,max=10"`
+	Source    string `json:"source"`
+	RequestID string `json:"requestId"`
+	DeviceID  string `json:"deviceId"`
+}
+
 // LotteryDrawsQuery 我的抽奖记录；activityId 不传为全部活动。
 type LotteryDrawsQuery struct {
 	ActivityID int64 `form:"activityId"`
@@ -535,6 +544,50 @@ func (h *Handler) AppLotteryDraw(c *gin.Context) {
 		message = "恭喜中奖，奖品待发放"
 	case result.Draw.PrizeKind != lotterydomain.KindNone:
 		message = "恭喜中奖"
+	}
+	response.Success(c, http.StatusOK, message, result)
+}
+
+// AppLotteryDrawBatch 连抽（十连抽）。逐次抽、逐次到账；中途次数用完时停下，已抽到的照常返回（stopped 写明原因）。
+func (h *Handler) AppLotteryDrawBatch(c *gin.Context) {
+	session, ok := authSession(c)
+	if !ok {
+		response.Error(c, http.StatusUnauthorized, 40100, "未登录")
+		return
+	}
+	activityID, ok := cardKeyPathID(c, "activityId")
+	if !ok {
+		return
+	}
+	var req LotteryBatchDrawRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	deviceID, _ := h.resolveGatewayDevice(c, req.DeviceID, "")
+	result, err := h.lottery.DrawBatch(c.Request.Context(), service.LotteryBatchRequest{
+		LotteryDrawRequest: service.LotteryDrawRequest{
+			AppID:      session.AppID,
+			UserID:     session.UserID,
+			ActivityID: activityID,
+			Source:     req.Source,
+			RequestID:  req.RequestID,
+			DeviceID:   deviceID,
+			ClientIP:   c.ClientIP(),
+			UserAgent:  c.Request.UserAgent(),
+		},
+		Count: req.Count,
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	message := "谢谢参与"
+	for _, draw := range result.Draws {
+		if draw.PrizeKind != lotterydomain.KindNone {
+			message = "恭喜中奖"
+			break
+		}
 	}
 	response.Success(c, http.StatusOK, message, result)
 }

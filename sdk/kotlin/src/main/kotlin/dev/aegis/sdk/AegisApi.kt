@@ -870,6 +870,26 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
         mapOf("source" to source, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
     )
 
+    /**
+     * 连抽（十连抽）：[count] 为 1–10。逐次抽、逐次到账（保底、每日运气在十次之间照常推进），返回 `draws`、
+     * 抽完后的 `chances` 与 `pity`。中途次数用完时停下，已抽到的照常返回，`stopped`（`code` / `message`）写明原因；
+     * 第一次就抽不了时与 [drawLottery] 报同一个错误码。
+     *
+     * [requestId] 不超过 61 位：第 i 次用 `requestId#i`。网络重试带同一个值时已抽过的原样返回，没抽到的接着抽。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun drawLotteryBatch(
+        activityId: Long,
+        count: Int,
+        source: String? = null,
+        requestId: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/lottery/activities/$activityId/draw/batch",
+        mapOf("count" to count, "source" to source, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
+    )
+
     /** 我的抽奖记录，新的在前；[activityId] 为空时不限活动。 */
     @Throws(IOException::class)
     @JvmOverloads

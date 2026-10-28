@@ -212,6 +212,8 @@ var gatewayOperations = []authprotocol.Operation{
 		Summary: "抽奖活动页：奖品与公示概率、我的各种次数（含视频抽奖的广告场景）、保底进度"},
 	{Key: "lotteryDraw", Method: "POST", Path: "/lottery/activities/{activityId}/draw", Auth: true,
 		Summary: "抽一次（source: free / bonus / points，留空自动选；requestId 幂等）；返回结果与抽完后的次数"},
+	{Key: "lotteryDrawBatch", Method: "POST", Path: "/lottery/activities/{activityId}/draw/batch", Auth: true,
+		Summary: "连抽（十连抽，count 1–10）：逐次抽、逐次到账；中途次数用完时停下并返回已抽到的（stopped 写明原因）"},
 	{Key: "lotteryDraws", Method: "GET", Path: "/lottery/draws", Auth: true, Summary: "我的抽奖记录（activityId 可选）"},
 	// 邀请：未开启时 /invite 回 enabled=false（不报错），入口整个隐藏。注册表单上的邀请码字段由
 	// /config 的 auth.invite 决定，填了的码随 /auth/register 的 inviteCode 一起提交。

@@ -155,6 +155,12 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 控制台积分账另外按运气最好的系数算一遍永久会员，那天会被缩减时给出警告。抽奖记录的 `trace.fortune` 是当次的系数；
 模拟虚拟用户时每人各抽一个系数（结果里的 `fortune` 是分布），指定真实用户时用他今天的系数。
 
+活动页的 `fortune`（开了每日运气时才有，`ReadFortune`）把这个系数讲给用户：`factor`（与出奖用的是同一个）、
+`percentile`（今天手气不如他的人占多少，1–99）、`level` 与 `title`（z ≥ 1.5 `burst` 运气大爆发约 7%，≥ 0.5 `lucky` 鸿运当头约 24%，
+> −0.5 `steady` 运势平稳约 38%，其余 `quiet` 手气平淡）、`low` / `high`（系数范围）、`winRate` / `baseWinRate`
+（抽中兜底奖以外奖品的概率，乘运气之后与之前）、`resetsAt`（次日零点）。每个奖品另有 `baseProbability`：活动公示的原概率
+（只去掉对他不参与抽取的已拥有奖品，不乘中奖加成与运气），与 `probability` 一比就是他今天比公示高还是低。
+
 ### 精确分析与审计
 
 - **首中分布**（`markov.go`）：把「已连续未中 k 次」看成马尔可夫链的状态，每个状态的中奖率 h_k（风险函数）由同一套
@@ -318,11 +324,20 @@ k 已拥有格子的发放比例。
 | `lotteryActivities` | GET | `/lottery` | 进行中的活动（含未开始的）；没有时为空列表 |
 | `lotteryState` | GET | `/lottery/activities/{activityId}` | 活动与奖品、`chances`、`pity` |
 | `lotteryDraw` | POST | `/lottery/activities/{activityId}/draw` | 抽一次，返回 `draw`（含 `position`）、抽完后的 `chances` 与 `pity` |
+| `lotteryDrawBatch` | POST | `/lottery/activities/{activityId}/draw/batch` | 连抽（`count` 1–10），见下 |
 | `lotteryDraws` | GET | `/lottery/draws?activityId=&page=&limit=` | 我的抽奖记录 |
 
 错误码：`40402` 活动不存在或已下线 / `40923` 未开始 / `40924` 已结束 / `42913` 今日免费次数已用完 /
 `42914` 今日积分抽奖次数已用完 / `42915` 没有可用次数 / `40307` 积分不足 / `40928` 该方式未开放 /
 `40929` 奖品配置已失效（整笔已回滚） / `40925` 同一 requestId 正在处理 / `40348` 风控拦截（场景 `lottery`）。
+
+活动页另有 `viewer.lifetime`（当前用户是否永久会员，客户端换专属外观用）与上面的 `fortune`。
+
+连抽（十连抽，`DrawBatch`）逐次调用与单抽相同的 `DrawLottery`：每一次一个事务、各自到账，保底、每日运气、库存与奖品限额在十次之间照常推进，
+不是一次算好十个结果。第 i 次的 requestId 是 `requestId#i`（所以 requestId 不超过 61 位），重试时已抽过的原样返回、没抽到的接着抽；
+全部是回放时 `replayed = true`。中途抽不了（次数用完、积分不够、活动刚好结束）时停下，返回已抽到的 `draws` 与 `stopped`
+（`code` 与单抽报的错误码相同、`message`）；第一次就抽不了时整个请求报那个错误。风控只在开始时评估一次。`source` 留空时每一次各自按
+free → bonus → points 选，所以免费、次数余额、积分可以混在一次十连里。
 
 抽中积分或花了积分时向用户的其它在线设备推 `points.changed`；抽中人工发放的奖品发站内信（类型 `lottery`，跳转路由 `lottery`）。
 
@@ -378,6 +393,9 @@ k 已拥有格子的发放比例。
 `TestLotteryPerksIntegration`：永久会员奖品（老客户端看到 `vip_plan`）与再抽中的折算、永久会员特权（4 次视频全部免看广告并进免费次数、
 额外免费、积分 5 折与额外次数、保底提前、提示卡并入说明、trace 记特权）、签到条件、功能时长奖品、免广告时长（顺延、功能时长免扣、
 开屏免除、`ad_free` 人群）、永久会员抽中免广告 / 功能时长的折算、模拟里的特权身份。单元测试在 `perks_test.go`（含免看广告判定的稳定性与比例校准）。
+
+`TestLotteryBatchIntegration`：十连抽在 3 次免费后停下并写明 42915、同一 requestId 重试原样返回且不多扣、一次都抽不了时报错、
+次数上限；活动页的今日运气与出奖系数一致、`baseProbability`、`viewer`。今日运气档位占比的单元测试在 `fortune_reading_test.go`。
 
 `TestLotteryStrategyIntegration`：12 人并发下全站每日限量不超发、个人上限、积分预算、同设备聚集、
 行为画像整条查询（签到、会员率、邀请、在线时长累计）与规则、方案落库且不给用户端、模拟与单人预览、策略回读与非法规则。
