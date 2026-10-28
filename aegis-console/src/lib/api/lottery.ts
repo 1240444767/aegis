@@ -718,3 +718,184 @@ export function simulateLottery(token: string, appKey: string, payload: LotteryS
 export function getLotteryAudit(token: string, appKey: string, activityId: number, days: number) {
   return apiRequest<LotteryAuditResult>(`${base(appKey)}/activities/${activityId}/audit${buildQuery({ days })}`, { token });
 }
+
+// ── 运气控制（docs/lottery.md「运气控制」）──
+//
+// 管理员对每日运气的干预：按人（每人一条）或全站，带生效时间窗（默认从现在到明天零点），可撤销、全部留痕。
+// 活动页、抽奖事务、单人模拟用同一个合成结果，用户看到的与抽到的是同一个系数；用户端看不到有没有被干预。
+
+export type LotteryFortuneLevel = "burst" | "lucky" | "steady" | "quiet";
+/** 重抽（换一个手气）/ 定档（z 定在某档或某系数）/ 偏移（z 加减） */
+export type LotteryFortuneControlKind = "reroll" | "pin" | "shift";
+export type LotteryFortuneControlStatus = "active" | "scheduled" | "expired" | "revoked";
+
+export type LotteryFortuneLevelInfo = {
+  level: LotteryFortuneLevel;
+  title: string;
+  /** 定档到这一档时用的 z */
+  pinZ: number;
+  /** 定档到这一档时的系数（按当前差异） */
+  factor: number;
+  /** 没有干预时的理论占比（0–1） */
+  share: number;
+  minZ: number;
+};
+
+export type LotteryFortuneDistribution = {
+  users: number;
+  levels: Record<LotteryFortuneLevel, number>;
+  baseLevels: Record<LotteryFortuneLevel, number>;
+  controlled: number;
+  meanFactor: number;
+  baseMeanFactor: number;
+};
+
+export type LotteryFortuneControl = {
+  id: number;
+  activityId: number;
+  /** 为空是全站 */
+  userId?: number | null;
+  account?: string;
+  nickname?: string;
+  kind: LotteryFortuneControlKind;
+  /** pin：定在的 z；shift：加减的量 */
+  z: number;
+  level?: LotteryFortuneLevel | "";
+  startsAt: string;
+  endsAt: string;
+  note?: string;
+  operator: string;
+  revokedAt?: string | null;
+  revokedBy?: string;
+  createdAt: string;
+  status: LotteryFortuneControlStatus;
+};
+
+export type LotteryFortuneOverview = {
+  activityId: number;
+  enabled: boolean;
+  spread: number;
+  low: number;
+  high: number;
+  levels: LotteryFortuneLevelInfo[];
+  dayStart: string;
+  resetsAt: string;
+  today: LotteryFortuneDistribution;
+  global: LotteryFortuneControl[];
+  counts: { activeGlobal: number; activeUsers: number; scheduled: number };
+};
+
+/** 用户端的运气读数（与 App 看到的一致） */
+export type LotteryFortuneReading = {
+  factor: number;
+  percentile: number;
+  level: LotteryFortuneLevel;
+  title: string;
+  message: string;
+  low: number;
+  high: number;
+  resetsAt: string;
+};
+
+export type LotteryFortuneUserReading = {
+  userId: number;
+  enabled: boolean;
+  base?: LotteryFortuneReading | null;
+  current?: LotteryFortuneReading | null;
+  baseZ: number;
+  z: number;
+  applied: LotteryFortuneControl[];
+  controls: LotteryFortuneControl[];
+};
+
+export type LotteryFortuneControlPayload = {
+  userIds?: number[];
+  allUsers?: boolean;
+  kind: LotteryFortuneControlKind;
+  level?: LotteryFortuneLevel;
+  factor?: number;
+  shift?: number;
+  startsAt?: string;
+  endsAt?: string;
+  note?: string;
+};
+
+export type LotteryFortuneControlParams = {
+  userId?: number;
+  kind?: LotteryFortuneControlKind;
+  status?: LotteryFortuneControlStatus;
+  page?: number;
+  limit?: number;
+};
+
+const fortuneBase = (appKey: string, activityId: number) => `${base(appKey)}/activities/${activityId}/fortune`;
+
+export function getLotteryFortune(token: string, appKey: string, activityId: number) {
+  return apiRequest<LotteryFortuneOverview>(fortuneBase(appKey, activityId), { token });
+}
+
+/** 调整运气差异（0 关闭每日运气） */
+export function setLotteryFortuneSpread(token: string, appKey: string, activityId: number, spread: number) {
+  return apiRequest<LotteryFortuneOverview>(`${fortuneBase(appKey, activityId)}/settings`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ spread })
+  });
+}
+
+export function getLotteryFortuneUser(token: string, appKey: string, activityId: number, userId: number) {
+  return apiRequest<LotteryFortuneUserReading>(`${fortuneBase(appKey, activityId)}/users/${userId}`, { token });
+}
+
+export function listLotteryFortuneControls(
+  token: string,
+  appKey: string,
+  activityId: number,
+  params?: LotteryFortuneControlParams
+) {
+  return apiRequest<LotteryPage<LotteryFortuneControl>>(
+    `${fortuneBase(appKey, activityId)}/controls${buildQuery(params ?? {})}`,
+    { token }
+  );
+}
+
+export function createLotteryFortuneControls(
+  token: string,
+  appKey: string,
+  activityId: number,
+  payload: LotteryFortuneControlPayload
+) {
+  return apiRequest<{ items: LotteryFortuneControl[] }>(`${fortuneBase(appKey, activityId)}/controls`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+/** 预演：按今天抽过奖的人（或所选用户）算干预之后的分布，不落库 */
+export function previewLotteryFortuneControl(
+  token: string,
+  appKey: string,
+  activityId: number,
+  payload: LotteryFortuneControlPayload
+) {
+  return apiRequest<LotteryFortuneDistribution>(`${fortuneBase(appKey, activityId)}/controls/preview`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(payload)
+  });
+}
+
+/** 撤销几条；all 为真时撤销全部生效中与待生效的（恢复自然运气） */
+export function revokeLotteryFortuneControls(
+  token: string,
+  appKey: string,
+  activityId: number,
+  input: { ids?: number[]; all?: boolean }
+) {
+  return apiRequest<{ revoked: number }>(`${fortuneBase(appKey, activityId)}/controls/revoke`, {
+    method: "POST",
+    token,
+    body: JSON.stringify(input)
+  });
+}

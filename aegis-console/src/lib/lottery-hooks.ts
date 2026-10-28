@@ -3,6 +3,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   createLotteryActivity,
+  createLotteryFortuneControls,
+  getLotteryFortune,
+  getLotteryFortuneUser,
+  listLotteryFortuneControls,
+  previewLotteryFortuneControl,
+  revokeLotteryFortuneControls,
+  setLotteryFortuneSpread,
+  type LotteryFortuneControlParams,
+  type LotteryFortuneControlPayload,
   deleteLotteryActivity,
   fulfillLotteryDraw,
   getLotteryAudit,
@@ -33,7 +42,10 @@ const KEY = {
   activities: "admin-lottery-activities",
   draws: "admin-lottery-draws",
   stats: "admin-lottery-stats",
-  audit: "admin-lottery-audit"
+  audit: "admin-lottery-audit",
+  fortune: "admin-lottery-fortune",
+  fortuneUser: "admin-lottery-fortune-user",
+  fortuneControls: "admin-lottery-fortune-controls"
 } as const;
 
 const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats];
@@ -158,5 +170,101 @@ export function useLotteryAuditQuery(appKey: string | null | undefined, activity
     queryFn: () => getLotteryAudit(token as string, appKey as string, activityId as number, days),
     enabled: Boolean(token && appKey && activityId),
     staleTime: 60_000
+  });
+}
+
+// ── 运气控制 ──
+//
+// 下干预、撤销、调差异都会改变今日分布、单人读数与记录：三者整组失效。调差异还改了活动策略，活动列表一并失效。
+
+const FORTUNE_SCOPE = [KEY.fortune, KEY.fortuneUser, KEY.fortuneControls];
+
+function useInvalidateFortuneScope() {
+  const queryClient = useQueryClient();
+  return async () => {
+    await Promise.all(FORTUNE_SCOPE.map((key) => queryClient.invalidateQueries({ queryKey: [key] })));
+  };
+}
+
+export function useLotteryFortuneQuery(appKey?: string | null, activityId?: number | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.fortune, token, appKey, activityId],
+    queryFn: () => getLotteryFortune(token as string, appKey as string, activityId as number),
+    enabled: Boolean(token && appKey && activityId)
+  });
+}
+
+export function useLotteryFortuneUserQuery(appKey?: string | null, activityId?: number | null, userId?: number | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.fortuneUser, token, appKey, activityId, userId],
+    queryFn: () => getLotteryFortuneUser(token as string, appKey as string, activityId as number, userId as number),
+    enabled: Boolean(token && appKey && activityId && userId)
+  });
+}
+
+export function useLotteryFortuneControlsQuery(
+  appKey?: string | null,
+  activityId?: number | null,
+  params?: LotteryFortuneControlParams
+) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [
+      KEY.fortuneControls,
+      token,
+      appKey,
+      activityId,
+      params?.userId ?? 0,
+      params?.kind ?? "",
+      params?.status ?? "",
+      params?.page ?? 1,
+      params?.limit ?? 20
+    ],
+    queryFn: () => listLotteryFortuneControls(token as string, appKey as string, activityId as number, params),
+    enabled: Boolean(token && appKey && activityId),
+    placeholderData: (previous) => previous
+  });
+}
+
+export function useCreateLotteryFortuneControlsMutation(appKey?: string | null, activityId?: number | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateFortuneScope();
+  return useMutation({
+    mutationFn: (payload: LotteryFortuneControlPayload) =>
+      createLotteryFortuneControls(token as string, appKey as string, activityId as number, payload),
+    onSuccess: invalidate
+  });
+}
+
+/** 预演不改任何数据，不失效缓存 */
+export function usePreviewLotteryFortuneControlMutation(appKey?: string | null, activityId?: number | null) {
+  const token = useAdminToken();
+  return useMutation({
+    mutationFn: (payload: LotteryFortuneControlPayload) =>
+      previewLotteryFortuneControl(token as string, appKey as string, activityId as number, payload)
+  });
+}
+
+export function useRevokeLotteryFortuneControlsMutation(appKey?: string | null, activityId?: number | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateFortuneScope();
+  return useMutation({
+    mutationFn: (input: { ids?: number[]; all?: boolean }) =>
+      revokeLotteryFortuneControls(token as string, appKey as string, activityId as number, input),
+    onSuccess: invalidate
+  });
+}
+
+export function useSetLotteryFortuneSpreadMutation(appKey?: string | null, activityId?: number | null) {
+  const token = useAdminToken();
+  const invalidateFortune = useInvalidateFortuneScope();
+  const invalidateLottery = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (spread: number) => setLotteryFortuneSpread(token as string, appKey as string, activityId as number, spread),
+    onSuccess: async () => {
+      await Promise.all([invalidateFortune(), invalidateLottery()]);
+    }
   });
 }
