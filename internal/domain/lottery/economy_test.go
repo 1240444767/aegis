@@ -242,34 +242,34 @@ func TestFortune(t *testing.T) {
 	}
 }
 
-// 10-28 的转盘：去掉永久会员，换成月度 / 季度会员；真实奖品约占 65%，σ = 0.3 时运气最好的永久会员也不套利。
+// 10-28 的全新转盘：月度 / 季度会员、启动画面、AI 生图时长；真实奖品约占 66%，σ = 0.3 时运气最好的永久会员也不套利。
 func fortuneBoard() ([]Prize, map[int64]pointstore.PlanRef) {
 	plans := map[int64]pointstore.PlanRef{
-		14: {ID: 14, Name: "月度会员", DurationDays: 30, Features: []string{"ai"}},
-		15: {ID: 15, Name: "季度会员", DurationDays: 124, Features: []string{"ai"}},
+		14: {ID: 14, Name: "月度会员", DurationDays: 30},
+		15: {ID: 15, Name: "季度会员", DurationDays: 125},
 	}
 	prize := func(position, weight int, reward Reward) Prize {
 		return Prize{ID: int64(position + 1), Name: reward.Type, Kind: reward.Type, Reward: reward, Weight: weight, Quantity: -1, Position: position}
 	}
 	prizes := []Prize{
 		prize(0, 20, Reward{Type: KindVipPlan, RefID: 15}),
-		prize(1, 15000, Reward{Type: KindPoints, Amount: 10}),
-		prize(2, 100, Reward{Type: KindVipPlan, RefID: 14}),
-		prize(3, 34380, Reward{Type: KindExperience, Amount: 20}),
-		prize(4, 4000, Reward{Type: KindAdFree, Amount: 1}),
-		prize(5, 2000, Reward{Type: KindPoints, Amount: 66}),
-		prize(6, 2000, Reward{Type: KindFeature, Tag: "ai", Amount: 3}),
-		prize(7, 30000, Reward{Type: KindPoints, Amount: 5}),
-		prize(8, 300, Reward{Type: KindPoints, Amount: 188}),
-		prize(9, 10000, Reward{Type: KindLotteryDraws, Amount: 1}),
-		prize(10, 1200, Reward{Type: KindVipDays, Amount: 3}),
-		prize(11, 1000, Reward{Type: KindAdFree, Amount: 3}),
+		prize(1, 23000, Reward{Type: KindPoints, Amount: 8}),
+		prize(2, 1500, Reward{Type: KindFeature, Tag: "ai", Amount: 3}),
+		prize(3, 33880, Reward{Type: KindExperience, Amount: 25}),
+		prize(4, 100, Reward{Type: KindVipPlan, RefID: 14}),
+		prize(5, 3000, Reward{Type: KindAdFree, Amount: 2}),
+		prize(6, 4000, Reward{Type: KindLotteryDraws, Amount: 2}),
+		prize(7, 28000, Reward{Type: KindPoints, Amount: 3}),
+		prize(8, 800, Reward{Type: KindVipDays, Amount: 5}),
+		prize(9, 3000, Reward{Type: KindPoints, Amount: 50}),
+		prize(10, 2500, Reward{Type: KindFeatureTime, Tag: "ai", Amount: 60}),
+		prize(11, 200, Reward{Type: KindPoints, Amount: 288}),
 	}
 	prizes[3].Fallback = true
 	return prizes, plans
 }
 
-// 运气最好的永久会员会套利时控制台要提示；10-28 的转盘在 σ = 0.3 时不会。
+// 运气最好的永久会员会套利时控制台要提示；10-28 的全新转盘在 σ = 0.3 时不会。
 func TestAuditEconomyFortune(t *testing.T) {
 	prizes, plans := fortuneBoard()
 	lifetime := lifetimeMember()
@@ -285,9 +285,10 @@ func TestAuditEconomyFortune(t *testing.T) {
 	if lucky.Scaled() || lucky.ExpectedReturn(1) >= 10 {
 		t.Fatalf("运气最好的永久会员也应低于价格，得到 %+v", lucky)
 	}
-	activity.Strategy.Fortune.Spread = 1
-	if audit := AuditEconomy(activity, prizes, plans, lifetime, 10); len(audit.Warnings) != 1 {
-		t.Fatalf("σ = 1 时运气最好的永久会员会套利，应提示，得到 %+v", audit.Warnings)
+	// 之前那张转盘积分奖品多、余量小：运气最好的永久会员会套利，要提示
+	tight, tightPlans := wheelBoard()
+	if audit := AuditEconomy(activity, tight, tightPlans, lifetime, 10); len(audit.Warnings) != 1 {
+		t.Fatalf("余量小的转盘上运气最好的永久会员会套利，应提示，得到 %+v", audit.Warnings)
 	}
 }
 
@@ -300,8 +301,8 @@ func TestSimulateFortune(t *testing.T) {
 		t.Fatalf("虚拟用户的运气应各不相同、平均约为 1，得到 %+v", result.Fortune)
 	}
 	real := 1 - result.Prizes[3].Rate
-	if math.Abs(real-0.6562) > 0.02 {
-		t.Fatalf("真实奖品总占比应接近公示的 65.6%%，得到 %.4f", real)
+	if math.Abs(real-0.6612) > 0.02 {
+		t.Fatalf("真实奖品总占比应接近公示的 66.1%%，得到 %.4f", real)
 	}
 	fixed := Simulate(Activity{}, strategy, prizes, SimulationInput{Users: 10, DrawsPerUser: 5, Seed: 7, FortuneApplied: true})
 	if fixed.Fortune != nil {
