@@ -722,6 +722,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/item-grant.ts` / `lib/item-grant-hooks.ts` | 物品发放域 API 与 React Query hooks |
 | `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
 | `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
+| `components/apps/account-setup/` | 账号初始化区块（`?tab=account-setup`，认证与安全分组）：统计 + 策略单页；建号方式文案在 `account-setup-shared.ts`，用户详情也从这里取 |
+| `lib/api/account-setup.ts` / `lib/account-setup-hooks.ts` | 账号初始化域 API 与 React Query hooks：应用策略、单个用户的初始化情况、要求重新设置、改用户名 |
 | `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品、邀请奖励与排行榜奖励共用 |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
@@ -1434,6 +1436,7 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `lib/geo/private-network.ts` | 内网 / 回环 / CGNAT 识别（"服务器地址"的判据） |
 | `lib/geo/server-location.ts` | 服务端端点位置，与攻击飞线图共用一份 |
 | `components/users/detail/user-governance-tab.tsx` | 账号开关 / 新建封禁 / 封禁历史与撤销 / 账号注销 / 删除 |
+| `components/users/detail/user-account-setup.tsx` | 改用户名弹窗（资料页签账号字段与安全页签共用，先输入再确认）+ 安全页签「账号初始化」区块（进度、要求重新设置） |
 | `lib/api/app-users.ts` | 单用户维度 API（封禁 / 钱包 / 单用户审计） |
 | `lib/app-user-hooks.ts` | 上述 hooks + 成组失效 `USER_SCOPE_KEYS` |
 

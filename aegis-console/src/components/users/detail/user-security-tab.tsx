@@ -5,6 +5,7 @@
  *
  *   安全评分     由密码强度、二次验证、Passkey、恢复码、第三方绑定推导，逐项给出结论
  *   登录凭据     密码生命周期、二次验证、恢复码三列并排；Passkey 单独一张表
+ *   账号初始化   快速登录建的号补设用户名与密码的进度，改用户名、要求重新设置（user-account-setup）
  *   登录绑定基线 强绑定策略下的设备 / IP / 属地基线，可重置
  *   第三方绑定   可解绑（含强制解绑）
  *   OAuth2 授权  可逐个或全部撤销
@@ -66,6 +67,7 @@ import {
   type Column,
   type Tone
 } from "./kit";
+import { UserAccountSetupSection } from "./user-account-setup";
 import { isPast, numberValue, textValue } from "./user-detail-shared";
 import { UserOAuthBindingsPanel } from "./user-oauth-bindings-panel";
 import { UserOAuth2GrantsPanel } from "./user-oauth2-grants-panel";
@@ -659,6 +661,8 @@ export function UserSecurityTab({ appKey, userId, user }: { appKey: string; user
         <ScoreCard security={security} onResetPassword={() => setShowResetPassword(true)} />
 
         <CredentialsSection security={security} />
+
+        <UserAccountSetupSection appKey={appKey} userId={userId} currentAccount={user.account ?? ""} />
 
         <div className="grid gap-5 xl:grid-cols-2">
           <PasskeySection security={security} />

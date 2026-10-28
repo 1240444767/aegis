@@ -53,6 +53,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { useNow } from "@/components/users/ban-form";
 import { ApiError } from "@/lib/api-client";
+import { usePermissionChecker } from "@/lib/permissions";
 import {
   useRemoveAdminAppUserAvatarMutation,
   useUpdateAdminAppUserProfileMutation,
@@ -62,6 +63,7 @@ import type { AdminAppUserDetail } from "@/lib/api/types";
 import { formatDateTime, formatRelative, localDateKey } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
 import { CopyButton, InfoGrid, SearchField, Section, StateBlock, ToneIcon, copyToClipboard, type InfoItem } from "./kit";
+import { UserRenameDialog } from "./user-account-setup";
 import { inputValue } from "./user-detail-shared";
 import { UserPreferences, humanizeKey, readableValue, updatedText } from "./user-preferences";
 
@@ -79,6 +81,7 @@ import { UserPreferences, humanizeKey, readableValue, updatedText } from "./user
  * 保存走按字段 PATCH：只发**改过的**字段；改过且为空 = 清空（生日走 clearBirthday）。
  * 管理端可写的只有昵称、邮箱、手机号、生日、简介、头像（后端 AdminUserProfilePatch），
  * 自定义 ID、第三方联系方式、附加字段与偏好设置没有管理端写接口，这里只读。
+ * 账号（用户名）走单独的改名接口（user-account-setup 的 UserRenameDialog），不进这张表单。
  */
 
 /** 头像上传的入口限制：超过 8MB 的原图先在这里拦下，别等后端报错。 */
@@ -380,6 +383,9 @@ function BasicSection({
   children?: ReactNode;
 }) {
   const profile = user.profile;
+  const can = usePermissionChecker();
+  const canRename = can("app:user:write");
+  const [renaming, setRenaming] = useState(false);
   const nickname = (user.nickname || profile?.nickname || "").trim();
   const birthday = describeBirthday(birthdayInputValue(profile?.birthday), now);
   const publicId = user.publicId ? String(user.publicId) : "";
@@ -388,7 +394,18 @@ function BasicSection({
 
   const items: InfoItem[] = [
     { label: "昵称", icon: UserRound, value: nickname, copy: nickname || null },
-    { label: "账号", icon: AtSign, value: user.account, mono: true, copy: user.account || null },
+    {
+      label: "账号",
+      icon: AtSign,
+      value: user.account,
+      mono: true,
+      copy: user.account || null,
+      hint: canRename ? (
+        <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={() => setRenaming(true)}>
+          修改用户名
+        </button>
+      ) : undefined
+    },
     { label: "用户 ID", icon: Hash, value: publicId, mono: true, copy: publicId || null, hint: publicId ? "用户在客户端看到的编号" : undefined },
     {
       label: "自定义 ID",
@@ -455,6 +472,9 @@ function BasicSection({
         <AvatarPanel appKey={appKey} userId={userId} user={user} />
         <div className="min-w-0 flex-1">{editing ? children : <InfoGrid items={items} columns={2} />}</div>
       </div>
+      {renaming ? (
+        <UserRenameDialog appKey={appKey} userId={userId} currentAccount={user.account ?? ""} onClose={() => setRenaming(false)} />
+      ) : null}
     </Section>
   );
 }
@@ -532,7 +552,7 @@ function ProfileEditForm({
       </FieldGroup>
 
       <p className="text-xs leading-5 text-muted-foreground">
-        账号、自定义 ID、第三方联系方式、附加字段与偏好设置由用户在客户端维护，管理端只读。
+        自定义 ID、第三方联系方式、附加字段与偏好设置由用户在客户端维护，管理端只读；账号在「修改用户名」中修改。
       </p>
       {/* 让回车提交表单；可见的保存按钮在底部固定条里 */}
       <button type="submit" className="hidden" aria-hidden tabIndex={-1} />

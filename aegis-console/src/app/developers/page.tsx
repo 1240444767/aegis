@@ -125,6 +125,18 @@ const ERROR_CODES: { code: string; layer: "gateway" | "business"; meaning: strin
     fix: "改用其他登录方式，或由管理员开启短信注册"
   },
   {
+    code: "40963",
+    layer: "business",
+    meaning: "用户名已被使用",
+    fix: "换一个，或选用 /me/account-setup 返回的 suggestions"
+  },
+  {
+    code: "40964 / 40967",
+    layer: "business",
+    meaning: "用户名已设置过 / 已设置过密码",
+    fix: "用户名只能自助设一次；已有密码改走 /auth/password/change"
+  },
+  {
     code: "40470",
     layer: "business",
     meaning: "应用不存在或已停用",
@@ -342,7 +354,7 @@ export default function DevelopersQuickStartPage() {
   "protocolVersion": "aegis-app-v1",
   "app": { "key": "${appKey}", "name": "示例应用", "status": true },
   "auth": {
-    "identifiers": ["username", "email", "phone"],
+    "identifiers": ["username", "email", "phone", "id"],
     "loginMethods": ["password", "sms", "oauth"],
     "registerMethods": ["password", "sms"],
     "registrationSchema": [
