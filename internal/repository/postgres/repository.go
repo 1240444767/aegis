@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	appdomain "aegis/internal/domain/app"
@@ -5024,16 +5025,29 @@ func unixTimeFromInt64(value int64) *time.Time {
 	return &tm
 }
 
-func generateTransactionNo(prefix string) string {
-	return prefix + time.Now().UTC().Format("20060102150405") + randomDigits(6)
+// transactionSeq 是流水号尾部 6 位的进程内序列，起点随机。
+// 尾部若取随机数，同一秒内几百笔流水就有可观的生日碰撞概率（批量发放曾因此撞
+// uq_integral_transactions_no 整笔回滚）；改为逐次加一后，同一进程每秒一百万笔以内不会重复，
+// 多实例之间靠随机起点错开。
+var transactionSeq atomic.Uint64
+
+func init() {
+	transactionSeq.Store(rand.Uint64N(1_000_000))
 }
 
+// generateTransactionNo 生成「前缀 + 14 位 UTC 时间 + 6 位序号」的流水号，并发安全。
+func generateTransactionNo(prefix string) string {
+	seq := transactionSeq.Add(1) % 1_000_000
+	return prefix + time.Now().UTC().Format("20060102150405") + fmt.Sprintf("%06d", seq)
+}
+
+// randomDigits 返回指定长度的随机数字串。math/rand/v2 的全局源并发安全、由系统熵播种，
+// 不能再像以前那样按纳秒时间新建随机源。
 func randomDigits(length int) string {
 	const digits = "0123456789"
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	buf := make([]byte, length)
 	for i := range buf {
-		buf[i] = digits[rng.Intn(len(digits))]
+		buf[i] = digits[rand.IntN(len(digits))]
 	}
 	return string(buf)
 }
