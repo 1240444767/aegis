@@ -21,6 +21,7 @@ export const POINT_CATEGORY_LABEL: Record<string, string> = {
   lottery_prize: "抽奖奖励",
   vip_bonus: "会员赠送",
   vip_convert: "会员权益折算",
+  item_grant: "物品发放",
   vip_purchase: "开通会员",
   card_key: "卡密兑换",
   rewarded_ad: "激励广告",

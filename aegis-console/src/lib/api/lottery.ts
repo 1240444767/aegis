@@ -914,6 +914,7 @@ export type LotteryTicketOrigin =
   | "invite"
   | "leaderboard"
   | "lottery"
+  | "item_grant"
   | "admin"
   | "legacy";
 

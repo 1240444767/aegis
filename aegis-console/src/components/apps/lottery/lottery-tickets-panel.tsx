@@ -57,6 +57,7 @@ const ORIGIN_LABEL: Record<LotteryTicketOrigin, string> = {
   leaderboard: "排行榜奖励",
   cardkey: "卡密",
   points_store: "积分兑换",
+  item_grant: "物品发放",
   admin: "系统发放",
   legacy: "早期余额"
 };

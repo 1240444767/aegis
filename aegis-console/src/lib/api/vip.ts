@@ -184,6 +184,7 @@ export type VipSource =
   | "invite"
   | "leaderboard"
   | "lottery"
+  | "item_grant"
   | "admin_revoke"
   | "legacy_import"
   | "lifetime_convert"

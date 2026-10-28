@@ -15,9 +15,10 @@
 | TanStack React Query | ^5.101.4 |
 | TanStack React Table | ^9.1.2（表格，v9 按需注册功能） |
 | Zustand | ^5.0.14 |
+| zundo | ^2.3.0（zustand 的撤销 / 重做中间件，物品发放画布用） |
 | next-themes | ^0.4.6 |
 | Zod | ^4.4.3（表单校验） |
-| @xyflow/react | ^12.11.2（工作流画布） |
+| @xyflow/react | ^12.11.2（工作流画布、物品发放规则画布） |
 | react-resizable-panels | ^4.12.2（可拖拽分栏，远程函数工作台用；**v4 是新 API**，见下） |
 | Recharts | ^3.10.1（图表） |
 | MapLibre GL | ^6.2.0（地图，无 default export） |
@@ -717,6 +718,8 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `lib/api/leaderboard.ts` / `lib/leaderboard-hooks.ts` | 排行榜域 API 与 React Query hooks |
 | `components/apps/lottery/` | 抽奖区块：活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数（见下节） |
 | `lib/api/lottery.ts` / `lib/lottery-hooks.ts` | 抽奖域 API 与 React Query hooks |
+| `components/apps/item-grant/` | 物品发放区块：规则 / 总览 / 发放记录 / 执行记录与画布编辑器（见下节） |
+| `lib/api/item-grant.ts` / `lib/item-grant-hooks.ts` | 物品发放域 API 与 React Query hooks |
 | `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
 | `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
 | `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品、邀请奖励与排行榜奖励共用 |
@@ -1138,6 +1141,31 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
 
 旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
+
+## 物品发放区块（/apps/{appKey}?tab=item-grant）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/item-grant/app-item-grant-panel.tsx` | 骨架 + 规则 / 总览 / 发放记录 / 执行记录四个视图，跨视图带规则、执行与状态筛选 |
+| `components/apps/item-grant/item-grant-rules-panel.tsx` | 规则卡片（触发方式、状态、节点构成、统计、执行进度与取消）；新建（空白或后端模板）、复制、上线 / 暂停 / 执行 / 归档 / 删除 |
+| `components/apps/item-grant/item-grant-editor.tsx` | 全屏画布编辑器：节点库（拖放或点击）、React Flow 画布、右侧配置 / 问题 / 预演；⌘S / ⌘Z / ⌘⇧Z / ⌘D |
+| `components/apps/item-grant/item-grant-store.ts` | 画布状态（zustand + **zundo** 撤销重做）：equality 只比配置与结构，连续变化合成一步 |
+| `components/apps/item-grant/item-grant-graph.ts` | 后端画布 ↔ React Flow 往返、默认配置、dagre 自动排版、成环检测 |
+| `components/apps/item-grant/item-grant-canvas-nodes.tsx` | 节点（输入 / 输出端口、摘要、问题角标、预演人数、追踪高亮）与连线（端口语义色、追踪流动、选中删除） |
+| `components/apps/item-grant/item-grant-inspector.tsx` / `item-grant-fields.tsx` | 每种节点的配置表单；物品编辑器（目录驱动，按人计算数量） |
+| `components/apps/item-grant/item-grant-preview-panel.tsx` | 预演：抽样估算（节点 / 端口到达人数、全量推算）与单人追踪（路径与物品） |
+| `components/apps/item-grant/item-grant-records-panel.tsx` / `item-grant-runs-panel.tsx` / `item-grant-overview.tsx` | 发放记录（路径、结果、标记发放、重试）、执行记录（进度轮询）、总览 |
+
+四条硬约束：
+
+1. **目录驱动**：物品、节点与端口、触发方式、事件与事件字段、条件字段与运算符、人群、周期、跳转页面、模板全部来自
+   `/item-grants/catalog`，前端不另抄；`describeItem` / `rulesExpr` 只是展示口径，与后端 `DescribeItem` / `RulesExpr` 同一份规则。
+2. **React Flow 节点的 `data` 就是后端节点配置**，问题、预演、追踪这类叠加信息走 `CanvasOverlayContext`，不进 data、不进撤销历史。
+3. **校验以后端为准**：画布变化 600ms 后调 `/validate`（与上线同一套判据），问题按 `nodeId` / `edgeId` 标在画布上；
+   生效中的规则保存时后端拒绝有错误的画布（40000，原因原样 toast）。
+4. **预演不发放**，与正式执行同一个判定函数；画布一改，旧的预演结果立即清掉。
+
+规则见 [docs/item-grant.md](../docs/item-grant.md)。
 
 ## AI 通道编辑（/apps/{appKey}?tab=ai 与 /configuration?tab=ai）
 

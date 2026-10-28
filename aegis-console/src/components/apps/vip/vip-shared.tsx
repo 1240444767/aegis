@@ -36,6 +36,7 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
   invite: { label: "邀请奖励", variant: "info" },
   leaderboard: { label: "排行榜奖励", variant: "info" },
   lottery: { label: "抽奖", variant: "info" },
+  item_grant: { label: "物品发放", variant: "info" },
   // 只出现在开通记录里：扣减天数是一条负时长的账，取消永久会员是一条 lifetime 留痕，
   // 都不是一段会员期。具体收回了什么看时长列（formatVipTerm）
   admin_revoke: { label: "收回", variant: "warning" },

@@ -12,6 +12,7 @@ import {
   Mail,
   MonitorSmartphone,
   MonitorPlay,
+  PackagePlus,
   Network,
   PlugZap,
   Route,
@@ -110,6 +111,7 @@ export const appSectionGroups: AppSectionGroup[] = [
       { key: "leaderboard", title: "排行榜", summary: "积分榜单、周期结算与名次奖励", icon: Trophy },
       { key: "account-deletion", title: "账号注销", summary: "注销方式、审核与重新注册限制", icon: UserX },
       { key: "lottery", title: "抽奖", summary: "九宫格与转盘、抽奖次数与保底", icon: Dices },
+      { key: "item-grant", title: "物品发放", summary: "画布规则：手动、定时与事件触发发放", icon: PackagePlus },
       { key: "rewarded-ad", title: "激励广告", summary: "看广告领奖励、回调验签与限次", icon: MonitorPlay },
       { key: "ad-policy", title: "广告服务", summary: "同意要求、基础服务与开屏广告", icon: ShieldHalf }
     ]

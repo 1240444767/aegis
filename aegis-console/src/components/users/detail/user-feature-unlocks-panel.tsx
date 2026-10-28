@@ -68,7 +68,8 @@ const SOURCE_LABEL: Record<string, string> = {
   invite: "邀请奖励",
   leaderboard: "排行榜奖励",
   lottery: "抽奖",
-  card_key: "卡密兑换"
+  card_key: "卡密兑换",
+  item_grant: "物品发放"
 };
 
 const REVOKE_REASONS = ["误操作授予", "违规使用", "退款收回", "活动结束"];
