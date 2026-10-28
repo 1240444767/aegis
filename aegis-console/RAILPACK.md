@@ -16,8 +16,13 @@ docker build -f railpack-plan.json \
 ```
 cd aegis-console
 railpack prepare . --plan-out railpack-plan.json \
-  --env BUN_CONFIG_REGISTRY --env NPM_CONFIG_REGISTRY \
   --env NEXT_PUBLIC_AEGIS_ENVIRONMENT --env NEXT_PUBLIC_AEGIS_CONSOLE_NAME
 ```
 
 升级 Railpack 时同时改 Dokploy 里的 `BUILDKIT_SYNTAX` 版本号。
+
+## 出站代理
+
+部署服务器的 IPv4 到部分 CDN 网段（Cloudflare 104.16.0.0/16、阿里 CDN、华为云等）不稳定，IPv6 正常。
+install / build 步骤的 `variables` 里设了 `HTTPS_PROXY=http://172.31.0.1:8888`：宿主机 docker0 上的 tinyproxy，
+经宿主机公网 IPv6 出站。重新生成计划后要把这三项（HTTPS_PROXY / HTTP_PROXY / NO_PROXY）加回去。

@@ -83,10 +83,8 @@
     ".eslintcache"
   ],
   "secrets": [
-    "BUN_CONFIG_REGISTRY",
     "NEXT_PUBLIC_AEGIS_CONSOLE_NAME",
-    "NEXT_PUBLIC_AEGIS_ENVIRONMENT",
-    "NPM_CONFIG_REGISTRY"
+    "NEXT_PUBLIC_AEGIS_ENVIRONMENT"
   ],
   "steps": [
     {
@@ -158,10 +156,7 @@
         }
       ],
       "name": "install",
-      "secrets": [
-        "NPM_CONFIG_REGISTRY",
-        "BUN_CONFIG_REGISTRY"
-      ],
+      "secrets": [],
       "variables": {
         "BUN_INSTALL_GLOBAL_STORE": "0",
         "CI": "true",
@@ -169,7 +164,10 @@
         "NPM_CONFIG_FETCH_RETRIES": "5",
         "NPM_CONFIG_FUND": "false",
         "NPM_CONFIG_PRODUCTION": "false",
-        "NPM_CONFIG_UPDATE_NOTIFIER": "false"
+        "NPM_CONFIG_UPDATE_NOTIFIER": "false",
+        "HTTPS_PROXY": "http://172.31.0.1:8888",
+        "HTTP_PROXY": "http://172.31.0.1:8888",
+        "NO_PROXY": "localhost,127.0.0.1"
       }
     },
     {
@@ -198,7 +196,10 @@
         "*"
       ],
       "variables": {
-        "NEXT_TELEMETRY_DISABLED": "1"
+        "NEXT_TELEMETRY_DISABLED": "1",
+        "HTTPS_PROXY": "http://172.31.0.1:8888",
+        "HTTP_PROXY": "http://172.31.0.1:8888",
+        "NO_PROXY": "localhost,127.0.0.1"
       }
     },
     {
@@ -208,7 +209,7 @@
       ],
       "commands": [
         {
-          "cmd": "sh -c 'apt-get update \u0026\u0026 apt-get install -y libatomic1'",
+          "cmd": "sh -c 'apt-get update && apt-get install -y libatomic1'",
           "customName": "install apt packages: libatomic1"
         }
       ],
