@@ -196,6 +196,28 @@ func TestItemGrantIntegration(t *testing.T) {
 		t.Fatalf("事件规则不能批量执行，得到 %v", err)
 	}
 
+	// ── 登录事件：每次登录一个幂等键，频次交给限额节点（每天一次）──
+	onLogin := itemgrant.Graph{
+		Nodes: []itemgrant.Node{
+			node("t", itemgrant.NodeTrigger, 0, itemgrant.TriggerConfig{Kind: itemgrant.TriggerEvent, Event: itemgrant.EventLogin}),
+			node("lim", itemgrant.NodeLimit, 300, itemgrant.LimitConfig{Period: itemgrant.PeriodDay, PerUser: 1}),
+			node("g", itemgrant.NodeGrant, 600, itemgrant.GrantConfig{Items: []itemgrant.Item{{Type: itemgrant.ItemExperience, Amount: 5}}}),
+		},
+		Edges: []itemgrant.Edge{link("t", "next", "lim"), link("lim", "pass", "g")},
+	}
+	loginRule := createActive("每日登录", onLogin)
+	grants.OnLogin(appID, dave, "password")
+	time.Sleep(400 * time.Millisecond)
+	grants.OnLogin(appID, dave, "sms")
+	time.Sleep(600 * time.Millisecond)
+	loginPage, _ := grants.ListRecords(ctx, itemgrant.RecordQuery{AppID: appID, RuleID: loginRule.ID})
+	if loginPage.Total != 1 {
+		t.Fatalf("一天两次登录在每天一次的限额下只应发一次，得到 %d 条", loginPage.Total)
+	}
+	if _, err := grants.SetStatus(ctx, appID, loginRule.ID, itemgrant.StatusArchived, "admin"); err != nil {
+		t.Fatal(err)
+	}
+
 	// ── 发放失败：名下没有授权卡，整笔回滚、留一条失败记录；重试仍失败 ──
 	broken := itemgrant.Graph{
 		Nodes: []itemgrant.Node{
@@ -285,7 +307,7 @@ func TestItemGrantIntegration(t *testing.T) {
 
 	// ── 总览与删除 ──
 	overview, err := grants.Overview(ctx, appID, 7)
-	if err != nil || overview.Records != 4 || overview.Failed != 1 || overview.ActiveRules != 5 || len(overview.Trend) != 7 {
+	if err != nil || overview.Records != 5 || overview.Failed != 1 || overview.ActiveRules != 5 || len(overview.Trend) != 7 {
 		t.Fatalf("总览不对：%+v %v", overview, err)
 	}
 	if err := grants.DeleteRule(ctx, appID, rule.ID); errCode(err) != 40900 {
@@ -295,7 +317,7 @@ func TestItemGrantIntegration(t *testing.T) {
 		t.Fatalf("没有记录的规则可以删除：%v", err)
 	}
 	rules, err := grants.ListRules(ctx, appID)
-	if err != nil || len(rules) != 4 || rules[0].Stats == nil {
+	if err != nil || len(rules) != 5 || rules[0].Stats == nil {
 		t.Fatalf("规则列表应带统计，得到 %d 条 %v", len(rules), err)
 	}
 	t.Logf("records=%d users=%d byItem=%s", overview.Records, overview.Users, strconv.Itoa(len(overview.ByItem)))

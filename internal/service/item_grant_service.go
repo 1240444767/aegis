@@ -783,7 +783,13 @@ func (s *ItemGrantService) OnSignIn(appID, userID int64, consecutiveDays int) {
 		map[string]any{"consecutiveDays": consecutiveDays})
 }
 
-// ObserveHook 插件钩子观察者：注册、登录、支付成功三个钩子转成发放事件。
+// OnLogin 登录观察者（AuthService.finalizeLogin，全部登录方式的收口）：每次登录一个幂等键，频次交给限额节点。
+func (s *ItemGrantService) OnLogin(appID, userID int64, _ string) {
+	s.Emit(appID, userID, itemgrant.EventLogin, strconv.FormatInt(userID, 10)+":"+strconv.FormatInt(time.Now().UnixMilli(), 10),
+		map[string]any{})
+}
+
+// ObserveHook 插件钩子观察者：注册、支付成功两个钩子转成发放事件。
 func (s *ItemGrantService) ObserveHook(hookName string, data map[string]any, meta plugindomain.HookMetadata) {
 	if meta.AppID == nil || meta.UserID == nil {
 		return
@@ -793,8 +799,6 @@ func (s *ItemGrantService) ObserveHook(hookName string, data map[string]any, met
 	switch hookName {
 	case HookUserRegistered:
 		s.Emit(appID, userID, itemgrant.EventRegister, uid, map[string]any{})
-	case HookAuthSessionIssued:
-		s.Emit(appID, userID, itemgrant.EventLogin, uid+":"+strconv.FormatInt(time.Now().UnixMilli(), 10), map[string]any{})
 	case HookPaymentCompleted:
 		orderID := fmt.Sprint(data["orderId"])
 		payload := map[string]any{}

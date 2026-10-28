@@ -79,6 +79,8 @@ type AuthService struct {
 	// 防止通过响应时间差枚举有效账号
 	timingDummyHash []byte
 	deletion        *AccountDeletionService
+	// loginObserver 每次真正签发会话之后的回调（物品发放的「登录成功」事件）；回调自己负责不阻塞。
+	loginObserver func(appID, userID int64, provider string)
 	// notifications 站内信出口（密码已重置等），见 SetNotificationService
 	notifications notificationDeliverer
 	// deviceLimit 登录设备数控制，见 SetDeviceLimitService；未注入时不做限制
@@ -122,6 +124,9 @@ type PasswordRegisterInput struct {
 }
 
 // SetAccountDeletion 接上账号注销：登录结果带上冷静期状态（按配置登录即撤销），注册前核对重新注册限制。
+// SetLoginObserver 注册登录观察者，见 loginObserver。
+func (s *AuthService) SetLoginObserver(fn func(appID, userID int64, provider string)) { s.loginObserver = fn }
+
 func (s *AuthService) SetAccountDeletion(deletion *AccountDeletionService) {
 	s.deletion = deletion
 }
@@ -1186,6 +1191,11 @@ func (s *AuthService) finalizeLogin(ctx context.Context, app *appdomain.App, use
 	result, err := s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
 	if err == nil && result != nil && result.DeviceLimit == nil && s.deletion != nil {
 		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
+	}
+	// 全部登录方式（密码、短信、第三方、扫码、卡密、通行密钥、二次验证之后）都在这里收口；
+	// 设备数超限待选择时还没有登录成功，不算
+	if err == nil && result != nil && result.DeviceLimit == nil && s.loginObserver != nil {
+		s.loginObserver(user.AppID, user.ID, provider)
 	}
 	return result, err
 }

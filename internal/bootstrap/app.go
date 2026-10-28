@@ -468,11 +468,12 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	leaderboardService.SetPublicIDs(userService.PublicIDs())
 	leaderboardService.SetNotifier(notificationService)
 	// 物品发放：画布规则手动 / 定时 / 事件触发（docs/item-grant.md）；定时与接管中断的执行由 API 进程的后台循环负责。
-	// 事件来自插件钩子（注册、登录、支付成功）与签到回调。
+	// 事件来自插件钩子（注册、支付成功）、登录收口（finalizeLogin）与签到回调。
 	itemGrantService := service.NewItemGrantService(log, pg)
 	itemGrantService.SetNotifier(notificationService)
 	itemGrantService.SetEventPublisher(realtimeService)
 	signInService.SetSignInObserver(itemGrantService.OnSignIn)
+	authService.SetLoginObserver(itemGrantService.OnLogin)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)

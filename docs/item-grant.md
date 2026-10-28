@@ -73,7 +73,8 @@
 
 - 一条规则同时只有一次在执行（部分唯一索引）。心跳超过 3 分钟的执行由任一实例接管、从游标接着跑（`FOR UPDATE SKIP LOCKED`）。
 - 定时：后台循环每 30 秒取到点的规则，`next_run_at` CAS 推进，多实例只跑一次。规则有生效期（`startsAt` / `endsAt`）。
-- 事件：插件服务的钩子观察者（`PluginService.ObserveHooks`，注册 / 登录 / 支付成功）与签到观察者（`SignInService.SetSignInObserver`）
+- 事件：插件服务的钩子观察者（`PluginService.ObserveHooks`，注册 / 支付成功）、登录观察者（`AuthService.SetLoginObserver`，
+  在 `finalizeLogin` 收口，密码、短信、第三方、扫码、卡密、通行密钥、二次验证之后都算；设备数超限待选择时不算）与签到观察者（`SignInService.SetSignInObserver`）
   转成 `Emit`；生效规则按应用与事件缓存 30 秒，改规则时本实例立即失效。事件处理在后台、8 并发，不阻塞登录与签到。
 - 账号不可用（停用、冻结、生效中的封禁）的人不进入画布。
 
