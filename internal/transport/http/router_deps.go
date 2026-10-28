@@ -85,6 +85,7 @@ type RouterDeps struct {
 	AutoSign     *service.AutoSignService
 	Points       *service.PointsService
 	Lottery      *service.LotteryService
+	ItemGrant    *service.ItemGrantService
 	Wallet       *service.WalletService
 	Vip          *service.VipService
 	Payment      *service.PaymentService
@@ -183,6 +184,7 @@ func (d RouterDeps) newHandler() *Handler {
 		geoAnalytics:       d.GeoAnalytics,
 		location:           d.Location,
 		lottery:            d.Lottery,
+		itemGrant:          d.ItemGrant,
 		announcement:       d.Announcement,
 		ldapSvc:            d.LDAP,
 		oidcSvc:            d.OIDC,

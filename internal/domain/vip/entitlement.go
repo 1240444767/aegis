@@ -33,6 +33,7 @@ const (
 	SourceInvite       = ChannelInvite
 	SourceLeaderboard  = ChannelLeaderboard
 	SourceLottery      = ChannelLottery
+	SourceItemGrant    = ChannelItemGrant
 	// SourceLifetimeConvert 取消永久会员后还回的会员时长
 	SourceLifetimeConvert = ChannelLifetimeConvert
 )
@@ -318,7 +319,7 @@ func normalizeSource(channel string) string {
 	switch channel {
 	case ChannelTrial, ChannelWallet, ChannelPaymentOrder, ChannelAdminGrant, ChannelCardKey,
 		ChannelAdReward, ChannelPointsStore, ChannelInvite, ChannelLeaderboard, ChannelLottery,
-		ChannelLifetimeConvert:
+		ChannelItemGrant, ChannelLifetimeConvert:
 		return channel
 	default:
 		return SourceUnknown

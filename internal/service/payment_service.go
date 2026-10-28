@@ -512,7 +512,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Se
 			appID := session.AppID
 			uid := session.UserID
 			go s.plugin.ExecuteHook(context.Background(), HookPaymentCreated, map[string]any{"orderId": order.ID}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
-			go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{"orderId": order.ID}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
+			go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{"orderId": order.ID, "amount": order.Amount.String()}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
 		}
 		return payload, order, nil
 	}
@@ -890,7 +890,8 @@ func (s *PaymentService) applyVerifiedResult(ctx context.Context, order *payment
 				appID := order.AppID
 				go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{
 					"orderId": order.ID,
-				}, plugindomain.HookMetadata{AppID: &appID})
+					"amount":  order.Amount.String(),
+				}, plugindomain.HookMetadata{AppID: &appID, UserID: order.UserID})
 			}
 		}
 	} else {

@@ -19,6 +19,7 @@ const (
 	ChannelInvite       = "invite"        // 邀请奖励
 	ChannelLeaderboard  = "leaderboard"   // 排行榜奖励
 	ChannelLottery      = "lottery"       // 抽奖奖品
+	ChannelItemGrant    = "item_grant"    // 物品发放
 	// ChannelAdminRevoke 扣减天数 / 取消永久会员（管理员 / 远程函数 vip.revoke、vip.revokeLifetime）。
 	// 它是账本里的一条留痕记录，不是一段会员期：不贡献功能，也不会成为「当前套餐」。
 	ChannelAdminRevoke = "admin_revoke"

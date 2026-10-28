@@ -23,6 +23,7 @@ DELETE	/api/admin/apps/:appkey/function-kv	AdminDeleteAppFunctionKV
 DELETE	/api/admin/apps/:appkey/functions/:functionName	AdminDeleteAppFunction
 DELETE	/api/admin/apps/:appkey/functions/:functionName/versions/:version	AdminDeleteAppFunctionVersion
 DELETE	/api/admin/apps/:appkey/invite/codes/:codeId	AdminDeleteInviteCode
+DELETE	/api/admin/apps/:appkey/item-grants/rules/:ruleId	AdminDeleteItemGrantRule
 DELETE	/api/admin/apps/:appkey/leaderboard/exclusions/:userId	AdminRemoveLeaderboardExclusion
 DELETE	/api/admin/apps/:appkey/login-baseline/:userid	ResetAdminAppLoginBaseline
 DELETE	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminDeleteLotteryActivity
@@ -216,6 +217,14 @@ GET	/api/admin/apps/:appkey/invite/codes	AdminListInviteCodes
 GET	/api/admin/apps/:appkey/invite/relations	AdminListInviteRelations
 GET	/api/admin/apps/:appkey/invite/settings	AdminInviteSettings
 GET	/api/admin/apps/:appkey/invite/stats	AdminInviteStats
+GET	/api/admin/apps/:appkey/item-grants/catalog	AdminItemGrantCatalog
+GET	/api/admin/apps/:appkey/item-grants/overview	AdminItemGrantOverview
+GET	/api/admin/apps/:appkey/item-grants/records	AdminListItemGrantRecords
+GET	/api/admin/apps/:appkey/item-grants/records/:recordId	AdminGetItemGrantRecord
+GET	/api/admin/apps/:appkey/item-grants/rules	AdminListItemGrantRules
+GET	/api/admin/apps/:appkey/item-grants/rules/:ruleId	AdminGetItemGrantRule
+GET	/api/admin/apps/:appkey/item-grants/runs	AdminListItemGrantRuns
+GET	/api/admin/apps/:appkey/item-grants/runs/:runId	AdminGetItemGrantRun
 GET	/api/admin/apps/:appkey/leaderboard/boards/:key	AdminLeaderboardBoard
 GET	/api/admin/apps/:appkey/leaderboard/exclusions	AdminLeaderboardExclusions
 GET	/api/admin/apps/:appkey/leaderboard/settings	AdminLeaderboardSettings
@@ -870,6 +879,13 @@ POST	/api/admin/apps/:appkey/governance/appeals/:appealId/withdraw	AdminAppWithd
 POST	/api/admin/apps/:appkey/invite/codes	AdminCreateInviteCodes
 POST	/api/admin/apps/:appkey/invite/relations/:relationId/cancel	AdminCancelInviteRelation
 POST	/api/admin/apps/:appkey/invite/relations/:relationId/settle	AdminSettleInviteRelation
+POST	/api/admin/apps/:appkey/item-grants/preview	AdminPreviewItemGrant
+POST	/api/admin/apps/:appkey/item-grants/records/:recordId/fulfill	AdminFulfillItemGrantRecord
+POST	/api/admin/apps/:appkey/item-grants/records/:recordId/retry	AdminRetryItemGrantRecord
+POST	/api/admin/apps/:appkey/item-grants/rules	AdminCreateItemGrantRule
+POST	/api/admin/apps/:appkey/item-grants/rules/:ruleId/run	AdminRunItemGrantRule
+POST	/api/admin/apps/:appkey/item-grants/runs/:runId/cancel	AdminCancelItemGrantRun
+POST	/api/admin/apps/:appkey/item-grants/validate	AdminValidateItemGrant
 POST	/api/admin/apps/:appkey/leaderboard/exclusions	AdminAddLeaderboardExclusions
 POST	/api/admin/apps/:appkey/leaderboard/settle	AdminSettleLeaderboard
 POST	/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry	AdminRetryLeaderboardSnapshot
@@ -1386,6 +1402,8 @@ PUT	/api/admin/apps/:appkey/functions/:functionName	AdminUpdateAppFunction
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId	AdminUpdateInviteCode
 PUT	/api/admin/apps/:appkey/invite/codes/:codeId/status	AdminSetInviteCodeStatus
 PUT	/api/admin/apps/:appkey/invite/settings	AdminSaveInviteSettings
+PUT	/api/admin/apps/:appkey/item-grants/rules/:ruleId	AdminUpdateItemGrantRule
+PUT	/api/admin/apps/:appkey/item-grants/rules/:ruleId/status	AdminSetItemGrantRuleStatus
 PUT	/api/admin/apps/:appkey/leaderboard/settings	AdminSaveLeaderboardSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminUpdateLotteryActivity
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings	AdminSetLotteryFortuneSettings

@@ -74,6 +74,8 @@ type APIApp struct {
 	AccountDeletion *service.AccountDeletionService
 	// Leaderboard 积分排行榜：后台循环结算到期的周期榜并发放奖励，退出时必须 Stop
 	Leaderboard *service.LeaderboardService
+	// ItemGrant 物品发放：后台循环执行到点的定时规则、接管中断的执行，退出时必须 Stop
+	ItemGrant *service.ItemGrantService
 	// AIGateway AI 中转网关：后台循环放回超时未结算的暂扣，退出时必须 Stop
 	AIGateway *service.AIGatewayService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
@@ -465,6 +467,12 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	leaderboardService := service.NewLeaderboardService(log, pg, sessions)
 	leaderboardService.SetPublicIDs(userService.PublicIDs())
 	leaderboardService.SetNotifier(notificationService)
+	// 物品发放：画布规则手动 / 定时 / 事件触发（docs/item-grant.md）；定时与接管中断的执行由 API 进程的后台循环负责。
+	// 事件来自插件钩子（注册、登录、支付成功）与签到回调。
+	itemGrantService := service.NewItemGrantService(log, pg)
+	itemGrantService.SetNotifier(notificationService)
+	itemGrantService.SetEventPublisher(realtimeService)
+	signInService.SetSignInObserver(itemGrantService.OnSignIn)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
@@ -505,6 +513,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		log.Warn("插件系统初始化失败（非致命）", zap.Error(err))
 	}
 	adminService.SetPluginService(pluginService)
+	pluginService.ObserveHooks(itemGrantService.ObserveHook)
 	authService.SetPluginService(pluginService)
 	userService.SetPluginService(pluginService)
 	accountBanService.SetPluginService(pluginService)
@@ -714,6 +723,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AutoSign:     autoSignService,
 		Points:       pointsService,
 		Lottery:      lotteryService,
+		ItemGrant:    itemGrantService,
 		Wallet:       walletService,
 		Vip:          vipService,
 		Payment:      paymentService,
@@ -811,6 +821,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Storage:            storageService,
 		AccountDeletion:    accountDeletionService,
 		Leaderboard:        leaderboardService,
+		ItemGrant:          itemGrantService,
 		AIGateway:          aiGatewayService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
@@ -852,6 +863,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.Leaderboard != nil {
 		a.Leaderboard.Start(ctx)
 	}
+	if a.ItemGrant != nil {
+		a.ItemGrant.Start(ctx)
+	}
 	if a.AIGateway != nil {
 		a.AIGateway.Start(ctx)
 	}
@@ -892,6 +906,9 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Leaderboard != nil {
 		a.Leaderboard.Stop()
+	}
+	if a.ItemGrant != nil {
+		a.ItemGrant.Stop()
 	}
 	if a.AIGateway != nil {
 		a.AIGateway.Stop()

@@ -25,6 +25,8 @@ const (
 	// TicketOriginLottery 抽中的「抽奖次数」，以及已拥有奖品按活动策略改发的次数
 	TicketOriginLottery = "lottery"
 	TicketOriginAdmin   = "admin"
+	// TicketOriginItemGrant 物品发放规则发的次数（算赠送）
+	TicketOriginItemGrant = "item_grant"
 	// TicketOriginLegacy 分批记账之前的余额（迁移 000136 一次性转成一批）
 	TicketOriginLegacy = "legacy"
 )
@@ -33,7 +35,7 @@ const (
 func TicketOrigins() []string {
 	return []string{
 		TicketOriginRewardedAd, TicketOriginLottery, TicketOriginInvite, TicketOriginLeaderboard,
-		TicketOriginCardKey, TicketOriginPointsStore, TicketOriginAdmin, TicketOriginLegacy,
+		TicketOriginCardKey, TicketOriginPointsStore, TicketOriginItemGrant, TicketOriginAdmin, TicketOriginLegacy,
 	}
 }
 
@@ -52,6 +54,8 @@ func TicketOriginLabel(origin string) string {
 		return "排行榜奖励"
 	case TicketOriginLottery:
 		return "抽奖所得"
+	case TicketOriginItemGrant:
+		return "物品发放"
 	case TicketOriginAdmin:
 		return "系统发放"
 	case TicketOriginLegacy:

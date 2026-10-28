@@ -49,6 +49,7 @@ type Handler struct {
 	geoAnalytics    *service.GeoAnalyticsService
 	location        *service.LocationService
 	lottery         *service.LotteryService
+	itemGrant       *service.ItemGrantService
 	announcement    *service.AnnouncementService
 	ldapSvc         *service.LDAPService
 	oidcSvc         *service.OIDCService

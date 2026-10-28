@@ -27,6 +27,7 @@ const (
 	UnlockSourceLeaderboard = "leaderboard"  // 排行榜奖励
 	UnlockSourceLottery     = "lottery"      // 抽奖奖品
 	UnlockSourceCardKey     = "card_key"     // 卡密兑换
+	UnlockSourceItemGrant   = "item_grant"   // 物品发放
 )
 
 // FeatureUnlock 一条功能解锁记录（账本行）。

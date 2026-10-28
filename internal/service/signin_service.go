@@ -30,6 +30,8 @@ type SignInService struct {
 	// afterSignIn 新签到落库之后的回调（邀请：被邀请人累计签到满 N 天后发邀请人奖励）。
 	// 回调自己负责不阻塞：签到链路不等它。
 	afterSignIn func(appID, userID int64)
+	// signInObserver 同上，带本次的连续签到天数（物品发放的「每日签到」事件）。
+	signInObserver func(appID, userID int64, consecutiveDays int)
 }
 
 const (
@@ -50,6 +52,11 @@ func NewSignInService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrep
 
 // SetAfterSignIn 注册新签到之后的回调，见 afterSignIn。
 func (s *SignInService) SetAfterSignIn(fn func(appID, userID int64)) { s.afterSignIn = fn }
+
+// SetSignInObserver 注册新签到之后的观察者（带连续签到天数），见 signInObserver。
+func (s *SignInService) SetSignInObserver(fn func(appID, userID int64, consecutiveDays int)) {
+	s.signInObserver = fn
+}
 
 func (s *SignInService) GetStatus(ctx context.Context, session *authdomain.Session) (*userdomain.SignInStatus, error) {
 	user, err := s.requireActiveUser(ctx, session)
@@ -258,6 +265,9 @@ func (s *SignInService) signInOnce(ctx context.Context, session *authdomain.Sess
 	_ = s.sessions.DeleteMyView(ctx, session.AppID, session.UserID)
 	if s.afterSignIn != nil {
 		s.afterSignIn(session.AppID, session.UserID)
+	}
+	if s.signInObserver != nil {
+		s.signInObserver(session.AppID, session.UserID, result.Record.ConsecutiveDays)
 	}
 	_ = s.publisher.PublishJSON(ctx, event.SubjectUserSignedIn, map[string]any{
 		"user_id":           session.UserID,

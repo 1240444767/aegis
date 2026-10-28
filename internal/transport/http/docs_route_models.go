@@ -187,6 +187,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/admin/apps/{appkey}/invite/codes/{codeId}/status"):                                         InviteCodeStatusRequest{},                // AdminSetInviteCodeStatus
 		routeKey("GET", "/api/admin/apps/{appkey}/invite/relations"):                                                     InviteRelationQuery{},                    // AdminListInviteRelations
 		routeKey("PUT", "/api/admin/apps/{appkey}/invite/settings"):                                                      InviteSettingsRequest{},                  // AdminSaveInviteSettings
+		routeKey("POST", "/api/admin/apps/{appkey}/item-grants/preview"):                                                 ItemGrantPreviewRequest{},                // AdminPreviewItemGrant
+		routeKey("POST", "/api/admin/apps/{appkey}/item-grants/records/{recordId}/fulfill"):                              ItemGrantFulfillRequest{},                // AdminFulfillItemGrantRecord
+		routeKey("POST", "/api/admin/apps/{appkey}/item-grants/rules"):                                                   ItemGrantRuleRequest{},                   // AdminCreateItemGrantRule
+		routeKey("PUT", "/api/admin/apps/{appkey}/item-grants/rules/{ruleId}"):                                           ItemGrantRuleRequest{},                   // AdminUpdateItemGrantRule
+		routeKey("PUT", "/api/admin/apps/{appkey}/item-grants/rules/{ruleId}/status"):                                    ItemGrantStatusRequest{},                 // AdminSetItemGrantRuleStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/item-grants/validate"):                                                ItemGrantGraphRequest{},                  // AdminValidateItemGrant
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/boards/{key}"):                                             LeaderboardAdminBoardQuery{},             // AdminLeaderboardBoard
 		routeKey("GET", "/api/admin/apps/{appkey}/leaderboard/exclusions"):                                               LeaderboardExclusionQuery{},              // AdminLeaderboardExclusions
 		routeKey("POST", "/api/admin/apps/{appkey}/leaderboard/exclusions"):                                              LeaderboardExclusionRequest{},            // AdminAddLeaderboardExclusions

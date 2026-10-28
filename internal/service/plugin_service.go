@@ -22,6 +22,20 @@ type PluginService struct {
 	// 内存缓存：hookName → 按 priority 排序的插件列表
 	cacheMu   sync.RWMutex
 	hookCache map[string][]plugindomain.Plugin
+
+	// observers 进程内的钩子观察者（物品发放的事件触发）：每次钩子执行都通知，与有没有启用插件无关。
+	// 观察者自己负责不阻塞。只在启动装配时注册，之后只读。
+	observers []HookObserver
+}
+
+// HookObserver 进程内的钩子观察者。
+type HookObserver func(hookName string, data map[string]any, meta plugindomain.HookMetadata)
+
+// ObserveHooks 注册钩子观察者（启动装配时调用）。
+func (s *PluginService) ObserveHooks(fn HookObserver) {
+	if fn != nil {
+		s.observers = append(s.observers, fn)
+	}
 }
 
 // NewPluginService 创建插件服务
@@ -151,6 +165,9 @@ func (s *PluginService) DisablePlugin(ctx context.Context, id int64) error {
 
 // ExecuteHook 执行指定钩子上的所有插件
 func (s *PluginService) ExecuteHook(ctx context.Context, hookName string, data map[string]any, meta plugindomain.HookMetadata) *plugindomain.HookResult {
+	for _, observe := range s.observers {
+		observe(hookName, data, meta)
+	}
 	s.cacheMu.RLock()
 	plugins := s.hookCache[hookName]
 	s.cacheMu.RUnlock()

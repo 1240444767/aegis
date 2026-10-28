@@ -55,6 +55,7 @@ const (
 	TypeLottery         = "lottery"
 	TypeCardKey         = "cardkey"
 	TypeTicket          = "ticket"
+	TypeItemGrant       = "item_grant"
 )
 
 // typeCategories 旧 type → 分类。没登记的 type 一律落 system。
@@ -86,6 +87,7 @@ var typeCategories = map[string]string{
 	"lottery":      CategoryReward,
 	"rewarded_ad":  CategoryReward,
 	"cardkey":      CategoryReward,
+	"item_grant":   CategoryReward,
 
 	"ticket":   CategoryTicket,
 	"feedback": CategoryTicket,
