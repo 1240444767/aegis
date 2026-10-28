@@ -104,3 +104,19 @@ async def test_conversion_policy_merges(backend, call):
     req = backend.find("PUT", f"{BASE}/conversion-policy")
     assert req.json == {"owned": "convert", "upgrade": "keep", "perVipDay": 20, "perFeatureDay": 5,
                         "perFeatureHour": 10, "perLifetime": 3650, "restoreOnRevoke": False}
+
+
+async def test_tiers(backend, call, call_error):
+    await call("vip_tiers", {"app": "demo"})
+    assert (backend.last().method, backend.last().path) == ("GET", f"{BASE}/tiers")
+    await call("vip_save_tier", {"app": "demo", "name": "永久会员", "features": ["export"]})
+    assert (backend.last().path, backend.last().json) == (f"{BASE}/tiers", {"id": 0, "name": "永久会员", "features": ["export"]})
+    assert "name" in await call_error("vip_save_tier", {"app": "demo"})
+    await call("vip_delete_tier", {"app": "demo", "tier_id": 3, "move_to": 5})
+    req = backend.last()
+    assert (req.method, req.path, req.query.get("moveTo")) == ("DELETE", f"{BASE}/tiers/3", "5")
+    await call("vip_save_plan", {"app": "demo", "plan_id": 2, "tier_id": 5})
+    assert backend.last().json == {"id": 2, "tierId": 5}
+    await call("vip_grant", {"app": "demo", "user_id": 7, "lifetime": True, "tier_id": 5})
+    assert backend.last().json == {"userId": 7, "lifetime": True, "tierId": 5, "reason": ""}
+    assert "tier_id" in await call_error("vip_grant", {"app": "demo", "user_id": 7, "plan_id": 1, "tier_id": 5})

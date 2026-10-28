@@ -1730,6 +1730,13 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/tiers",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/vip/transactions",
     "permission": "app:read",
     "appScoped": true,
@@ -3726,6 +3733,13 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/vip/plans",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/vip/tiers",
     "permission": "app:write",
     "appScoped": true,
     "unmapped": false
@@ -6470,6 +6484,13 @@
   {
     "method": "DELETE",
     "path": "/api/admin/apps/:appkey/vip/plans/:planId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/vip/tiers/:tierId",
     "permission": "app:write",
     "appScoped": true,
     "unmapped": false

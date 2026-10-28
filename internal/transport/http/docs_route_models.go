@@ -300,6 +300,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant"):                                                           AdminVipGrantRequest{},                   // AdminGrantAppUserVip
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/grant/preview"):                                                   AdminVipGrantRequest{},                   // AdminPreviewAppUserVipGrant
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/plans"):                                                           AdminVipPlanRequest{},                    // AdminSaveAppVipPlan
+		routeKey("POST", "/api/admin/apps/{appkey}/vip/tiers"):                                                           AdminVipTierRequest{},                    // AdminSaveAppVipTier
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/revoke"):                                                          AdminVipRevokeRequest{},                  // AdminRevokeAppUserVip
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/trial/claims"):                                                    AdminVipTrialClaimRequest{},              // AdminClaimAppVipTrial
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/adjust"):                                                       AdminWalletAdjustRequest{},               // AdminAdjustAppUserWallet

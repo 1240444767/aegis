@@ -172,7 +172,8 @@ func TestVipLifetimeIntegration(t *testing.T) {
 		t.Fatalf("自定义永久发放的记录不对：%+v", granted)
 	}
 	ent = mustEntitlement(t, svc, appID, userB)
-	if !ent.IsLifetime || ent.Source != vipdomain.SourceAdminGrant || !slices.Equal(ent.Features, []string{"ai.chat"}) {
+	// 不挂套餐的永久会员归入应用的永久档位（永久基础版的 export），ai.chat 是档位之外另给的
+	if !ent.IsLifetime || ent.Source != vipdomain.SourceAdminGrant || !slices.Equal(ent.Features, []string{"ai.chat", "export"}) {
 		t.Fatalf("管理员发放的永久会员判定不对：%+v", ent)
 	}
 	if _, err := svc.ClaimTrial(ctx, &authdomain.Session{AppID: appID, UserID: userB}, ""); err == nil {

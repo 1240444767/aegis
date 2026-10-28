@@ -44,6 +44,7 @@ DELETE	/api/admin/apps/:appkey/users/:userId/sessions/:tokenHash	AdminRevokeUser
 DELETE	/api/admin/apps/:appkey/versions/:vid	AdminDeleteVersion
 DELETE	/api/admin/apps/:appkey/vip/features/:tag	AdminDeleteAppVipFeature
 DELETE	/api/admin/apps/:appkey/vip/plans/:planId	AdminDeleteAppVipPlan
+DELETE	/api/admin/apps/:appkey/vip/tiers/:tierId	AdminDeleteAppVipTier
 DELETE	/api/admin/apps/:appkey/vip/trial/claims/:userId	AdminResetAppVipTrial
 DELETE	/api/admin/notify/channels/:id	AdminDeleteNotifyChannel
 DELETE	/api/admin/notify/deliveries	AdminPurgeNotifyDeliveries
@@ -321,6 +322,7 @@ GET	/api/admin/apps/:appkey/vip/conversions	AdminAppVipConversions
 GET	/api/admin/apps/:appkey/vip/entitlement	AdminAppUserVipEntitlement
 GET	/api/admin/apps/:appkey/vip/features	AdminAppVipFeatures
 GET	/api/admin/apps/:appkey/vip/plans	AdminAppVipPlans
+GET	/api/admin/apps/:appkey/vip/tiers	AdminAppVipTiers
 GET	/api/admin/apps/:appkey/vip/transactions	AdminAppVipTransactions
 GET	/api/admin/apps/:appkey/vip/trial/claims	AdminAppVipTrialClaims
 GET	/api/admin/apps/:appkey/wallet/stats	AdminAppWalletStats
@@ -944,6 +946,7 @@ POST	/api/admin/apps/:appkey/vip/grant	AdminGrantAppUserVip
 POST	/api/admin/apps/:appkey/vip/grant/preview	AdminPreviewAppUserVipGrant
 POST	/api/admin/apps/:appkey/vip/plans	AdminSaveAppVipPlan
 POST	/api/admin/apps/:appkey/vip/revoke	AdminRevokeAppUserVip
+POST	/api/admin/apps/:appkey/vip/tiers	AdminSaveAppVipTier
 POST	/api/admin/apps/:appkey/vip/trial/claims	AdminClaimAppVipTrial
 POST	/api/admin/apps/:appkey/wallet/adjust	AdminAdjustAppUserWallet
 POST	/api/admin/apps/:appkey/wallet/receipt	AdminAppWalletReceipt

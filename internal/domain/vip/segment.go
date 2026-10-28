@@ -8,6 +8,10 @@ import (
 
 // 会员段：一条开通记录在「此刻给了什么」上的投影。
 //
+// 权益现在属于档位（见 tier.go）：一段会员期记了档位，就按档位当前的功能算，
+// 套餐删掉、重新上架都不影响它。下面是档位出现之前「跟随套餐」那一版的理由，
+// 档位继承了它 —— 只是把锚点从会被删掉的套餐行换成了不会悬空的档位。
+//
 // ── 为什么权益要跟随套餐，而不是停在开通那一刻 ──
 //
 // 功能标识最早是**按值快照**进账本的（vip_transactions.features），判定只读快照。
@@ -39,7 +43,13 @@ type Segment struct {
 	PlanName string   `json:"planName"`
 	Features []string `json:"features"`
 	// Plan 所引用套餐的**当前**配置。自定义发放、卡密赠送天数、套餐已删除时为 nil。
+	// 有档位时只用它的名字（功能看档位）。
 	Plan *SegmentPlan `json:"plan,omitempty"`
+	// TierID / Tier 这段会员期所属档位与档位的**当前**配置。不挂档位的发放为 nil。
+	TierID *int64       `json:"tierId,omitempty"`
+	Tier   *SegmentTier `json:"tier,omitempty"`
+	// Extras 档位之外另给的功能（自定义发放时选的），只在有档位时生效
+	Extras []string `json:"extras,omitempty"`
 	// ActiveFrom / ActiveUntil 这一段在会员链上的实际位置（已计入退款前移与扣减截断）。
 	// 永久开通没有终点，ActiveUntil 为零值，看 Lifetime。
 	ActiveFrom  time.Time `json:"activeFrom"`
@@ -66,12 +76,16 @@ type SegmentPlan struct {
 	Features []string `json:"features"`
 }
 
-// EffectiveFeatures 这一段此刻解锁的功能：套餐还在就按套餐现在的配置；
+// EffectiveFeatures 这一段此刻解锁的功能：有档位就按档位现在的功能（并上另给的）；
+// 没有档位而套餐还在（滚动发布期间旧实例写的记录）按套餐现在的配置；
 // 看广告领的会员天数按所属场景现在的会员权益；都没有时按快照。
 //
 // 看广告领的会员套餐仍按套餐算（PlanID 非空）：套餐删除后回落到快照，
 // 不会被场景里那份只对「会员天数」生效的功能顶替。
 func (s Segment) EffectiveFeatures() []string {
+	if s.Tier != nil {
+		return TierFeatures(s.Tier.Features, s.Extras)
+	}
 	if s.Plan != nil {
 		return s.Plan.Features
 	}

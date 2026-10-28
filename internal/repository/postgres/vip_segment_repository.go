@@ -40,7 +40,9 @@ const vipSegmentScopeSQL = `(vt.duration_days > 0 OR vt.lifetime) AND vt.revoked
 // vipSegmentTimedSQL 限时会员段：在顺延链上、有终点。退款前移与扣减截断只动这些。
 const vipSegmentTimedSQL = `NOT vt.lifetime`
 
-// vipLiveSegmentsSQL 此刻仍生效的各段，连同所引用套餐的**当前**配置，聚成一个 JSON 数组。
+// vipLiveSegmentsSQL 此刻仍生效的各段，连同所属档位与所引用套餐的**当前**配置，聚成一个 JSON 数组。
+//
+// 权益看档位（vip_tiers）：有档位的段按档位当前的功能并上 extra_features。套餐只提供展示名。
 //
 // 聚成 JSON 而不是另查一次：判定事实必须一次取齐（见 GetVipEntitlementFacts），
 // 分两次查就有"中间刚好买了会员"的窗口。
@@ -61,6 +63,10 @@ const vipLiveSegmentsSQL = `COALESCE((
         'features', to_jsonb(vt.features),
         'plan', CASE WHEN p.id IS NULL THEN NULL
                      ELSE jsonb_build_object('name', p.name, 'features', to_jsonb(p.features)) END,
+        'tierId', vt.tier_id,
+        'tier', CASE WHEN t.id IS NULL THEN NULL
+                     ELSE jsonb_build_object('name', t.name, 'features', to_jsonb(t.features)) END,
+        'extras', to_jsonb(COALESCE(vt.extra_features, '{}')),
         'activeFrom', ` + vipSegmentFromSQL + `,
         'activeUntil', CASE WHEN vt.lifetime THEN NULL ELSE ` + vipSegmentUntilSQL + ` END,
         'lifetime', vt.lifetime,
@@ -75,6 +81,7 @@ const vipLiveSegmentsSQL = `COALESCE((
     ) ORDER BY vt.id)
     FROM vip_transactions vt
     LEFT JOIN vip_plans p ON p.id = vt.plan_id AND p.appid = vt.appid
+    LEFT JOIN vip_tiers t ON t.id = vt.tier_id AND t.appid = vt.appid
     WHERE vt.appid = u.appid AND vt.user_id = u.id AND ` + vipSegmentScopeSQL + `
       AND ` + vipSegmentUntilSQL + ` > NOW()
       AND ` + vipSegmentUntilSQL + ` > ` + vipSegmentFromSQL + `
@@ -114,6 +121,12 @@ SET vip_lifetime_at = COALESCE(u.vip_lifetime_at, NOW()), vip_expire_at = NULL, 
 FROM legacy l
 WHERE u.id = l.id`, vipdomain.LegacyLifetimeExpireAt, vipdomain.ChannelLegacyImport)
 	if err != nil {
+		return 0, err
+	}
+	// 补记的永久开通归入应用的永久档位（与迁移 000138 第 3 步同一条规则）
+	if _, err := r.pool.Exec(ctx, `UPDATE vip_transactions x SET tier_id = `+vipDefaultLifetimeTierFor("x.appid")+`
+WHERE x.tier_id IS NULL AND x.lifetime AND x.pay_channel = $1 AND x.revoked_at IS NULL`,
+		vipdomain.ChannelLegacyImport); err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil

@@ -86,6 +86,10 @@ func (s *VipService) AdminPreviewGrant(ctx context.Context, in AdminVipGrantInpu
 	if err != nil {
 		return nil, err
 	}
+	// 与发放事务同一条规则定档位（发放时会在事务里再解析一次，这里只为预览看到并上档位后的功能）
+	if err := s.pg.ResolveVipGrantTier(ctx, &grant); err != nil {
+		return nil, translateVipTierError(err)
+	}
 	holdings, err := s.pg.GetVipHoldings(ctx, in.AppID, in.UserID)
 	if err != nil {
 		if errors.Is(err, pgrepo.ErrUserNotFound) {

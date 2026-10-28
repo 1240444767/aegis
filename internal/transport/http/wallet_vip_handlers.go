@@ -50,8 +50,9 @@ type AdminVipPlanRequest struct {
 	Lifetime *bool `json:"lifetime"`
 	// TrialDeviceLimited 仅试用套餐有意义：同一设备只能领一次
 	TrialDeviceLimited *bool `json:"trialDeviceLimited"`
-	// Features 这个套餐解锁哪些功能标识（引用会员功能目录里的 tag）。
-	// 不传即不变更；传空数组即清空。
+	// TierID 套餐卖的会员档位（权益属于档位）。新建时不传：有功能完全相同的档位就并进去，否则按套餐名新建一个。
+	TierID *int64 `json:"tierId"`
+	// Features 改的是所属档位的功能（同档位的套餐一起变）。不传即不变更；传空数组即清空。
 	Features           *[]string `json:"features"`
 	DurationDays       *int      `json:"durationDays"`
 	Price              *string `json:"price"`
@@ -78,6 +79,9 @@ type AdminVipGrantRequest struct {
 	Quantity      int      `json:"quantity"`
 	Days          int      `json:"days"`
 	Lifetime      bool     `json:"lifetime"`
+	// TierID 自定义发放归入的会员档位，features 则是档位之外另给的。
+	// 不传时永久会员归入应用的永久档位，限时的只带 features。
+	TierID        int64    `json:"tierId"`
 	Features      []string `json:"features"`
 	Reason        string   `json:"reason"`
 	BonusIntegral int64    `json:"bonusIntegral"`
@@ -382,6 +386,7 @@ func (h *Handler) AdminSaveAppVipPlan(c *gin.Context) {
 		Kind:               req.Kind,
 		Lifetime:           req.Lifetime,
 		TrialDeviceLimited: req.TrialDeviceLimited,
+		TierID:             req.TierID,
 		Features:           req.Features,
 		DurationDays:       req.DurationDays,
 		BonusIntegral:      req.BonusIntegral,
@@ -431,6 +436,86 @@ func (h *Handler) AdminDeleteAppVipPlan(c *gin.Context) {
 	response.Success(c, 200, "删除套餐成功", gin.H{"deleted": true})
 }
 
+// ── 管理端：会员档位 ──
+
+// AdminVipTierRequest 会员档位创建 / 更新（id 为 0 即新建）。
+type AdminVipTierRequest struct {
+	ID          int64   `json:"id"`
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+	// Features 档位的功能标识（引用会员功能目录）。改了即对档位下全部在期会员生效；不传即不变更
+	Features  *[]string `json:"features"`
+	SortOrder *int      `json:"sortOrder"`
+}
+
+// AdminAppVipTiers GET /api/admin/apps/:appkey/vip/tiers
+func (h *Handler) AdminAppVipTiers(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	tiers, err := h.vip.AdminListTiers(c.Request.Context(), appID)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取会员档位成功", tiers)
+}
+
+// AdminSaveAppVipTier POST /api/admin/apps/:appkey/vip/tiers
+func (h *Handler) AdminSaveAppVipTier(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req AdminVipTierRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	tier, err := h.vip.AdminSaveTier(c.Request.Context(), vipdomain.TierMutation{
+		ID:          req.ID,
+		AppID:       appID,
+		Name:        req.Name,
+		Description: req.Description,
+		Features:    req.Features,
+		SortOrder:   req.SortOrder,
+	})
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "保存会员档位成功", tier)
+}
+
+// AdminDeleteAppVipTier DELETE /api/admin/apps/:appkey/vip/tiers/:tierId?moveTo=
+//
+// 档位下还有套餐或在期会员时必须带 moveTo（迁往的档位），否则 40996。
+func (h *Handler) AdminDeleteAppVipTier(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	tierID, err := strconv.ParseInt(c.Param("tierId"), 10, 64)
+	if err != nil || tierID <= 0 {
+		response.Error(c, http.StatusBadRequest, 40000, "档位ID无效")
+		return
+	}
+	var moveTo int64
+	if raw := strings.TrimSpace(c.Query("moveTo")); raw != "" {
+		moveTo, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || moveTo < 0 {
+			response.Error(c, http.StatusBadRequest, 40000, "迁往的档位ID无效")
+			return
+		}
+	}
+	if err := h.vip.AdminDeleteTier(c.Request.Context(), appID, tierID, moveTo); err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "删除会员档位成功", gin.H{"deleted": true, "movedTo": moveTo})
+}
+
 // AdminGrantAppUserVip POST /api/admin/apps/:appkey/vip/grant
 func (h *Handler) AdminGrantAppUserVip(c *gin.Context) {
 	appID, ok := resolveAppID(c, h.app)
@@ -450,6 +535,7 @@ func (h *Handler) AdminGrantAppUserVip(c *gin.Context) {
 		Quantity:      req.Quantity,
 		Days:          req.Days,
 		Lifetime:      req.Lifetime,
+		TierID:        req.TierID,
 		Features:      req.Features,
 		Reason:        req.Reason,
 		BonusIntegral: req.BonusIntegral,
@@ -489,6 +575,7 @@ func (h *Handler) AdminPreviewAppUserVipGrant(c *gin.Context) {
 		Quantity:      req.Quantity,
 		Days:          req.Days,
 		Lifetime:      req.Lifetime,
+		TierID:        req.TierID,
 		Features:      req.Features,
 		Reason:        req.Reason,
 		BonusIntegral: req.BonusIntegral,

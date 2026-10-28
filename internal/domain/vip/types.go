@@ -67,7 +67,10 @@ type Plan struct {
 	// 防的是"注册小号反复领试用"，代价是请求必须带设备标识（否则拒领而不是放行 ——
 	// 开着的开关放行等于没有这个开关）。
 	TrialDeviceLimited bool `json:"trialDeviceLimited"`
-	// Features 这个套餐包含的功能标识（引用 vip_features.tag）。
+	// TierID / TierName 这个套餐卖的档位（见 tier.go）。权益属于档位，套餐只是售卖规格。
+	TierID   int64  `json:"tierId"`
+	TierName string `json:"tierName,omitempty"`
+	// Features 这个套餐包含的功能标识（引用 vip_features.tag）：就是所属档位当前的功能，只读。
 	// 空数组即"只是会员"，不带任何细分权益。
 	Features      []string         `json:"features"`
 	DurationDays  int              `json:"durationDays"`
@@ -105,7 +108,10 @@ type PlanMutation struct {
 	Kind               *string
 	Lifetime           *bool
 	TrialDeviceLimited *bool
-	// Features nil 表示不变更；空切片表示清空
+	// TierID 套餐卖的档位。新建时为空：有功能完全相同的档位就并进去，否则按套餐名新建一个。
+	// 改档位只影响以后的售卖，已开通的会员仍在原档位。
+	TierID *int64
+	// Features 改的是所属档位的功能（同档位的套餐一起变）。nil 表示不变更；空切片表示清空
 	Features      *[]string
 	DurationDays  *int
 	Price         *decimal.Decimal
@@ -126,8 +132,14 @@ type Grant struct {
 	//
 	// 它**不是**判定依据：套餐还在时权益按套餐当前配置算（见 Segment），
 	// 快照只在两种情况下生效 —— 这笔不是按套餐开的（自定义发放），或套餐已被删除。
-	Features     []string
-	DurationDays int
+	Features []string
+	// TierID 不挂套餐的发放归入的档位，Features 则是档位之外另给的功能。
+	// 挂套餐时取套餐的档位，这里忽略；不挂套餐的永久开通为空时归入应用的永久档位（看广告领的除外）。
+	// 档位在发放事务里解析（resolveGrantTierTx），Features 随之并上档位的功能。
+	TierID *int64
+	// ExtraFeatures 档位之外另给的功能，由 resolveGrantTierTx 填，调用方不用设
+	ExtraFeatures []string
+	DurationDays  int
 	// Lifetime 永久开通：DurationDays 忽略，不动限时那条线的到期时间，
 	// 只把用户标记为永久会员并记一段没有终点的会员期。
 	Lifetime       bool
@@ -156,6 +168,9 @@ type Transaction struct {
 	PlanID        *int64   `json:"planId,omitempty"`
 	PlanName      string   `json:"planName"`
 	Features      []string `json:"features"`
+	// TierID 这段会员期所属档位；ExtraFeatures 档位之外另给的功能
+	TierID        *int64   `json:"tierId,omitempty"`
+	ExtraFeatures []string `json:"extraFeatures,omitempty"`
 	DurationDays  int      `json:"durationDays"`
 	// Lifetime 永久开通（durationDays 为 0、expireAfter 为空），
 	// 或 admin_revoke 渠道下的「取消永久会员」留痕。

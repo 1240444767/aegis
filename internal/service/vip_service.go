@@ -219,6 +219,9 @@ func (s *VipService) AdminSavePlan(ctx context.Context, mutation vipdomain.PlanM
 	}
 	plan, err := s.pg.UpsertVipPlan(ctx, mutation)
 	if err != nil {
+		if errors.Is(err, pgrepo.ErrVipTierNotFound) {
+			return nil, translateVipTierError(err)
+		}
 		// vip_plans 上唯一的唯一索引就是「每个应用至多一个启用中的试用套餐」。
 		// 不翻译的话，管理员在控制台上看到的是一句原始的 SQL 约束名。
 		if pgrepo.IsUniqueViolation(err) {
@@ -332,6 +335,9 @@ type AdminVipGrantInput struct {
 	Quantity      int
 	Days          int
 	Lifetime      bool
+	// TierID 自定义发放归入的档位（Features 则是档位之外另给的）。
+	// 为 0 时：永久会员归入应用的永久档位，限时的不挂档位（只有 Features）。按套餐发放时忽略。
+	TierID        int64
 	Features      []string
 	Reason        string
 	BonusIntegral int64
@@ -439,6 +445,17 @@ func (s *VipService) buildAdminGrant(ctx context.Context, in AdminVipGrantInput)
 		if in.Lifetime {
 			grant.PlanName = "管理员授予永久会员"
 		}
+	}
+	if in.TierID > 0 {
+		tier, err := s.pg.GetVipTier(ctx, in.AppID, in.TierID)
+		if err != nil {
+			return grant, err
+		}
+		if tier == nil {
+			return grant, apperrors.New(errCodeVipTierNotFound, http.StatusNotFound, "会员档位不存在")
+		}
+		grant.TierID = &tier.ID
+		grant.Metadata["tierName"] = tier.Name
 	}
 	grant.Features = features
 	grant.BonusIntegral = in.BonusIntegral

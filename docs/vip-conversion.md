@@ -17,7 +17,7 @@
 只有一个入口：`vip.Holdings`（`internal/domain/vip/holdings.go`）。它由会员判定的同一份事实（`EvalInput`，
 与 `/vip/status` 同一条查询）推出（`vip.HoldingsOf`），在事务里取时与发放串行：
 
-- `lifetime`：是不是永久会员；`lifetimeFeatures`：仍生效的永久开通的功能并集（按套餐当前配置，不与功能目录取交集）；
+- `lifetime`：是不是永久会员；`lifetimeFeatures`：仍生效的永久开通的功能并集（按[会员档位](vip-tiers.md)当前配置，不与功能目录取交集）；
 - `lifetimeAdFree`：永久那条线免不免广告（看广告领到的永久会员按场景设置，可以不免）；
 - `permanentUnlocks`：已永久解锁的功能；启用中的功能目录。
 

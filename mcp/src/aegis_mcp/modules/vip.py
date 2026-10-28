@@ -1,4 +1,4 @@
-"""会员：套餐、功能标识目录、发放与预览、收回、权益判定、会员流水、试用领取、折算策略与折算记录。
+"""会员：套餐、会员档位、功能标识目录、发放与预览、收回、权益判定、会员流水、试用领取、折算策略与折算记录。
 
 权限：读接口需要 app:read，其余（含发放预览）需要 app:write。
 """
@@ -19,6 +19,9 @@ server = FastMCP("vip")
 PLANS = GET("/api/admin/apps/:appkey/vip/plans")
 PLAN_SAVE = POST("/api/admin/apps/:appkey/vip/plans")
 PLAN_DELETE = DELETE("/api/admin/apps/:appkey/vip/plans/:planId")
+TIERS = GET("/api/admin/apps/:appkey/vip/tiers")
+TIER_SAVE = POST("/api/admin/apps/:appkey/vip/tiers")
+TIER_DELETE = DELETE("/api/admin/apps/:appkey/vip/tiers/:tierId")
 FEATURES = GET("/api/admin/apps/:appkey/vip/features")
 FEATURE_SAVE = POST("/api/admin/apps/:appkey/vip/features")
 FEATURE_DELETE = DELETE("/api/admin/apps/:appkey/vip/features/:tag")
@@ -37,6 +40,7 @@ CONVERSIONS = GET("/api/admin/apps/:appkey/vip/conversions")
 FEATURE_TAG = r"^[a-z][a-z0-9._-]{1,63}$"
 
 PlanID = Annotated[int, Field(gt=0, description="套餐 ID（vip_plans 结果里的 id）")]
+TierID = Annotated[int, Field(gt=0, description="会员档位 ID（vip_tiers 结果里的 id）")]
 FeatureTags = Annotated[
     list[str] | None,
     Field(description="功能标识列表（须已在功能目录登记，见 vip_features）；不改留空，传空数组即清空"),
@@ -83,7 +87,11 @@ async def save_plan(
     kind: Annotated[Literal["paid", "trial"] | None, Field(description="paid 付费 / trial 试用（试用价格须为 0，每个应用最多一个上架的试用套餐）；不传沿用原值，新建默认 paid")] = None,
     lifetime: Annotated[bool | None, Field(description="永久套餐（不带时长）。只能在新建时指定，之后不能切换")] = None,
     trial_device_limited: Annotated[bool | None, Field(description="仅试用套餐：同一设备只能领一次")] = None,
-    features: FeatureTags = None,
+    tier_id: Annotated[int | None, Field(gt=0, description="套餐卖的会员档位（vip_tiers）。新建时不传：功能完全相同的档位就并进去，否则按套餐名新建一个")] = None,
+    features: Annotated[
+        list[str] | None,
+        Field(description="改的是所属档位的功能（同档位的套餐与全部在期会员一起变）；须已登记，不改留空"),
+    ] = None,
     duration_days: Annotated[int | None, Field(gt=0, description="时长（天）；非永久套餐新建必填")] = None,
     price: Money = None,
     original_price: Money = None,
@@ -94,7 +102,8 @@ async def save_plan(
 ) -> Any:
     """新建或修改会员套餐。plan_id 为 0 时新建（需 name、price，非永久还需 duration_days）；修改时只传要改的字段。
 
-    修改价格、时长、功能会影响之后的购买与发放，已开通的记录不受影响。
+    权益属于会员档位，套餐只是档位的售卖规格：改价格、时长只影响之后的购买；改 tier_id 只影响之后的售卖；
+    传 features 改的是档位的功能，对该档位全部在期会员立即生效。重新上架删掉的套餐时，用 tier_id 选回原档位。
     """
     if plan_id == 0:
         if not (name or "").strip():
@@ -105,7 +114,7 @@ async def save_plan(
             raise ToolError("新建非永久套餐需要 duration_days")
     return await PLAN_SAVE(appkey=app, body=body(
         id=plan_id, name=name, kind=kind, lifetime=lifetime, trialDeviceLimited=trial_device_limited,
-        features=features, durationDays=duration_days, price=price, originalPrice=original_price,
+        tierId=tier_id, features=features, durationDays=duration_days, price=price, originalPrice=original_price,
         bonusIntegral=bonus_integral, description=description, isActive=is_active, sortOrder=sort_order,
     ))
 
@@ -122,8 +131,45 @@ async def set_plan_active(
 
 @server.tool(**DESTRUCTIVE("vip"))
 async def delete_plan(app: AppRef, plan_id: PlanID) -> Any:
-    """删除会员套餐（不可恢复）。只想停售请用 vip_set_plan_active 下架。执行前先向用户确认套餐名称与 ID。"""
+    """删除会员套餐（不可恢复）。已开通的会员仍在原档位、权益不变。只想停售请用 vip_set_plan_active 下架。执行前先向用户确认套餐名称与 ID。"""
     return await PLAN_DELETE(appkey=app, planId=plan_id)
+
+
+# ── 会员档位 ──
+
+
+@server.tool(**READ("vip"))
+async def tiers(app: AppRef) -> Any:
+    """会员档位：权益的唯一来源。每个档位的功能、卖它的套餐、在期会员数（含永久）、是否永久会员默认档位。
+
+    每段会员期记的是档位，权益按档位当前的功能算；删套餐、重新上架、调价都不影响已开通的会员。
+    """
+    return await TIERS(appkey=app)
+
+
+@server.tool(**WRITE("vip"))
+async def save_tier(
+    app: AppRef,
+    tier_id: Annotated[int, Field(ge=0, description="要修改的档位 ID；0 为新建")] = 0,
+    name: Annotated[str | None, Field(description="档位名称（新建必填）")] = None,
+    description: Annotated[str | None, Field(description="说明")] = None,
+    features: FeatureTags = None,
+    sort_order: Annotated[int | None, Field(description="排序，小的在前")] = None,
+) -> Any:
+    """新建或修改会员档位。改 features 即对档位下全部在期会员立即生效（卖这个档位的套餐一起变），修改前先向用户说明影响人数（vip_tiers 的 members）。"""
+    if tier_id == 0 and not (name or "").strip():
+        raise ToolError("新建档位需要 name")
+    return await TIER_SAVE(appkey=app, body=body(id=tier_id, name=name, description=description, features=features, sortOrder=sort_order))
+
+
+@server.tool(**DESTRUCTIVE("vip"))
+async def delete_tier(
+    app: AppRef,
+    tier_id: TierID,
+    move_to: Annotated[int | None, Field(gt=0, description="迁往的档位 ID：档位下还有套餐或在期会员时必填，套餐与全部开通记录改挂它")] = None,
+) -> Any:
+    """删除会员档位（不可恢复）。档位下还有套餐或在期会员时必须给 move_to，否则报 40996；迁移后这些会员按目标档位的功能算。执行前向用户确认档位、迁往目标与影响人数。"""
+    return await TIER_DELETE(appkey=app, tierId=tier_id, query=q(moveTo=move_to))
 
 
 # ── 功能标识目录 ──
@@ -163,14 +209,15 @@ async def delete_feature(
 def _grant_body(
     user_id: int, plan_id: int | None, quantity: int | None, days: int | None, lifetime: bool,
     features: list[str] | None, reason: str, bonus_integral: int | None, owned_policy: str, upgrade_policy: str,
+    tier_id: int | None = None,
 ) -> dict[str, Any]:
     if not plan_id and not lifetime and not days:
         raise ToolError("需要 plan_id（按套餐发放）、days（自定义天数）或 lifetime=true（永久会员）之一")
-    if plan_id and (days or lifetime or features):
-        raise ToolError("按套餐发放时时长与权益取自套餐，不要同时给 days / lifetime / features")
+    if plan_id and (days or lifetime or features or tier_id):
+        raise ToolError("按套餐发放时时长与权益取自套餐，不要同时给 days / lifetime / features / tier_id")
     return body(
         userId=user_id, planId=plan_id, quantity=quantity, days=days, lifetime=lifetime or None,
-        features=features, reason=reason, bonusIntegral=bonus_integral,
+        tierId=tier_id, features=features, reason=reason, bonusIntegral=bonus_integral,
         ownedPolicy=owned_policy or None, upgradePolicy=upgrade_policy or None,
     )
 
@@ -179,7 +226,8 @@ GrantPlan = Annotated[int | None, Field(gt=0, description="按套餐发放：套
 GrantQuantity = Annotated[int | None, Field(ge=1, le=100, description="按套餐发放的份数（时长 × 份数），默认 1；永久套餐只能 1 份")]
 GrantDays = Annotated[int | None, Field(gt=0, description="自定义发放：会员天数")]
 GrantLifetime = Annotated[bool, Field(description="自定义发放：发永久会员（days 忽略）")]
-GrantFeatures = Annotated[list[str] | None, Field(description="自定义发放时附带的功能标识（须已登记）")]
+GrantFeatures = Annotated[list[str] | None, Field(description="自定义发放时附带的功能标识（须已登记）；给了 tier_id 时是档位之外另给的")]
+GrantTier = Annotated[int | None, Field(gt=0, description="自定义发放归入的会员档位（vip_tiers），权益随档位变化。不传：永久会员归入应用的永久档位，限时的只带 features")]
 GrantReason = Annotated[str, Field(description="发放原因（记入会员流水；自定义发放时也作为套餐名显示）")]
 GrantBonus = Annotated[int | None, Field(ge=0, description="额外赠送的积分")]
 
@@ -192,6 +240,7 @@ async def grant_preview(
     quantity: GrantQuantity = None,
     days: GrantDays = None,
     lifetime: GrantLifetime = False,
+    tier_id: GrantTier = None,
     features: GrantFeatures = None,
     reason: GrantReason = "",
     bonus_integral: GrantBonus = None,
@@ -203,7 +252,7 @@ async def grant_preview(
     参数与 vip_grant 完全相同。需要 app:write 权限。
     """
     return await GRANT_PREVIEW(appkey=app, body=_grant_body(
-        user_id, plan_id, quantity, days, lifetime, features, reason, bonus_integral, owned_policy, upgrade_policy,
+        user_id, plan_id, quantity, days, lifetime, features, reason, bonus_integral, owned_policy, upgrade_policy, tier_id,
     ))
 
 
@@ -215,6 +264,7 @@ async def grant(
     quantity: GrantQuantity = None,
     days: GrantDays = None,
     lifetime: GrantLifetime = False,
+    tier_id: GrantTier = None,
     features: GrantFeatures = None,
     reason: GrantReason = "",
     bonus_integral: GrantBonus = None,
@@ -227,7 +277,7 @@ async def grant(
     发错了只能用 vip_revoke 扣回（赠送的积分不会自动收回）。执行前先调 vip_grant_preview 预览，并向用户复述用户、时长与折算结论后再执行。
     """
     return await GRANT(appkey=app, body=_grant_body(
-        user_id, plan_id, quantity, days, lifetime, features, reason, bonus_integral, owned_policy, upgrade_policy,
+        user_id, plan_id, quantity, days, lifetime, features, reason, bonus_integral, owned_policy, upgrade_policy, tier_id,
     ))
 
 
