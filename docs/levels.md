@@ -63,7 +63,7 @@
 | GET | `/points/level` | 我的等级：原有字段 + `icon` `color` `description` `maxLevel` `privileges`（实际享有）`claimableRewards` `blockedBy` `schemeName` `schemeVersion` `hideLocked` |
 | GET | `/points/levels` | 全部等级：原有字段 + `privileges`（本级配置）`effective`（实际享有）`rewards`（`items` 为文字描述）`gate` `reached`；`hideLocked` 时只到下一级 |
 | GET | `/points/level/rewards?status=` | 我的达成奖励（待领取在前） |
-| POST | `/points/level/rewards/{rewardId}/claim` | 领取；已领取 40900，不存在 40400 |
+| POST | `/points/level/rewards/{rewardId}/claim` | 领取；已领取 40900，不存在 40400，物品发不出去 50000（记录标为失败，等管理员重试） |
 | GET | `/points/level/history?page=&limit=` | 我的升级记录 |
 
 `expMultiplier`、`privileges`、`rewards` 的形状变了：`privileges` 从字符串数组变为对象数组，`rewards` 从对象变为数组。
@@ -87,6 +87,13 @@
 | POST | `/rewards/{id}/retry`、`/rewards/{id}/fulfill`、`/rewards/backfill` | 重试失败 / 人工物品已处理 / 补发（`nodeId`） |
 | GET / POST | `/jobs` | 重算任务列表 / 起一个（`downgrade`，202；一个应用同时只有一个，40900） |
 | GET | `/jobs/{id}`、POST `/jobs/{id}/cancel` | 进度 / 取消 |
+
+## 控制台
+
+应用详情「用户运营 → 等级体系」（`components/apps/levels/`）：体系（逐级展开）、总览、用户等级（详情里补判与调级）、升级记录、奖励记录、版本与重算。
+画布编辑器是全屏弹层（`level-editor.tsx` → `level-workspace.tsx`，next/dynamic 只在浏览器加载），晋级条件复用物品发放的 `ConditionForm`，奖励复用 `ItemListEditor`（`asItemGrantCatalog` 把等级目录适配过去）。
+
+Flowgram 在 React 严格模式的**开发环境**下会把插件加载两次（`useMemo` 被调用两次），页面报 `Ambiguous match found for serviceIdentifier: FlowRendererRegistry`，物品发放的画布同样如此；生产构建不受影响。本地要在浏览器里看画布，临时把 `next.config.ts` 的 `reactStrictMode` 改成 false。
 
 ## 测法
 
