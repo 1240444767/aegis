@@ -197,6 +197,12 @@ func TestBoostPrizes(t *testing.T) {
 	if prizes[1].Weight != 50 {
 		t.Fatal("不能改到原奖盘")
 	}
+	// 没有谢谢参与、兜底经验垫底的奖盘：兜底奖不加成，否则加成等于没加
+	consolation := []Prize{{ID: 1, Kind: KindExperience, Weight: 50, Quantity: -1, Fallback: true}, {ID: 2, Kind: KindPoints, Weight: 50, Quantity: -1}}
+	probabilities = Probabilities(PerkEffects{Names: []string{"x"}, WinBoost: 2}.BoostPrizes(consolation))
+	if math.Abs(probabilities[1]-66.67) > 0.01 {
+		t.Fatalf("兜底奖不加成，积分格应为 66.67%%，得到 %v", probabilities)
+	}
 }
 
 func TestSummaryOf(t *testing.T) {

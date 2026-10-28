@@ -420,7 +420,10 @@ func (e PerkEffects) Personalize(activity Activity) Activity {
 // winBoostScale 加成时先把所有权重放大这么多倍，整数权重才乘得出小数系数
 const winBoostScale = 100
 
-// BoostPrizes 中奖加成：中奖奖品的权重 × 系数（谢谢参与不变），公示概率随之重算。
+// BoostPrizes 中奖加成：中奖奖品的权重 × 系数（谢谢参与与兜底奖不变），公示概率随之重算。
+//
+// 兜底奖（库存抢光时改发的那一格，通常是经验）也不加成：没有谢谢参与的奖盘上它就是「没中到真东西」，
+// 一起乘等于什么都没加。与每日运气（FortunePrizes）同一个口径。
 func (e PerkEffects) BoostPrizes(prizes []Prize) []Prize {
 	if e.WinBoost <= 1 {
 		return prizes
@@ -428,7 +431,7 @@ func (e PerkEffects) BoostPrizes(prizes []Prize) []Prize {
 	out := slices.Clone(prizes)
 	for index := range out {
 		weight := out[index].Weight * winBoostScale
-		if out[index].Winning() {
+		if out[index].Winning() && !out[index].Fallback {
 			weight = int(math.Round(float64(weight) * e.WinBoost))
 		}
 		out[index].Weight = weight
