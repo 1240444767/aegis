@@ -187,6 +187,8 @@ type UserLevel struct {
 	LevelUpCount  int        `json:"levelUpCount"`
 	LastLevelUpAt *time.Time `json:"lastLevelUpAt,omitempty"`
 	UpdatedAt     *time.Time `json:"updatedAt,omitempty"`
+	// LockedLevel 管理员锁定的保底等级，0 = 没有锁定
+	LockedLevel int `json:"lockedLevel"`
 	// Claimable 待领取的奖励数
 	Claimable int `json:"claimable"`
 }

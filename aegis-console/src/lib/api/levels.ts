@@ -235,6 +235,8 @@ export type LevelUser = {
   levelUpCount: number;
   lastLevelUpAt?: string;
   updatedAt?: string;
+  /** 管理员锁定的保底等级（「重算并允许降级」也不降到它以下），0 = 没有锁定 */
+  lockedLevel: number;
   claimable: number;
 };
 
@@ -423,10 +425,39 @@ export function getLevelUser(token: string, appKey: string, userId: number) {
   return apiRequest<LevelUserDetail>(`${base(appKey)}/users/${userId}`, { token });
 }
 
-export type LevelAdjustPayload = { level: number; topUp?: boolean; note?: string };
+/**
+ * 强制升级：level 越过经验门槛与晋级条件直接调到至少这一级（0 = 只按当前体系补判）；
+ * topUp 把经验补到门槛；lock 把结果锁定为保底、unlock 解除锁定；skipRewards 不发经过的达成奖励；silent 不发升级通知。
+ */
+export type LevelAdjustPayload = {
+  level: number;
+  topUp?: boolean;
+  lock?: boolean;
+  unlock?: boolean;
+  skipRewards?: boolean;
+  silent?: boolean;
+  note?: string;
+};
+
+export type LevelBatchAdjustPayload = LevelAdjustPayload & { userIds: number[] };
+
+export type LevelBatchAdjustResult = {
+  total: number;
+  succeeded: number;
+  changed: number;
+  failed: number;
+  items: Array<{ userId: number; account?: string; from: number; to: number; addExperience: number; error?: string }>;
+};
+
+/** 一次批量强制升级最多的人数（与服务端一致） */
+export const LEVEL_BATCH_ADJUST_MAX = 500;
 
 export function adjustLevelUser(token: string, appKey: string, userId: number, payload: LevelAdjustPayload) {
   return apiRequest<LevelAdjustResult>(`${base(appKey)}/users/${userId}/adjust`, { token, method: "POST", body: JSON.stringify(payload) });
+}
+
+export function adjustLevelUsers(token: string, appKey: string, payload: LevelBatchAdjustPayload) {
+  return apiRequest<LevelBatchAdjustResult>(`${base(appKey)}/users/adjust`, { token, method: "POST", body: JSON.stringify(payload) });
 }
 
 export function listLevelEvents(token: string, appKey: string, params: LevelEventParams) {

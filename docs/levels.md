@@ -4,7 +4,8 @@
 草稿与已发布分开存，发布时留一份版本快照（可恢复到草稿），发布后可以起一个重算任务让全体用户按新体系判定一次。
 
 代码：`internal/domain/levels`（目录、画布编译、判定、默认体系与模板）、`internal/repository/postgres/level_*.go`（体系缓存、同步等级记录、
-奖励发放、管理端查询、重算任务）、`internal/service/level_service.go`（发布、推演、后台循环）、控制台 `components/apps/levels/`。迁移 `000140`。
+奖励发放、管理端查询、重算任务）、`internal/service/level_service.go`（发布、推演、强制升级、后台循环）、控制台 `components/apps/levels/`。
+迁移 `000140`（体系）、`000141`（等级锁定 `user_level_records.locked_level`）。
 
 ## 默认体系
 
@@ -37,8 +38,22 @@
 - 等级记录 `user_level_records` 是准的：等级**只升不降**，记录里的等级是保底。判定从保底的下一级开始往上：经验够、（有条件时）条件满足就升，遇到第一个不满足的条件停下（`BlockedBy` 告诉 App 卡在哪）。
 - 判定发生在：经验变化（经验账本、签到，在原事务里）、`GET /points/level`（短事务补判：条件后来满足了、体系改过门槛）、管理员调级、重算任务。行为画像只有跨晋级条件时才取。
 - 体系级数变少时保底截到新的最高级；调高门槛不会让人掉级，要按新门槛降级须在发布时勾「重算并允许降级」（或单独起重算任务）。
+  允许降级的重算从**锁定的等级**（没有锁定为 0）起判定，所以被锁定的人不会降到锁定等级以下。
 - 第一次建记录时的补判（新用户第一次打开等级页）不算升级、不发通知，但会写经过的达成奖励（因此 Lv.1 的奖励就是新人礼）。
 - 排行榜等级榜、物品发放人群的等级范围、抽奖 / 物品发放条件里的 `user.level`、积分商城与邀请的等级门槛全部读等级记录（没有记录按 Lv.1）。等级榜排名先比等级再比经验。
+
+## 强制升级
+
+管理员可以不看经验门槛与晋级条件，把一个人或一批人直接升到目标等级（`POST /users/{userId}/adjust`、`POST /users/adjust`）：
+
+- 等级只能调高：目标不高于当前等级时不变（批量里算成功、未变化）。经验不扣减，所以调低没有意义，下次判定会升回去。
+- 判定从 `max(当前等级, 目标)` 起继续往上：经验够、后面的条件也满足的，会顺势升得更高。
+- `topUp`：先把经验补到目标等级的门槛（经验流水记为管理员调整，原因「管理员强制升级至 Lv.N」），否则等级高于经验对应的等级，进度从 0 开始。
+- `skipRewards`：不写这次经过的各级达成奖励。之后也不会再自动写（奖励按「经过的等级」写，这些等级已经过了），需要时对奖励节点「补发」。
+- `silent`：不发升级通知；升级记录照写（原因 `admin`、操作人与备注）。
+- `lock`：把判定后的等级锁定为保底（`locked_level`），「重算并允许降级」不会降到它以下；`unlock` 解除锁定，当前等级不变。
+  `level = 0` 配 `lock` 即「按当前体系补判后锁定当前等级」。
+- 批量最多 500 人，逐人在自己的事务里执行，个别失败（用户不存在、补经验失败）不影响其他人，结果逐人列出 `from` `to` `error`。
 
 ## 达成奖励
 
@@ -81,7 +96,8 @@
 | GET | `/versions`、`/versions/{v}` | 发布历史 / 一版的画布 |
 | POST | `/versions/{v}/restore` | 取回草稿（不自动发布） |
 | GET | `/users`、`/users/{userId}` | 用户等级列表（等级、范围、关键字、排序）/ 详情（等级信息、升级记录、奖励） |
-| POST | `/users/{userId}/adjust` | 调级：`level` 至少到这一级（越过门槛与条件；0 = 只补判），`topUp` 同时把经验补到门槛，`note` |
+| POST | `/users/{userId}/adjust` | 强制升级：`level` 至少到这一级（越过门槛与条件；0 = 只补判），`topUp` 补经验到门槛，`skipRewards` 不发经过的奖励，`silent` 不发通知，`lock` / `unlock` 锁定或解除保底，`note` |
+| POST | `/users/adjust` | 批量强制升级：`userIds`（最多 500）+ 同上选项；返回 `total` `succeeded` `changed` `failed` 与逐人结果 |
 | GET | `/events` | 升级记录（用户、原因、等级、时间） |
 | GET | `/rewards`、`/rewards/{id}` | 达成奖励记录 |
 | POST | `/rewards/{id}/retry`、`/rewards/{id}/fulfill`、`/rewards/backfill` | 重试失败 / 人工物品已处理 / 补发（`nodeId`） |
@@ -90,7 +106,7 @@
 
 ## 控制台
 
-应用详情「用户运营 → 等级体系」（`components/apps/levels/`）：体系（逐级展开）、总览、用户等级（详情里补判与调级）、升级记录、奖励记录、版本与重算。
+应用详情「用户运营 → 等级体系」（`components/apps/levels/`）：体系（逐级展开）、总览、用户等级（勾选多人批量强制升级；详情里补判、强制升级、锁定当前等级 / 解除锁定，列表里锁定的人等级旁有锁形标记）、升级记录、奖励记录、版本与重算。
 画布编辑器是全屏弹层（`level-editor.tsx` → `level-workspace.tsx`，next/dynamic 只在浏览器加载），晋级条件复用物品发放的 `ConditionForm`，奖励复用 `ItemListEditor`（`asItemGrantCatalog` 把等级目录适配过去）。
 
 Flowgram 在 React 严格模式的**开发环境**下会把插件加载两次（`useMemo` 被调用两次），页面报 `Ambiguous match found for serviceIdentifier: FlowRendererRegistry`，物品发放的画布同样如此；生产构建不受影响。本地要在浏览器里看画布，临时把 `next.config.ts` 的 `reactStrictMode` 改成 false。
@@ -100,3 +116,4 @@ Flowgram 在 React 严格模式的**开发环境**下会把插件加载两次（
 - `go test ./internal/domain/levels/`：默认体系与旧表一致、模板可编译、晋级条件、保底与截断、编译错误、权益继承与覆盖、奖励区间。
 - `TestLevelIntegration`（真实 Postgres）：`AEGIS_TEST_PG_DSN=postgres://postgres@127.0.0.1:55438/postgres?sslmode=disable go test ./internal/service -run TestLevelIntegration`。
   覆盖默认体系、草稿并发保护、发布、升级与自动 / 手动奖励、通知、重复领取、晋级条件补判、倍率、调级、重算降级、补发、版本恢复、推演、总览、排名。
+  `TestLevelForceUpgradeIntegration`：越过门槛与条件、锁定扛住降级重算、不发奖励与不发通知、批量逐人与单人失败、解除锁定、参数校验。

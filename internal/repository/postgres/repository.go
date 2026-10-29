@@ -66,6 +66,8 @@ type levelRecordRow struct {
 	HighestLevel        int
 	LevelUpCount        int
 	LastLevelUpAt       *time.Time
+	// LockedLevel 管理员锁定的保底等级（重算降级也不低于它），0 = 没有锁定
+	LockedLevel int
 }
 
 func (r *Repository) GetUserByAppAndAccount(ctx context.Context, appID int64, account string) (*userdomain.User, error) {
@@ -4300,6 +4302,7 @@ func scanLevelRecord(row interface{ Scan(dest ...any) error }) (*levelRecordRow,
 		&item.HighestLevel,
 		&item.LevelUpCount,
 		&item.LastLevelUpAt,
+		&item.LockedLevel,
 	); err != nil {
 		return nil, normalizeNotFound(err)
 	}

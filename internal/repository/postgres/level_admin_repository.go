@@ -201,7 +201,7 @@ LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid`
 	args = append(args, limit, (page-1)*limit)
 	rows, err := r.pool.Query(ctx, `SELECT u.id, u.account, COALESCE(up.nickname, ''), COALESCE(up.avatar, ''),
 COALESCE(lr.current_level, 1), u.experience, COALESCE(lr.highest_level, 1), COALESCE(lr.level_up_count, 0),
-lr.last_level_up_at, lr.updated_at,
+lr.last_level_up_at, lr.updated_at, COALESCE(lr.locked_level, 0),
 (SELECT COUNT(*) FROM user_level_rewards w WHERE w.appid = u.appid AND w.user_id = u.id AND w.status = 'claimable')
 `+joins+` WHERE `+cond+` ORDER BY `+order+`
 LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
@@ -213,7 +213,7 @@ LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
 	for rows.Next() {
 		var item levels.UserLevel
 		if err := rows.Scan(&item.UserID, &item.Account, &item.Nickname, &item.Avatar, &item.Level, &item.Experience,
-			&item.HighestLevel, &item.LevelUpCount, &item.LastLevelUpAt, &item.UpdatedAt, &item.Claimable); err != nil {
+			&item.HighestLevel, &item.LevelUpCount, &item.LastLevelUpAt, &item.UpdatedAt, &item.LockedLevel, &item.Claimable); err != nil {
 			return nil, err
 		}
 		state := scheme.StateOf(item.Level, item.Experience)
@@ -225,9 +225,20 @@ LIMIT $`+strconv.Itoa(len(args)-1)+` OFFSET $`+strconv.Itoa(len(args)), args...)
 	return out, rows.Err()
 }
 
-// SyncUserLevelAdmin 管理员：按当前体系补判一个人（force > 0 时直接调到至少这一级）。
-func (r *Repository) SyncUserLevelAdmin(ctx context.Context, appID, userID int64, force int, recompute bool,
-	operator, note string, traces *[]levels.GateTrace) (*levels.UserLevel, int, int, error) {
+// LevelAdminSync 管理员补判 / 强制升级一个人的选项。
+type LevelAdminSync struct {
+	// Force > 0 时直接调到至少这一级（越过门槛与晋级条件）；0 = 只按当前体系补判
+	Force       int
+	Lock        bool
+	Unlock      bool
+	SkipRewards bool
+	Silent      bool
+	Operator    string
+	Note        string
+}
+
+// SyncUserLevelAdmin 管理员：按当前体系补判一个人，或强制升级。
+func (r *Repository) SyncUserLevelAdmin(ctx context.Context, appID, userID int64, opts LevelAdminSync) (*levels.UserLevel, int, int, error) {
 	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
 		return nil, 0, 0, err
@@ -241,7 +252,8 @@ func (r *Repository) SyncUserLevelAdmin(ctx context.Context, appID, userID int64
 		return nil, 0, 0, err
 	}
 	synced, err := r.syncUserLevel(ctx, tx, userID, appID, experience, time.Now().UTC(), levelSyncOptions{
-		Reason: levels.ReasonAdmin, Operator: operator, Note: note, ForceLevel: force, Recompute: recompute, Traces: traces,
+		Reason: levels.ReasonAdmin, Operator: opts.Operator, Note: opts.Note, ForceLevel: opts.Force,
+		Lock: opts.Lock, Unlock: opts.Unlock, SkipRewards: opts.SkipRewards, Silent: opts.Silent,
 	})
 	if err != nil {
 		return nil, 0, 0, err

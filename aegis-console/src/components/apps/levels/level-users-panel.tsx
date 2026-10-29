@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowUpCircle, Loader2, Users } from "lucide-react";
+import { ArrowUpCircle, Loader2, Lock, LockOpen, Users, X } from "lucide-react";
 import { toast } from "sonner";
 import { NumberInput } from "@/components/apps/item-grant/item-grant-fields";
 import { EVENT_REASON_LABEL, LEVEL_ICON, REWARD_STATUS_META, formatNumber } from "@/components/apps/levels/level-meta";
@@ -24,15 +24,48 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
-import type { LevelUser, LevelUserParams } from "@/lib/api/levels";
+import {
+  LEVEL_BATCH_ADJUST_MAX,
+  type LevelAdjustPayload,
+  type LevelBatchAdjustResult,
+  type LevelRow,
+  type LevelUser,
+  type LevelUserParams
+} from "@/lib/api/levels";
 import { ApiError } from "@/lib/api/client";
 import { formatDateTime } from "@/lib/datetime";
-import { useAdjustLevelUserMutation, useLevelSchemeQuery, useLevelUserQuery, useLevelUsersQuery } from "@/lib/level-hooks";
+import {
+  useAdjustLevelUserMutation,
+  useBatchAdjustLevelUsersMutation,
+  useLevelSchemeQuery,
+  useLevelUserQuery,
+  useLevelUsersQuery
+} from "@/lib/level-hooks";
 
 /**
- * 用户等级：按等级、关键字筛选与排序；点开看等级详情（进度、享有的权益、升级记录、达成奖励），
- * 在详情里补判或调级（越过门槛与晋级条件，可选同时把经验补到门槛）。
+ * 用户等级：按等级、关键字筛选与排序；勾选多人批量强制升级；点开看等级详情（进度、享有的权益、升级记录、达成奖励），
+ * 在详情里补判、强制升级（越过经验门槛与晋级条件）、锁定或解除锁定保底等级。
  */
+
+/** 强制升级的选项（单人与批量共用） */
+type ForceOptions = { level: number; topUp: boolean; rewards: boolean; notify: boolean; lock: boolean };
+
+const FORCE_DEFAULTS: ForceOptions = { level: 1, topUp: true, rewards: true, notify: true, lock: false };
+
+function forcePayload(options: ForceOptions, note: string): LevelAdjustPayload {
+  return {
+    level: options.level,
+    topUp: options.topUp,
+    lock: options.lock,
+    skipRewards: !options.rewards,
+    silent: !options.notify,
+    note: note.trim()
+  };
+}
+
+function errorText(error: unknown, fallback: string) {
+  return error instanceof ApiError ? error.message : fallback;
+}
 
 export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; initialLevel?: number }) {
   const [level, setLevel] = useState(initialLevel ? String(initialLevel) : "");
@@ -41,6 +74,10 @@ export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; init
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
   const [opened, setOpened] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Map<number, LevelUser>>(() => new Map());
+  const [batchOpen, setBatchOpen] = useState(false);
+  // 每次打开批量对话框换一个 key，表单回到默认值
+  const [batchKey, setBatchKey] = useState(0);
   const debounced = useDebouncedValue(keyword.trim(), 300);
   const schemeQuery = useLevelSchemeQuery(appKey);
   const query = useLevelUsersQuery(appKey, { level: level ? Number(level) : undefined, sort, keyword: debounced || undefined, page, limit });
@@ -48,7 +85,36 @@ export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; init
   const rows = schemeQuery.data?.levels ?? [];
   const colorOf = (value: number) => rows.find((row) => row.level === value)?.color || "#6366f1";
 
+  const pageRows = data?.items ?? [];
+  const pageChecked = pageRows.length > 0 && pageRows.every((user) => selected.has(user.userId));
+  const pagePartial = !pageChecked && pageRows.some((user) => selected.has(user.userId));
+  const toggle = (users: LevelUser[], checked: boolean) =>
+    setSelected((previous) => {
+      const next = new Map(previous);
+      for (const user of users) {
+        if (checked) next.set(user.userId, user);
+        else next.delete(user.userId);
+      }
+      return next;
+    });
+
   const columns: Array<Column<LevelUser>> = [
+    {
+      id: "pick",
+      header: (
+        <Checkbox
+          aria-label="选择本页"
+          checked={pageChecked ? true : pagePartial ? "indeterminate" : false}
+          onCheckedChange={(value) => toggle(pageRows, Boolean(value))}
+        />
+      ),
+      width: "40px",
+      cell: (user) => (
+        <div onClick={(event) => event.stopPropagation()}>
+          <Checkbox aria-label="选择" checked={selected.has(user.userId)} onCheckedChange={(value) => toggle([user], Boolean(value))} />
+        </div>
+      )
+    },
     {
       id: "user",
       header: "用户",
@@ -68,11 +134,16 @@ export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; init
       width: "22%",
       cell: (user) => (
         <div className="min-w-0">
-          <div className="truncate text-xs font-medium">
-            <span className="mr-1 tabular-nums" style={{ color: colorOf(user.level) }}>
+          <div className="flex items-center gap-1 truncate text-xs font-medium">
+            <span className="tabular-nums" style={{ color: colorOf(user.level) }}>
               Lv.{user.level}
             </span>
-            {user.levelName}
+            <span className="truncate">{user.levelName}</span>
+            {user.lockedLevel ? (
+              <span title={`已锁定保底 Lv.${user.lockedLevel}`} className="text-muted-foreground">
+                <Lock className="size-3" />
+              </span>
+            ) : null}
           </div>
           <Progress className="mt-1 h-1" value={user.progress} />
         </div>
@@ -109,10 +180,29 @@ export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; init
   return (
     <Section
       title="用户等级"
-      description="没有等级记录的用户按 Lv.1 计；点开可以查看详情与调整等级"
+      description="没有等级记录的用户按 Lv.1 计；勾选后可批量强制升级，点开可以查看详情与调整等级"
       icon={Users}
       tone="primary"
       flush
+      actions={
+        selected.size ? (
+          <>
+            <Button size="sm" variant="ghost" onClick={() => setSelected(new Map())}>
+              <X /> 清除选择
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                setBatchKey((key) => key + 1);
+                setBatchOpen(true);
+              }}
+              disabled={selected.size > LEVEL_BATCH_ADJUST_MAX}
+            >
+              <ArrowUpCircle /> 强制升级 {selected.size} 人
+            </Button>
+          </>
+        ) : null
+      }
       toolbar={
         <FilterBar>
           <FilterSelect
@@ -184,7 +274,147 @@ export function LevelUsersPanel({ appKey, initialLevel }: { appKey: string; init
         empty={<StateBlock compact title={filtered ? "没有符合条件的用户" : "还没有用户"} />}
       />
       <UserLevelSheet appKey={appKey} userId={opened} onClose={() => setOpened(null)} />
+      <BatchForceDialog
+        key={batchKey}
+        appKey={appKey}
+        open={batchOpen}
+        onOpenChange={setBatchOpen}
+        users={[...selected.values()]}
+        rows={rows}
+        onDone={() => setSelected(new Map())}
+      />
     </Section>
+  );
+}
+
+/** 强制升级的表单：目标等级与四个选项。 */
+function ForceUpgradeFields({
+  value,
+  onChange,
+  rows,
+  current
+}: {
+  value: ForceOptions;
+  onChange: (value: ForceOptions) => void;
+  rows: LevelRow[];
+  /** 单人时的当前等级，用来提示目标要高于它 */
+  current?: number;
+}) {
+  const target = rows.find((row) => row.level === value.level);
+  const set = (patch: Partial<ForceOptions>) => onChange({ ...value, ...patch });
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <Label className="w-16 shrink-0 text-xs">目标等级</Label>
+        <NumberInput value={value.level} min={1} max={rows.length || 1} onChange={(level) => set({ level })} suffix={target?.name ?? ""} />
+      </div>
+      {current && value.level <= current ? <p className="text-xs text-destructive">目标等级需要高于当前的 Lv.{current}</p> : null}
+      <OptionCheck
+        id="force-topup"
+        checked={value.topUp}
+        onChange={(topUp) => set({ topUp })}
+        title="同时把经验补到目标等级的门槛"
+        hint={`门槛 ${formatNumber(target?.threshold ?? 0)} 经验；不补时等级高于经验对应的等级，进度条从 0 开始。`}
+      />
+      <OptionCheck
+        id="force-rewards"
+        checked={value.rewards}
+        onChange={(rewards) => set({ rewards })}
+        title="发放经过的各级达成奖励"
+        hint="不发时这些奖励之后也不会自动补上，需要时在体系里对奖励节点补发。"
+      />
+      <OptionCheck id="force-notify" checked={value.notify} onChange={(notify) => set({ notify })} title="发送升级通知" hint="升级记录照常写入。" />
+      <OptionCheck
+        id="force-lock"
+        checked={value.lock}
+        onChange={(lock) => set({ lock })}
+        title="锁定为保底等级"
+        hint="「重算并允许降级」不会把用户降到这一级以下；随时可以在用户详情里解除。"
+      />
+    </div>
+  );
+}
+
+function OptionCheck({ id, checked, onChange, title, hint }: { id: string; checked: boolean; onChange: (value: boolean) => void; title: string; hint: string }) {
+  return (
+    <div className="flex items-start gap-2.5">
+      <Checkbox id={id} checked={checked} onCheckedChange={(value) => onChange(Boolean(value))} />
+      <Label htmlFor={id} className="grid gap-0.5 text-xs font-normal">
+        <span className="font-medium">{title}</span>
+        <span className="text-muted-foreground">{hint}</span>
+      </Label>
+    </div>
+  );
+}
+
+function BatchForceDialog({
+  appKey,
+  open,
+  onOpenChange,
+  users,
+  rows,
+  onDone
+}: {
+  appKey: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  users: LevelUser[];
+  rows: LevelRow[];
+  onDone: () => void;
+}) {
+  const batch = useBatchAdjustLevelUsersMutation(appKey);
+  const [options, setOptions] = useState<ForceOptions>(() => ({ ...FORCE_DEFAULTS, level: Math.min(2, rows.length || 1) }));
+  const [note, setNote] = useState("");
+  const names = users.slice(0, 6).map((user) => user.nickname || user.account);
+
+  const report = (result: LevelBatchAdjustResult) => {
+    const unchanged = result.succeeded - result.changed;
+    const head = `已强制升级 ${result.changed} 人${unchanged ? `，${unchanged} 人已在目标等级及以上` : ""}`;
+    if (!result.failed) {
+      toast.success(head);
+      return;
+    }
+    const failures = result.items
+      .filter((item) => item.error)
+      .slice(0, 3)
+      .map((item) => `#${item.userId} ${item.error}`)
+      .join("；");
+    toast.warning(`${head}，${result.failed} 人失败`, { description: failures });
+  };
+
+  return (
+    <ConfirmActionDialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`强制升级 ${users.length} 人`}
+      description="直接升到目标等级，不看经验门槛与晋级条件；已在目标等级及以上的人保持不变。逐人执行，个别失败不影响其他人。"
+      confirmLabel="强制升级"
+      pending={batch.isPending}
+      disabled={!options.level || options.level > rows.length || !users.length}
+      note={{ value: note, onChange: setNote, placeholder: "调整原因（写进升级记录）", max: 200 }}
+      onConfirm={() =>
+        batch.mutate(
+          { ...forcePayload(options, note), userIds: users.map((user) => user.userId) },
+          {
+            onSuccess: (result) => {
+              report(result);
+              setNote("");
+              onOpenChange(false);
+              onDone();
+            },
+            onError: (error) => toast.error(errorText(error, "批量强制升级失败"))
+          }
+        )
+      }
+    >
+      <div className="space-y-3">
+        <p className="text-xs text-muted-foreground">
+          {names.join("、")}
+          {users.length > names.length ? ` 等 ${users.length} 人` : ""}
+        </p>
+        <ForceUpgradeFields value={options} onChange={setOptions} rows={rows} />
+      </div>
+    </ConfirmActionDialog>
   );
 }
 
@@ -192,9 +422,8 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
   const query = useLevelUserQuery(appKey, userId);
   const schemeQuery = useLevelSchemeQuery(appKey);
   const adjust = useAdjustLevelUserMutation(appKey);
-  const [confirm, setConfirm] = useState<"sync" | "adjust" | null>(null);
-  const [target, setTarget] = useState(1);
-  const [topUp, setTopUp] = useState(true);
+  const [confirm, setConfirm] = useState<"sync" | "force" | "lock" | "unlock" | null>(null);
+  const [options, setOptions] = useState<ForceOptions>(FORCE_DEFAULTS);
   const [note, setNote] = useState("");
   const detail = query.data;
   const info = detail?.info;
@@ -202,8 +431,10 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
   const color = info?.color || "#6366f1";
   const rows = schemeQuery.data?.levels ?? [];
   const max = info?.maxLevel ?? rows.length;
+  const current = info?.currentLevel ?? 1;
+  const locked = detail?.user.lockedLevel ?? 0;
 
-  const submit = (payload: { level: number; topUp?: boolean; note?: string }) =>
+  const submit = (payload: LevelAdjustPayload, done: (from: number, to: number, addExperience: number) => string) =>
     userId &&
     adjust.mutate(
       { userId, payload },
@@ -211,14 +442,10 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
         onSuccess: (result) => {
           setConfirm(null);
           setNote("");
-          toast.success(
-            result.to !== result.from
-              ? `已从 Lv.${result.from} 调到 Lv.${result.to}${result.addExperience ? `，补了 ${formatNumber(result.addExperience)} 经验` : ""}`
-              : "等级没有变化"
-          );
+          toast.success(done(result.from, result.to, result.addExperience));
           void query.refetch();
         },
-        onError: (error) => toast.error(error instanceof ApiError ? error.message : "调整失败")
+        onError: (error) => toast.error(errorText(error, "调整失败"))
       }
     );
 
@@ -261,6 +488,7 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
               { label: "升级次数", value: formatNumber(detail.user.levelUpCount) },
               { label: "签到经验倍率", value: `${info.expMultiplier} 倍` },
               { label: "待领取奖励", value: `${info.claimableRewards} 份` },
+              { label: "保底锁定", value: locked ? `Lv.${locked}，降级重算不低于此级` : "未锁定", wide: true },
               ...(info.blockedBy ? [{ label: "卡在晋级条件", value: info.blockedBy.hint || info.blockedBy.label || "未满足", wide: true }] : []),
               { label: "享有的权益", value: info.privileges.length ? info.privileges.map((item) => item.label).join("、") : "无", wide: true }
             ]
@@ -272,15 +500,24 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
             <Button size="sm" variant="outline" onClick={() => setConfirm("sync")} disabled={adjust.isPending}>
               按当前体系补判
             </Button>
+            {locked ? (
+              <Button size="sm" variant="outline" onClick={() => setConfirm("unlock")} disabled={adjust.isPending}>
+                <LockOpen /> 解除锁定
+              </Button>
+            ) : (
+              <Button size="sm" variant="outline" onClick={() => setConfirm("lock")} disabled={adjust.isPending}>
+                <Lock /> 锁定当前等级
+              </Button>
+            )}
             <Button
               size="sm"
               onClick={() => {
-                setTarget(Math.min((info?.currentLevel ?? 1) + 1, max || 1));
-                setConfirm("adjust");
+                setOptions({ ...FORCE_DEFAULTS, level: Math.min(current + 1, max || 1) });
+                setConfirm("force");
               }}
               disabled={adjust.isPending || (info?.isMaxLevel ?? false)}
             >
-              <ArrowUpCircle /> 调整等级
+              <ArrowUpCircle /> 强制升级
             </Button>
           </>
         ) : null
@@ -347,34 +584,42 @@ function UserLevelSheet({ appKey, userId, onClose }: { appKey: string; userId: n
         description="按已发布的体系重新判定一次：经验与晋级条件都满足的会升级并写入达成奖励；不会降级。"
         confirmLabel="补判"
         pending={adjust.isPending}
-        onConfirm={() => submit({ level: 0 })}
+        onConfirm={() => submit({ level: 0 }, (from, to) => (to !== from ? `已从 Lv.${from} 升到 Lv.${to}` : "等级没有变化"))}
       />
       <ConfirmActionDialog
-        open={confirm === "adjust"}
+        open={confirm === "lock"}
         onOpenChange={(open) => !open && setConfirm(null)}
-        title="调整等级"
-        description="把这个人直接调到目标等级（越过经验门槛与晋级条件），经过的每一级的达成奖励照常发放。等级只能调高。"
-        confirmLabel="调整"
+        title={`锁定 Lv.${current}`}
+        description="锁定前先按当前体系补判一次。锁定后「重算并允许降级」不会把这个人降到锁定的等级以下；正常升级不受影响。"
+        confirmLabel="锁定"
         pending={adjust.isPending}
-        disabled={!target || target <= (info?.currentLevel ?? 0) || target > max}
+        onConfirm={() => submit({ level: 0, lock: true }, (_from, to) => `已锁定 Lv.${to}`)}
+      />
+      <ConfirmActionDialog
+        open={confirm === "unlock"}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title="解除锁定"
+        description={`当前等级不变；解除后再「重算并允许降级」，会按经验与晋级条件从头判定，可能低于 Lv.${locked}。`}
+        confirmLabel="解除锁定"
+        pending={adjust.isPending}
+        onConfirm={() => submit({ level: 0, unlock: true }, () => "已解除锁定")}
+      />
+      <ConfirmActionDialog
+        open={confirm === "force"}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title="强制升级"
+        description="直接升到目标等级，不看经验门槛与晋级条件。等级只能调高，经验不扣减。"
+        confirmLabel="强制升级"
+        pending={adjust.isPending}
+        disabled={!options.level || options.level <= current || options.level > max}
         note={{ value: note, onChange: setNote, placeholder: "调整原因（写进升级记录）", max: 200 }}
-        onConfirm={() => submit({ level: target, topUp, note: note.trim() })}
+        onConfirm={() =>
+          submit(forcePayload(options, note), (from, to, addExperience) =>
+            to !== from ? `已从 Lv.${from} 强制升到 Lv.${to}${addExperience ? `，补了 ${formatNumber(addExperience)} 经验` : ""}` : "等级没有变化"
+          )
+        }
       >
-        <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <Label className="w-16 shrink-0 text-xs">目标等级</Label>
-            <NumberInput value={target} min={1} max={max} onChange={setTarget} suffix={rows.find((row) => row.level === target)?.name ?? ""} />
-          </div>
-          <div className="flex items-start gap-2.5">
-            <Checkbox id="lv-topup" checked={topUp} onCheckedChange={(value) => setTopUp(Boolean(value))} />
-            <Label htmlFor="lv-topup" className="grid gap-0.5 text-xs font-normal">
-              <span className="font-medium">同时把经验补到目标等级的门槛</span>
-              <span className="text-muted-foreground">
-                门槛 {formatNumber(rows.find((row) => row.level === target)?.threshold ?? 0)} 经验；不补时等级会高于经验对应的等级，进度条从 0 开始。
-              </span>
-            </Label>
-          </div>
-        </div>
+        <ForceUpgradeFields value={options} onChange={setOptions} rows={rows} current={current} />
       </ConfirmActionDialog>
     </RecordSheet>
   );

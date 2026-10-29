@@ -323,10 +323,17 @@ type levelSyncOptions struct {
 	Reason   string
 	Operator string
 	Note     string
-	// ForceLevel 管理员调级：至少到这一级（越过门槛与晋级条件）
+	// ForceLevel 管理员强制升级：至少到这一级（越过门槛与晋级条件）
 	ForceLevel int
-	// Recompute 按经验从第一级重新判定（允许降级），重算任务用
+	// Recompute 按经验从第一级重新判定（允许降级，但不低于锁定的等级），重算任务用
 	Recompute bool
+	// Lock 判定完把结果锁定为保底；Unlock 解除锁定（两者都没有时保持原样）
+	Lock   bool
+	Unlock bool
+	// SkipRewards 不写这次经过的各级达成奖励（之后也不会再发，要发用「补发」）
+	SkipRewards bool
+	// Silent 不发升级通知（升级记录照写）
+	Silent bool
 	// Traces 记下每一道晋级条件的判定（单人推演用）
 	Traces *[]levels.GateTrace
 }
@@ -357,7 +364,7 @@ func (r *Repository) syncUserLevel(ctx context.Context, q queryExecutor, userID,
 		return nil, err
 	}
 
-	query := `SELECT user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at FROM user_level_records WHERE user_id = $1 AND appid = $2`
+	query := `SELECT user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at, locked_level FROM user_level_records WHERE user_id = $1 AND appid = $2`
 	if _, isTx := q.(pgx.Tx); isTx {
 		query += ` FOR UPDATE`
 	}
@@ -365,9 +372,9 @@ func (r *Repository) syncUserLevel(ctx context.Context, q queryExecutor, userID,
 	if err != nil {
 		return nil, err
 	}
-	floor := 0
+	floor, locked := 0, 0
 	if record != nil {
-		floor = record.CurrentLevel
+		floor, locked = record.CurrentLevel, record.LockedLevel
 	}
 
 	// 晋级条件按需取行为画像（一次判定最多取一次）
@@ -399,13 +406,21 @@ func (r *Repository) syncUserLevel(ctx context.Context, q queryExecutor, userID,
 	start := floor
 	switch {
 	case opts.Recompute:
-		start = 0
+		// 锁定的等级是管理员给的，按经验重算也不降到它以下
+		start = min(locked, scheme.MaxLevel())
 	case opts.ForceLevel > 0:
 		start = max(floor, min(opts.ForceLevel, scheme.MaxLevel()))
 	}
 	newLevel, blocked, err := scheme.Resolve(totalExperience, start, check)
 	if err != nil {
 		return nil, err
+	}
+
+	switch {
+	case opts.Unlock:
+		locked = 0
+	case opts.Lock:
+		locked = newLevel
 	}
 
 	state := scheme.StateOf(newLevel, totalExperience)
@@ -428,8 +443,8 @@ func (r *Repository) syncUserLevel(ctx context.Context, q queryExecutor, userID,
 	if !state.IsMaxLevel {
 		nextLevelExperience = state.ExpToNextLevel
 	}
-	if _, err := q.Exec(ctx, `INSERT INTO user_level_records (user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11)
+	if _, err := q.Exec(ctx, `INSERT INTO user_level_records (user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at, locked_level, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $12, $11, $11)
 ON CONFLICT (user_id, appid) DO UPDATE SET
     current_level = EXCLUDED.current_level,
     current_experience = EXCLUDED.current_experience,
@@ -439,9 +454,10 @@ ON CONFLICT (user_id, appid) DO UPDATE SET
     highest_level = EXCLUDED.highest_level,
     level_up_count = EXCLUDED.level_up_count,
     last_level_up_at = EXCLUDED.last_level_up_at,
+    locked_level = EXCLUDED.locked_level,
     updated_at = EXCLUDED.updated_at`,
 		userID, appID, newLevel, state.ExpInCurrentLevel, totalExperience, nextLevelExperience, state.Progress,
-		highest, levelUpCount, lastLevelUpAt, updatedAt.UTC()); err != nil {
+		highest, levelUpCount, lastLevelUpAt, updatedAt.UTC(), locked); err != nil {
 		return nil, err
 	}
 
@@ -449,7 +465,7 @@ ON CONFLICT (user_id, appid) DO UPDATE SET
 	// 第一次建记录时的补判不算升级（新用户第一次打开等级页、老数据补建记录），只发经过的达成奖励
 	if newLevel != from && !(record == nil && opts.Reason == levels.ReasonSync) {
 		notify := levels.NotifyNone
-		if newLevel > from && scheme.Notify {
+		if newLevel > from && scheme.Notify && !opts.Silent {
 			notify = levels.NotifyPending
 			queued = true
 		}
@@ -459,7 +475,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
 			return nil, err
 		}
 	}
-	if newLevel > floor {
+	if newLevel > floor && !opts.SkipRewards {
 		for _, reward := range scheme.RewardsBetween(floor, newLevel) {
 			inserted, err := insertLevelReward(ctx, q, appID, userID, reward, version, levels.OriginLevelUp)
 			if err != nil {

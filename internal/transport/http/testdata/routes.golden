@@ -918,6 +918,7 @@ POST	/api/admin/apps/:appkey/levels/rewards/:rewardId/retry	AdminRetryLevelRewar
 POST	/api/admin/apps/:appkey/levels/rewards/backfill	AdminBackfillLevelReward
 POST	/api/admin/apps/:appkey/levels/simulate	AdminSimulateLevel
 POST	/api/admin/apps/:appkey/levels/users/:userId/adjust	AdminAdjustLevelUser
+POST	/api/admin/apps/:appkey/levels/users/adjust	AdminBatchAdjustLevelUsers
 POST	/api/admin/apps/:appkey/levels/validate	AdminValidateLevelScheme
 POST	/api/admin/apps/:appkey/levels/versions/:version/restore	AdminRestoreLevelVersion
 POST	/api/admin/apps/:appkey/lottery/activities	AdminCreateLotteryActivity

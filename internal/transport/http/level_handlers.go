@@ -40,11 +40,29 @@ type LevelSimulateRequest struct {
 	User       string        `json:"user"`
 }
 
-// LevelAdjustRequest 管理员调级：level 为 0 时只按当前体系补判；topUp 同时把经验补到目标级门槛。
+// LevelAdjustRequest 管理员强制升级：level 为 0 时只按当前体系补判；topUp 同时把经验补到目标级门槛；
+// lock 把结果锁定为保底（重算降级也不低于它）、unlock 解除锁定；skipRewards 不发经过的达成奖励；silent 不发升级通知。
 type LevelAdjustRequest struct {
-	Level int    `json:"level"`
-	TopUp bool   `json:"topUp"`
-	Note  string `json:"note"`
+	Level       int    `json:"level"`
+	TopUp       bool   `json:"topUp"`
+	Lock        bool   `json:"lock"`
+	Unlock      bool   `json:"unlock"`
+	SkipRewards bool   `json:"skipRewards"`
+	Silent      bool   `json:"silent"`
+	Note        string `json:"note"`
+}
+
+// LevelBatchAdjustRequest 批量强制升级：userIds 最多 500 个，其余选项同单人。
+type LevelBatchAdjustRequest struct {
+	LevelAdjustRequest
+	UserIDs []int64 `json:"userIds" binding:"required"`
+}
+
+func (req LevelAdjustRequest) input(appID, userID, adminID int64, operator string) service.LevelAdjustInput {
+	return service.LevelAdjustInput{
+		AppID: appID, UserID: userID, Level: req.Level, TopUp: req.TopUp, Lock: req.Lock, Unlock: req.Unlock,
+		SkipRewards: req.SkipRewards, Silent: req.Silent, Note: req.Note, Operator: operator, AdminID: adminID,
+	}
 }
 
 // LevelFulfillRequest 人工物品已处理。
@@ -224,7 +242,7 @@ func (h *Handler) AdminGetLevelUser(c *gin.Context) {
 	h.levelRespond(c, result, err)
 }
 
-// AdminAdjustLevelUser 管理员调级（或只按当前体系补判）。
+// AdminAdjustLevelUser 管理员强制升级（或只按当前体系补判）。
 func (h *Handler) AdminAdjustLevelUser(c *gin.Context) {
 	appID, ok := resolveAppID(c, h.app)
 	if !ok {
@@ -240,8 +258,24 @@ func (h *Handler) AdminAdjustLevelUser(c *gin.Context) {
 		return
 	}
 	adminID, operator := adminAccount(c)
-	result, err := h.level.AdjustUser(c.Request.Context(), service.LevelAdjustInput{
-		AppID: appID, UserID: userID, Level: req.Level, TopUp: req.TopUp, Note: req.Note, Operator: operator, AdminID: adminID,
+	result, err := h.level.AdjustUser(c.Request.Context(), req.input(appID, userID, adminID, operator))
+	h.levelRespond(c, result, err)
+}
+
+// AdminBatchAdjustLevelUsers 批量强制升级。
+func (h *Handler) AdminBatchAdjustLevelUsers(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req LevelBatchAdjustRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	adminID, operator := adminAccount(c)
+	result, err := h.level.AdjustUsers(c.Request.Context(), service.LevelBatchAdjustInput{
+		LevelAdjustInput: req.LevelAdjustRequest.input(appID, 0, adminID, operator), UserIDs: req.UserIDs,
 	})
 	h.levelRespond(c, result, err)
 }

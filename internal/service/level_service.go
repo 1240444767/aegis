@@ -400,17 +400,23 @@ func (s *LevelService) GetUser(ctx context.Context, appID, userID int64) (*Level
 	return detail, nil
 }
 
-// LevelAdjustInput 管理员调整一个人的等级。
+// LevelAdjustInput 管理员强制升级（或只补判）一个人。
 type LevelAdjustInput struct {
 	AppID  int64
 	UserID int64
-	// Level 调到至少这一级（越过门槛与晋级条件）；0 表示只按当前体系补判
+	// Level 强制升到至少这一级（越过经验门槛与晋级条件）；0 表示只按当前体系补判
 	Level int
 	// TopUp 同时把经验补到这一级的门槛（经验只增不减）
-	TopUp    bool
-	Note     string
-	Operator string
-	AdminID  int64
+	TopUp bool
+	// Lock 把调整后的等级锁定为保底（「重算并允许降级」也不降到它以下）；Unlock 解除锁定
+	Lock   bool
+	Unlock bool
+	// SkipRewards 不发这次经过的各级达成奖励；Silent 不发升级通知
+	SkipRewards bool
+	Silent      bool
+	Note        string
+	Operator    string
+	AdminID     int64
 }
 
 // LevelAdjustResult 调整结果。
@@ -421,8 +427,35 @@ type LevelAdjustResult struct {
 	AddExperience int64             `json:"addExperience"`
 }
 
-// AdjustUser 管理员调级：可先补经验，再把等级调到至少目标级。等级不能调低（经验不扣减，调低了下次就会升回去）。
-func (s *LevelService) AdjustUser(ctx context.Context, input LevelAdjustInput) (*LevelAdjustResult, error) {
+// MaxLevelBatchAdjust 一次批量强制升级最多的人数。
+const MaxLevelBatchAdjust = 500
+
+// LevelBatchAdjustInput 批量强制升级：选项与单人相同，逐人在自己的事务里执行。
+type LevelBatchAdjustInput struct {
+	LevelAdjustInput
+	UserIDs []int64
+}
+
+// LevelBatchAdjustItem 批量里的一个人。
+type LevelBatchAdjustItem struct {
+	UserID        int64  `json:"userId"`
+	Account       string `json:"account,omitempty"`
+	From          int    `json:"from"`
+	To            int    `json:"to"`
+	AddExperience int64  `json:"addExperience"`
+	Error         string `json:"error,omitempty"`
+}
+
+// LevelBatchAdjustResult 批量结果：changed 为等级确实变了的人数。
+type LevelBatchAdjustResult struct {
+	Total     int                    `json:"total"`
+	Succeeded int                    `json:"succeeded"`
+	Changed   int                    `json:"changed"`
+	Failed    int                    `json:"failed"`
+	Items     []LevelBatchAdjustItem `json:"items"`
+}
+
+func (s *LevelService) checkAdjust(ctx context.Context, input LevelAdjustInput) (*levels.Scheme, error) {
 	scheme, _, err := s.pg.LevelScheme(ctx, input.AppID)
 	if err != nil {
 		return nil, err
@@ -430,6 +463,23 @@ func (s *LevelService) AdjustUser(ctx context.Context, input LevelAdjustInput) (
 	if input.Level < 0 || input.Level > scheme.MaxLevel() {
 		return nil, apperrors.New(40000, http.StatusBadRequest, "目标等级需要在 1–"+strconv.Itoa(scheme.MaxLevel())+" 之间")
 	}
+	if input.Lock && input.Unlock {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "锁定与解除锁定只能选一个")
+	}
+	return scheme, nil
+}
+
+// AdjustUser 管理员强制升级：可先补经验，再把等级直接调到至少目标级，不看经验门槛与晋级条件。
+// 等级不能调低（经验不扣减，调低了下次就会升回去）；要让它在「重算并允许降级」时也保住，同时锁定。
+func (s *LevelService) AdjustUser(ctx context.Context, input LevelAdjustInput) (*LevelAdjustResult, error) {
+	scheme, err := s.checkAdjust(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return s.adjustUser(ctx, scheme, input)
+}
+
+func (s *LevelService) adjustUser(ctx context.Context, scheme *levels.Scheme, input LevelAdjustInput) (*LevelAdjustResult, error) {
 	note := strings.TrimSpace(input.Note)
 	result := &LevelAdjustResult{}
 	if input.TopUp && input.Level > 0 {
@@ -438,7 +488,7 @@ func (s *LevelService) AdjustUser(ctx context.Context, input LevelAdjustInput) (
 			return nil, s.translate(err)
 		}
 		if need := scheme.At(input.Level).Threshold - experience; need > 0 {
-			reason := "管理员调整等级至 Lv." + strconv.Itoa(input.Level)
+			reason := "管理员强制升级至 Lv." + strconv.Itoa(input.Level)
 			if note != "" {
 				reason += "：" + note
 			}
@@ -450,13 +500,72 @@ func (s *LevelService) AdjustUser(ctx context.Context, input LevelAdjustInput) (
 			result.AddExperience = need
 		}
 	}
-	user, from, to, err := s.pg.SyncUserLevelAdmin(ctx, input.AppID, input.UserID, input.Level, false, input.Operator, note, nil)
+	user, from, to, err := s.pg.SyncUserLevelAdmin(ctx, input.AppID, input.UserID, pgrepo.LevelAdminSync{
+		Force: input.Level, Lock: input.Lock, Unlock: input.Unlock, SkipRewards: input.SkipRewards, Silent: input.Silent,
+		Operator: input.Operator, Note: note,
+	})
 	if err != nil {
 		return nil, s.translate(err)
 	}
 	result.User, result.From, result.To = user, from, to
 	s.publishUser(input.AppID, input.UserID, "level.changed", map[string]any{"level": to})
 	return result, nil
+}
+
+// AdjustUsers 批量强制升级：逐人执行，一个人失败（不存在、补经验失败）不影响其他人。
+func (s *LevelService) AdjustUsers(ctx context.Context, input LevelBatchAdjustInput) (*LevelBatchAdjustResult, error) {
+	ids := make([]int64, 0, len(input.UserIDs))
+	seen := map[int64]bool{}
+	for _, id := range input.UserIDs {
+		if id > 0 && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择要调整的用户")
+	}
+	if len(ids) > MaxLevelBatchAdjust {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "一次最多调整 "+strconv.Itoa(MaxLevelBatchAdjust)+" 人")
+	}
+	if input.Level <= 0 && !input.Lock && !input.Unlock {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择目标等级")
+	}
+	scheme, err := s.checkAdjust(ctx, input.LevelAdjustInput)
+	if err != nil {
+		return nil, err
+	}
+	out := &LevelBatchAdjustResult{Total: len(ids), Items: make([]LevelBatchAdjustItem, 0, len(ids))}
+	for _, id := range ids {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		one := input.LevelAdjustInput
+		one.UserID = id
+		item := LevelBatchAdjustItem{UserID: id}
+		result, err := s.adjustUser(ctx, scheme, one)
+		if err != nil {
+			var appErr *apperrors.AppError
+			if errors.As(err, &appErr) {
+				item.Error = appErr.Message
+			} else {
+				s.log.Warn("level: batch adjust failed", zap.Int64("appid", input.AppID), zap.Int64("userId", id), zap.Error(err))
+				item.Error = "调整失败"
+			}
+			out.Failed++
+		} else {
+			item.From, item.To, item.AddExperience = result.From, result.To, result.AddExperience
+			if result.User != nil {
+				item.Account = result.User.Account
+			}
+			out.Succeeded++
+			if result.To != result.From {
+				out.Changed++
+			}
+		}
+		out.Items = append(out.Items, item)
+	}
+	return out, nil
 }
 
 // ListEvents 升级记录。

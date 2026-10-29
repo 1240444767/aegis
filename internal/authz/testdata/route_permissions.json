@@ -1695,6 +1695,13 @@
   },
   {
     "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/users/adjust",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
     "path": "/api/admin/apps/:appkey/levels/users/:userId/adjust",
     "permission": "app:write",
     "appScoped": true,

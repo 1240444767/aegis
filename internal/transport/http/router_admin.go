@@ -544,6 +544,7 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/levels/versions/:version/restore", h.AdminRestoreLevelVersion)
 		admin.GET("/apps/:appkey/levels/users", h.AdminListLevelUsers)
 		admin.GET("/apps/:appkey/levels/users/:userId", h.AdminGetLevelUser)
+		admin.POST("/apps/:appkey/levels/users/adjust", h.AdminBatchAdjustLevelUsers)
 		admin.POST("/apps/:appkey/levels/users/:userId/adjust", h.AdminAdjustLevelUser)
 		admin.GET("/apps/:appkey/levels/events", h.AdminListLevelEvents)
 		admin.GET("/apps/:appkey/levels/rewards", h.AdminListLevelRewards)

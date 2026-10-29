@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   adjustLevelUser,
+  adjustLevelUsers,
   backfillLevelReward,
   cancelLevelJob,
   fulfillLevelReward,
@@ -24,6 +25,7 @@ import {
   startLevelJob,
   validateLevelScheme,
   type LevelAdjustPayload,
+  type LevelBatchAdjustPayload,
   type LevelEventParams,
   type LevelPublishPayload,
   type LevelRewardParams,
@@ -182,6 +184,15 @@ export function useAdjustLevelUserMutation(appKey?: string | null) {
   return useMutation({
     mutationFn: (input: { userId: number; payload: LevelAdjustPayload }) =>
       adjustLevelUser(token as string, appKey as string, input.userId, input.payload),
+    onSuccess: invalidate
+  });
+}
+
+export function useBatchAdjustLevelUsersMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const invalidate = useInvalidateLevelScope();
+  return useMutation({
+    mutationFn: (payload: LevelBatchAdjustPayload) => adjustLevelUsers(token as string, appKey as string, payload),
     onSuccess: invalidate
   });
 }
