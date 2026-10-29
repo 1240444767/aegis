@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
 	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
+	vipdomain "aegis/internal/domain/vip"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
 
@@ -46,7 +48,9 @@ type LotterySimulation struct {
 	Profile lotterydomain.BehaviorProfile
 	// PerkFacts 不指定用户时虚拟用户的特权身份（会员、永久会员、免广告……）；为空时没有特权身份
 	PerkFacts *lotterydomain.PerkFacts
-	Options   lotterydomain.SimulationInput
+	// Tiers 不指定用户时虚拟用户所在的会员档位（至尊加成按档位分级时用；PerkFacts.Lifetime 时按永久开通算）
+	Tiers   []int64
+	Options lotterydomain.SimulationInput
 }
 
 // LotterySimulationResult 模拟结果，以及（指定了用户时）这个人的画像与下一次抽奖的出奖方案。
@@ -60,6 +64,23 @@ type LotterySimulationResult struct {
 	Current *lotterydomain.DrawPlan `json:"current,omitempty"`
 	// Analytic 距首次中奖次数的精确分布（吸收马尔可夫链），与模拟结果互相印证
 	Analytic lotterydomain.StreakAnalysis `json:"analytic"`
+	// Supreme 活动实际生效的至尊加成与它的效果（没有生效的配置时没有）
+	Supreme *LotterySupremeSimulation `json:"supreme,omitempty"`
+}
+
+// LotterySupremeSimulation 模拟里的至尊加成。
+type LotterySupremeSimulation struct {
+	Title string `json:"title"`
+	// Source activity：活动单独设置；app：跟随应用设置
+	Source string `json:"source"`
+	// Applied 模拟的这个人（或虚拟用户）拿到了加成；Grades 他能得到的参数组
+	Applied bool                         `json:"applied"`
+	Grades  []lotterydomain.SupremeGrade `json:"grades"`
+	// BaseFactor / Factor 指定真实用户时，他今天加成之前与之后的运气系数
+	BaseFactor float64 `json:"baseFactor,omitempty"`
+	Factor     float64 `json:"factor,omitempty"`
+	// Baseline 同一批随机数、不加成时的模拟结果（与 result 一比就是加成的效果）
+	Baseline *lotterydomain.SimulationResult `json:"baseline,omitempty"`
 }
 
 // Simulate 按策略模拟一批虚拟用户连续抽奖。不写库、不发奖。
@@ -94,6 +115,17 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 
 	out := &LotterySimulationResult{Profile: req.Profile}
 	base := lotterydomain.DrawState{Now: now, Source: req.Options.Source}
+	appSupreme, err := s.pg.LotteryAppSupreme(ctx, req.AppID)
+	if err != nil {
+		return nil, err
+	}
+	supremeConfig, supremeSource := lotterydomain.EffectiveSupreme(activity.Strategy.Fortune, appSupreme)
+	if supremeConfig != nil {
+		out.Supreme = &LotterySupremeSimulation{Title: lotterydomain.SupremeTitle(supremeConfig), Source: supremeSource,
+			Grades: []lotterydomain.SupremeGrade{}}
+	}
+	// baselinePrizes 指定真实用户且拿到至尊加成时，只乘自然运气的奖盘（对照组）
+	var baselinePrizes []lotterydomain.Prize
 	if req.UserID > 0 {
 		profile, err := s.pg.LotteryBehaviorProfile(ctx, req.AppID, req.UserID, now, lotteryDayStart(now))
 		if err != nil {
@@ -115,8 +147,17 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 		if err != nil {
 			return nil, err
 		}
-		prizes = lotterydomain.FortunePrizes(prizes, lotterydomain.FortuneFactor(activity.Strategy.Fortune, activity.ID,
-			req.UserID, lotteryDayStart(now), now, controls))
+		natural := lotterydomain.FortuneFactor(activity.Strategy.Fortune, activity.ID, req.UserID, lotteryDayStart(now), now, controls)
+		factor := natural
+		if out.Supreme != nil {
+			out.Supreme.Grades = nonNilGrades(lotterydomain.SupremeGrades(supremeConfig, coverage.Holdings))
+			if outcome := lotterydomain.ResolveSupreme(supremeConfig, coverage.Holdings, natural); outcome != nil {
+				factor = outcome.Factor
+				out.Supreme.Applied, out.Supreme.BaseFactor, out.Supreme.Factor = true, natural, factor
+				baselinePrizes = lotterydomain.FortunePrizes(prizes, natural)
+			}
+		}
+		prizes = lotterydomain.FortunePrizes(prizes, factor)
 		req.Options.FortuneApplied = true
 		if saved != nil {
 			state, err := s.pg.LotteryPreview(ctx, activity, prizes, req.AppID, req.UserID, profile, now,
@@ -128,6 +169,15 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 			out.Current = &plan
 			base = state
 		}
+	} else if out.Supreme != nil && req.PerkFacts != nil {
+		// 虚拟用户：按请求给的身份（永久会员、所在档位）取参数组，每人按自己抽到的自然运气取最好的一组
+		holdings := vipdomain.Holdings{Lifetime: req.PerkFacts.Lifetime}
+		for _, id := range req.Tiers {
+			holdings.Tiers = append(holdings.Tiers, vipdomain.HeldTier{ID: id, Lifetime: req.PerkFacts.Lifetime})
+		}
+		out.Supreme.Grades = nonNilGrades(lotterydomain.SupremeGrades(supremeConfig, holdings))
+		out.Supreme.Applied = len(out.Supreme.Grades) > 0
+		req.Options.Supreme = out.Supreme.Grades
 	}
 	base.Profile = out.Profile
 	// 人群特权：真实用户按他此刻的身份与行为；虚拟用户按请求给的身份。只有保底提前与中奖加成影响出奖
@@ -144,6 +194,9 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 		if !effects.Empty() {
 			activity = effects.Personalize(activity)
 			prizes = effects.BoostPrizes(prizes)
+			if baselinePrizes != nil {
+				baselinePrizes = effects.BoostPrizes(baselinePrizes)
+			}
 			out.Perks = &effects
 			if out.Current != nil {
 				plan := lotterydomain.PlanDraw(activity, activity.Strategy, prizes, base)
@@ -155,11 +208,37 @@ func (s *LotteryService) Simulate(ctx context.Context, req LotterySimulation) (*
 	out.Analytic = lotterydomain.AnalyzeStreak(activity, activity.Strategy, prizes, base)
 	out.Behavior = lotterydomain.ScoreBehavior(activity.Strategy.Behavior, out.Profile)
 
+	if out.Current != nil && out.Supreme != nil && out.Supreme.Applied && out.Supreme.Factor > 0 {
+		grade, _ := lotterydomain.BestSupreme(out.Supreme.Grades, out.Supreme.BaseFactor)
+		out.Current.Fortune, out.Current.FortuneBase, out.Current.Supreme = out.Supreme.Factor, out.Supreme.BaseFactor, grade
+	}
+
 	options := req.Options
 	options.Profile = out.Profile
 	options.Now = now
+	if options.Seed == 0 {
+		// 对照组要用同一批随机数
+		options.Seed = rand.Uint64()
+	}
 	out.Result = lotterydomain.Simulate(activity, activity.Strategy, prizes, options)
+	if out.Supreme != nil && out.Supreme.Applied {
+		plain := options
+		plain.Supreme = nil
+		board := prizes
+		if baselinePrizes != nil {
+			board = baselinePrizes
+		}
+		baseline := lotterydomain.Simulate(activity, activity.Strategy, board, plain)
+		out.Supreme.Baseline = &baseline
+	}
 	return out, nil
+}
+
+func nonNilGrades(grades []lotterydomain.SupremeGrade) []lotterydomain.SupremeGrade {
+	if grades == nil {
+		return []lotterydomain.SupremeGrade{}
+	}
+	return grades
 }
 
 // draftActivity 把还没保存的编辑内容变成可以模拟的活动与奖盘。

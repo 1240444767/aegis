@@ -88,6 +88,9 @@ func normalizeControl(s *Strategy) {
 	if s.Fortune != nil && s.Fortune.Spread <= 0 {
 		s.Fortune = nil
 	}
+	if s.Fortune != nil {
+		s.Fortune.Supreme = NormalizeSupreme(s.Fortune.Supreme)
+	}
 	if s.Variance != VariancePRD {
 		s.Variance = ""
 	}
@@ -109,6 +112,11 @@ func validateControl(s Strategy) error {
 	}
 	if f := s.Fortune; f != nil && f.Spread > MaxFortuneSpread {
 		return fmt.Errorf("每日运气的差异需要在 0–%d 之间", MaxFortuneSpread)
+	}
+	if f := s.Fortune; f != nil {
+		if err := ValidateSupreme(f.Supreme); err != nil {
+			return err
+		}
 	}
 	if w := s.WinRate; w != nil {
 		if w.Target >= 1 {

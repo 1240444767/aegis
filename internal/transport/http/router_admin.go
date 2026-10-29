@@ -497,6 +497,8 @@ func registerAdminAppRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		admin.POST("/apps/:appkey/ai-gateway/users/:userId/credits", h.AdminAdjustAIGatewayCredit)
 
 		admin.GET("/apps/:appkey/lottery/catalog", h.AdminLotteryCatalog)
+		admin.GET("/apps/:appkey/lottery/settings", h.AdminLotterySettings)
+		admin.PUT("/apps/:appkey/lottery/settings", h.AdminSaveLotterySettings)
 		admin.GET("/apps/:appkey/lottery/activities", h.AdminListLotteryActivities)
 		admin.POST("/apps/:appkey/lottery/activities", h.AdminCreateLotteryActivity)
 		admin.GET("/apps/:appkey/lottery/activities/:activityId", h.AdminGetLotteryActivity)

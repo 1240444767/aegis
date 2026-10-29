@@ -675,14 +675,23 @@ ON CONFLICT (activity_id, user_id) DO NOTHING`, activity.ID, input.UserID); err 
 		}
 	}
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
-	// 今日运气计入管理员干预（全站与本人的），与活动页同一个解析
+	// 今日运气计入管理员干预（全站与本人的），再按已拥有的判定加上至尊加成，与活动页同一个解析
 	var fortune float64 = 1
+	var supreme *lotterydomain.SupremeOutcome
 	if f := activity.Strategy.Fortune; f != nil && f.Spread > 0 {
 		controls, err := lotteryFortuneControlsQ(ctx, tx, activity.ID, input.UserID, now)
 		if err != nil {
 			return nil, err
 		}
 		fortune = lotterydomain.FortuneFactor(f, activity.ID, input.UserID, input.DayStart, now, controls)
+		app, err := lotteryAppSupremeQ(ctx, tx, input.AppID)
+		if err != nil {
+			return nil, err
+		}
+		config, _ := lotterydomain.EffectiveSupreme(f, app)
+		if supreme = lotterydomain.ResolveSupreme(config, coverage.Holdings, fortune); supreme != nil {
+			fortune = supreme.Factor
+		}
 	}
 	personal := lotterydomain.FortunePrizes(effects.BoostPrizes(lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)), fortune)
 	// 无套利：原价折算会让积分买次数稳赚时，已拥有格子的改发按刚好回本的比例缩减（正常奖盘照原价）
@@ -707,6 +716,9 @@ ON CONFLICT (activity_id, user_id) DO NOTHING`, activity.ID, input.UserID); err 
 	}
 	if fortune != 1 {
 		plan.Fortune = fortune
+	}
+	if supreme != nil {
+		plan.FortuneBase, plan.Supreme = supreme.Base, &supreme.Grade
 	}
 	pity := plan.Pity
 	trace, err := json.Marshal(plan)

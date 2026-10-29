@@ -196,3 +196,42 @@ func (h *Handler) AdminRevokeLotteryFortuneControls(c *gin.Context) {
 	}
 	response.Success(c, http.StatusOK, "已撤销", gin.H{"revoked": count})
 }
+
+// LotterySettingsRequest 应用的抽奖设置：每日运气的至尊加成（活动策略里没写 fortune.supreme 时跟随这里）。
+type LotterySettingsRequest struct {
+	Supreme lotterydomain.Supreme `json:"supreme"`
+}
+
+// AdminLotterySettings 应用的抽奖设置，附可选的会员档位与开了每日运气的活动各自的加成来源。
+func (h *Handler) AdminLotterySettings(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	result, err := h.lottery.Settings(c.Request.Context(), appID)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "ok", result)
+}
+
+// AdminSaveLotterySettings 保存应用的至尊加成。
+func (h *Handler) AdminSaveLotterySettings(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req LotterySettingsRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	_, operator := adminAccount(c)
+	result, err := h.lottery.SaveSettings(c.Request.Context(), appID, req.Supreme, operator)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "已保存至尊加成", result)
+}

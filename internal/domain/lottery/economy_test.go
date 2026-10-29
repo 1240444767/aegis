@@ -79,7 +79,7 @@ func TestEconomyKeepsFullValueOnHealthyBoard(t *testing.T) {
 			t.Errorf("位置 %d 应按原价折 %d 积分，得到 %+v", position, want, alt)
 		}
 	}
-	if audit := AuditEconomy(Activity{LifetimePolicy: LifetimePoints}, prizes, plans, lifetime, 10); audit.LifetimeScale != 1 || len(audit.Warnings) != 0 {
+	if audit := AuditEconomy(Activity{LifetimePolicy: LifetimePoints}, prizes, plans, lifetime, 10, nil); audit.LifetimeScale != 1 || len(audit.Warnings) != 0 {
 		t.Fatalf("控制台积分账不应警告，得到 %+v", audit)
 	}
 }
@@ -121,7 +121,7 @@ func TestEconomyScalesOnlyWhenArbitrage(t *testing.T) {
 	if plain.Scaled() || plain.Arbitrage() {
 		t.Fatalf("普通用户不缩减、奖盘本身不套利，得到 %+v", plain)
 	}
-	audit := AuditEconomy(Activity{LifetimePolicy: LifetimePoints}, prizes, plans, lifetime, 10)
+	audit := AuditEconomy(Activity{LifetimePolicy: LifetimePoints}, prizes, plans, lifetime, 10, nil)
 	if audit.LifetimeScale >= 1 || len(audit.Warnings) != 1 {
 		t.Fatalf("永久会员被缩减时控制台要提示，得到 %+v", audit)
 	}
@@ -274,7 +274,7 @@ func TestAuditEconomyFortune(t *testing.T) {
 	prizes, plans := fortuneBoard()
 	lifetime := lifetimeMember()
 	activity := Activity{LifetimePolicy: LifetimePoints, Strategy: Strategy{Fortune: &Fortune{Spread: 0.3}}}
-	audit := AuditEconomy(activity, prizes, plans, lifetime, 10)
+	audit := AuditEconomy(activity, prizes, plans, lifetime, 10, nil)
 	if len(audit.Warnings) != 0 || audit.LifetimeScale != 1 {
 		t.Fatalf("σ = 0.3 时不应警告，得到 %+v", audit)
 	}
@@ -287,7 +287,7 @@ func TestAuditEconomyFortune(t *testing.T) {
 	}
 	// 之前那张转盘积分奖品多、余量小：运气最好的永久会员会套利，要提示
 	tight, tightPlans := wheelBoard()
-	if audit := AuditEconomy(activity, tight, tightPlans, lifetime, 10); len(audit.Warnings) != 1 {
+	if audit := AuditEconomy(activity, tight, tightPlans, lifetime, 10, nil); len(audit.Warnings) != 1 {
 		t.Fatalf("余量小的转盘上运气最好的永久会员会套利，应提示，得到 %+v", audit.Warnings)
 	}
 }

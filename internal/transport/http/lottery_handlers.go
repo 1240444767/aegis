@@ -108,6 +108,8 @@ type LotterySimulatePerk struct {
 	AdFree             bool    `json:"adFree"`
 	SignedToday        bool    `json:"signedToday"`
 	OnlineMinutesToday float64 `json:"onlineMinutesToday"`
+	// Tiers 所在的会员档位（至尊加成按档位分级时用；lifetime 为真时按永久开通算）
+	Tiers []int64 `json:"tiers"`
 }
 
 // LotteryStatusRequest 改活动状态：draft / active / paused / ended。
@@ -350,6 +352,7 @@ func (h *Handler) AdminSimulateLottery(c *gin.Context) {
 			Member: req.Perk.Member, Lifetime: req.Perk.Lifetime, AdFree: req.Perk.AdFree,
 			SignedToday: req.Perk.SignedToday, OnlineMinutesToday: req.Perk.OnlineMinutesToday,
 		}
+		sim.Tiers = req.Perk.Tiers
 	}
 	result, err := h.lottery.Simulate(c.Request.Context(), sim)
 	if err != nil {

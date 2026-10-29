@@ -248,7 +248,12 @@ func (s *LotteryService) annotateEconomy(ctx context.Context, appID int64, item 
 		Holdings: vipdomain.Holdings{Lifetime: true, LifetimeAdFree: true, LifetimeFeatures: vipdomain.NormalizeFeatureTags(owned)},
 		Policy:   policy,
 	}
-	economy := lotterydomain.AuditEconomy(item.Activity, item.Prizes, plans, coverage, storePrice)
+	app, err := s.pg.LotteryAppSupreme(ctx, appID)
+	if err != nil {
+		s.log.Warn("lottery: app supreme failed", zap.Int64("appid", appID), zap.Error(err))
+	}
+	supreme, _ := lotterydomain.EffectiveSupreme(item.Strategy.Fortune, app)
+	economy := lotterydomain.AuditEconomy(item.Activity, item.Prizes, plans, coverage, storePrice, supreme)
 	item.Economy = &economy
 }
 
@@ -369,6 +374,11 @@ func (s *LotteryService) prepare(ctx context.Context, input lotterydomain.Activi
 		}
 		if prize.Name == "" {
 			input.Prizes[index].Name = lotterydomain.DefaultPrizeName(prize.Reward, plans, features)
+		}
+	}
+	if f := input.Strategy.Fortune; f != nil {
+		if err := s.checkSupremeTiers(ctx, input.AppID, f.Supreme); err != nil {
+			return input, err
 		}
 	}
 	if input.VideoScene != "" {
@@ -495,7 +505,7 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	plans, features := s.catalogRefs(ctx, appID, prizes)
 	rule := lotterydomain.RuleOf(*activity, coverage.Policy)
 	personal := s.personalize(ctx, *activity, prizes, appID, userID, facts, now)
-	fortune, err := s.readFortune(ctx, *activity, userID, now)
+	fortune, natural, err := s.readFortune(ctx, *activity, userID, coverage, now)
 	if err != nil {
 		return nil, err
 	}
@@ -503,9 +513,12 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	if fortune != nil {
 		factor = fortune.Factor
 	}
-	client, shares := s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features, factor)
+	client, shares := s.clientActivity(ctx, *activity, prizes, coverage, personal.effects, plans, features, factor, natural)
 	if fortune != nil {
 		fortune.WinRate, fortune.BaseWinRate = shares.lucky, shares.plain
+		if fortune.Supreme != nil {
+			fortune.Supreme.BaseWinRate = shares.natural
+		}
 	}
 	return &lotterydomain.ClientState{
 		Activity:   client,
@@ -519,22 +532,34 @@ func (s *LotteryService) State(ctx context.Context, appID, userID, activityID in
 	}, nil
 }
 
-// readFortune 这个人此刻的今日运气（计入管理员干预）；没开每日运气时为 nil。
-func (s *LotteryService) readFortune(ctx context.Context, activity lotterydomain.Activity, userID int64, now time.Time) (
-	*lotterydomain.FortuneReading, error) {
+// readFortune 这个人此刻的今日运气（计入管理员干预与至尊加成）；没开每日运气时为 nil。
+// natural 是至尊加成之前的系数（没有加成时与 reading.Factor 相同）。
+func (s *LotteryService) readFortune(ctx context.Context, activity lotterydomain.Activity, userID int64,
+	coverage lotterydomain.MemberCoverage, now time.Time) (reading *lotterydomain.FortuneReading, natural float64, err error) {
 	fortune := activity.Strategy.Fortune
 	if fortune == nil || fortune.Spread <= 0 {
-		return nil, nil
+		return nil, 1, nil
 	}
 	controls, err := s.pg.LotteryFortuneControls(ctx, activity.ID, userID, now)
 	if err != nil {
-		return nil, err
+		return nil, 1, err
 	}
-	return lotterydomain.ReadFortuneControlled(fortune, activity.ID, userID, lotteryDayStart(now), now, controls), nil
+	reading = lotterydomain.ReadFortuneControlled(fortune, activity.ID, userID, lotteryDayStart(now), now, controls)
+	if reading == nil {
+		return nil, 1, nil
+	}
+	natural = reading.Factor
+	app, err := s.pg.LotteryAppSupreme(ctx, activity.AppID)
+	if err != nil {
+		return nil, 1, err
+	}
+	config, _ := lotterydomain.EffectiveSupreme(fortune, app)
+	outcome := lotterydomain.ResolveSupreme(config, coverage.Holdings, natural)
+	return lotterydomain.ApplySupremeReading(reading, fortune, config, outcome), natural, nil
 }
 
-// lotteryShares 抽中兜底奖以外奖品的概率（百分比）：乘今日运气之前与之后。
-type lotteryShares struct{ plain, lucky float64 }
+// lotteryShares 抽中兜底奖以外奖品的概率（百分比）：乘今日运气之前、之后，与只乘自然运气（至尊加成之前）。
+type lotteryShares struct{ plain, lucky, natural float64 }
 
 // lotteryPersonal 这个人此刻的次数、保底与人群特权（活动页与抽奖结果共用）。
 type lotteryPersonal struct {
@@ -600,7 +625,7 @@ func (s *LotteryService) catalogRefs(ctx context.Context, appID int64, prizes []
 // 已拥有的奖品带上「对你来说会怎样」。另给出活动公示的原概率（baseProbability），以及今日运气前后的中奖率。
 func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydomain.Activity, prizes []lotterydomain.Prize,
 	coverage lotterydomain.MemberCoverage, effects lotterydomain.PerkEffects, plans map[int64]pointstore.PlanRef,
-	features map[string]pointstore.FeatureRef, fortune float64) (lotterydomain.ClientActivity, lotteryShares) {
+	features map[string]pointstore.FeatureRef, fortune, natural float64) (lotterydomain.ClientActivity, lotteryShares) {
 	rule := lotterydomain.RuleOf(activity, coverage.Policy)
 	owned := lotterydomain.PersonalPrizes(rule, coverage, prizes, plans)
 	boosted := effects.BoostPrizes(owned)
@@ -608,6 +633,10 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 	probabilities := lotterydomain.Probabilities(personal)
 	base := lotterydomain.Probabilities(owned)
 	shares := lotteryShares{plain: lotterydomain.RealPrizeShare(boosted), lucky: lotterydomain.RealPrizeShare(personal)}
+	shares.natural = shares.lucky
+	if natural != fortune {
+		shares.natural = lotterydomain.RealPrizeShare(lotterydomain.FortunePrizes(boosted, natural))
+	}
 	// 与抽奖事务同一个无套利比例：「转为 N 积分」写的是真会发的数
 	storePrice, err := s.pg.LotteryStoreDrawPrice(ctx, activity.AppID)
 	if err != nil {

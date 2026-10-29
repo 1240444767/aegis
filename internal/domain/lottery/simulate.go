@@ -37,6 +37,8 @@ type SimulationInput struct {
 	Seed uint64
 	// FortuneApplied 奖盘已经乘过某个真实用户今天的运气系数；否则每个虚拟用户各抽一个运气系数
 	FortuneApplied bool
+	// Supreme 虚拟用户的至尊加成参数组（每人按自己的自然运气取最好的一组）；空为没有加成
+	Supreme []SupremeGrade
 }
 
 // ValidateSimulation 校验模拟规模。
@@ -96,8 +98,10 @@ type SimulationResult struct {
 	ValuePerDraw float64           `json:"valuePerDraw"`
 	Prizes       []SimulationPrize `json:"prizes"`
 	Behavior     *BehaviorScore    `json:"behavior,omitempty"`
-	// Fortune 虚拟用户运气系数的分布（开了每日运气时）
+	// Fortune 虚拟用户运气系数的分布（开了每日运气时；有至尊加成时是加成之后的）
 	Fortune *Distribution `json:"fortune,omitempty"`
+	// FortuneBase 有至尊加成时，加成之前的系数分布
+	FortuneBase *Distribution `json:"fortuneBase,omitempty"`
 }
 
 type simUser struct {
@@ -153,6 +157,7 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 	}
 
 	fortunes := []float64{}
+	bases := []float64{}
 	for userIndex := range input.Users {
 		pool := shared
 		if input.IsolatedStock {
@@ -164,6 +169,10 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 		fortune := 1.0
 		if f := strategy.Fortune; f != nil && f.Spread > 0 && !input.FortuneApplied {
 			fortune = fortuneFactor(f.Spread, seed+uint64(userIndex)*0x9e3779b97f4a7c15)
+			if len(input.Supreme) > 0 {
+				bases = append(bases, fortune)
+				_, fortune = BestSupreme(input.Supreme, fortune)
+			}
 			fortunes = append(fortunes, fortune)
 		}
 		for range input.DrawsPerUser {
@@ -265,6 +274,10 @@ func Simulate(activity Activity, strategy Strategy, prizes []Prize, input Simula
 	if len(fortunes) > 0 {
 		distribution := describe(fortunes)
 		result.Fortune = &distribution
+	}
+	if len(bases) > 0 {
+		distribution := describe(bases)
+		result.FortuneBase = &distribution
 	}
 	if result.Draws > 0 {
 		result.ValuePerDraw = round6(valueIssued / float64(result.Draws))

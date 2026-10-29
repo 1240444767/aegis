@@ -156,6 +156,8 @@ func init() {
 
 		// 抽奖
 		View("GET /api/admin/apps/:appkey/lottery/catalog", "查看抽奖奖品目录", ""),
+		View("GET /api/admin/apps/:appkey/lottery/settings", "查看抽奖应用设置", ""),
+		Write("PUT /api/admin/apps/:appkey/lottery/settings", "调整抽奖至尊加成", "", SeverityMedium),
 		View("GET /api/admin/apps/:appkey/lottery/activities", "查看抽奖活动列表", ""),
 		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId", "查看抽奖活动详情", "抽奖活动"),
 		View("GET /api/admin/apps/:appkey/lottery/activities/:activityId/stats", "查看抽奖活动统计", "抽奖活动"),

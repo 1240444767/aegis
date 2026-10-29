@@ -9,6 +9,7 @@ import (
 	"time"
 
 	lotterydomain "aegis/internal/domain/lottery"
+	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
 )
@@ -38,6 +39,11 @@ type FortuneOverview struct {
 	// Global 生效中与待生效的全站干预
 	Global []lotterydomain.FortuneControl `json:"global"`
 	Counts pgrepo.FortuneControlCounts    `json:"counts"`
+	// Supreme 这个活动实际生效的至尊加成（关闭时为空）与来源（activity / app）；今日分布不含加成
+	Supreme       *lotterydomain.Supreme `json:"supreme,omitempty"`
+	SupremeSource string                 `json:"supremeSource,omitempty"`
+	// SupremeHigh 拿到加成的人最走运时的系数（积分账按它检查）
+	SupremeHigh float64 `json:"supremeHigh,omitempty"`
 }
 
 // FortuneLevelInfo 一个档位。
@@ -71,6 +77,9 @@ type FortuneUserReading struct {
 	Z        float64                        `json:"z"`
 	Applied  []lotterydomain.FortuneControl `json:"applied"`
 	Controls []lotterydomain.FortuneControl `json:"controls"`
+	// Lifetime / Tiers 他是不是永久会员、名下仍生效的会员档位（至尊加成按这些判定）
+	Lifetime bool                 `json:"lifetime"`
+	Tiers    []vipdomain.HeldTier `json:"tiers"`
 }
 
 func (s *LotteryService) fortuneActivity(ctx context.Context, appID, activityID int64) (*lotterydomain.Activity, error) {
@@ -105,6 +114,16 @@ func (s *LotteryService) FortuneOverview(ctx context.Context, appID, activityID 
 		return nil, err
 	}
 	out.Global = global
+	if out.Enabled {
+		app, err := s.pg.LotteryAppSupreme(ctx, appID)
+		if err != nil {
+			return nil, err
+		}
+		out.Supreme, out.SupremeSource = lotterydomain.EffectiveSupreme(fortune, app)
+		if out.Supreme != nil {
+			out.SupremeHigh = lotterydomain.SupremeHigh(fortune, out.Supreme)
+		}
+	}
 	if !out.Enabled {
 		out.Today = emptyDistribution()
 		return out, nil
@@ -135,7 +154,8 @@ func (s *LotteryService) FortuneUser(ctx context.Context, appID, activityID, use
 	if err != nil {
 		return nil, err
 	}
-	out := &FortuneUserReading{UserID: userID, Applied: []lotterydomain.FortuneControl{}, Controls: []lotterydomain.FortuneControl{}}
+	out := &FortuneUserReading{UserID: userID, Applied: []lotterydomain.FortuneControl{}, Controls: []lotterydomain.FortuneControl{},
+		Tiers: []vipdomain.HeldTier{}}
 	for _, control := range controls {
 		if !control.Global() {
 			out.Controls = append(out.Controls, control)
@@ -150,6 +170,20 @@ func (s *LotteryService) FortuneUser(ctx context.Context, appID, activityID, use
 	out.BaseZ, out.Z, out.Applied = outcome.BaseZ, outcome.Z, outcome.Applied
 	out.Base = lotterydomain.ReadFortune(fortune, activity.ID, userID, day)
 	out.Current = lotterydomain.ReadFortuneControlled(fortune, activity.ID, userID, day, now, controls)
+	// 至尊加成接在干预之后（Current 计入加成，Base 是什么都不计的自然运气）
+	coverage, err := s.pg.LotteryMemberCoverage(ctx, appID, userID)
+	if err != nil {
+		return nil, s.translate(err)
+	}
+	out.Lifetime, out.Tiers = coverage.Lifetime, coverage.Tiers
+	app, err := s.pg.LotteryAppSupreme(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	config, _ := lotterydomain.EffectiveSupreme(fortune, app)
+	if lifted := lotterydomain.ResolveSupreme(config, coverage.Holdings, outcome.Factor); lifted != nil {
+		out.Current = lotterydomain.ApplySupremeReading(out.Current, fortune, config, lifted)
+	}
 	if out.Applied == nil {
 		out.Applied = []lotterydomain.FortuneControl{}
 	}
@@ -260,7 +294,12 @@ func (s *LotteryService) SetFortuneSpread(ctx context.Context, appID, activityID
 	if spread == 0 {
 		input.Strategy.Fortune = nil
 	} else {
-		input.Strategy.Fortune = &lotterydomain.Fortune{Spread: math.Round(spread*1000) / 1000}
+		fortune := &lotterydomain.Fortune{Spread: math.Round(spread*1000) / 1000}
+		// 活动单独设置的至尊加成原样留着
+		if previous := current.Strategy.Fortune; previous != nil {
+			fortune.Supreme = previous.Supreme
+		}
+		input.Strategy.Fortune = fortune
 	}
 	if _, err := s.UpdateActivity(ctx, activityID, input); err != nil {
 		return nil, err

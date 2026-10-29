@@ -1373,6 +1373,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/settings",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/settings",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/activities",
     "permission": "app:read",
     "appScoped": true,

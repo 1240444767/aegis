@@ -28,6 +28,8 @@ import (
 type Fortune struct {
 	// Spread 运气差异 σ（对数标准差，0–1）
 	Spread float64 `json:"spread"`
+	// Supreme 本活动的至尊加成（见 supreme.go）；不写时跟随应用的设置
+	Supreme *Supreme `json:"supreme,omitempty"`
 }
 
 const (
@@ -82,6 +84,8 @@ type FortuneReading struct {
 	BaseWinRate float64 `json:"baseWinRate"`
 	// ResetsAt 下一次换运气的时刻（明天零点）
 	ResetsAt time.Time `json:"resetsAt"`
+	// Supreme 至尊加成（这个人拿到时才有）：上面的系数、档位、范围已是加成之后的，加成之前的在这里
+	Supreme *SupremeReading `json:"supreme,omitempty"`
 }
 
 // ReadFortune 这个人今天的运气解读（不计管理员干预）；没开每日运气时为 nil。胜率由调用方按个人奖盘填。

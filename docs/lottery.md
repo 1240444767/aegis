@@ -228,6 +228,61 @@ PRD 把连败 P99 压到 4、长期中奖率不变；运气平衡把中奖次数
 | POST | `/fortune/controls/preview` | 预演：同样的请求体，按今天抽过奖的人（或所选用户）算干预之后的分布，不落库 |
 | POST | `/fortune/controls/revoke` | `{ids}` 撤销几条，`{all: true}` 撤销全部生效中与待生效的（恢复自然运气） |
 
+### 至尊加成
+
+永久会员（或指定会员档位）的每日运气在自然运气之上再抬一截（`supreme.go`）。自然运气的系数 f 先按上面的规则算出（计入管理员干预），
+再按下式加成，所以干预作用在加成之前：
+
+    f' = max(f, min(max(f × 加成幅度, 保底运气), 上限))
+
+| 参数 | 范围 | 作用 |
+|---|---|---|
+| `boost` 加成幅度 | 1–3（0 为不乘） | 系数乘多少 |
+| `floor` 保底运气 | 0–5（0 为不设） | 加成之后至少多少；1 即「至少平均水平」 |
+| `cap` 上限 | 1–5（0 按 5 封顶） | 加成之后最多多少；自然运气已经高过上限的那天按自然运气算，加成不会让运气变差 |
+
+f' 关于 f 单调不减，所以拿到加成的人的系数范围就是把自然范围两端各套一次（`SupremeRange`），活动页的 `low` / `high` 换成这个范围。
+生效点与每日运气完全相同（`FortunePrizes`：兜底奖与谢谢参与以外的奖品权重 × f'），公示概率、中奖率护栏、无套利比例都按乘过之后的
+个人奖盘算，概率照常归一。控制台积分账检查「永久会员最走运那天」时用 `SupremeHigh`（所有可能落到永久会员身上的参数组取最高）。
+
+**谁能得到**（判据只用 `vip.Holdings`，与会员判定同一份事实）：
+
+- `scope: "lifetime"`：只对永久会员（`Holdings.Lifetime`），用顶层的 `boost` / `floor` / `cap`。
+- `scope: "tiers"`：按会员档位分级（`Holdings.Tiers`：此刻仍生效的会员期所属档位，同一档位里有永久开通的记为永久）。
+  `tiers[]` 每档 `{tierId, boost, floor, cap, lifetimeOnly}`，`lifetimeOnly` 只认这个档位里的永久开通。同时落在几档时取对他今天最好的
+  那一档；没落在任何一档的永久会员，顶层参数有效果时按顶层参数算。
+
+**配置两层**：应用的默认（表 `lottery_app_settings.supreme`，迁移 000142）与活动策略里的 `strategy.fortune.supreme`。
+活动里不写时跟随应用，写了以活动为准（`{enabled: false}` 即这个活动不加成）。只有开了每日运气的活动才有加成；关掉运气差异
+（`spread = 0`）会连活动自己的加成设置一起去掉，`PUT /fortune/settings` 只改差异时保留它。`title` 是展示给用户的名称，默认「至尊加成」。
+
+**用户端**：活动页 `fortune` 的 `factor` / `level` / `title` / `percentile` / `low` / `high` / `winRate` 都是加成之后的（老客户端不升级
+也照着新数字显示），另有 `fortune.supreme`（拿到加成时才有）：
+
+| 字段 | 说明 |
+|---|---|
+| `title` / `tier` | 加成名称；按档位分级时落在的档位名 |
+| `baseFactor` / `baseLevel` / `baseTitle` / `basePercentile` | 加成之前的运气 |
+| `boost` / `floor` / `cap` | 生效的参数 |
+| `lift` | 加成之后是之前的几倍（1 为自然运气已高过上限） |
+| `baseWinRate` | 加成之前（只乘自然运气）抽中兜底奖以外奖品的概率（百分比） |
+| `message` | 一句话说明，如「永久会员至尊加成：今日运气由 ×0.85 提升至 ×1.28」 |
+
+抽奖记录的 `trace.fortune` 是加成之后的系数，`trace.fortuneBase` 与 `trace.supreme` 是加成之前的系数与生效的参数组。
+
+**管理端**：
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/api/admin/apps/{appKey}/lottery/settings` | 应用设置：`supreme`、可选的会员档位（`tiers`，含会员数）、开了每日运气的活动各自的来源（`activities[].source`：activity / app） |
+| PUT | `/api/admin/apps/{appKey}/lottery/settings` | `{supreme}` 整体替换；引用的档位必须属于这个应用 |
+
+运气总览（`GET /fortune`）多 `supreme`（实际生效的配置）、`supremeSource`、`supremeHigh`；今日分布不含加成。单人读数
+（`GET /fortune/users/{uid}`）的 `current` 计入加成，另给 `lifetime` 与 `tiers`。模拟（`POST /lottery/simulate`）有生效的配置时
+返回 `supreme`：`applied`（这个人或虚拟用户拿到没有）、`grades`、指定真实用户时的 `baseFactor` / `factor`、`baseline`（同一批随机数、
+不加成的完整模拟结果）；虚拟用户按 `perk.lifetime` 与 `perk.tiers` 判定，每人按自己抽到的自然运气取最好的一组，`result.fortuneBase`
+是加成之前的系数分布。MCP 工具 `lottery_settings` / `lottery_save_settings`。
+
 ### 精确分析与审计
 
 - **首中分布**（`markov.go`）：把「已连续未中 k 次」看成马尔可夫链的状态，每个状态的中奖率 h_k（风险函数）由同一套
@@ -459,6 +514,8 @@ k 已拥有格子的发放比例。
 `000136_lottery_draw_lots` 建批次表与流水表、给抽奖记录加批次列，并把每个人汇总里多出批次的部分补成一批 `legacy`（带一条流水）；
 差额为 0 时不再补，所以可重复执行。
 
+`000142_lottery_app_settings` 建应用级设置表（至尊加成），只有 `CREATE TABLE IF NOT EXISTS`，不碰旧表搬迁。
+
 ## 验证
 
 `TestLotteryIntegration`（真实 Postgres）：保存校验、草稿不可见、免费次数与幂等回放、视频抽奖（client 模式的激励广告发次数）、
@@ -476,6 +533,11 @@ k 已拥有格子的发放比例。
 `TestLotteryFortuneControlIntegration`：定档后活动页与抽奖事务的系数一致、个人定档优先于全站偏移、全站 −4 落到最低系数、
 总览的今日分布、预演不落库、记录与状态、全部撤销恢复自然运气、重复撤销 40404、重抽、跨应用用户 40401、关闭 / 重开运气差异不动奖盘。
 合成规则的单元测试在 `fortune_control_test.go`。
+
+`TestLotterySupremeIntegration`：应用设置的校验（幅度超限、别的应用的档位）与保存、永久会员活动页与抽奖事务同一个加成后的系数、
+限时会员与普通用户不受影响、模拟（真实用户带对照组、普通用户没有、虚拟永久会员）、活动单独关闭、调整运气差异保留活动的设置、
+按档位分级（限时档位、只认永久开通、未列档位的永久会员）、单人读数与总览、应用关闭后回到自然运气。公式、单调性、范围、
+档位择优、用户端读数、归一与模拟的单元测试在 `supreme_test.go`。
 
 `TestLotteryBatchIntegration`：十连抽在 3 次免费后停下并写明 42915、同一 requestId 重试原样返回且不多扣、一次都抽不了时报错、
 次数上限；活动页的今日运气与出奖系数一致、`baseProbability`、`viewer`。今日运气档位占比的单元测试在 `fortune_reading_test.go`。

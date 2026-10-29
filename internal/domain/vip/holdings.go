@@ -36,6 +36,27 @@ type Holdings struct {
 	// Catalog 启用中的功能；CatalogKnown 为假时不按目录过滤（手工拼出来的 Holdings）
 	Catalog      []string `json:"-"`
 	CatalogKnown bool     `json:"-"`
+	// Tiers 此刻仍生效的会员期所属的档位（同一档位既有永久又有限时的，记为永久）。按档位分级的权益
+	// （如抽奖的至尊加成）只问这里，与会员判定同一份段
+	Tiers []HeldTier `json:"tiers,omitempty"`
+}
+
+// HeldTier 他名下仍生效的一个档位。
+type HeldTier struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	// Lifetime 这个档位里有永久开通
+	Lifetime bool `json:"lifetime"`
+}
+
+// HoldsTier 他有没有落在这个档位的会员期；lifetimeOnly 时只认永久开通。
+func (h Holdings) HoldsTier(tierID int64, lifetimeOnly bool) (HeldTier, bool) {
+	for _, tier := range h.Tiers {
+		if tier.ID == tierID && (tier.Lifetime || !lifetimeOnly) {
+			return tier, true
+		}
+	}
+	return HeldTier{}, false
 }
 
 // HoldingsOf 从会员判定的事实推出持有（与 Evaluate 同一份输入、同一套段规则）。
@@ -47,12 +68,14 @@ func HoldingsOf(in EvalInput, now time.Time) Holdings {
 		Catalog:          NormalizeFeatureTags(in.FeatureCatalog),
 		CatalogKnown:     true,
 	}
+	live := liveSegments(in.Segments, now)
+	holdings.Tiers = heldTiers(live)
 	if !holdings.Lifetime {
 		return holdings
 	}
 	features := []string{}
 	segments := 0
-	for _, segment := range liveSegments(in.Segments, now) {
+	for _, segment := range live {
 		if !segment.Lifetime {
 			continue
 		}
@@ -68,6 +91,31 @@ func HoldingsOf(in EvalInput, now time.Time) Holdings {
 	}
 	holdings.LifetimeFeatures = NormalizeFeatureTags(features)
 	return holdings
+}
+
+// heldTiers 仍生效的段落在哪些档位（按档位 ID 排列）。
+func heldTiers(live []Segment) []HeldTier {
+	out := []HeldTier{}
+	for _, segment := range live {
+		if segment.TierID == nil {
+			continue
+		}
+		name := ""
+		if segment.Tier != nil {
+			name = segment.Tier.Name
+		}
+		index := slices.IndexFunc(out, func(tier HeldTier) bool { return tier.ID == *segment.TierID })
+		if index < 0 {
+			out = append(out, HeldTier{ID: *segment.TierID, Name: name, Lifetime: segment.Lifetime})
+			continue
+		}
+		out[index].Lifetime = out[index].Lifetime || segment.Lifetime
+		if out[index].Name == "" {
+			out[index].Name = name
+		}
+	}
+	slices.SortFunc(out, func(a, b HeldTier) int { return int(a.ID - b.ID) })
+	return out
 }
 
 // Benefit 一份会员类权益：一段会员期、一个套餐、一次永久开通。

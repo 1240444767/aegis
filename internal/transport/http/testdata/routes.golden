@@ -255,6 +255,7 @@ GET	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId
 GET	/api/admin/apps/:appkey/lottery/activities/:activityId/stats	AdminLotteryStats
 GET	/api/admin/apps/:appkey/lottery/catalog	AdminLotteryCatalog
 GET	/api/admin/apps/:appkey/lottery/draws	AdminListLotteryDraws
+GET	/api/admin/apps/:appkey/lottery/settings	AdminLotterySettings
 GET	/api/admin/apps/:appkey/lottery/tickets	AdminLotteryTicketOverview
 GET	/api/admin/apps/:appkey/lottery/tickets/accounts	AdminListLotteryTicketAccounts
 GET	/api/admin/apps/:appkey/lottery/tickets/ledger	AdminListLotteryTicketLedger
@@ -1450,6 +1451,7 @@ PUT	/api/admin/apps/:appkey/levels/scheme	AdminSaveLevelScheme
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId	AdminUpdateLotteryActivity
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings	AdminSetLotteryFortuneSettings
 PUT	/api/admin/apps/:appkey/lottery/activities/:activityId/status	AdminSetLotteryActivityStatus
+PUT	/api/admin/apps/:appkey/lottery/settings	AdminSaveLotterySettings
 PUT	/api/admin/apps/:appkey/notices/:noticeId	UpdateAdminNotice
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider	AdminUpdateAppOAuthProvider
 PUT	/api/admin/apps/:appkey/oauth-providers/:provider/enabled	AdminSetAppOAuthProviderEnabled

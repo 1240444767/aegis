@@ -215,6 +215,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls"):                    LotteryFortuneControlRequest{},           // AdminCreateLotteryFortuneControls
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls/preview"):            LotteryFortuneControlRequest{},           // AdminPreviewLotteryFortuneControl
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls/revoke"):             LotteryFortuneRevokeRequest{},            // AdminRevokeLotteryFortuneControls
+		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/settings"):                                                     LotterySettingsRequest{},                 // AdminSaveLotterySettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/settings"):                     LotteryFortuneSettingsRequest{},          // AdminSetLotteryFortuneSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/status"):                               LotteryStatusRequest{},                   // AdminSetLotteryActivityStatus
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/draws/{drawId}/fulfill"):                                      LotteryFulfillRequest{},                  // AdminFulfillLotteryDraw

@@ -115,3 +115,15 @@ async def test_tickets(backend, call, call_error):
     assert req.json == {"amount": -2, "reason": "多发"}
     await call_error("lottery_adjust_tickets", {"app": "demo", "user_id": 7, "amount": 0, "reason": "x"})
 
+
+
+async def test_settings(backend, call):
+    await call("lottery_settings", {"app": "demo"})
+    assert (backend.last().method, backend.last().path) == ("GET", f"{BASE}/settings")
+    await call("lottery_save_settings", {"app": "demo", "enabled": True, "boost": 1.5, "floor": 1, "cap": 2.5})
+    req = backend.last()
+    assert (req.method, req.path) == ("PUT", f"{BASE}/settings")
+    assert req.json == {"supreme": {"enabled": True, "scope": "lifetime", "boost": 1.5, "floor": 1, "cap": 2.5}}
+    await call("lottery_save_settings", {"app": "demo", "enabled": True, "scope": "tiers",
+                                         "tiers": [{"tierId": 3, "boost": 2, "lifetimeOnly": True}]})
+    assert backend.last().json == {"supreme": {"enabled": True, "scope": "tiers", "tiers": [{"tierId": 3, "boost": 2, "lifetimeOnly": True}]}}

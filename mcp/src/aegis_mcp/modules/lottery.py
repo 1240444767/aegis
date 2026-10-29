@@ -1,4 +1,4 @@
-"""抽奖：表单目录、活动与奖品（新建、修改、启停、删除）、策略模拟、统计与出奖审计、抽奖记录与人工奖品发放、抽奖次数。
+"""抽奖：表单目录、活动与奖品（新建、修改、启停、删除）、策略模拟、统计与出奖审计、抽奖记录与人工奖品发放、抽奖次数、至尊加成。
 
 权限：读需要 app:read，其余（含模拟）需要 app:write。
 """
@@ -17,6 +17,8 @@ NAMESPACE = "lottery"
 server = FastMCP("lottery")
 
 CATALOG = GET("/api/admin/apps/:appkey/lottery/catalog")
+SETTINGS = GET("/api/admin/apps/:appkey/lottery/settings")
+SETTINGS_SAVE = PUT("/api/admin/apps/:appkey/lottery/settings")
 ACTIVITIES = GET("/api/admin/apps/:appkey/lottery/activities")
 ACTIVITY = GET("/api/admin/apps/:appkey/lottery/activities/:activityId")
 ACTIVITY_CREATE = POST("/api/admin/apps/:appkey/lottery/activities")
@@ -49,7 +51,8 @@ PRIZES_HELP = (
 )
 STRATEGY_HELP = (
     "多维度出奖策略（整体替换，可选键）：softPity {start, step} / pacing / cooldown / budget / risk / behavior / rules / "
-    "luck / variance（independent | prd）/ winRate / guard / fortune {spread}（每日运气）。不确定时先用 lottery_simulate 验证"
+    "luck / variance（independent | prd）/ winRate / guard / fortune {spread, supreme?}（每日运气；supreme 为本活动的至尊加成，"
+    "不写跟随应用设置 lottery_settings，写 {enabled: false} 即本活动不加成）。不确定时先用 lottery_simulate 验证"
 )
 PERKS_HELP = (
     "人群特权（整体替换）。每项 {name, disabled?, audience: all | member | lifetime | non_member | non_lifetime | ad_free, "
@@ -258,9 +261,11 @@ async def simulate(
     seed: Annotated[int | None, Field(ge=0, description="随机种子，固定后结果可复现")] = None,
     user_id: Annotated[int | None, Field(gt=0, description="用这个真实用户的画像（并附带他下一次抽奖的出奖方案）")] = None,
     profile: Annotated[dict[str, Any] | None, Field(description="不指定用户时的虚拟画像（行为信号，如 registeredDays、signStreak、member、paidAmount…）")] = None,
-    perk: Annotated[dict[str, Any] | None, Field(description="不指定用户时虚拟用户的特权身份：{member, lifetime, adFree, signedToday, onlineMinutesToday}")] = None,
+    perk: Annotated[dict[str, Any] | None, Field(description="不指定用户时虚拟用户的特权身份：{member, lifetime, adFree, signedToday, onlineMinutesToday, tiers?（所在会员档位 ID，至尊加成按档位分级时用）}")] = None,
 ) -> Any:
-    """按出奖策略模拟抽奖（不写库、不发奖、不扣次数）：实际中奖率、各奖品分布、首中次数与连续未中分布。需要 app:write 权限。"""
+    """按出奖策略模拟抽奖（不写库、不发奖、不扣次数）：实际中奖率、各奖品分布、首中次数与连续未中分布。需要 app:write 权限。
+
+    活动有生效的至尊加成时结果带 supreme（是否拿到、加成前后系数、同一批随机数不加成的对照组 baseline）。"""
     if activity_id is None and activity is None:
         raise ToolError("需要 activity_id（已保存的活动）或 activity（未保存的配置）之一")
     if users * draws_per_user > 200_000:
@@ -369,3 +374,32 @@ async def adjust_tickets(
     if amount == 0:
         raise ToolError("amount 不能为 0")
     return await TICKET_ADJUST(appkey=app, userId=user_id, body=body(amount=amount, reason=reason, paid=paid or None))
+
+
+SupremeScope = Literal["lifetime", "tiers"]
+
+
+@server.tool(**READ("lottery"))
+async def settings(app: AppRef) -> Any:
+    """应用的抽奖设置：每日运气的至尊加成（supreme），附可选的会员档位与开了每日运气的活动各自的加成来源（activity / app）。"""
+    return await SETTINGS(appkey=app)
+
+
+@server.tool(**WRITE("lottery", idempotent=True))
+async def save_settings(
+    app: AppRef,
+    enabled: Annotated[bool, Field(description="开启至尊加成（只对开了每日运气、且没有单独设置的活动生效）")],
+    scope: Annotated[SupremeScope, Field(description="lifetime 只对永久会员；tiers 按会员档位分级")] = "lifetime",
+    boost: Annotated[float, Field(ge=0, le=3, description="加成幅度：运气系数乘多少（1–3，0 为不乘）；tiers 时是没落在任何一档的永久会员的幅度")] = 0,
+    floor: Annotated[float, Field(ge=0, le=5, description="保底运气：加成之后至少多少（0 不设，1 为平均水平）")] = 0,
+    cap: Annotated[float, Field(ge=0, le=5, description="上限：加成之后最多多少（0 按 5 封顶；自然运气已高过上限时按自然运气）")] = 0,
+    tiers: Annotated[list[dict[str, Any]] | None, Field(description="tiers 时每档 {tierId, boost?, floor?, cap?, lifetimeOnly?}；档位 ID 见 lottery_settings 的 tiers")] = None,
+    title: Annotated[str, Field(max_length=16, description="展示给用户的名称，默认「至尊加成」")] = "",
+) -> Any:
+    """保存应用的至尊加成（整体替换），会改变所有跟随应用设置的活动的出奖概率：执行前先向用户复述参数并确认。
+
+    可先用 lottery_simulate 看效果。"""
+    return await SETTINGS_SAVE(appkey=app, body=body(supreme=body(
+        enabled=enabled, scope=scope, boost=boost or None, floor=floor or None, cap=cap or None,
+        tiers=tiers if scope == "tiers" else None, title=title or None,
+    )))

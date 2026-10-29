@@ -346,6 +346,9 @@ type DrawPlan struct {
 	Perks *PerkEffects `json:"perks,omitempty"`
 	// Fortune 这个人今天的运气系数（真实奖品的权重已乘过）；没开每日运气时不写
 	Fortune float64 `json:"fortune,omitempty"`
+	// FortuneBase / Supreme 拿到至尊加成时：加成之前的系数与生效的参数（Fortune 是加成之后的）
+	FortuneBase float64       `json:"fortuneBase,omitempty"`
+	Supreme     *SupremeGrade `json:"supreme,omitempty"`
 }
 
 // PlanDraw 按策略算出这一次每个奖品的最终概率。纯函数：同样的输入永远得到同样的方案。
