@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { SectionCard } from "@/components/apps/app-config-primitives";
+import { SupremeCard, SupremeReadingNote } from "@/components/apps/lottery/lottery-supreme-panel";
 import { formatStoreDate } from "@/components/apps/points-store/points-store-shared";
 import { UserPicker as SingleUserPicker, type PickedUser } from "@/components/commerce/user-picker";
 import { StatTile } from "@/components/content/content-shared";
@@ -195,6 +196,7 @@ export function LotteryFortunePanel({
       ) : (
         <>
           <SpreadCard appKey={appKey} activityId={currentId} overview={overview} />
+          <SupremeCard appKey={appKey} overview={overview} />
           {overview.enabled ? (
             <>
               <DistributionCard overview={overview} />
@@ -658,8 +660,14 @@ function UserLookupCard({ appKey, activityId, overview }: { appKey: string; acti
           <>
             <div className="grid grid-cols-2 gap-3">
               <ReadingTile title="干预前" reading={reading.base} z={reading.baseZ} />
-              <ReadingTile title="此刻" reading={reading.current} z={reading.z} highlight={reading.applied.length > 0} />
+              <ReadingTile
+                title="此刻"
+                reading={reading.current}
+                z={reading.z}
+                highlight={reading.applied.length > 0 || Boolean(reading.current?.supreme)}
+              />
             </div>
+            <SupremeReadingNote supreme={reading.current?.supreme ?? undefined} />
             {reading.applied.length ? (
               <div className="space-y-1.5">
                 <p className="text-[11px] text-muted-foreground">生效的干预</p>

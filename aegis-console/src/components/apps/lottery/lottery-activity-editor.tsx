@@ -102,7 +102,7 @@ import { Switch } from "@/components/ui/switch";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/api/client";
 import type { LotteryAdminActivity, LotteryLifetimePolicy, LotteryStatus, LotteryUIMode } from "@/lib/api/lottery";
-import { useLotteryCatalogQuery, useSaveLotteryActivityMutation } from "@/lib/lottery-hooks";
+import { useLotteryCatalogQuery, useLotterySettingsQuery, useSaveLotteryActivityMutation } from "@/lib/lottery-hooks";
 import { cn } from "@/lib/utils";
 
 const SECTIONS: SectionMeta[] = [
@@ -168,6 +168,7 @@ export function LotteryActivityEditor({
   onOpenChange: (open: boolean) => void;
 }) {
   const catalogQuery = useLotteryCatalogQuery(appKey);
+  const settingsQuery = useLotterySettingsQuery(appKey);
   const saveMutation = useSaveLotteryActivityMutation(appKey);
   const catalog = catalogQuery.data;
 
@@ -684,6 +685,7 @@ export function LotteryActivityEditor({
                     onChange={(strategy) => patch("strategy", strategy)}
                     catalog={catalog}
                     prizeLabels={form.prizes.map((prize) => prizeName(prize.key))}
+                    supremeTiers={settingsQuery.data?.tiers}
                   />
                 </EditorSection>
 

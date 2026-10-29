@@ -17,6 +17,9 @@ import {
   previewLotteryFortuneControl,
   revokeLotteryFortuneControls,
   setLotteryFortuneSpread,
+  getLotterySettings,
+  saveLotterySettings,
+  type LotterySupreme,
   type LotteryFortuneControlParams,
   type LotteryFortuneControlPayload,
   deleteLotteryActivity,
@@ -56,10 +59,11 @@ const KEY = {
   tickets: "admin-lottery-tickets",
   ticketAccounts: "admin-lottery-ticket-accounts",
   ticketAccount: "admin-lottery-ticket-account",
-  ticketLedger: "admin-lottery-ticket-ledger"
+  ticketLedger: "admin-lottery-ticket-ledger",
+  settings: "admin-lottery-settings"
 } as const;
 
-const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats];
+const LOTTERY_SCOPE = [KEY.activities, KEY.draws, KEY.stats, KEY.settings];
 
 function useInvalidateLotteryScope() {
   const queryClient = useQueryClient();
@@ -275,6 +279,33 @@ export function useSetLotteryFortuneSpreadMutation(appKey?: string | null, activ
   return useMutation({
     mutationFn: (spread: number) => setLotteryFortuneSpread(token as string, appKey as string, activityId as number, spread),
     onSuccess: async () => {
+      await Promise.all([invalidateFortune(), invalidateLottery()]);
+    }
+  });
+}
+
+// ── 至尊加成（应用设置）──
+//
+// 保存会改变跟随应用设置的活动的运气：运气总览与单人读数、活动列表（积分账）一并失效。
+
+export function useLotterySettingsQuery(appKey?: string | null) {
+  const token = useAdminToken();
+  return useQuery({
+    queryKey: [KEY.settings, token, appKey],
+    queryFn: () => getLotterySettings(token as string, appKey as string),
+    enabled: Boolean(token && appKey)
+  });
+}
+
+export function useSaveLotterySettingsMutation(appKey?: string | null) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  const invalidateFortune = useInvalidateFortuneScope();
+  const invalidateLottery = useInvalidateLotteryScope();
+  return useMutation({
+    mutationFn: (supreme: LotterySupreme) => saveLotterySettings(token as string, appKey as string, supreme),
+    onSuccess: async (data) => {
+      queryClient.setQueryData([KEY.settings, token, appKey], data);
       await Promise.all([invalidateFortune(), invalidateLottery()]);
     }
   });

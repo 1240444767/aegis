@@ -21,6 +21,7 @@ import {
 import { FieldGroup, NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import { STRATEGY_LIMITS, type RuleDraft, type StrategyDraft } from "@/components/apps/lottery/lottery-strategy-form";
 import { kindLabelOf } from "@/components/apps/lottery/lottery-shared";
+import { SupremeFields, SupremeModePicker, type SupremeTierOption } from "@/components/apps/lottery/lottery-supreme-editor";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -117,7 +118,8 @@ export function LotteryStrategyEditor({
   onChange,
   catalog,
   prizeLabels,
-  embedded
+  embedded,
+  supremeTiers = []
 }: {
   value: StrategyDraft;
   onChange: (next: StrategyDraft) => void;
@@ -126,6 +128,8 @@ export function LotteryStrategyEditor({
   prizeLabels: string[];
   /** 嵌在外层已有标题的分区里时不再画自己的分组标题 */
   embedded?: boolean;
+  /** 应用的会员档位（至尊加成按档位分级时选） */
+  supremeTiers?: SupremeTierOption[];
 }) {
   const limits = catalog?.strategyLimits ?? STRATEGY_LIMITS;
   const kinds = catalog?.kinds ?? [];
@@ -199,6 +203,29 @@ export function LotteryStrategyEditor({
             {fortuneHint(value.fortuneSpread)}
           </p>
         </DimensionBox>
+      ) : null}
+
+      {value.fortune ? (
+        <div className="space-y-3 rounded-xl border border-border p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-[11px] font-medium text-muted-foreground">至尊加成</span>
+            <SupremeModePicker value={value.supremeMode} onChange={(supremeMode) => patch({ supremeMode })} />
+          </div>
+          {value.supremeMode === "custom" ? (
+            <SupremeFields
+              value={value.supreme}
+              onChange={(supreme) => patch({ supreme })}
+              tiers={supremeTiers}
+              spread={Number(value.fortuneSpread) || undefined}
+            />
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              {value.supremeMode === "off"
+                ? "本活动的永久会员按自然运气抽奖"
+                : "按「运气控制」里的应用设置给永久会员或指定档位加成"}
+            </p>
+          )}
+        </div>
       ) : null}
 
       {value.prd ? (

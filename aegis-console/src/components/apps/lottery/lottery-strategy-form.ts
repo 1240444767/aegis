@@ -1,4 +1,12 @@
 import type { LotteryCatalog, LotteryStrategy, LotteryStrategyLimits } from "@/lib/api/lottery";
+import {
+  activitySupremePayload,
+  seedSupreme,
+  supremeModeOf,
+  validateSupreme,
+  type SupremeDraft,
+  type SupremeMode
+} from "@/components/apps/lottery/lottery-supreme-form";
 
 /**
  * 出奖策略的草稿模型。数字按字符串存（输入框要能清空），开关单独存：关掉一项时保留填过的数，
@@ -66,6 +74,9 @@ export type StrategyDraft = {
   luckStrength: string;
   fortune: boolean;
   fortuneSpread: string;
+  /** 本活动的至尊加成：跟随应用设置 / 本活动不加成 / 本活动单独设置（只在开了每日运气时下发） */
+  supremeMode: SupremeMode;
+  supreme: SupremeDraft;
   /** 伪随机分布（与软保底二选一） */
   prd: boolean;
   winRate: boolean;
@@ -127,6 +138,8 @@ export function seedStrategy(strategy?: LotteryStrategy | null): StrategyDraft {
     luckStrength: num(s.luck?.strength, 0.3),
     fortune: Boolean(s.fortune),
     fortuneSpread: num(s.fortune?.spread, 0.3),
+    supremeMode: supremeModeOf(s.fortune?.supreme),
+    supreme: seedSupreme(s.fortune?.supreme?.enabled ? s.fortune.supreme : null),
     prd: s.variance === "prd",
     winRate: Boolean(s.winRate),
     winRateTarget: pct(s.winRate?.target, 30),
@@ -178,7 +191,11 @@ export function strategyPayload(draft: StrategyDraft, catalog?: LotteryCatalog |
     }
   }
   if (draft.luck) out.luck = { strength: toNumber(draft.luckStrength) };
-  if (draft.fortune) out.fortune = { spread: toNumber(draft.fortuneSpread) };
+  if (draft.fortune) {
+    out.fortune = { spread: toNumber(draft.fortuneSpread) };
+    const supreme = activitySupremePayload(draft.supremeMode, draft.supreme);
+    if (supreme) out.fortune.supreme = supreme;
+  }
   if (draft.prd) out.variance = "prd";
   if (draft.winRate) {
     out.winRate = {
@@ -252,6 +269,7 @@ export function validateStrategy(draft: StrategyDraft, prizeCount: number, limit
     const spread = toNumber(draft.fortuneSpread);
     const max = limits.fortuneSpread ?? 1;
     if (spread <= 0 || spread > max) issues.push(`每日运气的差异需要在 0–${max} 之间`);
+    if (draft.supremeMode === "custom") issues.push(...validateSupreme({ ...draft.supreme, enabled: true }));
   }
   if (draft.prd && draft.softPity) issues.push("伪随机分布与软保底只能二选一");
   if (draft.winRate) {

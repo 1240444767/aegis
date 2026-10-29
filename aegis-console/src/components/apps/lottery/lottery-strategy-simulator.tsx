@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FlaskConical, Loader2, Play } from "lucide-react";
+import { Crown, FlaskConical, Loader2, Play } from "lucide-react";
 import { toast } from "sonner";
 import { NumberField, SwitchRow } from "@/components/apps/app-config-primitives";
 import { BehaviorScoreView, DrawPlanView, percent } from "@/components/apps/lottery/lottery-plan-view";
@@ -29,7 +29,7 @@ import type {
   LotterySimulateResponse,
   LotterySource
 } from "@/lib/api/lottery";
-import { useSimulateLotteryMutation } from "@/lib/lottery-hooks";
+import { useLotterySettingsQuery, useSimulateLotteryMutation } from "@/lib/lottery-hooks";
 import { cn } from "@/lib/utils";
 
 type PerkIdentity = "none" | "member" | "lifetime" | "adFree" | "signed";
@@ -72,7 +72,10 @@ export function LotteryStrategySimulator({
   const [userId, setUserId] = useState("");
   const [isolated, setIsolated] = useState(false);
   const [identity, setIdentity] = useState<PerkIdentity>("none");
+  const [tierIds, setTierIds] = useState<number[]>([]);
   const [result, setResult] = useState<LotterySimulateResponse | null>(null);
+  const tiers = useLotterySettingsQuery(appKey).data?.tiers ?? [];
+  const tieredIdentity = identity === "member" || identity === "lifetime";
 
   const total = (Number(users) || 0) * (Number(draws) || 0);
   const run = async () => {
@@ -89,7 +92,10 @@ export function LotteryStrategySimulator({
         drawsPerUser: Number(draws) || 1,
         source,
         isolatedStock: isolated,
-        perk: Number(userId) > 0 || identity === "none" ? undefined : PERK_IDENTITY[identity].facts
+        perk:
+          Number(userId) > 0 || identity === "none"
+            ? undefined
+            : { ...PERK_IDENTITY[identity].facts, tiers: tieredIdentity && tierIds.length ? tierIds : undefined }
       });
       setResult(response);
     } catch (error) {
@@ -179,7 +185,34 @@ export function LotteryStrategySimulator({
                     </button>
                   ))}
                 </div>
-                <p className="text-[10px] text-muted-foreground">按这一身份判定人群特权，保底提前与中奖加成计入模拟</p>
+                <p className="text-[10px] text-muted-foreground">按这一身份判定人群特权与至尊加成，保底提前与中奖加成计入模拟</p>
+                {tieredIdentity && tiers.length ? (
+                  <div className="space-y-1 pt-1">
+                    <span className="text-[11px] font-medium">所在会员档位</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {tiers.map((tier) => {
+                        const on = tierIds.includes(tier.id);
+                        return (
+                          <button
+                            key={tier.id}
+                            type="button"
+                            aria-pressed={on}
+                            onClick={() => setTierIds(on ? tierIds.filter((id) => id !== tier.id) : [...tierIds, tier.id])}
+                            className={cn(
+                              "h-7 rounded-lg border px-2.5 text-[11px] font-medium transition-colors",
+                              on
+                                ? "border-foreground/80 bg-foreground text-background"
+                                : "border-border bg-card text-muted-foreground hover:text-foreground"
+                            )}
+                          >
+                            {tier.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">至尊加成按会员档位分级时用；永久会员按永久开通算</p>
+                  </div>
+                ) : null}
               </div>
             )}
             <div className="flex flex-wrap items-center gap-3">
@@ -244,6 +277,7 @@ function SimulationReport({
           {result.perks.winBoost ? `，中奖 ×${result.perks.winBoost}` : ""}
         </p>
       ) : null}
+      {result.supreme ? <SupremeView result={result} /> : null}
       <p className="text-[11px] text-muted-foreground">
         共 {formatCount(sim.users)} 人、{formatCount(sim.draws)} 次，发出积分 {formatCount(sim.pointsIssued)}
         {sim.valuePerDraw !== undefined ? `，平均每次 ${sim.valuePerDraw.toFixed(2)} 积分当量` : ""}
@@ -298,6 +332,82 @@ function SimulationReport({
           <DrawPlanView plan={result.current} prizeName={nameOf} signals={catalog?.signals} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+/** 至尊加成的效果：加成前后的运气系数，与同一批随机数、不加成的对照组逐项对比 */
+function SupremeView({ result }: { result: LotterySimulateResponse }) {
+  const supreme = result.supreme!;
+  const sim = result.result;
+  const baseline = supreme.baseline;
+  const source = supreme.source === "activity" ? "活动单独设置" : "跟随应用设置";
+  if (!supreme.applied) {
+    return (
+      <p className="rounded-xl bg-muted px-3 py-2 text-[11px] text-muted-foreground">
+        {supreme.title}（{source}）：模拟的{result.current ? "这位用户" : "虚拟用户"}不在加成范围内，按自然运气抽奖
+      </p>
+    );
+  }
+  const before = supreme.baseFactor ?? sim.fortuneBase?.mean;
+  const after = supreme.factor ?? sim.fortune?.mean;
+  const rows: Array<{ label: string; plain?: string; lifted: string }> = [
+    { label: "实际中奖率", plain: baseline ? percent(baseline.winRate) : undefined, lifted: percent(sim.winRate) },
+    {
+      label: "每次积分当量",
+      plain: baseline?.valuePerDraw !== undefined ? baseline.valuePerDraw.toFixed(2) : undefined,
+      lifted: sim.valuePerDraw !== undefined ? sim.valuePerDraw.toFixed(2) : "—"
+    },
+    { label: "发出积分", plain: baseline ? formatCount(baseline.pointsIssued) : undefined, lifted: formatCount(sim.pointsIssued) }
+  ];
+  return (
+    <div className="space-y-2 rounded-xl border border-amber-500/30 bg-amber-500/[0.04] p-3">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <span className="flex items-center gap-1.5 text-[11px] font-medium">
+          <Crown className="size-3.5 text-amber-600 dark:text-amber-400" />
+          {supreme.title}（{source}）
+        </span>
+        {before !== undefined && after !== undefined ? (
+          <span className="font-mono text-[11px] tabular-nums">
+            {supreme.factor !== undefined ? "运气系数" : "平均运气系数"} ×{before.toFixed(2)} → ×{after.toFixed(2)}
+          </span>
+        ) : null}
+      </div>
+      {supreme.grades.length ? (
+        <p className="text-[10px] text-muted-foreground">
+          参数：
+          {supreme.grades
+            .map(
+              (grade) =>
+                `${grade.tierName ?? (grade.tierId ? `档位 ${grade.tierId}` : "永久会员")} 幅度 ×${grade.boost || 1}` +
+                (grade.floor ? `，保底 ${grade.floor}` : "") +
+                (grade.cap ? `，上限 ${grade.cap}` : "")
+            )
+            .join("；")}
+        </p>
+      ) : null}
+      <div className="grid gap-2 sm:grid-cols-3">
+        {rows.map((row) => (
+          <Stat key={row.label} label={row.label} value={row.lifted} sub={row.plain ? `不加成 ${row.plain}` : undefined} />
+        ))}
+      </div>
+      {baseline ? (
+        <div className="divide-y divide-border rounded-lg border border-border bg-card">
+          {sim.prizes.map((prize, index) => {
+            const plain = baseline.prizes[index];
+            return (
+              <div key={`${prize.prizeId}-${prize.position}`} className="flex items-center justify-between gap-2 px-2.5 py-1 text-[11px]">
+                <span className="truncate">{prize.name}</span>
+                <span className="shrink-0 font-mono tabular-nums">
+                  {plain ? <span className="text-muted-foreground">{percent(plain.rate)} → </span> : null}
+                  {percent(prize.rate)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      <p className="text-[10px] text-muted-foreground">对照组与加成组使用同一批随机数，差异只来自至尊加成</p>
     </div>
   );
 }

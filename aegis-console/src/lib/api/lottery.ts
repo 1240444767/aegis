@@ -227,8 +227,8 @@ export type LotteryStrategy = {
   rules?: LotteryStrategyRule[];
   /** 运气平衡：每 1σ 在对数几率上校正多少 */
   luck?: { strength: number };
-  /** 每日运气：每人每天一个系数乘在真实奖品上，spread 为对数标准差 σ */
-  fortune?: { spread: number };
+  /** 每日运气：每人每天一个系数乘在真实奖品上，spread 为对数标准差 σ；supreme 为本活动的至尊加成（不写跟随应用设置） */
+  fortune?: { spread: number; supreme?: LotterySupreme };
   /** prd 为伪随机分布（替代软保底）；空为独立抽取 */
   variance?: "" | "prd";
   /** 全站中奖率反馈（Beta 后验） */
@@ -374,6 +374,10 @@ export type LotterySimulationResult = {
     blocked: number;
   }>;
   behavior?: LotteryBehaviorScore;
+  /** 虚拟用户运气系数的分布；有至尊加成时是加成之后的 */
+  fortune?: LotteryDistribution;
+  /** 有至尊加成时，加成之前的系数分布 */
+  fortuneBase?: LotteryDistribution;
 };
 
 export type LotterySimulatePayload = {
@@ -388,7 +392,15 @@ export type LotterySimulatePayload = {
   isolatedStock?: boolean;
   seed?: number;
   /** 不指定用户时，虚拟用户的特权身份 */
-  perk?: { member?: boolean; lifetime?: boolean; adFree?: boolean; signedToday?: boolean; onlineMinutesToday?: number };
+  perk?: {
+    member?: boolean;
+    lifetime?: boolean;
+    adFree?: boolean;
+    signedToday?: boolean;
+    onlineMinutesToday?: number;
+    /** 所在会员档位（至尊加成按档位分级时用；lifetime 时按永久开通算） */
+    tiers?: number[];
+  };
 };
 
 export type LotterySimulateResponse = {
@@ -400,6 +412,21 @@ export type LotterySimulateResponse = {
   analytic?: LotteryStreakAnalysis;
   /** 模拟里计入的人群特权（保底提前、中奖加成） */
   perks?: LotteryPerkEffects;
+  /** 活动实际生效的至尊加成与它的效果 */
+  supreme?: LotterySupremeSimulation;
+};
+
+export type LotterySupremeSimulation = {
+  title: string;
+  source: LotterySupremeSource;
+  /** 模拟的这个人（或虚拟用户）拿到了加成 */
+  applied: boolean;
+  grades: LotterySupremeGrade[];
+  /** 指定真实用户时，他今天加成之前与之后的系数 */
+  baseFactor?: number;
+  factor?: number;
+  /** 同一批随机数、不加成时的模拟结果 */
+  baseline?: LotterySimulationResult;
 };
 
 export type LotteryReward = {
@@ -773,6 +800,64 @@ export type LotteryFortuneControl = {
   status: LotteryFortuneControlStatus;
 };
 
+// ── 至尊加成（docs/lottery.md「至尊加成」）──
+//
+// f' = max(f, min(max(f × 幅度, 保底), 上限))：接在管理员干预之后、与每日运气同一个生效点。
+// 应用设置是默认，活动策略里的 fortune.supreme 覆盖它（enabled=false 即这个活动不加成）。
+
+export type LotterySupremeScope = "lifetime" | "tiers";
+export type LotterySupremeSource = "activity" | "app";
+
+export type LotterySupremeTier = {
+  tierId: number;
+  /** 只认这个档位里的永久开通 */
+  lifetimeOnly?: boolean;
+  boost?: number;
+  floor?: number;
+  cap?: number;
+};
+
+export type LotterySupreme = {
+  enabled: boolean;
+  scope: LotterySupremeScope;
+  /** lifetime 时为永久会员的参数；tiers 时为没落在任何一档的永久会员的参数 */
+  boost?: number;
+  floor?: number;
+  cap?: number;
+  tiers?: LotterySupremeTier[];
+  title?: string;
+};
+
+export type LotterySupremeGrade = {
+  boost: number;
+  floor?: number;
+  cap?: number;
+  tierId?: number;
+  tierName?: string;
+};
+
+export type LotterySettings = {
+  appid: number;
+  supreme: LotterySupreme;
+  updatedBy?: string;
+  updatedAt: string;
+  tiers: Array<{ id: number; name: string; members: number; lifetimeMembers: number }>;
+  /** 开了每日运气的活动各自用的是哪份至尊加成 */
+  activities: Array<{ id: number; name: string; status: string; source: LotterySupremeSource; enabled: boolean }>;
+};
+
+export function getLotterySettings(token: string, appKey: string) {
+  return apiRequest<LotterySettings>(`${base(appKey)}/settings`, { token });
+}
+
+export function saveLotterySettings(token: string, appKey: string, supreme: LotterySupreme) {
+  return apiRequest<LotterySettings>(`${base(appKey)}/settings`, {
+    method: "PUT",
+    token,
+    body: JSON.stringify({ supreme })
+  });
+}
+
 export type LotteryFortuneOverview = {
   activityId: number;
   enabled: boolean;
@@ -785,6 +870,11 @@ export type LotteryFortuneOverview = {
   today: LotteryFortuneDistribution;
   global: LotteryFortuneControl[];
   counts: { activeGlobal: number; activeUsers: number; scheduled: number };
+  /** 实际生效的至尊加成与来源；今日分布不含加成 */
+  supreme?: LotterySupreme;
+  supremeSource?: LotterySupremeSource;
+  /** 拿到加成的人最走运时的系数 */
+  supremeHigh?: number;
 };
 
 /** 用户端的运气读数（与 App 看到的一致） */
@@ -797,6 +887,23 @@ export type LotteryFortuneReading = {
   low: number;
   high: number;
   resetsAt: string;
+  /** 至尊加成：上面的读数已是加成之后的 */
+  supreme?: LotterySupremeReading;
+};
+
+export type LotterySupremeReading = {
+  title: string;
+  tier?: string;
+  baseFactor: number;
+  baseLevel: LotteryFortuneLevel;
+  baseTitle: string;
+  basePercentile: number;
+  boost: number;
+  floor?: number;
+  cap?: number;
+  lift: number;
+  baseWinRate: number;
+  message: string;
 };
 
 export type LotteryFortuneUserReading = {
@@ -808,6 +915,8 @@ export type LotteryFortuneUserReading = {
   z: number;
   applied: LotteryFortuneControl[];
   controls: LotteryFortuneControl[];
+  lifetime?: boolean;
+  tiers?: Array<{ id: number; name: string; lifetime: boolean }>;
 };
 
 export type LotteryFortuneControlPayload = {
