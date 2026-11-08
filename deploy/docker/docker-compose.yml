@@ -206,7 +206,7 @@ services:
       DB_PORT: 5432
       POSTGRES_USER: temporal
       POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:-temporal}
-      POSTGRES_SEEDS: temporalpostgres
+      POSTGRES_SEEDS: temporal-postgres
       BIND_ON_IP: 0.0.0.0
       TEMPORAL_ADDRESS: 127.0.0.1:7233
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
