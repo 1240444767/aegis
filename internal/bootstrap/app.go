@@ -296,8 +296,12 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 邮件模板服务（MJML 运行在 wasm 里）首次编译要实例化模块，启动后在后台预热，第一封信不必多等
 	go mailtpl.Default().Warmup(context.Background())
 	paymentService := service.NewPaymentService(log, pg, cfg.PaymentReceipt)
+	// 订单履约成功（会员开通/充值到账）给用户留一条「会员与订单」站内信（见 payment_notify.go）
+	paymentService.SetNotifier(notificationService)
 	walletService := service.NewWalletService(log, pg)
 	vipService := service.NewVipService(log, pg)
+	// 余额直购成功同样留痕到消息中心（见 vip_notify.go）
+	vipService.SetNotifier(notificationService)
 	workflowService := service.NewWorkflowService(log, pg, temporalClient, cfg.Temporal)
 	storageService := service.NewStorageService(log, pg, redisClient, cfg.Redis.KeyPrefix)
 	storageService.SetLinkSigningKey(cfg.Security.MasterKey)

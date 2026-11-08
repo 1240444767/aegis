@@ -58,6 +58,8 @@ type PaymentService struct {
 	consoleBaseURL string
 	// settleAttempts 用户查单触发主动核实的节流表：订单号 → 上次核实时间
 	settleAttempts sync.Map
+	// notifier 站内信投递（会员开通/充值到账通知，实现见 payment_notify.go）
+	notifier notificationDeliverer
 }
 
 // SetConsoleBaseURL 注入控制台对外地址（bootstrap 中调用）。
@@ -1046,6 +1048,7 @@ func (s *PaymentService) ensureOrderFulfilled(ctx context.Context, order *paymen
 		s.log.Info("payment order fulfilled",
 			zap.String("orderNo", order.OrderNo), zap.String("purpose", instr.Purpose),
 			zap.Int64("userId", *order.UserID), zap.Int64("appid", order.AppID))
+		s.notifyFulfilled(ctx, order, instr)
 	}
 	return nil
 }

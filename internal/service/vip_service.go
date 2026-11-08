@@ -27,6 +27,8 @@ type VipService struct {
 	pg  *pgrepo.Repository
 	// payments 凭证引擎的持有者；余额直购成功后由它按应用设置自动寄送凭证
 	payments *PaymentService
+	// notifier 站内信投递（余额直购成功通知，实现见 vip_notify.go）
+	notifier notificationDeliverer
 }
 
 func NewVipService(log *zap.Logger, pg *pgrepo.Repository) *VipService {
@@ -150,6 +152,10 @@ func (s *VipService) PurchaseWithWallet(ctx context.Context, session *authdomain
 		if !result.Replayed && strings.TrimSpace(result.WalletTransactionNo) != "" {
 			go s.payments.autoEmailWalletReceipt(session.AppID, result.WalletTransactionNo)
 		}
+	}
+	// 站内信同理：开通这件事要在「会员与订单」里留一条，幂等重放不重复发
+	if !result.Replayed {
+		s.notifyVipGranted(ctx, session.AppID, session.UserID, result)
 	}
 	return result, nil
 }
