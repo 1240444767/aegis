@@ -67,14 +67,17 @@ Redis Stream 或 Lua 脚本要求 Redis 可靠落盘，线上 Redis 的启动参
 `deploy/docker/postgres/tuning.sql`（`ALTER SYSTEM`，写进数据目录，容器重建后仍生效），按 8 核 / 32 GB、与其它服务同机估算：
 `shared_buffers` 4 GB、`effective_cache_size` 16 GB、`work_mem` 16 MB、`max_connections` 200、`max_wal_size` 4 GB、
 `random_page_cost` 1.1、自动清理更积极、`pg_stat_statements` 与慢语句 / 等锁日志。标「重启」的参数要重启 Postgres
-才生效（几秒中断）。容器的 `/dev/shm` 默认只有 64 MB，compose 里给 postgres 加 `shm_size: 1g`。
+才生效（几秒中断）。容器的 `/dev/shm` 默认只有 64 MB：`min_dynamic_shared_memory` 256 MB 让并行查询先用主共享内存里预留的
+一块，不受它限制（线上的基础设施 compose 存在 Dokploy 里，改 `shm_size` 要整套重新部署，所以用这个参数代替）。
 
 JetStream 默认每 2 分钟把文件存储刷一次盘（`sync_interval`），进程崩溃不丢、整机断电可能丢最近的未刷盘部分；
 要连断电都不丢，nats-server 配 `jetstream { sync_interval: always }`（写入变慢）。
 
 ## 容量
 
-单机（本机 Docker Postgres 17、连接池 40 条）的抽奖压测约 2300–3000 次/秒（`TestLotteryLoad`，见 docs/lottery.md）。
+单机（本机 Docker Postgres 17、连接池 40 条）的抽奖压测：单抽约 2300–3400 次/秒、十连抽约 3300–5300 次/秒，
+比改造前快 1.5–1.9 倍（`TestLotteryLoad`，与改造前的代码在同一时段交替跑，见 docs/lottery.md）。
+抽奖事务里互不依赖的读都走 pgx 的批量管道（`repository/postgres/pgpipe.go`），单抽 7 次往返。
 「200 万人」指的是用户规模：抽奖、风控留痕的每一步开销都与用户数和历史记录数无关（计数 O(1)、分片无热点），
 吞吐只随库的 CPU 与连接数涨。再往上的手段按顺序：调库侧参数 → 加 API 实例（多实例之间已经安全：咨询锁、行锁、
 工作队列消费者都按多实例设计）→ PgBouncer 事务池化 → 读写分离 → 按时间分区 `lottery_draws` 与 `risk_assessments`。
