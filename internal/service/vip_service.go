@@ -367,6 +367,8 @@ func (s *VipService) AdminGrantVip(ctx context.Context, in AdminVipGrantInput) (
 		}
 		return nil, err
 	}
+	// 发放成功给用户留一条「会员与订单」消息（见 vip_notify.go）
+	s.notifyAdminVipGrant(ctx, in.AppID, in.UserID, txn, in.Reason)
 	return txn, nil
 }
 

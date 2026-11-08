@@ -57,6 +57,8 @@ const (
 	TypeTicket          = "ticket"
 	TypeItemGrant       = "item_grant"
 	TypeLevel           = "level"
+	// TypePointsAdjust 管理端手动调整积分/经验（发放与扣减都算）。starbox 补丁，见 service/points_notify.go
+	TypePointsAdjust = "points_adjust"
 )
 
 // typeCategories 旧 type → 分类。没登记的 type 一律落 system。
@@ -88,6 +90,8 @@ var typeCategories = map[string]string{
 	"lottery":      CategoryReward,
 	"rewarded_ad":  CategoryReward,
 	"cardkey":      CategoryReward,
+
+	"points_adjust": CategoryReward, // starbox 补丁：管理端手动调整积分/经验
 	"item_grant":   CategoryReward,
 	"level":        CategoryReward,
 

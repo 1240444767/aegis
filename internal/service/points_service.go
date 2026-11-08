@@ -30,6 +30,8 @@ type PointsService struct {
 	location  *time.Location
 	// 排行榜并发合并：多个用户同时请求同一榜单页时只打一次 DB
 	rankingFlight singleflight.Group
+	// notifier 站内信投递（管理端调整积分/经验通知，实现见 points_notify.go）
+	notifier notificationDeliverer
 }
 
 func NewPointsService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository) *PointsService {
@@ -290,6 +292,10 @@ func (s *PointsService) AdminAdjustIntegral(ctx context.Context, in pointdomain.
 	if err != nil {
 		return nil, mapPointsAdjustError(in.Kind, err)
 	}
+	// 管理端手动调整要在「积分与奖励」里留一条（见 points_notify.go）
+	if !result.Replayed {
+		s.notifyAdminIntegralAdjust(ctx, in, result)
+	}
 	return result, nil
 }
 
@@ -303,6 +309,9 @@ func (s *PointsService) AdminAdjustExperience(ctx context.Context, in pointdomai
 	result, err := s.pg.AdminAdjustExperience(ctx, in, options)
 	if err != nil {
 		return nil, mapPointsAdjustError(in.Kind, err)
+	}
+	if !result.Replayed {
+		s.notifyAdminExperienceAdjust(ctx, in, result)
 	}
 	return result, nil
 }

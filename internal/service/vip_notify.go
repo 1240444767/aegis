@@ -63,3 +63,48 @@ func (s *VipService) notifyVipGranted(ctx context.Context, appID, userID int64, 
 			zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
 	}
 }
+
+// notifyAdminVipGrant 管理端发放会员后的站内信（不动钱包，type=vip → 分类 membership）。
+// 与余额直购/订单履约的通知互不重叠：三条链路各发各的，同一次开通只会走其中一条。
+func (s *VipService) notifyAdminVipGrant(ctx context.Context, appID, userID int64, txn *vipdomain.Transaction, reason string) {
+	if s.notifier == nil || txn == nil || userID <= 0 {
+		return
+	}
+	planName := strings.TrimSpace(txn.PlanName)
+	if planName == "" {
+		planName = "会员"
+	}
+	validity := "永久有效"
+	if !txn.Lifetime {
+		validity = strconv.Itoa(txn.DurationDays) + " 天"
+	}
+	content := fmt.Sprintf("系统向您发放「%s」（%s），已生效。", planName, validity)
+	if txn.BonusIntegral > 0 {
+		content += fmt.Sprintf("另赠送 %d 积分。", txn.BonusIntegral)
+	}
+	content += "可在会员中心查看有效期与权益。"
+	if trimmed := strings.TrimSpace(reason); trimmed != "" {
+		content += "备注：" + trimmed + "。"
+	}
+	meta := map[string]any{
+		"scene":         "vip_admin_grant",
+		"planName":      planName,
+		"durationDays":  txn.DurationDays,
+		"lifetime":      txn.Lifetime,
+		"transactionNo": txn.TransactionNo,
+		"operator":      txn.Operator,
+	}
+	if _, err := s.notifier.Deliver(ctx, notificationdomain.DeliverInput{
+		AppID:    appID,
+		UserID:   userID,
+		Type:     "vip",
+		Title:    planName + "发放到账",
+		Content:  content,
+		Level:    "success",
+		Metadata: meta,
+		Action:   notificationdomain.RouteAction(notificationdomain.RouteMembership, "查看会员"),
+	}); err != nil {
+		s.log.Warn("vip: notify admin grant failed",
+			zap.Int64("appid", appID), zap.Int64("userId", userID), zap.Error(err))
+	}
+}
