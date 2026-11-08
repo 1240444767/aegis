@@ -131,6 +131,9 @@ func (p *localStorageProvider) Delete(_ context.Context, cfg *storagedomain.Conf
 	if err != nil {
 		return err
 	}
+	if localRootMissing(localCfg.RootDir) {
+		return nil
+	}
 	absPath, err := secureLocalStoragePath(localCfg.RootDir, objectKey)
 	if err != nil {
 		return err

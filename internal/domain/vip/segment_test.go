@@ -226,3 +226,28 @@ func TestMemberWithoutSegmentsIsUnknown(t *testing.T) {
 		t.Errorf("已结束的段不该贡献功能：%v", got.Features)
 	}
 }
+
+// 有档位的段按档位当前的功能算（并上另给的），套餐与快照都不再左右它：
+// 套餐删掉之后（Plan 为 nil）也不会回落到开通那一刻的快照。
+func TestTierDecidesSegmentFeatures(t *testing.T) {
+	tierID := int64(7)
+	withTier := Segment{
+		Features: []string{"old"},
+		Plan:     &SegmentPlan{Name: "高级版", Features: []string{"plan_only"}},
+		TierID:   &tierID,
+		Tier:     &SegmentTier{Name: "永久会员", Features: []string{"splash", "ai"}},
+		Extras:   []string{"bonus", "ai"},
+	}
+	if got := withTier.EffectiveFeatures(); !reflect.DeepEqual(got, []string{"ai", "bonus", "splash"}) {
+		t.Errorf("档位段的功能 = %v", got)
+	}
+	withTier.Plan = nil
+	if got := withTier.EffectiveFeatures(); !reflect.DeepEqual(got, []string{"ai", "bonus", "splash"}) {
+		t.Errorf("套餐删除后档位段的功能 = %v", got)
+	}
+	// 没有档位：套餐还在按套餐，否则按快照（滚动发布期间旧实例写的记录、不挂档位的会员天数）
+	noTier := Segment{Features: []string{"old"}, Extras: []string{"ignored"}}
+	if got := noTier.EffectiveFeatures(); !reflect.DeepEqual(got, []string{"old"}) {
+		t.Errorf("无档位段应按快照，得到 %v", got)
+	}
+}

@@ -3,12 +3,15 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
 	"time"
 
 	emaildomain "aegis/internal/domain/email"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // appid 在库里用 NULL 表示平台级，Go 侧用 0（emaildomain.PlatformAppID）。
@@ -337,14 +340,14 @@ func (r *Repository) CreateEmailDelivery(ctx context.Context, item emaildomain.D
 		return nil, err
 	}
 	row := r.pool.QueryRow(ctx, `INSERT INTO email_deliveries
-	(appid, config_id, config_name, provider, provider_message_id, message_id, to_address, from_address, subject, purpose, status, error_message, open_count, click_count, last_event, last_event_payload, sent_at, delivered_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, $13, $14, $15, $16, NOW(), NOW())
+	(appid, config_id, config_name, provider, provider_message_id, message_id, to_address, from_address, subject, purpose, status, error_message, open_count, click_count, last_event, last_event_payload, sent_at, delivered_at, created_at, updated_at, inherited)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, 0, $13, $14, $15, $16, NOW(), NOW(), $17)
 RETURNING `+emailDeliveryColumns,
 		nullableAppID(item.AppID), nullableInt64(item.ConfigID), nullableString(item.ConfigName), item.Provider,
 		nullableString(item.ProviderMessageID), nullableString(item.MessageID),
 		item.ToAddress, nullableString(item.FromAddress), nullableString(item.Subject), nullableString(item.Purpose),
 		item.Status, nullableString(item.ErrorMessage), nullableString(item.LastEvent), payload,
-		nullableTimePtr(item.SentAt), nullableTimePtr(item.DeliveredAt))
+		nullableTimePtr(item.SentAt), nullableTimePtr(item.DeliveredAt), item.Inherited)
 	return scanEmailDelivery(row)
 }
 
@@ -370,20 +373,35 @@ type EmailDeliveryStatusUpdate struct {
 // delivery 事件覆盖回去，open/click 也不改主状态 —— 否则乱序到达的 webhook
 // 会把一封已退信的邮件显示成投递成功。返回 false 表示没有匹配到记录。
 func (r *Repository) ApplyEmailDeliveryEvent(ctx context.Context, update EmailDeliveryStatusUpdate) (bool, error) {
+	outcome, err := r.ApplyEmailDeliveryEventOutcome(ctx, update)
+	if err != nil {
+		return false, err
+	}
+	return outcome.Matched, nil
+}
+
+// ApplyEmailDeliveryEventOutcome 回填状态并记一条事件，返回匹配到的那封信。
+//
+// 作用域按**通道归属**判定：回执地址验的是哪条通道的密钥，就只能改那条通道发出的信。
+// 借用平台共享通道的信记在发信应用名下（appid 是应用），但它的 config_id 指向平台通道，
+// 因此条件是「这封信的 appid 属于该作用域，或者它走的通道属于该作用域」。
+func (r *Repository) ApplyEmailDeliveryEventOutcome(ctx context.Context, update EmailDeliveryStatusUpdate) (emaildomain.DeliveryEventOutcome, error) {
+	var outcome emaildomain.DeliveryEventOutcome
 	providerMessageID := strings.TrimSpace(update.ProviderMessageID)
 	if providerMessageID == "" {
-		return false, nil
+		return outcome, nil
 	}
 	payload, err := json.Marshal(orEmptyMap(update.Payload))
 	if err != nil {
-		return false, err
+		return outcome, err
 	}
 	args := []any{
 		providerMessageID, update.Status, update.Event, payload, update.ErrorMessage,
 		update.IncrementOpen, update.IncrementClick, update.MarkDelivered, nullableTime(update.OccurredAt),
 	}
-	scope := emailScopeCondition(update.AppID, &args)
-	result, err := r.pool.Exec(ctx, `UPDATE email_deliveries SET
+	deliveryScope := emailScopeCondition(update.AppID, &args)
+	configScope := emailScopeCondition(update.AppID, &args)
+	err = r.pool.QueryRow(ctx, `UPDATE email_deliveries SET
 	status = CASE
 		WHEN $2 = '' THEN status
 		WHEN status IN ('bounced', 'complained', 'rejected', 'failed') THEN status
@@ -397,11 +415,28 @@ func (r *Repository) ApplyEmailDeliveryEvent(ctx context.Context, update EmailDe
 	click_count = click_count + CASE WHEN $7 THEN 1 ELSE 0 END,
 	delivered_at = CASE WHEN $8 AND delivered_at IS NULL THEN COALESCE($9, NOW()) ELSE delivered_at END,
 	updated_at = NOW()
-WHERE provider_message_id = $1 AND `+scope, args...)
-	if err != nil {
-		return false, err
+WHERE provider_message_id = $1 AND (`+deliveryScope+` OR config_id IN (SELECT id FROM app_email_configs WHERE `+configScope+`))
+RETURNING id, COALESCE(appid, 0), to_address, status`, args...).
+		Scan(&outcome.DeliveryID, &outcome.AppID, &outcome.ToAddress, &outcome.Status)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return outcome, nil
 	}
-	return result.RowsAffected() > 0, nil
+	if err != nil {
+		return outcome, err
+	}
+	outcome.Matched = true
+
+	// 事件留痕失败不回滚状态：状态是主事实，时间线只是旁证
+	occurredAt := update.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now()
+	}
+	if _, err := r.pool.Exec(ctx, `INSERT INTO email_delivery_events (delivery_id, event, status, detail, payload, occurred_at)
+VALUES ($1, $2, $3, $4, $5, $6)`, outcome.DeliveryID, firstNonEmpty(update.Event, "unknown"), outcome.Status,
+		update.ErrorMessage, payload, occurredAt); err != nil {
+		return outcome, nil
+	}
+	return outcome, nil
 }
 
 // CountEmailDeliveriesSince 统计某个用途、某个收件地址在给定时刻之后的发信次数。
@@ -512,7 +547,7 @@ func (r *Repository) ListEmailDeliveries(ctx context.Context, query emaildomain.
 	return &emaildomain.DeliveryPage{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
-const emailDeliveryColumns = `id, COALESCE(appid, 0), COALESCE(config_id, 0), COALESCE(config_name, ''), provider, COALESCE(provider_message_id, ''), COALESCE(message_id, ''), to_address, COALESCE(from_address, ''), COALESCE(subject, ''), COALESCE(purpose, ''), status, COALESCE(error_message, ''), open_count, click_count, COALESCE(last_event, ''), COALESCE(last_event_payload, '{}'::jsonb), sent_at, delivered_at, created_at, updated_at`
+const emailDeliveryColumns = `id, COALESCE(appid, 0), COALESCE(config_id, 0), COALESCE(config_name, ''), provider, COALESCE(provider_message_id, ''), COALESCE(message_id, ''), to_address, COALESCE(from_address, ''), COALESCE(subject, ''), COALESCE(purpose, ''), status, COALESCE(error_message, ''), open_count, click_count, COALESCE(last_event, ''), COALESCE(last_event_payload, '{}'::jsonb), sent_at, delivered_at, created_at, updated_at, inherited`
 
 func scanEmailDelivery(row interface{ Scan(dest ...any) error }) (*emaildomain.Delivery, error) {
 	var item emaildomain.Delivery
@@ -520,7 +555,7 @@ func scanEmailDelivery(row interface{ Scan(dest ...any) error }) (*emaildomain.D
 	if err := row.Scan(&item.ID, &item.AppID, &item.ConfigID, &item.ConfigName, &item.Provider,
 		&item.ProviderMessageID, &item.MessageID, &item.ToAddress, &item.FromAddress, &item.Subject,
 		&item.Purpose, &item.Status, &item.ErrorMessage, &item.OpenCount, &item.ClickCount,
-		&item.LastEvent, &payloadBytes, &item.SentAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		&item.LastEvent, &payloadBytes, &item.SentAt, &item.DeliveredAt, &item.CreatedAt, &item.UpdatedAt, &item.Inherited); err != nil {
 		return nil, normalizeNotFound(err)
 	}
 	// Scope 是派生的，不单独存一列：多一列就多一个可能与 appid 对不上的事实。

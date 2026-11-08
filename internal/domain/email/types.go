@@ -319,9 +319,11 @@ type Delivery struct {
 	ID    int64 `json:"id"`
 	AppID int64 `json:"appid"`
 	// Scope 冗余一列作用域，让平台级留痕不必靠「appid 是不是 0」去反推。
-	Scope             string         `json:"scope"`
-	ConfigID          int64          `json:"configId"`
-	ConfigName        string         `json:"configName,omitempty"`
+	Scope      string `json:"scope"`
+	ConfigID   int64  `json:"configId"`
+	ConfigName string `json:"configName,omitempty"`
+	// Inherited 这封信借用的是平台共享通道（留痕仍记在发信的应用名下）
+	Inherited         bool           `json:"inherited"`
 	Provider          string         `json:"provider"`
 	ProviderMessageID string         `json:"providerMessageId,omitempty"`
 	MessageID         string         `json:"messageId,omitempty"`

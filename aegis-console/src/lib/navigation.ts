@@ -24,6 +24,7 @@ import {
   Users2,
   UsersRound,
   Wallet,
+  Waves,
   Workflow
 } from "lucide-react";
 import { appSections } from "@/lib/app-sections";
@@ -161,6 +162,22 @@ export const navigationGroups: NavigationGroup[] = [
         href: "/releases",
         icon: PackageCheck,
         summary: "版本与渠道"
+      },
+      {
+        title: "版本管控",
+        href: "/client-control",
+        icon: ShieldCheck,
+        summary: "停用版本与非官方安装包",
+        permission: "version:read",
+        children: [
+          { title: "概览", tab: "overview" },
+          { title: "规则", tab: "rules" },
+          { title: "版本分布", tab: "versions" },
+          { title: "设备", tab: "devices" },
+          { title: "模拟", tab: "simulate" },
+          { title: "密钥", tab: "keys" },
+          { title: "设置", tab: "settings" }
+        ]
       },
       {
         // 与 /apps?tab=payment 的分工是「运营 vs 配置」：那边配渠道密钥与限额，
@@ -342,6 +359,21 @@ export const navigationGroups: NavigationGroup[] = [
         ]
       },
       {
+        // 内置插件 traffic：限速、并发、排队、预热与过载保护
+        title: "流量管理",
+        href: "/traffic",
+        icon: Waves,
+        summary: "限流、削峰与过载保护",
+        superAdmin: true,
+        children: [
+          { title: "总览", tab: "overview" },
+          { title: "规则", tab: "rules" },
+          { title: "全局设置", tab: "settings" },
+          { title: "历史", tab: "history" },
+          { title: "版本", tab: "revisions" }
+        ]
+      },
+      {
         title: "风控中心",
         href: "/risk-control",
         icon: ShieldAlert,
@@ -351,11 +383,10 @@ export const navigationGroups: NavigationGroup[] = [
           { title: "风控大盘", tab: "dashboard" },
           { title: "评估记录", tab: "assessments" },
           { title: "人工复核", tab: "reviews" },
-          { title: "风险规则", tab: "rules" },
-          { title: "处置策略", tab: "actions" },
-          { title: "规则模拟", tab: "simulator" },
-          { title: "设备指纹", tab: "devices" },
-          { title: "IP 风险库", tab: "ips" }
+          { title: "规则策略", tab: "rules" },
+          { title: "名单库", tab: "lists" },
+          { title: "实体画像", tab: "entities" },
+          { title: "规则模拟", tab: "simulator" }
         ]
       },
       {
@@ -393,17 +424,21 @@ export const navigationGroups: NavigationGroup[] = [
         ]
       },
       {
-        title: "存储管理",
+        title: "存储中心",
         href: "/storage",
         icon: Database,
-        summary: "对象存储配置",
+        summary: "对象存储、存储池与迁移",
         children: [
-          { title: "全局配置", tab: "global" },
-          { title: "应用级配置", tab: "app" },
+          { title: "概览", tab: "overview" },
+          { title: "存储源", tab: "global" },
+          { title: "存储池", tab: "pools" },
+          { title: "迁移", tab: "migrations" },
+          { title: "运行事件", tab: "events" },
+          { title: "应用存储", tab: "app" },
           { title: "文件管理", tab: "files" },
           { title: "上传规则", tab: "rules" },
           { title: "CDN 与安全", tab: "cdn" },
-          { title: "用量统计", tab: "usage" }
+          { title: "用量", tab: "usage" }
         ]
       },
       {

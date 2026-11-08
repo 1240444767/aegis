@@ -93,7 +93,7 @@ func (s *EmailService) HandleZeaburWebhook(ctx context.Context, request ZeaburWe
 	}
 	update.AppID = request.AppID
 
-	matched, err := s.pg.ApplyEmailDeliveryEvent(ctx, update)
+	matched, err := s.applyDeliveryEvent(ctx, update)
 	if err != nil {
 		return nil, err
 	}

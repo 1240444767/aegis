@@ -29,7 +29,36 @@ import type {
   EmailDeliveryStats,
   EmailProviderCatalog
 } from "@/lib/api/types";
+import {
+  createAppEmailSuppression,
+  createPlatformEmailSuppression,
+  deleteAppEmailSuppression,
+  deletePlatformEmailSuppression,
+  getAppEmailDeliveryDetail,
+  getAppEmailOverview,
+  getAppEmailPolicy,
+  getAppEmailSuppressions,
+  getEmailSceneCatalog,
+  getPlatformEmailDeliveryDetail,
+  getPlatformEmailOverview,
+  getPlatformEmailPolicy,
+  getPlatformEmailSuppressions,
+  previewAppEmail,
+  previewPlatformEmail,
+  saveAppEmailPolicy,
+  savePlatformEmailPolicy,
+  type EmailDeliveryDetail,
+  type EmailOverview,
+  type EmailPolicy,
+  type EmailPolicyView,
+  type EmailPreview,
+  type EmailSceneCatalog,
+  type EmailSuppressionFilters,
+  type EmailSuppressionInput,
+  type EmailSuppressionPage
+} from "@/lib/api/email-policy";
 import { useAdminToken } from "@/lib/admin-hooks";
+import { browserTimeZone } from "@/lib/datetime";
 
 /**
  * 邮件通道的 React Query hooks。
@@ -153,6 +182,7 @@ function useEmailInvalidator(scope: EmailScope) {
     void queryClient.invalidateQueries({ queryKey: ["email", "configs", scopeKey(scope)] });
     void queryClient.invalidateQueries({ queryKey: ["email", "channel"] });
     void queryClient.invalidateQueries({ queryKey: ["email", "stats", scopeKey(scope)] });
+    void queryClient.invalidateQueries({ queryKey: ["email", "overview", scopeKey(scope)] });
   };
 }
 
@@ -204,6 +234,138 @@ export function useTestEmailConfigMutation(scope: EmailScope) {
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["email", "deliveries", scopeKey(scope)] });
       void queryClient.invalidateQueries({ queryKey: ["email", "stats", scopeKey(scope)] });
+      void queryClient.invalidateQueries({ queryKey: ["email", "overview", scopeKey(scope)] });
     }
+  });
+}
+
+// ── 策略、场景、预览、概览、投递详情、抑制名单 ──
+
+/** 场景目录。静态自述，缓存整场会话。 */
+export function useEmailSceneCatalogQuery() {
+  const token = useAdminToken();
+  return useQuery<EmailSceneCatalog>({
+    queryKey: ["email", "scenes"],
+    queryFn: () => getEmailSceneCatalog(token as string),
+    enabled: Boolean(token),
+    staleTime: Infinity
+  });
+}
+
+export function useEmailPolicyQuery(scope: EmailScope) {
+  const token = useAdminToken();
+  return useQuery<EmailPolicyView>({
+    queryKey: ["email", "policy", scopeKey(scope)],
+    queryFn: () =>
+      scope.kind === "platform"
+        ? getPlatformEmailPolicy(token as string)
+        : getAppEmailPolicy(token as string, scope.appId),
+    enabled: Boolean(token) && isReady(scope)
+  });
+}
+
+export function useSaveEmailPolicyMutation(scope: EmailScope) {
+  const token = useAdminToken();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (policy: EmailPolicy) =>
+      scope.kind === "platform"
+        ? savePlatformEmailPolicy(token as string, policy)
+        : saveAppEmailPolicy(token as string, scope.appId, policy),
+    onSuccess: (view) => {
+      queryClient.setQueryData(["email", "policy", scopeKey(scope)], view);
+      void queryClient.invalidateQueries({ queryKey: ["email", "preview", scopeKey(scope)] });
+    }
+  });
+}
+
+/**
+ * 模板预览。草稿策略进查询键：改一个字就是一份新预览，React Query 自然去重与缓存。
+ * 调用方负责防抖，不要把每次按键都直接塞进来。
+ */
+export function useEmailPreviewQuery(scope: EmailScope, scene: string | null, policy: EmailPolicy | null) {
+  const token = useAdminToken();
+  return useQuery<EmailPreview>({
+    queryKey: ["email", "preview", scopeKey(scope), scene, policy],
+    queryFn: () =>
+      scope.kind === "platform"
+        ? previewPlatformEmail(token as string, scene as string, policy ?? undefined)
+        : previewAppEmail(token as string, scope.appId, scene as string, policy ?? undefined),
+    enabled: Boolean(token) && isReady(scope) && Boolean(scene),
+    placeholderData: (previous) => previous,
+    retry: false
+  });
+}
+
+export function useEmailOverviewQuery(scope: EmailScope, days: number) {
+  const token = useAdminToken();
+  const tz = browserTimeZone();
+  return useQuery<EmailOverview>({
+    queryKey: ["email", "overview", scopeKey(scope), days, tz],
+    queryFn: () =>
+      scope.kind === "platform"
+        ? getPlatformEmailOverview(token as string, days, tz)
+        : getAppEmailOverview(token as string, scope.appId, days, tz),
+    enabled: Boolean(token) && isReady(scope),
+    placeholderData: (previous) => previous
+  });
+}
+
+export function useEmailDeliveryDetailQuery(scope: EmailScope, deliveryId: number | null) {
+  const token = useAdminToken();
+  return useQuery<EmailDeliveryDetail>({
+    queryKey: ["email", "delivery", scopeKey(scope), deliveryId],
+    queryFn: () =>
+      scope.kind === "platform"
+        ? getPlatformEmailDeliveryDetail(token as string, deliveryId as number)
+        : getAppEmailDeliveryDetail(token as string, scope.appId, deliveryId as number),
+    enabled: Boolean(token) && isReady(scope) && Boolean(deliveryId)
+  });
+}
+
+export function useEmailSuppressionsQuery(scope: EmailScope, filters: EmailSuppressionFilters) {
+  const token = useAdminToken();
+  return useQuery<EmailSuppressionPage>({
+    queryKey: ["email", "suppressions", scopeKey(scope), filters],
+    queryFn: () =>
+      scope.kind === "platform"
+        ? getPlatformEmailSuppressions(token as string, filters)
+        : getAppEmailSuppressions(token as string, scope.appId, filters),
+    enabled: Boolean(token) && isReady(scope),
+    placeholderData: (previous) => previous
+  });
+}
+
+/** 抑制名单变了，概览里的计数与投递详情里的「已暂停投递」提示都要跟着刷新。 */
+function useSuppressionInvalidator(scope: EmailScope) {
+  const queryClient = useQueryClient();
+  return () => {
+    void queryClient.invalidateQueries({ queryKey: ["email", "suppressions", scopeKey(scope)] });
+    void queryClient.invalidateQueries({ queryKey: ["email", "overview", scopeKey(scope)] });
+    void queryClient.invalidateQueries({ queryKey: ["email", "delivery", scopeKey(scope)] });
+  };
+}
+
+export function useCreateEmailSuppressionMutation(scope: EmailScope) {
+  const token = useAdminToken();
+  const invalidate = useSuppressionInvalidator(scope);
+  return useMutation({
+    mutationFn: (input: EmailSuppressionInput) =>
+      scope.kind === "platform"
+        ? createPlatformEmailSuppression(token as string, input)
+        : createAppEmailSuppression(token as string, scope.appId, input),
+    onSuccess: invalidate
+  });
+}
+
+export function useDeleteEmailSuppressionMutation(scope: EmailScope) {
+  const token = useAdminToken();
+  const invalidate = useSuppressionInvalidator(scope);
+  return useMutation({
+    mutationFn: (id: number) =>
+      scope.kind === "platform"
+        ? deletePlatformEmailSuppression(token as string, id)
+        : deleteAppEmailSuppression(token as string, scope.appId, id),
+    onSuccess: invalidate
   });
 }

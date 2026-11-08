@@ -24,7 +24,7 @@
 | `auth_service.go` | `AuthService` | 用户 JWT 认证、Token 刷新、OAuth2 |
 | `auth_sms.go` | — | 短信验证码登录/自动建号 + `MobileOAuthLoginScoped`（叠加应用级开关） |
 | `auth_cardkey.go` | — | 卡密登录：卡即凭证，首次使用按卡面派生账号自动建号并绑卡绑设备 |
-| `cardkey_service.go` | `CardKeyService` | **卡密**：批次生成 / 作废 / 导出 / 兑换 / 设备解绑（见下节） |
+| `cardkey_service.go` | `CardKeyService` | **卡密**：批次生成 / 导入 / 补发 / 提卡 / 修改 / 作废 / 导出 / 统计，预览 / 兑换 / 代兑，设备解绑（含自助），防爆破（见下节） |
 | `auth_protocol_service.go` | `AuthProtocolService` | 接入协议：策略、安全等级、应用密钥签名、Transport v2 |
 | `auth_protocol_selftest.go` | — | 接入自检；同时是三档协议的**参考客户端实现** |
 | `auto_sign_service.go` | `AutoSignService` | 自动签到调度（Redis Sorted Set） |
@@ -65,11 +65,14 @@
 | `risk_env.go` | — | `RiskEvalEnv` —— 引擎看到的全部事实，同时是 expr 的类型化环境（`expr` 标签即变量名） |
 | `risk_expr.go` | — | expr 编译缓存、领域函数（`in_cidr`/`any_cidr`/`contains_any`/`in_time_window`）、表达式校验 |
 | `risk_provider.go` / `risk_provider_ipqs.go` | — | 外部 IP 情报源抽象与 IPQualityScore 适配（带熔断与限速） |
-| `location_geoip.go` | — | GeoIP2 mmdb 加载 & 自动更新实现 |
-| `location_service.go` | `LocationService` | IP 地理位置查询（city + ASN），Redis 缓存 |
+| `location_service.go` | `LocationService` | IP 归属地查询入口：两级缓存、批量合并、singleflight |
+| `location_provider.go` | — | 归属地来源链：按 `GEOIP_PROVIDERS` 排优先级、两轮查询（不限额并发 → 有额度补缺）、合并填空、每来源熔断 |
+| `location_meituan.go` / `location_btcn.go` / `location_uapis.go` | — | 美团（IPv4、区县+区划代码、无运营商）/ 宝塔（IPv4 批量、带运营商）/ UAPIs（支持 IPv6、有额度）三个来源的请求与字段映射 |
+| `location_country.go` | — | 中文国名 → ISO 两位代码（CLDR 反推 + 常见简称） |
 | `migration_service.go` | `MigrationService` | 遗留 MySQL 用户迁移 |
 | `monitor_service.go` | `MonitorService` | 系统监控数据聚合（所有服务汇总） |
-| `notification_service.go` | `NotificationService` | **应用用户**站内信（notifications 表，外键 users） |
+| `notification_service.go` | `NotificationService` | **应用用户**站内信（notifications 表，外键 users）：唯一写入口 `Deliver`（分类、动作、实时事件），消息中心读写与推送偏好，见 [docs](../../docs/notification-center.md) |
+| `crash_report_service.go` | `CrashReportService` | 客户端崩溃报告：免登录上报（校验 / 去重 / 按设备与 IP 限频）、管理端列表 / 详情 / 标记已处理 / 删除，见 [docs](../../docs/crash-reports.md) |
 | `admin_inbox_service.go` | `AdminInboxService` | **管理员**收件箱（admin_notifications 表，外键 admin_accounts）+ 角标实时推送 |
 | `realtime_publisher.go` | — | 仅发布的 NATS 实时事件发布器，供 Worker 把事件送达连在 API 实例上的客户端 |
 | `notify_hub.go` | `NotifyHub` | **统一通知出口**：订阅匹配 → 模板渲染 → 多渠道投递 → 留痕重试 |
@@ -254,6 +257,11 @@ WebAuthn 规定 `rp.id` 只能**等于当前页面的有效域名、或它的可
 以前它会被兜底成 `localhost`，而缺省白名单里同时有 `http://127.0.0.1:3000` ——
 两者自相矛盾，从 127.0.0.1 打开控制台必然报上面那句。
 
+应用在控制台配了**独立依赖方**（`apps.settings.passkey`，见 `domain/app/passkey.go` 与
+[docs/passkey.md](../../docs/passkey.md)）时，这个应用的四个仪式入口一律改按它校验：RP ID 固定、
+允许来源 = 配置的网页源 + 由安卓证书 SHA-256 推出的 `android:apk-key-hash:` 源，上面那套按请求来源解析不再参与。
+原生 App 的请求没有 Origin，只能走这条路。入口是 `webAuthnForAppRequest` / `webAuthnForAppCeremony`。
+
 Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 （go-webauthn 已把它写进 `SessionData.RelyingPartyID` 并随挑战落库）。
 注意 `CreateCredential` / `ValidateLogin` 读的是 `Config.RPID` 而**不是** session 里那个字段，
@@ -272,12 +280,24 @@ Finish 阶段**不重新推导**，而是用 Begin 下发的那个 RP ID
 | `loginCheckDeviceTimeOut` | `LoginConsistencyService` | **设备换绑冷却秒数**（旧字段原义即「登录换绑机器码间隔」），从上次换绑起算 |
 | `loginCheckIp` | `LoginConsistencyService` | 与上次成功登录不在同一网段（IPv4 /24、IPv6 /48）即拦截 |
 | `loginCheckUser` | `LoginConsistencyService` | 登录属地（国家 + 省/州）与上次不一致即拦截 |
-| `multiDeviceLogin` / `multiDeviceLimit` | `enforceSessionPolicy` | 同时在线设备上限，超出踢最旧会话 |
+| `multiDeviceLogin` / `multiDeviceLimit` | 已由登录设备数控制接管（`DeviceLimitService`，执行点 `issueSession`） | 旧字段只在没保存过 `deviceLimit` 时用来推导策略，见 [docs/device-limit.md](../../docs/device-limit.md) |
 | `registerCheckIp` | `validateRegisterPolicy` | 同一 IP 不允许重复注册 |
 
 三项强绑定策略（device / ip / user）**全关时不产生任何 Redis I/O**，绝大多数应用走这条路径。
 开启后唯一的解绑出口是 `ResetLoginBaseline`（控制台「登录绑定 → 重置」）——
 没有这个出口，用户换宽带就等于账号报废。基线读写失败一律 fail-open，与 `LoginGuardService` 同取向。
+
+### 账号注销 —— 申请行是唯一记录，删除只走 PurgeUser
+
+规则与接口见 [docs/account-deletion.md](../../docs/account-deletion.md)。改这块时守住几条：
+
+- 判定都在 `domain/accountdeletion`（`EvaluateGuards`、`PlanVerification`、`ResolveReason`），注销页展示的结论
+  与提交时的报错出自同一个函数，不要在服务层另写一份。
+- 状态迁移只用 `TransitionAccountDeletionRequest`（条件更新）；执行前申请必须已是 processing（认领过）。
+- 删用户只走 `UserService.PurgeUser`，管理员「删除用户」也是它；新增需要随账号清理的外部资源（对象存储之类）
+  时加在 `execute` 里，表数据靠外键 CASCADE / SET NULL。
+- 登录回调在 `finalizeLogin`（所有登录方式的收口），注册回调 `checkReregister` 在密码、短信、第三方三处建号前。
+  新增建号路径时要接上。
 
 ### 账号封禁 —— 封禁记录是唯一依据，两档范围各有执行点
 
@@ -921,13 +941,17 @@ vip_transactions.features  开通那一刻的功能留档（套餐被删 / 非�
 - **账号名由卡面派生**（`CardKeyAccount`）。这让首次建号成为**确定性**操作：
   用随机账号名的话，同一张卡的两次并发首登会造出两个账号，其中一个成为孤儿；
   用卡面则第二次撞 `uq_users_appid_account`，服务层据此回读同一个用户。
-- **一码一用有三道保证**，各自防不同的失效模式：行锁（并发串行化）→
-  条件 UPDATE 抢占（`WHERE status='unused'`，与 `FulfillPaymentOrder` 同构）→
-  `uq_card_key_redemptions_card` 唯一约束（兜住前两道被改坏，那种 bug 的表现是重复发钱）。
-- **七档权益在同一个事务里发放**。四档复用既有的事务内助手（`extendUserVipTx` /
-  `applyIntegralChangeTx` / `applyWalletChangeTx`），经验值这次新抽出
-  `applyExperienceChangeTx` —— 它此前**只有**一个自开事务的管理端入口，
-  接不进「要么全发、要么全不发」。
+- **每人恰好一次有四道保证**，各自防不同的失效模式：行锁（并发串行化）→
+  条件 UPDATE 抢占（`WHERE status='unused' AND use_count < max_uses`，与 `FulfillPaymentOrder` 同构）→
+  同一个人的预查（活动码报 40976）→ `uq_card_key_redemptions_card_user` 唯一约束（兜住前几道被改坏，
+  那种 bug 的表现是重复发奖）。活动码（`max_uses > 1`）与一卡一用共用这一条路径。
+- **九档权益在同一个事务里发放**（`grantCardRewardsTx`），复用既有的事务内助手
+  （`extendUserVipTx` / `grantFeatureUnlockTx` / `applyIntegralChangeTx` / `applyExperienceChangeTx` /
+  `applyWalletChangeTx`）。功能已永久拥有、套餐被删等发不出去的情况整笔回滚，卡不会被核销。
+- **预览与兑换同一套判据**：`previewBlocker` 与 `RedeemCardKey` 都走 `pgrepo.CheckCardKeyUsable`，
+  再加已兑换 / 每人限兑 / 领取对象三项；不能用时预览返回 `usable=false` 与同一个错误码。
+- **防爆破只数「卡密不存在」**，按账号与 IP（`ck-user` / `ck-ip`，复用 `LoginGuardRepository`）；
+  卡密登录前没有账号，只按 IP。Redis 故障时放行。
 - **权益目录是单一事实源**（`internal/domain/cardkey/catalog.go`），
   `TestRewardCatalogHasGrantBranch` 双向钉死「目录 ↔ 发放分支」。
 - **缺设备标识时拒绝而不是放行**（40343）：开着的限制因为请求没带标识就放行，
@@ -1246,9 +1270,14 @@ localStorage、移动端存进本地库、邮件正文里嵌成 `<img>`、中间
 - 连接状态同步写入 Redis
 
 ### LocationService
-- 首次查询写入 Redis 缓存（TTL 24h）
-- GeoIP2 mmdb 文件自动从 GitHub 下载并定时更新
-- 可选 `ChinaOptimized` 模式和远程 HTTP fallback
+- 全部走远程接口，不下载本地库。来源与优先级 `GEOIP_PROVIDERS`（默认 `meituan,btcn,uapis`）
+- 第一轮美团、宝塔并发；UAPIs 有额度，只补没查到 / 缺运营商 / 缺国家代码的地址（IPv6 主要靠它）
+- 合并以最靠前且查到的来源为准，后面的只填空；省份对不上不混拼。`Source` 记参与的来源（`meituan+btcn`）
+- 每个来源独立熔断：连续 3 次失败停 1 分钟起翻倍、封顶 30 分钟；429 按接口给的等待时间停。
+  美团 IP 定位 2026 年年中起对所有地址回 404「Can Not Loc」，靠「别家判成国内、它说查不到」识别成故障
+- Redis 键 `location:v4:ip:`：查到 72h、查不到 6h；来源故障导致没查全的只在进程内记 1 分钟
+- UAPIs：`GEOIP_UAPIS_KEY`（不配按出口 IP 每秒 4 次、30 天 1500 积分）、`GEOIP_UAPIS_SOURCE`（commercial 带区县、2 积分）、`GEOIP_UAPIS_QPS`
+- 测试：`go test ./internal/service/ -run 'BtCN|Meituan|UAPIs|MergeLocations|SourceHealth|LocationSource'`；真实接口 `LOCATION_LIVE=1 go test ./internal/service/ -run LocationProvidersLive -v`
 
 ### PlatformSettingsService
 - 支持动态更新 Firewall 配置（CIDR 黑白名单、限流规则）

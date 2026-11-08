@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	aidomain "aegis/internal/domain/ai"
 
@@ -83,8 +86,9 @@ func (c *aiLLMClient) openAIClient(cfg aidomain.Config, meta aidomain.ProviderMe
 	return openai.NewClient(options...)
 }
 
-// buildOpenAIParams 把统一请求翻成 SDK 的 Chat Completions 参数。
-func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams {
+// buildOpenAIParams 把统一请求翻成 SDK 的 Chat Completions 参数。[provider] 决定思考参数、
+// 输出上限与思考回传的写法（各家兼容端点在这几处各不相同）。
+func buildOpenAIParams(req aidomain.ChatRequest, provider string) openai.ChatCompletionNewParams {
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)+1)
 	if strings.TrimSpace(req.System) != "" {
 		messages = append(messages, openai.SystemMessage(req.System))
@@ -112,6 +116,11 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 						},
 					},
 				})
+			}
+			// 思考模式的工具循环：发起调用那一轮的思考要带回（DeepSeek、Kimi、GLM 等的硬约束）。
+			// 只带有工具调用的那几轮，其余轮次的思考对上游没有用，只会多花输入 token。
+			if key := openAIReasoningEchoKey(provider); key != "" && len(item.ToolCalls) > 0 && item.Reasoning != "" {
+				assistant.SetExtraFields(map[string]any{key: item.Reasoning})
 			}
 			messages = append(messages, openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant})
 		case aidomain.RoleSystem:
@@ -150,7 +159,13 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 		}
 	}
 	if req.MaxTokens > 0 {
-		params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		// OpenAI 的推理模型只认 max_completion_tokens（max_tokens 直接 400），其余新模型两个都认；
+		// 兼容端点大多只认 max_tokens。
+		if openAIOfficial(provider) {
+			params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
+		} else {
+			params.MaxTokens = openai.Int(int64(req.MaxTokens))
+		}
 	}
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
@@ -166,7 +181,98 @@ func buildOpenAIParams(req aidomain.ChatRequest) openai.ChatCompletionNewParams 
 			OfJSONObject: &shared.ResponseFormatJSONObjectParam{},
 		}
 	}
+	applyOpenAIReasoning(&params, provider, req.Reasoning)
 	return params
+}
+
+// openAIOfficial OpenAI 自家（含 Azure）：参数按官方最新约定。
+func openAIOfficial(provider string) bool {
+	return provider == aidomain.ProviderOpenAI || provider == aidomain.ProviderAzureOpenAI
+}
+
+// openAIReasoningEchoKey 工具循环里回传上一轮思考用的字段名；空串表示这家不收（官方 OpenAI 会拒绝未知字段）。
+func openAIReasoningEchoKey(provider string) string {
+	switch provider {
+	case aidomain.ProviderOpenAI, aidomain.ProviderAzureOpenAI, aidomain.ProviderGroq, aidomain.ProviderXAI:
+		return ""
+	case aidomain.ProviderOpenRouter:
+		return "reasoning"
+	default:
+		return "reasoning_content"
+	}
+}
+
+// applyOpenAIReasoning 思考设置 → 各家兼容端点的写法。没给思考设置时什么都不带，交给上游默认。
+//
+//   - OpenAI / Azure / Groq / xAI / Ollama / 聚合站：reasoning_effort；
+//   - OpenRouter：reasoning 对象（effort / max_tokens / enabled）；
+//   - DeepSeek、智谱 GLM：thinking.type 开关；
+//   - 豆包（火山方舟）：thinking.type 开关，另带 reasoning_effort（Seed 系列认）；
+//   - 通义千问（百炼兼容模式）、硅基流动：enable_thinking 开关与 thinking_budget；
+//   - Kimi：由型号决定（k2-thinking），没有开关。
+func applyOpenAIReasoning(params *openai.ChatCompletionNewParams, provider string, reasoning *aidomain.ReasoningConfig) {
+	if reasoning == nil {
+		return
+	}
+	effort := reasoning.EffectiveEffort()
+	extras := map[string]any{}
+	thinkingType := "disabled"
+	if reasoning.On() {
+		thinkingType = "enabled"
+	}
+	switch provider {
+	case aidomain.ProviderMoonshot:
+		return
+	case aidomain.ProviderOpenRouter:
+		switch {
+		case reasoning.Off():
+			extras["reasoning"] = map[string]any{"enabled": false}
+		case reasoning.BudgetTokens > 0:
+			extras["reasoning"] = map[string]any{"max_tokens": reasoning.BudgetTokens}
+		case effort != "":
+			extras["reasoning"] = map[string]any{"effort": effort}
+		default:
+			extras["reasoning"] = map[string]any{"enabled": true}
+		}
+	case aidomain.ProviderDeepSeek, aidomain.ProviderZhipu:
+		extras["thinking"] = map[string]any{"type": thinkingType}
+	case aidomain.ProviderDoubao:
+		extras["thinking"] = map[string]any{"type": thinkingType}
+		if reasoning.On() && effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(clampEffort(effort, aidomain.ReasoningMinimal, aidomain.ReasoningHigh))
+		}
+	case aidomain.ProviderQwen, aidomain.ProviderSiliconFlow:
+		extras["enable_thinking"] = reasoning.On()
+		if reasoning.On() && (reasoning.BudgetTokens > 0 || effort != "") {
+			extras["thinking_budget"] = reasoning.Budget()
+		}
+	default:
+		if effort != "" {
+			params.ReasoningEffort = shared.ReasoningEffort(effort)
+		}
+	}
+	if len(extras) > 0 {
+		params.SetExtraFields(extras)
+	}
+}
+
+// clampEffort 把强度压进 [low, high] 之间（某家只认其中几档时用）。
+func clampEffort(effort, low, high string) string {
+	rank := func(value string) int {
+		for index, item := range aidomain.ReasoningEfforts {
+			if item == value {
+				return index
+			}
+		}
+		return -1
+	}
+	switch {
+	case rank(effort) < rank(low):
+		return low
+	case rank(effort) > rank(high):
+		return high
+	}
+	return effort
 }
 
 // openAIUserMessage 单段纯文本压成字符串（最大兼容面），多模态才用分片数组。
@@ -189,16 +295,25 @@ func openAIUserMessage(parts []aidomain.ContentPart) openai.ChatCompletionMessag
 
 func normalizeOpenAIFinish(reason string) string {
 	switch reason {
-	case "stop":
+	case "stop", "end_turn", "stop_sequence", "eos":
 		return aidomain.FinishStop
-	case "length":
+	case "length", "max_tokens":
 		return aidomain.FinishLength
-	case "tool_calls", "function_call":
+	case "tool_calls", "function_call", "tool_use":
 		return aidomain.FinishToolCalls
 	case "content_filter":
 		return aidomain.FinishFiltered
 	default:
 		return aidomain.FinishOther
+	}
+}
+
+// setOpenAIFinish 记结束原因；归一不了的把原样留在 FinishRaw。
+func setOpenAIFinish(result *aidomain.ChatResponse, reason string) {
+	result.FinishReason = normalizeOpenAIFinish(reason)
+	result.FinishRaw = ""
+	if result.FinishReason == aidomain.FinishOther {
+		result.FinishRaw = reason
 	}
 }
 
@@ -234,7 +349,7 @@ func mapOpenAISDKError(provider string, err error) error {
 func (c *aiLLMClient) openAIChat(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta,
 	req aidomain.ChatRequest, onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
 	client := c.openAIClient(cfg, meta, req.Model)
-	params := buildOpenAIParams(req)
+	params := buildOpenAIParams(req, meta.Provider)
 
 	if onEvent == nil {
 		completion, err := client.Chat.Completions.New(ctx, params)
@@ -246,9 +361,19 @@ func (c *aiLLMClient) openAIChat(ctx context.Context, cfg aidomain.Config, meta 
 
 	// 没有这一句，多数实现的流里不带用量 —— 而计费与压缩判定都要它。
 	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{IncludeUsage: openai.Bool(true)}
-	stream := client.Chat.Completions.NewStreaming(ctx, params)
+	// SDK 读到 EOF 就当流正常结束，分不出「上游发完了 [DONE]」与「连接半路断了」；
+	// 在响应体上挂个探针看有没有 [DONE]，consumeOpenAIStream 据此判断流是不是完整的。
+	probe := &aiSSEDoneProbe{}
+	stream := client.Chat.Completions.NewStreaming(ctx, params,
+		openaioption.WithMiddleware(func(request *http.Request, next openaioption.MiddlewareNext) (*http.Response, error) {
+			response, err := next(request)
+			if response != nil && response.Body != nil {
+				response.Body = probe.wrap(response.Body)
+			}
+			return response, err
+		}))
 	defer stream.Close()
-	return consumeOpenAIStream(stream, meta.Provider, onEvent)
+	return consumeOpenAIStream(stream, meta.Provider, onEvent, probe.Done)
 }
 
 func openAIResponseFromCompletion(completion *openai.ChatCompletion) *aidomain.ChatResponse {
@@ -266,7 +391,7 @@ func openAIResponseFromCompletion(completion *openai.ChatCompletion) *aidomain.C
 		choice := completion.Choices[0]
 		result.Text = choice.Message.Content
 		result.Reasoning = extraFieldText(choice.Message.JSON.ExtraFields, "reasoning_content", "reasoning")
-		result.FinishReason = normalizeOpenAIFinish(string(choice.FinishReason))
+		setOpenAIFinish(result, string(choice.FinishReason))
 		for _, call := range choice.Message.ToolCalls {
 			arguments := call.Function.Arguments
 			if strings.TrimSpace(arguments) == "" {
@@ -284,18 +409,47 @@ func openAIResponseFromCompletion(completion *openai.ChatCompletion) *aidomain.C
 }
 
 // consumeOpenAIStream 逐块消费 SSE，边转发增量边聚合终态。
+//
+// done 报告上游有没有发出 [DONE]（可为 nil）。流的完整性按两条判断：见过 finish_reason，
+// 或者见过 [DONE]。两样都没有就是流被半路切断了 —— 按上游失败处理，而不是把半截内容
+// 当成一次正常结束（下游会看到 finish_reason=stop，Agent 就此收工）。
+//
+// 工具调用按上游的 index 分组，对下游另编连续的序号（StreamEvent.ToolIndex）。调用编号在
+// 发出 tool-start 时就定下来：上游没给就合成一个，流里与最终结论用的是同一个编号，
+// 下一轮客户端带回的 tool_call_id 才对得上。名字到之前就来的入参先攒着，宣布调用时一并补发。
 func consumeOpenAIStream(stream *openaisse.Stream[openai.ChatCompletionChunk], provider string,
-	onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+	onEvent func(aidomain.StreamEvent) error, done func() bool) (*aidomain.ChatResponse, error) {
 	result := &aidomain.ChatResponse{FinishReason: aidomain.FinishOther}
 	var text, reasoning strings.Builder
-	// 工具调用按 index 聚合：多数实现分很多块下发 id / name / arguments。
 	type toolBuffer struct {
-		id, name  string
-		arguments strings.Builder
-		announced bool
+		slot       int
+		upstreamID string
+		id, name   string
+		arguments  strings.Builder
+		emitted    int
+		announced  bool
 	}
 	tools := map[int]*toolBuffer{}
-	order := make([]int, 0, 2)
+	ordered := make([]*toolBuffer, 0, 2)
+	sawFinish := false
+	emit := func(event aidomain.StreamEvent) error {
+		if err := onEvent(event); err != nil {
+			return &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
+		}
+		return nil
+	}
+	// flushArguments 把攒下还没发出的入参作为一条增量发出。
+	flushArguments := func(buffer *toolBuffer) error {
+		pending := buffer.arguments.String()[buffer.emitted:]
+		if pending == "" {
+			return nil
+		}
+		buffer.emitted = buffer.arguments.Len()
+		return emit(aidomain.StreamEvent{
+			Type: aidomain.StreamToolDelta, ToolIndex: buffer.slot,
+			ToolID: buffer.id, ToolName: buffer.name, Delta: pending,
+		})
+	}
 
 	for stream.Next() {
 		chunk := stream.Current()
@@ -315,83 +469,153 @@ func consumeOpenAIStream(stream *openaisse.Stream[openai.ChatCompletionChunk], p
 		for _, choice := range chunk.Choices {
 			if choice.Delta.Content != "" {
 				text.WriteString(choice.Delta.Content)
-				if err := onEvent(aidomain.StreamEvent{Type: aidomain.StreamText, Delta: choice.Delta.Content}); err != nil {
-					return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
+				if err := emit(aidomain.StreamEvent{Type: aidomain.StreamText, Delta: choice.Delta.Content}); err != nil {
+					return nil, err
 				}
 			}
 			// reasoning_content / reasoning 是 DeepSeek、OpenRouter 一系的扩展字段，
 			// 不在官方类型里 —— SDK 把未识别字段留在 ExtraFields，从那里捞。
 			if delta := extraFieldText(choice.Delta.JSON.ExtraFields, "reasoning_content", "reasoning"); delta != "" {
 				reasoning.WriteString(delta)
-				if err := onEvent(aidomain.StreamEvent{Type: aidomain.StreamReasoning, Delta: delta}); err != nil {
-					return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
+				if err := emit(aidomain.StreamEvent{Type: aidomain.StreamReasoning, Delta: delta}); err != nil {
+					return nil, err
 				}
 			}
 			for _, call := range choice.Delta.ToolCalls {
 				index := int(call.Index)
 				buffer, ok := tools[index]
+				// 有的实现把几次并行调用都标成同一个 index、只靠 id 区分：同一 index 上换了 id 就是新的一次。
+				if ok && call.ID != "" && buffer.upstreamID != "" && call.ID != buffer.upstreamID {
+					ok = false
+				}
 				if !ok {
-					buffer = &toolBuffer{}
+					buffer = &toolBuffer{slot: len(ordered)}
 					tools[index] = buffer
-					order = append(order, index)
+					ordered = append(ordered, buffer)
 				}
-				if call.ID != "" {
-					buffer.id = call.ID
+				if call.ID != "" && buffer.upstreamID == "" {
+					buffer.upstreamID = call.ID
 				}
-				if call.Function.Name != "" {
+				if call.Function.Name != "" && !buffer.announced {
 					buffer.name = call.Function.Name
 				}
+				buffer.arguments.WriteString(call.Function.Arguments)
 				if !buffer.announced && buffer.name != "" {
 					buffer.announced = true
-					if err := onEvent(aidomain.StreamEvent{
-						Type: aidomain.StreamToolStart, ToolIndex: index,
+					buffer.id = buffer.upstreamID
+					if buffer.id == "" {
+						buffer.id = "call_" + randomCallSuffix()
+					}
+					if err := emit(aidomain.StreamEvent{
+						Type: aidomain.StreamToolStart, ToolIndex: buffer.slot,
 						ToolID: buffer.id, ToolName: buffer.name,
 					}); err != nil {
-						return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
+						return nil, err
 					}
 				}
-				if call.Function.Arguments != "" {
-					buffer.arguments.WriteString(call.Function.Arguments)
-					if err := onEvent(aidomain.StreamEvent{
-						Type: aidomain.StreamToolDelta, ToolIndex: index,
-						ToolID: buffer.id, ToolName: buffer.name, Delta: call.Function.Arguments,
-					}); err != nil {
-						return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
+				if buffer.announced {
+					if err := flushArguments(buffer); err != nil {
+						return nil, err
 					}
 				}
 			}
 			if choice.FinishReason != "" {
-				result.FinishReason = normalizeOpenAIFinish(string(choice.FinishReason))
+				sawFinish = true
+				setOpenAIFinish(result, string(choice.FinishReason))
 			}
 		}
 	}
 	if err := stream.Err(); err != nil {
 		return nil, mapOpenAISDKError(provider, err)
 	}
+	if !sawFinish {
+		if done == nil || !done() {
+			return nil, &aiUpstreamError{Provider: provider, Retryable: true,
+				Message: "上游的流没有给出结束原因就断开了（被上游或中间代理切断），本次结果不完整"}
+		}
+		// 发了 [DONE] 却从不带 finish_reason 的兼容实现：流是完整的，按正常结束处理。
+		result.FinishReason = aidomain.FinishStop
+	}
 
 	result.Text = text.String()
 	result.Reasoning = reasoning.String()
-	for fallback, index := range order {
-		buffer := tools[index]
+	for _, buffer := range ordered {
 		arguments := strings.TrimSpace(buffer.arguments.String())
 		if arguments == "" {
 			arguments = "{}"
 		}
 		id := buffer.id
 		if id == "" {
-			id = fmt.Sprintf("call_%d", fallback)
+			id = buffer.upstreamID
+		}
+		if id == "" {
+			id = "call_" + randomCallSuffix()
 		}
 		result.ToolCalls = append(result.ToolCalls, aidomain.ToolCall{
 			ID: id, Name: buffer.name, Arguments: json.RawMessage(arguments),
 		})
 	}
-	if len(result.ToolCalls) > 0 && result.FinishReason == aidomain.FinishOther {
-		result.FinishReason = aidomain.FinishToolCalls
+	if len(result.ToolCalls) > 0 && (result.FinishReason == aidomain.FinishOther || result.FinishReason == aidomain.FinishStop) {
+		result.FinishReason, result.FinishRaw = aidomain.FinishToolCalls, ""
 	}
 	if result.Usage.TotalTokens == 0 {
 		result.Usage.TotalTokens = result.Usage.InputTokens + result.Usage.OutputTokens
 	}
 	return result, nil
+}
+
+// aiSSEDoneProbe 旁听 SSE 响应体，记下有没有出现 `data: [DONE]` 这一行。
+type aiSSEDoneProbe struct {
+	mu   sync.Mutex
+	done bool
+	line []byte
+}
+
+func (p *aiSSEDoneProbe) wrap(body io.ReadCloser) io.ReadCloser {
+	return &aiSSEDoneProbeBody{ReadCloser: body, probe: p}
+}
+
+// Done 上游是否发过 [DONE]。
+func (p *aiSSEDoneProbe) Done() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.done || p.matchLocked()
+}
+
+func (p *aiSSEDoneProbe) observe(data []byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, b := range data {
+		if b == '\n' {
+			if p.matchLocked() {
+				p.done = true
+			}
+			p.line = p.line[:0]
+			continue
+		}
+		// 只需要行首十几个字节就能认出 [DONE]，长行不必攒。
+		if len(p.line) < 16 {
+			p.line = append(p.line, b)
+		}
+	}
+}
+
+func (p *aiSSEDoneProbe) matchLocked() bool {
+	line := strings.TrimSpace(string(p.line))
+	return line == "data: [DONE]" || line == "data:[DONE]"
+}
+
+type aiSSEDoneProbeBody struct {
+	io.ReadCloser
+	probe *aiSSEDoneProbe
+}
+
+func (b *aiSSEDoneProbeBody) Read(data []byte) (int, error) {
+	n, err := b.ReadCloser.Read(data)
+	if n > 0 {
+		b.probe.observe(data[:n])
+	}
+	return n, err
 }
 
 // extraFieldText 从 SDK 响应的未识别字段里取字符串值，按给定键序取第一个非空。

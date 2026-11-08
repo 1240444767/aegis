@@ -33,6 +33,9 @@ func (h *Handler) AdminApps(c *gin.Context) {
 	if ok && session != nil && !session.IsSuperAdmin {
 		items = filterAppsByAssignments(items, session.Assignments)
 	}
+	if ok && session != nil {
+		items = filterAppsByMCPKey(items, session.MCPKey)
+	}
 	response.Success(c, 200, "获取成功", items)
 }
 
@@ -304,15 +307,19 @@ func (h *Handler) AdminBulkNotifyUsers(c *gin.Context) {
 		return
 	}
 	result, err := h.notifications.AdminBulkSend(c.Request.Context(), appID, notificationdomain.AdminBulkSendCommand{
-		UserIDs:  req.UserIDs,
-		Keyword:  req.Keyword,
-		Enabled:  req.Enabled,
-		Limit:    req.Limit,
-		Type:     req.Type,
-		Title:    req.Title,
-		Content:  req.Content,
-		Level:    req.Level,
-		Metadata: req.Metadata,
+		UserIDs:   req.UserIDs,
+		Keyword:   req.Keyword,
+		Enabled:   req.Enabled,
+		Limit:     req.Limit,
+		Type:      req.Type,
+		Title:     req.Title,
+		Content:   req.Content,
+		Level:     req.Level,
+		Metadata:  req.Metadata,
+		Category:  req.Category,
+		Action:    req.Action,
+		Image:     req.Image,
+		ExpiresAt: req.ExpiresAt,
 	})
 	if err != nil {
 		h.writeError(c, err)
@@ -333,11 +340,12 @@ func (h *Handler) AdminAppNotifications(c *gin.Context) {
 	var query AdminNotificationListQuery
 	_ = bind(c, &query)
 	result, err := h.notifications.AdminList(c.Request.Context(), appID, notificationdomain.AdminListQuery{
-		Keyword: query.Keyword,
-		Type:    query.Type,
-		Level:   query.Level,
-		Page:    query.Page,
-		Limit:   query.Limit,
+		Keyword:  query.Keyword,
+		Category: query.Category,
+		Type:     query.Type,
+		Level:    query.Level,
+		Page:     query.Page,
+		Limit:    query.Limit,
 	})
 	if err != nil {
 		h.writeError(c, err)
@@ -383,10 +391,11 @@ func (h *Handler) DeleteAdminAppNotificationsByFilter(c *gin.Context) {
 		return
 	}
 	result, err := h.notifications.AdminDeleteByFilter(c.Request.Context(), appID, notificationdomain.AdminExportQuery{
-		Keyword: req.Keyword,
-		Type:    req.Type,
-		Level:   req.Level,
-		Limit:   req.Limit,
+		Keyword:  req.Keyword,
+		Category: req.Category,
+		Type:     req.Type,
+		Level:    req.Level,
+		Limit:    req.Limit,
 	})
 	if err != nil {
 		h.writeError(c, err)
@@ -407,10 +416,11 @@ func (h *Handler) ExportAdminAppNotifications(c *gin.Context) {
 	var query AdminNotificationListQuery
 	_ = bind(c, &query)
 	items, err := h.notifications.AdminExport(c.Request.Context(), appID, notificationdomain.AdminExportQuery{
-		Keyword: query.Keyword,
-		Type:    query.Type,
-		Level:   query.Level,
-		Limit:   query.Limit,
+		Keyword:  query.Keyword,
+		Category: query.Category,
+		Type:     query.Type,
+		Level:    query.Level,
+		Limit:    query.Limit,
 	})
 	if err != nil {
 		h.writeError(c, err)
@@ -423,7 +433,7 @@ func (h *Handler) ExportAdminAppNotifications(c *gin.Context) {
 	writer := csv.NewWriter(c.Writer)
 	defer writer.Flush()
 
-	_ = writer.Write([]string{"id", "appid", "user_id", "account", "nickname", "type", "title", "content", "level", "status", "read_at", "created_at", "updated_at", "metadata"})
+	_ = writer.Write([]string{"id", "appid", "user_id", "account", "nickname", "type", "category", "title", "content", "level", "status", "read_at", "expires_at", "created_at", "updated_at", "metadata"})
 	for _, item := range items {
 		userID := ""
 		if item.UserID != nil {
@@ -439,6 +449,10 @@ func (h *Handler) ExportAdminAppNotifications(c *gin.Context) {
 				metadata = string(encoded)
 			}
 		}
+		expiresAt := ""
+		if item.ExpiresAt != nil {
+			expiresAt = item.ExpiresAt.UTC().Format(time.RFC3339)
+		}
 		_ = writer.Write([]string{
 			strconv.FormatInt(item.ID, 10),
 			strconv.FormatInt(item.AppID, 10),
@@ -446,11 +460,13 @@ func (h *Handler) ExportAdminAppNotifications(c *gin.Context) {
 			item.Account,
 			item.Nickname,
 			item.Type,
+			item.Category,
 			item.Title,
 			item.Content,
 			item.Level,
 			item.Status,
 			readAt,
+			expiresAt,
 			item.CreatedAt.UTC().Format(time.RFC3339),
 			item.UpdatedAt.UTC().Format(time.RFC3339),
 			metadata,
@@ -898,6 +914,7 @@ func (h *Handler) AdminRevokeUserSessions(c *gin.Context) {
 	}
 	// 令牌失效不会断开已建立的实时连接，这里一并断开，在线列表随即更新
 	h.realtime.DisconnectUser(c.Request.Context(), appID, userID)
+	h.listenTogether.RevokeUser(appID, userID, "sessions_revoked")
 	response.Success(c, 200, "用户会话已全部踢出", nil)
 }
 
@@ -1412,6 +1429,7 @@ func (h *Handler) AdminAppSignInRecords(c *gin.Context) {
 	}
 
 	item, err := h.app.ListAppSignInRecords(c.Request.Context(), appID, appdomain.AppSignInRecordQuery{
+		UserID:    req.UserID,
 		Keyword:   req.Keyword,
 		Source:    req.Source,
 		BonusType: req.BonusType,

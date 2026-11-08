@@ -159,11 +159,56 @@ val client = AegisClient.builder(baseUrl, appKey)
 - 含中文等非 ASCII 字符的值自动按 UTF-8 百分号编码（OkHttp 不接受非 ASCII 的请求头）。
 - 请求上已经显式带了的同名头不会被覆盖。字段说明见 `docs/app-integration.md` 的「设备信息」。
 
+## 多线路（AegisLineSelector）
+
+同一个服务有多个入口时（CDN 域名、另一家 CDN 回源的域名、源站 IP 直连），交给选择器：
+
+```kotlin
+val lines = AegisLineSelector(
+    listOf(
+        AegisLine("cdn", "默认线路", "https://aegis.example.com"),
+        AegisLine("cf", "Cloudflare 线路", "https://alt.example.com"),
+    ),
+)
+val client = AegisClient.builder("https://aegis.example.com", "demo_app").lines(lines).build()
+```
+
+- **客户端（App、前端）只放经 CDN 的域名，不要放源站 IP（`AegisLine.addresses`、`fallbackAddresses`）**：打进安装包等于公开，攻击者可以绕过 CDN 直接打源站。这两项只适合跑在自己机房里的服务端调用方。
+- 请求按 baseUrl 构造，发出前换到当前线路的源；线路只换协议、主机、端口与直连 IP，路径不变（签名覆盖路径）。
+- 自动模式：当前线路出现连接级失败（解析、建连、握手、超时、CDN 回 502/504/52x）时记为故障并冷却（15 秒起指数增长，最长 5 分钟），立刻换到最好的另一条，SDK 在新线路上立即重发（仍受「请求能否重发」约束，每条线路每次调用最多试一次）。`lines.probeAll()` 对每条线路测 `/healthz`，明显更快（快 30% 且至少 60 ms）才换。
+- 手动模式：`lines.pin(id)` 固定线路，不自动切换；`lines.useAuto()` 回到自动。
+- 响应信封 `data` 里以任意线路的源开头的字符串（含 ws/wss）换成当前线路；`lines.rewrite(url)` 给调用方存下来的地址用，`lines.interceptor()` 与 `lines.dns(…)` 可以装到图片加载等别的 OkHttpClient 上。
+- 状态（`lines.state`）不可变，`addListener` 订阅变化；持久化由调用方做（构造参数 `restoredActiveId` / `restoredHealth`）。
+
 ## 线程模型
 
 所有方法都是**同步**的，SDK 不替调用方决定并发模型。
 Android 上放进协程 / IO 线程；服务端直接调。
 `AegisClient` 线程安全，全进程共用一个实例即可（内部 OkHttpClient 自带连接池）。
+
+## AI 中转（client.ai.relay）
+
+`client.ai.relay` 用当前登录会话调用 AI 中转（应用需开启 `allowSessionToken`），`client.ai.relay(apiKey)` 用 `sk-ag-` 密钥。
+请求体与响应体是 OpenAI / Anthropic 的原生 JSON，按需取字段：
+
+```kotlin
+val relay = client.ai.relay
+val reply = relay.chat(buildJsonObject { put("model", "gpt-4o"); putJsonArray("messages") { addJsonObject { put("role", "user"); put("content", "你好") } } })
+relay.chatStream(body) { chunk -> /* chat.completion.chunk */ }
+
+val cancel = AegisAICancellation()          // 别的线程调 cancel()：断开连接、取消任务，不扣费
+val images = relay.generateImages(
+    buildJsonObject { put("model", "gpt-image-1"); put("prompt", "一只猫"); put("size", "1024x1024") },
+    AegisAIJobOptions(timeoutSeconds = 600, cancellation = cancel, onProgress = { job -> println(job.status) }),
+)
+val png = images.images.first().bytes()
+```
+
+生图、改图、语音合成、转写走**异步任务**：提交后立刻拿到任务编号，再长轮询取结果。每个请求都很短，
+不会被中间反向代理的读超时（常见 60–100 秒）切断，轮询途中断网自动重试，任务不受影响。
+底层的 `submitJob` / `job` / `awaitJob` / `cancelJob` / `jobContent` 也公开，可以把任务编号存下来，进程重启后接着取。
+失败抛 `AegisException`：`code` 是网关的 402xx 业务码（上游自己的错误为 0），`httpStatus` 是同步调用会回的状态，
+取消时 `isCanceled` 为 true。全部方法阻塞，请在后台线程调用。
 
 ## 服务端校验会员（AegisServerClient）
 

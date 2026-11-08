@@ -10,6 +10,7 @@ import (
 
 	"aegis/internal/config"
 	geodomain "aegis/internal/domain/geo"
+	notificationdomain "aegis/internal/domain/notification"
 	securitydomain "aegis/internal/domain/security"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
@@ -38,7 +39,7 @@ const (
 // GeoRiskService 登录地理风控（近线，Worker 消费 NATS 登录事件驱动）。
 //
 // 数据流：
-//  1. 解析登录事件 → LocationService（mmdb + 缓存）取坐标
+//  1. 解析登录事件 → LocationService（宝塔归属地接口 + 缓存）取坐标
 //  2. 读用户地理画像（Redis 读主，miss 回源 PG）
 //  3. 纯内存判定：不可能旅行 / 新国家 / 远离常驻地
 //  4. 命中 → 写 risk_assessments（复用风控体系）+ 高危用户通知
@@ -51,10 +52,17 @@ type GeoRiskService struct {
 	pg       *pgrepo.Repository
 	profiles *redisrepo.GeoProfileRepository
 	location *LocationService
+	// notifications 站内信出口（异常登录提醒），见 SetNotificationService
+	notifications notificationDeliverer
 
 	// disabled：geo 表不存在（迁移未执行，如 PostGIS 镜像未更新）时自动熔断，
 	// 避免 NATS 消息因永久性错误被无限 Nak 重投。
 	disabled atomic.Bool
+}
+
+// SetNotificationService 接上站内信：异常登录提醒经 NotificationService.Deliver 投递并实时推送。
+func (s *GeoRiskService) SetNotificationService(notifications notificationDeliverer) {
+	s.notifications = notifications
 }
 
 // NewGeoRiskService 构造服务并规范化配置默认值。
@@ -251,17 +259,18 @@ func (s *GeoRiskService) recordFindings(ctx context.Context, evt geodomain.Login
 	)
 
 	// 高危 → 给用户发送异地登录提醒
-	if level == "high" {
+	if level == "high" && s.notifications != nil {
 		locText := strings.TrimSpace(strings.Join(nonEmpty(evt.Country, evt.Region, evt.City), " "))
 		if locText == "" {
 			locText = evt.IP
 		}
 		content := fmt.Sprintf("检测到您的账号于 %s 在 %s 登录（IP: %s）。如非本人操作，请立即修改密码。",
 			evt.CreatedAt.Format("2006-01-02 15:04 MST"), locText, evt.IP)
-		if err := s.pg.CreateUserNotification(ctx, evt.AppID, evt.UserID,
-			"security", "异常登录提醒", content, "warning",
-			map[string]any{"scene": geodomain.SceneGeoLogin, "ip": evt.IP, "score": total},
-		); err != nil {
+		if _, err := s.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+			AppID: evt.AppID, UserID: evt.UserID, Type: "security", Title: "异常登录提醒", Content: content, Level: "warning",
+			Metadata: map[string]any{"scene": geodomain.SceneGeoLogin, "ip": evt.IP, "score": total},
+			Action:   notificationdomain.RouteAction(notificationdomain.RouteSecurity, "查看账号安全"),
+		}); err != nil {
 			s.log.Warn("geo risk notification failed", zap.Int64("user_id", evt.UserID), zap.Error(err))
 		}
 	}

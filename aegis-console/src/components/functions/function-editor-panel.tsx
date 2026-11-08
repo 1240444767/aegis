@@ -646,7 +646,7 @@ export function FunctionEditorPanel({
         </span>
         {draft ? (
           <span className="hidden xl:inline">
-            草稿保存于 {formatTime(new Date(draft.updatedAt).toISOString())}
+            草稿保存于 {formatTime(Number.isFinite(draft.updatedAt) ? new Date(draft.updatedAt).toISOString() : null)}
           </span>
         ) : null}
         <span className="ml-auto flex items-center gap-1">

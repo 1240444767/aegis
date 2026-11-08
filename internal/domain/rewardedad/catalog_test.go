@@ -11,23 +11,23 @@ import (
 // 文档给的签名算法：sha256(securityKey + ":" + transId)。
 // 期望值是 ToBid 系平台文档里公开的示例向量，独立于本实现；签名对不上时
 // 错误只会说「不对」而不说「哪里不对」，所以要有字面量钉着。
-func TestHuijingSignMatchesDocumentedAlgorithm(t *testing.T) {
+func TestCallbackSignMatchesDocumentedAlgorithm(t *testing.T) {
 	const (
 		key   = "D46C4341E83F33DB0DF2BC42816F21B7"
 		trans = "a78f36ed-95e5-4049-9647-dfc87e6df0e1"
 		want  = "db10d4a82a32597a101841988bbee1bf5f3ebca9a512456817e301d89c721270"
 	)
-	if got := HuijingSign(key, trans); got != want {
-		t.Fatalf("HuijingSign = %q, want %q", got, want)
+	if got := CallbackSign(key, trans); got != want {
+		t.Fatalf("CallbackSign = %q, want %q", got, want)
 	}
-	if !VerifyHuijingSign(key, trans, strings.ToUpper(want)) {
+	if !VerifyCallbackSign(key, trans, strings.ToUpper(want)) {
 		t.Fatal("大写的签名也应当通过")
 	}
-	got := HuijingSign("key", "trans")
-	if VerifyHuijingSign("", "trans", got) || VerifyHuijingSign("key", "trans", "") {
+	got := CallbackSign("key", "trans")
+	if VerifyCallbackSign("", "trans", got) || VerifyCallbackSign("key", "trans", "") {
 		t.Fatal("密钥或签名为空时必须拒绝")
 	}
-	if VerifyHuijingSign("key", "other", got) {
+	if VerifyCallbackSign("key", "other", got) {
 		t.Fatal("换了 transId 的签名不应通过")
 	}
 }
@@ -44,7 +44,7 @@ func TestRewardCatalogOnlyOffersAllowedTypes(t *testing.T) {
 	}
 	// 除了广告独有的「功能时长」，每一档都必须是卡密目录里真实存在的，否则控制台配得出、发放处认不得。
 	for _, kind := range allowedRewardTypes {
-		if kind == RewardFeatureMinutes {
+		if kind == RewardFeatureMinutes || kind == RewardAICredit {
 			continue
 		}
 		if _, ok := cardkeydomain.FindRewardSpec(kind); !ok {
@@ -60,8 +60,9 @@ func TestRewardCatalogOnlyOffersAllowedTypes(t *testing.T) {
 		spec.Value != cardkeydomain.ValueFeature {
 		t.Fatalf("功能时长的自述不对：%+v", spec)
 	}
-	if catalog[len(catalog)-1].Type != RewardFeatureMinutes {
-		t.Fatal("功能时长应排在激励广告目录的末尾")
+	// 广告独有的两档排在卡密子集之后：功能时长，然后是 AI 额度。
+	if catalog[len(catalog)-2].Type != RewardFeatureMinutes || catalog[len(catalog)-1].Type != RewardAICredit {
+		t.Fatal("广告独有的功能时长与 AI 额度应依次排在激励广告目录的末尾")
 	}
 }
 
@@ -244,5 +245,38 @@ func TestDescribeSceneMentionsMembershipTerms(t *testing.T) {
 	points := Scene{Rewards: []Reward{{Type: cardkeydomain.RewardIntegral, Amount: 10}}}
 	if strings.Contains(DescribeScene(points, nil, nil), "免广告") {
 		t.Fatal("scenes without membership say nothing about it")
+	}
+}
+
+// 「AI 额度」与「功能时长」同为广告独有：卡密目录里不能有它，校验管数量与重复，规整后排在最后。
+func TestAICreditReward(t *testing.T) {
+	if _, ok := cardkeydomain.FindRewardSpec(RewardAICredit); ok {
+		t.Fatal("AI 额度不应出现在卡密的权益目录里")
+	}
+	spec, ok := FindRewardSpec(RewardAICredit)
+	if !ok || spec.Unit != "点" || spec.Min != 1 || spec.Max != MaxAICreditPoints || spec.Value != cardkeydomain.ValueAmount {
+		t.Fatalf("AI 额度的自述不对：%+v", spec)
+	}
+	if err := ValidateRewards([]Reward{{Type: RewardAICredit, Amount: 50}}); err != nil {
+		t.Fatalf("合法的 AI 额度被拒：%v", err)
+	}
+	for name, rewards := range map[string][]Reward{
+		"为 0":  {{Type: RewardAICredit, Amount: 0}},
+		"超上限":  {{Type: RewardAICredit, Amount: MaxAICreditPoints + 1}},
+		"重复两次": {{Type: RewardAICredit, Amount: 1}, {Type: RewardAICredit, Amount: 2}},
+	} {
+		if err := ValidateRewards(rewards); err == nil {
+			t.Errorf("%s：应被拒绝", name)
+		}
+	}
+	normalized := NormalizeRewards([]Reward{
+		{Type: RewardAICredit, Amount: 30, Feature: "junk"},
+		{Type: cardkeydomain.RewardIntegral, Amount: 5},
+	})
+	if len(normalized) != 2 || normalized[1].Type != RewardAICredit || normalized[1].Amount != 30 || normalized[1].Feature != "" {
+		t.Fatalf("规整结果不对：%+v", normalized)
+	}
+	if got := DescribeRewards(normalized, nil, nil); !strings.Contains(got, "AI 额度 30 点") {
+		t.Fatalf("描述里应有 AI 额度：%s", got)
 	}
 }

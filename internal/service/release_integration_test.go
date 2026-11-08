@@ -101,6 +101,9 @@ func TestReleaseCenterIntegration(t *testing.T) {
 	if result.UpdateType != appdomain.ReleaseUpdateRecommended {
 		t.Fatalf("expected recommended, got %s", result.UpdateType)
 	}
+	if result.Release.NotesFormat != appdomain.ReleaseNotesHTML || result.Release.NotesMarkdown != "" {
+		t.Fatalf("html release should report html format: %q %q", result.Release.NotesFormat, result.Release.NotesMarkdown)
+	}
 
 	latest, err := svc.Latest(ctx, appID, appdomain.ReleaseClient{Platform: "android"}, base)
 	if err != nil || latest == nil || latest.ID != created.ID {
@@ -120,6 +123,30 @@ func TestReleaseCenterIntegration(t *testing.T) {
 	stats, err := svc.Stats(ctx, appID, created.ID)
 	if err != nil || stats.Total.Offered != 1 || stats.Total.Downloaded != 1 || stats.Total.Installed != 1 || len(stats.Daily) != 1 {
 		t.Fatalf("unexpected stats: %+v %v", stats, err)
+	}
+
+	// Markdown 撰写：原文与渲染出的 HTML 都落库，检测结果与跨版本说明两份都带
+	md := "## 修复\n- 修复闪退\n\n<span style=\"color:#D32F2F\">重要</span>"
+	if _, err := svc.Save(ctx, appdomain.ReleaseMutation{ID: created.ID, AppID: appID, NotesFormat: ptr("markdown"), NotesMarkdown: &md}, base); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := svc.Detail(ctx, appID, created.ID, base)
+	if err != nil || reloaded.NotesFormat != appdomain.ReleaseNotesMarkdown || reloaded.NotesMarkdown != md ||
+		!strings.Contains(reloaded.Notes, "<h2>修复</h2>") || !strings.Contains(reloaded.Notes, "#D32F2F") || reloaded.Summary == "" {
+		t.Fatalf("markdown notes not persisted: %+v %v", reloaded, err)
+	}
+	if result, _ := svc.Check(ctx, appID, client, base); result.Release == nil || result.Release.NotesMarkdown != md ||
+		result.Release.NotesFormat != appdomain.ReleaseNotesMarkdown || len(result.Changelog) == 0 || result.Changelog[0].NotesMarkdown != md {
+		t.Fatalf("check should carry the markdown source: %+v", result)
+	}
+	// 旧接口只会改 HTML 正文：改完退回 html，不让过期的 Markdown 原文继续下发
+	legacyNotes := "<p>旧控制台改的</p>"
+	if _, err := pg.UpsertAppVersion(ctx, appdomain.AppVersionMutation{ID: created.ID, AppID: appID, ReleaseNotes: &legacyNotes}); err != nil {
+		t.Fatal(err)
+	}
+	if reloaded, err := svc.Detail(ctx, appID, created.ID, base); err != nil || reloaded.NotesFormat != appdomain.ReleaseNotesHTML ||
+		reloaded.NotesMarkdown != "" || reloaded.Notes != legacyNotes {
+		t.Fatalf("legacy edit should fall back to html: %+v %v", reloaded, err)
 	}
 
 	if _, err := svc.SetRollout(ctx, appID, created.ID, 0, base); err != nil {

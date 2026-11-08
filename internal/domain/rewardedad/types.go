@@ -12,8 +12,9 @@ import (
 
 // 广告平台。
 const (
-	// ProviderHuijing 灰鲸（huimiaokeji）聚合广告，底层是 ToBid / WindMill。
-	ProviderHuijing = "huijing"
+	// ProviderApex Apex（ApexAdx）聚合广告，底层是 ToBid / WindMill。2026-10 起取代灰鲸
+	// （huijing，同样基于 ToBid，回调协议相同），旧配置由迁移 000103 改成 apex。
+	ProviderApex = "apex"
 )
 
 // 校验模式：一次观看在什么条件下算数。
@@ -64,6 +65,15 @@ const RewardFeatureMinutes = "feature_minutes"
 // MaxFeatureMinutes 一次观看最多给多少分钟（一天）。
 const MaxFeatureMinutes = 1440
 
+// RewardAICredit AI 额度：激励广告独有的另一档，给 AI 中转网关的赠送额度加点数
+// （1 点按 1 积分定价，见 internal/domain/aigateway）。不过期，调用时按应用的扣费顺序使用。
+//
+// 只放在广告这里，理由与「功能时长」相同：它是「反复看、少量给」的那一类权益。
+const RewardAICredit = "ai_credit"
+
+// MaxAICreditPoints 一次观看最多给多少点。
+const MaxAICreditPoints = 100_000
+
 // 激励广告可发的权益。复用卡密的权益目录与数据形态（同一套账本、同一套控制台表单），
 // 但只开放适合「看一次广告」的几档：余额是真钱、设备位挂在授权卡上，都不该由广告发。
 // 末尾的「功能时长」是广告独有的，自述见 featureMinutesSpec。
@@ -74,6 +84,7 @@ var allowedRewardTypes = []string{
 	cardkeydomain.RewardExperience,
 	cardkeydomain.RewardLotteryDraws,
 	RewardFeatureMinutes,
+	RewardAICredit,
 }
 
 // Reward 一项权益，与卡密同构。
@@ -98,6 +109,8 @@ type Scene struct {
 	CooldownSeconds int `json:"cooldownSeconds"`
 	// Membership 这个场景送出的会员带什么权益。
 	Membership SceneMembership `json:"membership"`
+	// Lifetime 永久会员（或已永久拥有某功能的人）看这个场景时，已拥有的权益怎么办，见 lifetime.go。
+	Lifetime SceneLifetime `json:"lifetime"`
 }
 
 // SceneMembership 看广告赠送的会员的权益，与套餐一样**跟随当前配置**：
@@ -174,6 +187,9 @@ type AdminConfig struct {
 	Catalog          []cardkeydomain.RewardSpec `json:"catalog"`
 	VerifyModes      []string                   `json:"verifyModes"`
 	Providers        []string                   `json:"providers"`
+	// LifetimePolicies 已拥有权益的处理方式目录；ConvertTargets 折算能选的去处
+	LifetimePolicies []LifetimePolicySpec `json:"lifetimePolicies"`
+	ConvertTargets   []string             `json:"convertTargets"`
 }
 
 // SaveConfigInput 保存配置。SecurityKey 留空表示不修改。
@@ -213,10 +229,12 @@ type View struct {
 	DeviceID         string         `json:"deviceId,omitempty"`
 	ClientIP         string         `json:"clientIp,omitempty"`
 	Results          []RewardResult `json:"results"`
-	GrantedAt        *time.Time     `json:"grantedAt,omitempty"`
-	Operator         string         `json:"operator,omitempty"`
-	CreatedAt        time.Time      `json:"createdAt"`
-	UpdatedAt        time.Time      `json:"updatedAt"`
+	// Conversion 已拥有的权益改发了什么（永久会员折算），照常发放时为空
+	Conversion *Conversion `json:"conversion,omitempty"`
+	GrantedAt  *time.Time  `json:"grantedAt,omitempty"`
+	Operator   string      `json:"operator,omitempty"`
+	CreatedAt  time.Time   `json:"createdAt"`
+	UpdatedAt  time.Time   `json:"updatedAt"`
 }
 
 // ViewQuery 观看记录筛选。
@@ -319,13 +337,15 @@ func (p SettlePolicy) Ready(view *View) bool {
 // 上报本身总是成功的 —— 记录已经落库；Status 说明这次观看最终怎样：
 // pending 表示还在等广告平台的服务端回调，客户端可以稍后用同一个 transId 再上报一次来查询。
 type ClaimResult struct {
-	TransID   string         `json:"transId"`
-	Scene     string         `json:"scene"`
-	Status    string         `json:"status"`
-	Reason    string         `json:"reason,omitempty"`
-	Message   string         `json:"message"`
-	Results   []RewardResult `json:"results"`
-	GrantedAt *time.Time     `json:"grantedAt,omitempty"`
+	TransID string         `json:"transId"`
+	Scene   string         `json:"scene"`
+	Status  string         `json:"status"`
+	Reason  string         `json:"reason,omitempty"`
+	Message string         `json:"message"`
+	Results []RewardResult `json:"results"`
+	// Conversion 已拥有的权益改发了什么；有它时 Message 就是它的说明
+	Conversion *Conversion `json:"conversion,omitempty"`
+	GrantedAt  *time.Time  `json:"grantedAt,omitempty"`
 	// Remaining 结算后该场景今天还能领几次，-1 表示不限。
 	Remaining int `json:"remaining"`
 }
@@ -336,8 +356,10 @@ type ClientScene struct {
 	Name        string   `json:"name"`
 	PlacementID string   `json:"placementId"`
 	Rewards     []Reward `json:"rewards"`
-	// RewardSummary 一句话说清看完能拿到什么，客户端直接展示。
+	// RewardSummary 一句话说清看完能拿到什么，客户端直接展示。对永久会员是折算之后实际会发的。
 	RewardSummary string `json:"rewardSummary"`
+	// Lifetime 对当前用户有已拥有的权益时的提示（会折成什么），没有时为空
+	Lifetime *ClientLifetime `json:"lifetime,omitempty"`
 	// Membership 送出的会员带什么权益（功能标识与是否免广告），客户端可据此说明「会员能做什么」。
 	Membership      SceneMembership `json:"membership"`
 	DailyLimit      int             `json:"dailyLimit"`
@@ -380,14 +402,17 @@ type StatsDay struct {
 	Granted  int64  `json:"granted"`
 	Rejected int64  `json:"rejected"`
 	Users    int64  `json:"users"`
+	// Converted 已拥有的权益被折算的次数
+	Converted int64 `json:"converted"`
 }
 
 // StatsScene 一个场景在统计窗口内的表现。
 type StatsScene struct {
-	Scene   string `json:"scene"`
-	Name    string `json:"name"`
-	Views   int64  `json:"views"`
-	Granted int64  `json:"granted"`
+	Scene     string `json:"scene"`
+	Name      string `json:"name"`
+	Views     int64  `json:"views"`
+	Granted   int64  `json:"granted"`
+	Converted int64  `json:"converted"`
 }
 
 // StatsSummary 概览数字。
@@ -398,6 +423,9 @@ type StatsSummary struct {
 	TodayUsers    int64 `json:"todayUsers"`
 	Pending       int64 `json:"pending"`
 	TotalGranted  int64 `json:"totalGranted"`
+	// TotalConverted 累计折算次数；ConvertedIntegral 折算发出的积分合计
+	TotalConverted    int64 `json:"totalConverted"`
+	ConvertedIntegral int64 `json:"convertedIntegral"`
 }
 
 // Stats 管理端概览。

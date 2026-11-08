@@ -71,11 +71,12 @@ type AdminSessionAuditFilterQuery struct {
 }
 
 type AdminNotificationFilterQuery struct {
-	Keyword string `form:"keyword"`
-	Type    string `form:"type"`
-	Level   string `form:"level"`
-	Page    int    `form:"page"`
-	Limit   int    `form:"limit"`
+	Keyword  string `form:"keyword"`
+	Category string `form:"category"`
+	Type     string `form:"type"`
+	Level    string `form:"level"`
+	Page     int    `form:"page"`
+	Limit    int    `form:"limit"`
 }
 
 type AdminAppUserFilterQuery struct {

@@ -1,0 +1,37 @@
+{{ brand.name }}
+
+{% if mail.eyebrow != blank %}【{{ mail.eyebrow }}】{% endif %}{{ mail.title }}
+{% if mail.lead != blank %}
+{{ mail.lead }}
+{% endif %}
+{% for block in blocks %}
+{%- case block.kind -%}
+{%- when "paragraph" %}
+{{ block.text }}
+{% when "code" %}
+    {{ block.code }}
+{% if block.note != blank %}{{ block.note }}
+{% endif %}
+{% when "details" %}
+{% for row in block.rows %}{{ row.label }}：{{ row.value | default: "—" }}
+{% endfor %}
+{% when "notice" %}
+{% if block.title != blank %}{{ block.title }}
+{% endif %}{{ block.text }}
+{% when "button" %}
+{{ block.label }}：
+{{ block.url }}
+{% when "link" %}
+{{ block.label }}：
+{{ block.url }}
+{% endcase -%}
+{% endfor %}
+{% if mail.footer_note != blank %}
+{{ mail.footer_note }}
+{% endif %}
+--
+{% if brand.support_email != blank %}{% if mail.zh %}需要帮助？联系 {% endif %}{{ brand.support_email }}
+{% endif %}{{ mail.no_reply }}
+{{ brand.name }}
+{% if brand.footer_text != blank %}{{ brand.footer_text }}
+{% endif %}

@@ -5,7 +5,6 @@ import { FlaskConical, Loader2, RotateCcw, Wand2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api/client";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,7 +21,11 @@ import {
   ConditionFields, ConditionHint, ConditionTypeSelect,
   defaultConditionData, normalizeConditionData, type ConditionData,
 } from "./risk-condition-form";
-import { ActionBadge, LevelBadge, useRiskCatalog } from "./risk-shared";
+import { RuleEvaluationList } from "./risk-assessments";
+import { useRiskScope } from "./risk-scope";
+import {
+  ActionBadge, DecisionBadge, DimensionBreakdown, LevelBadge, ListKindBadge, SectionTitle, useRiskCatalog,
+} from "./risk-shared";
 
 /**
  * 规则模拟器。
@@ -59,16 +62,24 @@ const QUICK_OVERRIDES: Array<{ key: string; label: string; type: "bool" | "numbe
   { key: "device_age_hours", label: "设备存续小时", type: "number" },
   { key: "device_accounts_seen", label: "设备关联账号数", type: "number" },
   { key: "ip_accounts_seen", label: "IP 关联账号数", type: "number" },
+  { key: "user_age_hours", label: "账号年龄小时", type: "number" },
+  { key: "account_risk_trail", label: "账号近 7 天高危次数", type: "number" },
+  { key: "geo_changed", label: "归属地跳变", type: "bool" },
+  { key: "list_watch", label: "命中观察名单", type: "bool" },
+  { key: "scene_subject_hourly", label: "账号本场景小时次数", type: "number" },
 ];
 
 export function RiskSimulatorPanel() {
-  const { scenes, condition, metadata } = useRiskCatalog();
+  const { scenes, condition, metadata, scene: sceneMeta } = useRiskCatalog();
+  const { appId, appName } = useRiskScope();
   const simulateMut = useSimulateRiskMutation();
 
   const [scene, setScene] = useState("login");
   const [ip, setIP] = useState("203.0.113.7");
   const [account, setAccount] = useState("");
   const [deviceId, setDeviceId] = useState("");
+  const [userId, setUserId] = useState("");
+  const [captchaPassed, setCaptchaPassed] = useState(false);
   const [userAgent, setUserAgent] = useState(UA_PRESETS[0].value);
   const [overrides, setOverrides] = useState<Record<string, unknown>>({});
   const [showAllVariables, setShowAllVariables] = useState(false);
@@ -76,6 +87,7 @@ export function RiskSimulatorPanel() {
   const [useDraft, setUseDraft] = useState(false);
   const [draftType, setDraftType] = useState("custom_expr");
   const [draftScore, setDraftScore] = useState("30");
+  const [draftObserve, setDraftObserve] = useState(false);
   const [draftData, setDraftData] = useState<ConditionData>({ expression: "" });
 
   const [result, setResult] = useState<RiskEvalResult | null>(null);
@@ -85,6 +97,7 @@ export function RiskSimulatorPanel() {
   const run = async () => {
     const payload: RiskSimulatePayload = {
       scene, ip: ip.trim(), account: account.trim(), deviceId: deviceId.trim(), userAgent,
+      appId, userId: userId ? Number(userId) : undefined, captchaPassed: captchaPassed || undefined,
       overrides: Object.keys(overrides).length > 0 ? overrides : undefined,
     };
     if (useDraft) {
@@ -94,6 +107,7 @@ export function RiskSimulatorPanel() {
         conditionType: draftType,
         conditionData: normalizeConditionData(draftCatalog, draftData),
         score: Number(draftScore) || 20,
+        mode: draftObserve ? "observe" : "enforce",
       };
     }
     try {
@@ -156,6 +170,22 @@ export function RiskSimulatorPanel() {
                     <Input className="h-8 font-mono text-xs" value={deviceId} onChange={(e) => setDeviceId(e.target.value)}
                       placeholder="留空表示未上报" />
                   </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">用户 ID</Label>
+                    <Input type="number" className="h-8 font-mono text-xs" value={userId}
+                      onChange={(e) => setUserId(e.target.value)} placeholder="未登录" />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">作用域</Label>
+                    <div className="flex h-8 items-center justify-between gap-2 rounded-md border px-2.5 text-xs">
+                      <span className="truncate">{appName(appId)}</span>
+                      <label className="flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                        已过验证码
+                        <Switch checked={captchaPassed} onCheckedChange={setCaptchaPassed}
+                          disabled={!sceneMeta(scene)?.supportsCaptcha} />
+                      </label>
+                    </div>
+                  </div>
                   <div className="space-y-1 sm:col-span-2">
                     <Label className="text-xs">User-Agent</Label>
                     <Textarea rows={2} className="font-mono text-xs" value={userAgent}
@@ -210,6 +240,9 @@ export function RiskSimulatorPanel() {
                           onChange={(e) => setDraftScore(e.target.value)} />
                       </div>
                     </div>
+                    <label className="flex items-center gap-2 text-xs">
+                      <Switch checked={draftObserve} onCheckedChange={setDraftObserve} />观察模式
+                    </label>
                     <ConditionHint catalog={draftCatalog} />
                     {draftType === "custom_expr" ? (
                       <div className="space-y-1">
@@ -299,7 +332,7 @@ function OverrideEditor({ variables, showAll, values, onChange }: {
 }
 
 function SimulationResult({ result, pending }: { result: RiskEvalResult | null; pending: boolean }) {
-  const { conditionLabel } = useRiskCatalog();
+  const { listTypeLabel } = useRiskCatalog();
 
   if (!result) {
     return (
@@ -316,13 +349,14 @@ function SimulationResult({ result, pending }: { result: RiskEvalResult | null; 
   const hits = evaluated.filter((rule) => rule.hit);
   const misses = evaluated.filter((rule) => !rule.hit);
   const errored = evaluated.filter((rule) => rule.error);
+  const listHits = result.listHits ?? [];
 
   return (
     <Card className="flex flex-col lg:max-h-[calc(100vh-12rem)]">
       <CardContent className="flex min-h-0 flex-1 flex-col gap-3 p-4">
         <h3 className="text-sm font-semibold">模拟结果</h3>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-4 gap-2">
           <div className="rounded-lg border p-2.5 text-center">
             <div className="text-[10px] text-muted-foreground">总分</div>
             <div className="font-mono text-2xl font-bold tabular-nums">{result.totalScore}</div>
@@ -334,6 +368,12 @@ function SimulationResult({ result, pending }: { result: RiskEvalResult | null; 
           <div className="flex flex-col items-center justify-center gap-1 rounded-lg border p-2.5">
             <div className="text-[10px] text-muted-foreground">处置</div>
             <ActionBadge action={result.action} />
+          </div>
+          <div className="flex flex-col items-center justify-center gap-1 rounded-lg border p-2.5">
+            <div className="text-[10px] text-muted-foreground">判定来源</div>
+            {result.decisionBy && result.decisionBy !== "none"
+              ? <DecisionBadge decisionBy={result.decisionBy} />
+              : <span className="text-xs text-muted-foreground">无干预</span>}
           </div>
         </div>
 
@@ -350,44 +390,36 @@ function SimulationResult({ result, pending }: { result: RiskEvalResult | null; 
         )}
 
         <ScrollArea className="min-h-0 flex-1 pr-3">
-          <div className="space-y-3">
-            <RuleGroup title={`命中 ${hits.length} 条`} rules={hits} hit conditionLabel={conditionLabel} />
-            <RuleGroup title={`未命中 ${misses.length} 条`} rules={misses} conditionLabel={conditionLabel} />
+          <div className="space-y-4">
+            <section className="space-y-2">
+              <SectionTitle>维度得分</SectionTitle>
+              <DimensionBreakdown scores={result.dimensionScores} />
+            </section>
+            {listHits.length > 0 && (
+              <section className="space-y-1">
+                <SectionTitle>名单命中</SectionTitle>
+                {listHits.map((hit) => (
+                  <div key={hit.entryId} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px]">
+                    <ListKindBadge kind={hit.kind} />
+                    <span className="text-muted-foreground">{listTypeLabel(hit.listType)}</span>
+                    <code className="truncate font-mono">{hit.value}</code>
+                  </div>
+                ))}
+              </section>
+            )}
+            <section className="space-y-1">
+              <SectionTitle>命中 {hits.length} 条</SectionTitle>
+              <RuleEvaluationList rules={hits} />
+            </section>
+            {misses.length > 0 && (
+              <section className="space-y-1">
+                <SectionTitle>未命中 {misses.length} 条</SectionTitle>
+                <RuleEvaluationList rules={misses} showMisses />
+              </section>
+            )}
           </div>
         </ScrollArea>
       </CardContent>
     </Card>
-  );
-}
-
-function RuleGroup({ title, rules, hit, conditionLabel }: {
-  title: string;
-  rules: NonNullable<RiskEvalResult["evaluatedRules"]>;
-  hit?: boolean;
-  conditionLabel: (v: string) => string;
-}) {
-  if (rules.length === 0) return null;
-  return (
-    <section className="space-y-1">
-      <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{title}</h4>
-      {rules.map((rule, index) => (
-        <div key={`${rule.ruleId}-${index}`}
-          className={cn("rounded-lg border px-2.5 py-1.5 text-xs",
-            hit ? "border-amber-300/70 bg-amber-50/50 dark:border-amber-900/50 dark:bg-amber-950/20" : "opacity-70")}>
-          <div className="flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate font-medium">{rule.ruleName}</span>
-            <Badge variant="outline" size="sm">{conditionLabel(rule.conditionType)}</Badge>
-            <span className={cn("shrink-0 font-mono font-semibold tabular-nums",
-              hit ? "text-amber-700 dark:text-amber-400" : "text-muted-foreground")}>
-              {hit ? `+${rule.score}` : `(${rule.score})`}
-            </span>
-          </div>
-          {rule.reason && <p className="mt-0.5 text-[11px] text-muted-foreground">{rule.reason}</p>}
-          {rule.error && (
-            <p className="mt-0.5 font-mono text-[10px] text-rose-600 dark:text-rose-400">评估出错：{rule.error}</p>
-          )}
-        </div>
-      ))}
-    </section>
   );
 }

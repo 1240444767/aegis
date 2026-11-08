@@ -11,9 +11,9 @@ import {
   AlertDialogHeader,
   AlertDialogTitle
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import type { VipFeature, VipSource, VipTrialReason } from "@/lib/api/vip";
+import type { VipFeature, VipSource } from "@/lib/api/vip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -34,11 +34,17 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
   card_key: { label: "卡密核销", variant: "info" },
   ad_reward: { label: "看广告领取", variant: "info" },
   points_store: { label: "积分兑换", variant: "info" },
+  invite: { label: "邀请奖励", variant: "info" },
+  leaderboard: { label: "排行榜奖励", variant: "info" },
+  lottery: { label: "抽奖", variant: "info" },
+  item_grant: { label: "物品发放", variant: "info" },
   // 只出现在开通记录里：扣减天数是一条负时长的账，取消永久会员是一条 lifetime 留痕，
   // 都不是一段会员期。具体收回了什么看时长列（formatVipTerm）
   admin_revoke: { label: "收回", variant: "warning" },
   // 只出现在开通记录里：老系统的永久会员由迁移补记，判定时归为 unknown
   legacy_import: { label: "旧系统迁移", variant: "secondary" },
+  // 开通永久时折掉存量的说明行（负时长），以及取消永久会员后还回的会员时长（正时长，是一段会员期）
+  lifetime_convert: { label: "永久会员折算", variant: "warning" },
   // 老系统迁移进来的用户：到期时间是直接写进 users 的，账本里没有对应流水。
   // 谎报成某个具体渠道比说"不知道"更糟 —— 那会让对账的人去找一笔不存在的钱。
   unknown: { label: "来源未知", variant: "secondary" }
@@ -47,56 +53,6 @@ const SOURCE_META: Record<VipSource, { label: string; variant: "success" | "info
 /** 接受 string：交易中心与用户详情走的是宽松类型层（`lib/api/types.ts`），渠道是裸字符串 */
 export function vipSourceLabel(source?: VipSource | string) {
   return SOURCE_META[(source ?? "none") as VipSource]?.label ?? source ?? "—";
-}
-
-export function VipSourceBadge({ source }: { source?: VipSource | string }) {
-  const meta = SOURCE_META[(source ?? "none") as VipSource] ?? SOURCE_META.none;
-  return (
-    <Badge variant={meta.variant} size="sm">
-      {meta.label}
-    </Badge>
-  );
-}
-
-/** 试用资格判据 → 展示名 */
-export const TRIAL_REASON_META: Record<VipTrialReason, { label: string }> = {
-  eligible: { label: "可领取" },
-  not_configured: { label: "未开放" },
-  already_claimed: { label: "已领过" },
-  member_active: { label: "已是会员" },
-  device_claimed: { label: "设备已用" },
-  device_required: { label: "缺设备标识" }
-};
-
-/** 会员状态徽标：是不是会员 / 是不是永久 / 是不是试用，一眼分清 */
-export function VipStatusBadge({
-  isVip,
-  isTrial,
-  isLifetime
-}: {
-  isVip: boolean;
-  isTrial: boolean;
-  isLifetime?: boolean;
-}) {
-  if (!isVip) {
-    return (
-      <Badge variant="secondary" size="sm">
-        非会员
-      </Badge>
-    );
-  }
-  if (isLifetime) {
-    return (
-      <Badge variant="success" size="sm">
-        永久会员
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant={isTrial ? "warning" : "success"} size="sm">
-      {isTrial ? "试用会员" : "正式会员"}
-    </Badge>
-  );
 }
 
 /**
@@ -177,6 +133,52 @@ export function FeatureTagList({
   );
 }
 
+/** 功能标识多选（档位编辑、新建套餐时顺带建档位共用）。停用的标识照样可选，只是淡一些。 */
+export function FeatureChecklist({
+  catalog,
+  value,
+  onChange
+}: {
+  catalog: VipFeature[];
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  if (catalog.length === 0) {
+    return (
+      <p className="rounded-xl border border-dashed border-border px-3 py-4 text-center text-[11px] text-muted-foreground">
+        暂无功能标识
+      </p>
+    );
+  }
+  const toggle = (tag: string) =>
+    onChange(value.includes(tag) ? value.filter((item) => item !== tag) : [...value, tag]);
+  return (
+    <div className="space-y-1.5 rounded-xl border border-border p-2">
+      {catalog.map((feature) => (
+        <label
+          key={feature.tag}
+          className={cn(
+            "flex cursor-pointer items-start gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-muted/60",
+            !feature.isActive && "opacity-60"
+          )}
+        >
+          <Checkbox checked={value.includes(feature.tag)} onCheckedChange={() => toggle(feature.tag)} className="mt-0.5" />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <span className="truncate text-xs font-medium">{feature.name}</span>
+              <code className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{feature.tag}</code>
+              {!feature.isActive ? <span className="text-[10px] text-muted-foreground">已停用</span> : null}
+            </div>
+            {feature.description ? (
+              <p className="truncate text-[10px] text-muted-foreground">{feature.description}</p>
+            ) : null}
+          </div>
+        </label>
+      ))}
+    </div>
+  );
+}
+
 /**
  * 套餐时长。永久套餐的 durationDays 恒为 0，写成「0 天」会被读成「白送的空套餐」。
  * 结构化入参：会员区块与用户详情 / 交易中心用的是两套类型层，字段同名。
@@ -185,7 +187,12 @@ export function vipPlanTerm(plan: { lifetime?: boolean; durationDays: number }) 
   return plan.lifetime ? "永久" : `${plan.durationDays} 天`;
 }
 
-type VipTermRecord = { lifetime?: boolean; durationDays: number; payChannel: string };
+type VipTermRecord = {
+  lifetime?: boolean;
+  durationDays: number;
+  payChannel: string;
+  conversion?: { kind: string; points: number } | null;
+};
 
 /** 这条记录是不是一次永久开通（取消永久会员的留痕同样带 lifetime，要排除） */
 export function isLifetimeGrant(txn: VipTermRecord) {
@@ -197,6 +204,8 @@ export function isLifetimeGrant(txn: VipTermRecord) {
  * 扣减天数的记录 durationDays 本身就是负数。
  */
 export function formatVipTerm(txn: VipTermRecord) {
+  // 已拥有的发放被折成积分：没有记会员段，时长列说折了多少
+  if (txn.conversion?.kind === "owned") return `折算 ${txn.conversion.points} 积分`;
   if (txn.lifetime) return txn.payChannel === "admin_revoke" ? "取消永久" : "永久";
   return txn.durationDays < 0 ? `-${Math.abs(txn.durationDays)} 天` : `+${txn.durationDays} 天`;
 }
@@ -278,22 +287,6 @@ export function formatVipDate(value?: string | null) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(date);
-}
-
-/**
- * 剩余时长。
- *
- * 不足一天时给到小时 —— 「还剩 0 天」既像已经过期又像马上过期，
- * 而这两种情况客服要说的话完全不同。
- */
-export function formatRemaining(seconds?: number) {
-  const value = Math.max(0, Math.floor(seconds ?? 0));
-  if (value <= 0) return "已到期";
-  const days = Math.floor(value / 86400);
-  if (days >= 1) return `${days} 天`;
-  const hours = Math.floor(value / 3600);
-  if (hours >= 1) return `${hours} 小时`;
-  return `${Math.max(1, Math.floor(value / 60))} 分钟`;
 }
 
 /**

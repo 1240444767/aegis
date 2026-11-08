@@ -43,7 +43,8 @@ func (s *VipService) SetPaymentService(p *PaymentService) { s.payments = p }
 // 试用套餐的信息由 `/vip/status` 的 trialOffer 给出：那里同时带着「能不能领」，
 // 而这里给不出这个答案 —— 一份列不出资格的试用卡片，客户端只能先渲染再报错。
 //
-// 永久会员已经包含的套餐标上 included：它们买了也拿不到任何新东西，购买会以 40378 拒绝。
+// 永久会员已经包含的套餐标上 included：它们买了也拿不到任何新东西（vip.Holdings.CoversPlan：
+// 启用中的功能都已永久拥有，永久开通与永久解锁都算，免广告也已有），购买会以 40378 拒绝。
 // 标出来而不是从列表里拿掉 —— 永久会员看到一张空的套餐页，会以为是加载失败。
 func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Session) ([]vipdomain.Plan, error) {
 	if session == nil {
@@ -53,7 +54,7 @@ func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Se
 	if err != nil || len(plans) == 0 {
 		return plans, err
 	}
-	lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, session.AppID, session.UserID)
+	holdings, err := s.pg.GetVipHoldings(ctx, session.AppID, session.UserID)
 	if err != nil {
 		if errors.Is(err, pgrepo.ErrUserNotFound) {
 			return plans, nil
@@ -61,7 +62,15 @@ func (s *VipService) ListActivePlans(ctx context.Context, session *authdomain.Se
 		return nil, err
 	}
 	for i := range plans {
-		plans[i].Included = vipdomain.LifetimeIncludes(lifetime, features, plans[i])
+		plans[i].Included = holdings.CoversPlan(plans[i])
+		if plans[i].Lifetime && !plans[i].Included {
+			// 预览失败不影响套餐列表：少一句说明，不该让用户看不到套餐
+			if preview, err := s.previewUpgrade(ctx, session.AppID, session.UserID, plans[i].Features, ""); err == nil {
+				plans[i].UpgradePreview = preview
+			} else {
+				s.log.Warn("vip upgrade preview failed", zap.Int64("appid", session.AppID), zap.Error(err))
+			}
+		}
 	}
 	return plans, nil
 }
@@ -76,14 +85,14 @@ func errVipLifetimeIncluded() error {
 
 // ensurePlanNotIncluded 下单前拦住「永久会员已经包含」的套餐（在线直购走这里，余额购买在事务内判）。
 func (s *VipService) ensurePlanNotIncluded(ctx context.Context, appID int64, userID int64, plan vipdomain.Plan) error {
-	lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, appID, userID)
+	holdings, err := s.pg.GetVipHoldings(ctx, appID, userID)
 	if err != nil {
 		if errors.Is(err, pgrepo.ErrUserNotFound) {
 			return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 		}
 		return err
 	}
-	if vipdomain.LifetimeIncludes(lifetime, features, plan) {
+	if holdings.CoversPlan(plan) {
 		return errVipLifetimeIncluded()
 	}
 	return nil
@@ -210,6 +219,9 @@ func (s *VipService) AdminSavePlan(ctx context.Context, mutation vipdomain.PlanM
 	}
 	plan, err := s.pg.UpsertVipPlan(ctx, mutation)
 	if err != nil {
+		if errors.Is(err, pgrepo.ErrVipTierNotFound) {
+			return nil, translateVipTierError(err)
+		}
 		// vip_plans 上唯一的唯一索引就是「每个应用至多一个启用中的试用套餐」。
 		// 不翻译的话，管理员在控制台上看到的是一句原始的 SQL 约束名。
 		if pgrepo.IsUniqueViolation(err) {
@@ -323,19 +335,52 @@ type AdminVipGrantInput struct {
 	Quantity      int
 	Days          int
 	Lifetime      bool
+	// TierID 自定义发放归入的档位（Features 则是档位之外另给的）。
+	// 为 0 时：永久会员归入应用的永久档位，限时的不挂档位（只有 Features）。按套餐发放时忽略。
+	TierID        int64
 	Features      []string
 	Reason        string
 	BonusIntegral int64
 	Operator      string
+	// OwnedPolicy 这笔对他已是空的（永久会员已包含）时怎么办：空为按应用折算策略，grant 为照常发放
+	OwnedPolicy string
+	// UpgradePolicy 发的是永久会员时，被覆盖的存量怎么办：空为按应用折算策略，convert / keep 为这一次单独指定
+	UpgradePolicy string
 }
 
 // AdminGrantVip 管理员发放会员（不动钱包，可附赠积分；到期时间只增不减）。
 func (s *VipService) AdminGrantVip(ctx context.Context, in AdminVipGrantInput) (*vipdomain.Transaction, error) {
+	grant, err := s.buildAdminGrant(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	txn, err := s.pg.GrantVip(ctx, grant)
+	if err != nil {
+		if errors.Is(err, pgrepo.ErrUserNotFound) {
+			return nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
+		}
+		return nil, err
+	}
+	return txn, nil
+}
+
+// buildAdminGrant 管理员发放的输入 → 一次开通指令（发放与预览共用，预览看到的就是将要发的）。
+func (s *VipService) buildAdminGrant(ctx context.Context, in AdminVipGrantInput) (vipdomain.Grant, error) {
 	if in.UserID <= 0 || in.AppID <= 0 {
-		return nil, apperrors.New(40000, http.StatusBadRequest, "用户ID与应用ID不能为空")
+		return vipdomain.Grant{}, apperrors.New(40000, http.StatusBadRequest, "用户ID与应用ID不能为空")
 	}
 	if in.BonusIntegral < 0 {
-		return nil, apperrors.New(40088, http.StatusBadRequest, "赠送积分不能为负")
+		return vipdomain.Grant{}, apperrors.New(40088, http.StatusBadRequest, "赠送积分不能为负")
+	}
+	switch in.OwnedPolicy {
+	case "", vipdomain.OwnedGrant, vipdomain.OwnedConvert:
+	default:
+		return vipdomain.Grant{}, apperrors.New(40000, http.StatusBadRequest, "未知的已拥有处理方式")
+	}
+	switch in.UpgradePolicy {
+	case "", vipdomain.UpgradeConvert, vipdomain.UpgradeKeep:
+	default:
+		return vipdomain.Grant{}, apperrors.New(40000, http.StatusBadRequest, "未知的存量处理方式")
 	}
 	reason := strings.TrimSpace(in.Reason)
 
@@ -346,6 +391,9 @@ func (s *VipService) AdminGrantVip(ctx context.Context, in AdminVipGrantInput) (
 		PayAmount:  decimal.Zero,
 		Operator:   in.Operator,
 		Metadata:   map[string]any{"reason": reason},
+		// 已拥有的发放按应用折算策略处理，除非管理员这一次明确要照常发放
+		ConvertOwned: in.OwnedPolicy != vipdomain.OwnedGrant,
+		UpgradeMode:  in.UpgradePolicy,
 	}
 
 	if in.PlanID > 0 {
@@ -354,23 +402,23 @@ func (s *VipService) AdminGrantVip(ctx context.Context, in AdminVipGrantInput) (
 			quantity = 1
 		}
 		if quantity > 100 {
-			return nil, apperrors.New(40086, http.StatusBadRequest, "单次发放数量不能超过 100")
+			return grant, apperrors.New(40086, http.StatusBadRequest, "单次发放数量不能超过 100")
 		}
 		plan, err := s.pg.GetVipPlan(ctx, in.AppID, in.PlanID)
 		if err != nil {
-			return nil, err
+			return grant, err
 		}
 		if plan == nil {
-			return nil, apperrors.New(40480, http.StatusNotFound, "套餐不存在")
+			return grant, apperrors.New(40480, http.StatusNotFound, "套餐不存在")
 		}
 		// 试用是资格制的（一人一次、可能限设备），走发放入口会绕开全部资格判定，
 		// 且不落 trial claims 账本 —— 之后没人说得清这个人的试用资格用没用过。
 		if plan.IsTrial() {
-			return nil, apperrors.New(errCodeTrialPlanNotPurchase, http.StatusForbidden,
+			return grant, apperrors.New(errCodeTrialPlanNotPurchase, http.StatusForbidden,
 				"试用套餐请通过「代领试用」发放")
 		}
 		if plan.Lifetime && quantity > 1 {
-			return nil, apperrors.New(40086, http.StatusBadRequest, "永久套餐单次只能发放 1 份")
+			return grant, apperrors.New(40086, http.StatusBadRequest, "永久套餐单次只能发放 1 份")
 		}
 		grant.PlanID = &plan.ID
 		grant.PlanName = plan.Name
@@ -379,40 +427,44 @@ func (s *VipService) AdminGrantVip(ctx context.Context, in AdminVipGrantInput) (
 		grant.Lifetime = plan.Lifetime
 		grant.BonusIntegral = plan.BonusIntegral*int64(quantity) + in.BonusIntegral
 		grant.Metadata["quantity"] = quantity
-	} else {
-		if !in.Lifetime && in.Days <= 0 {
-			return nil, apperrors.New(40086, http.StatusBadRequest, "发放天数必须大于 0")
-		}
-		features := vipdomain.NormalizeFeatureTags(in.Features)
-		if len(features) > 0 {
-			if err := s.EnsureFeatureTagsRegistered(ctx, in.AppID, features); err != nil {
-				return nil, err
-			}
-		}
-		grant.PlanName = reason
-		if grant.PlanName == "" {
-			grant.PlanName = "管理员授予"
-			if in.Lifetime {
-				grant.PlanName = "管理员授予永久会员"
-			}
-		}
-		grant.Features = features
-		grant.BonusIntegral = in.BonusIntegral
-		if in.Lifetime {
-			grant.Lifetime = true
-		} else {
-			grant.DurationDays = in.Days
-		}
+		return grant, nil
 	}
 
-	txn, err := s.pg.GrantVip(ctx, grant)
-	if err != nil {
-		if errors.Is(err, pgrepo.ErrUserNotFound) {
-			return nil, apperrors.New(40401, http.StatusNotFound, "用户不存在")
-		}
-		return nil, err
+	if !in.Lifetime && in.Days <= 0 {
+		return grant, apperrors.New(40086, http.StatusBadRequest, "发放天数必须大于 0")
 	}
-	return txn, nil
+	features := vipdomain.NormalizeFeatureTags(in.Features)
+	if len(features) > 0 {
+		if err := s.EnsureFeatureTagsRegistered(ctx, in.AppID, features); err != nil {
+			return grant, err
+		}
+	}
+	grant.PlanName = reason
+	if grant.PlanName == "" {
+		grant.PlanName = "管理员授予"
+		if in.Lifetime {
+			grant.PlanName = "管理员授予永久会员"
+		}
+	}
+	if in.TierID > 0 {
+		tier, err := s.pg.GetVipTier(ctx, in.AppID, in.TierID)
+		if err != nil {
+			return grant, err
+		}
+		if tier == nil {
+			return grant, apperrors.New(errCodeVipTierNotFound, http.StatusNotFound, "会员档位不存在")
+		}
+		grant.TierID = &tier.ID
+		grant.Metadata["tierName"] = tier.Name
+	}
+	grant.Features = features
+	grant.BonusIntegral = in.BonusIntegral
+	if in.Lifetime {
+		grant.Lifetime = true
+	} else {
+		grant.DurationDays = in.Days
+	}
+	return grant, nil
 }
 
 // errCodeVipNotActive 扣减天数时该用户当前不是会员

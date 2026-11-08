@@ -191,6 +191,14 @@ type AuthCapability struct {
 	OAuthProviders     []oauthdomain.PublicProvider `json:"oauthProviders"`
 	// Invite 注册表单上的邀请码字段：enabled、field（hidden / optional / required）、label、placeholder
 	Invite invite.Capability `json:"invite"`
+	// Passkey 通行密钥能力。rpId 只在应用配了独立依赖方时下发，原生客户端没有它就不该画入口
+	Passkey PasskeyCapability `json:"passkey"`
+}
+
+// PasskeyCapability /config 里的 Passkey 能力。
+type PasskeyCapability struct {
+	Enabled bool   `json:"enabled"`
+	RPID    string `json:"rpId,omitempty"`
 }
 
 // CaptchaRequirement 各入口到底要不要图形验证码 —— 服务端算好的**结论**。
@@ -369,6 +377,41 @@ type Config struct {
 	Operations []Operation `json:"operations"`
 	// Errors 机器可读的错误码目录，供客户端把业务码映射成分类异常。
 	Errors []ErrorDescriptor `json:"errors"`
+	// ClientControl 版本管控通道的公钥与参数（docs/client-control.md）。与安全等级无关，未登录同样可用。
+	ClientControl *ClientControlSpec `json:"clientControl,omitempty"`
+}
+
+// ClientControlSpec 版本管控通道规格。
+//
+// /config 本身没有签名，因此 box 公钥由签名密钥签过（BoxKey.Signature），
+// 签名密钥之间以背书链相连（SigningKeys[i].Endorsement 由 EndorsedBy 指向的上一把签发）。
+// 客户端应内置（或首次使用时固定）某一把签名公钥，再顺着背书链信任后来的密钥。
+type ClientControlSpec struct {
+	Protocol       string                    `json:"protocol"`
+	Enabled        bool                      `json:"enabled"`
+	PolicyVersion  int64                     `json:"policyVersion"`
+	RecheckSeconds int                       `json:"recheckSeconds"`
+	WatchEnabled   bool                      `json:"watchEnabled"`
+	SigningKeyID   string                    `json:"signingKeyId"`
+	SigningKeys    []ClientControlSigningKey `json:"signingKeys"`
+	BoxKey         ClientControlBoxKey       `json:"boxKey"`
+	CheckPath      string                    `json:"checkPath"`
+	WatchPath      string                    `json:"watchPath"`
+}
+
+type ClientControlSigningKey struct {
+	KeyID       string `json:"keyId"`
+	PublicKey   string `json:"publicKey"`
+	Status      string `json:"status"`
+	EndorsedBy  string `json:"endorsedBy,omitempty"`
+	Endorsement string `json:"endorsement,omitempty"`
+}
+
+type ClientControlBoxKey struct {
+	KeyID        string `json:"keyId"`
+	PublicKey    string `json:"publicKey"`
+	SigningKeyID string `json:"signingKeyId"`
+	Signature    string `json:"signature"`
 }
 
 // ─────────────────────────────────────────────────────────────────────

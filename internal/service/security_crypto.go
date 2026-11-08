@@ -112,6 +112,15 @@ func passkeyUserHandle(appID int64, userID int64) []byte {
 	return []byte(fmt.Sprintf("u:%d:%d", appID, userID))
 }
 
+// formatAAGUID 把 16 字节 AAGUID 写成 UUID 形式；长度不对或全零时返回空串。
+func formatAAGUID(raw []byte) string {
+	if len(raw) != 16 || bytes.Equal(raw, make([]byte, 16)) {
+		return ""
+	}
+	h := hex.EncodeToString(raw)
+	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:32]
+}
+
 func adminPasskeyUserHandle(adminID int64) []byte {
 	return []byte(fmt.Sprintf("a:%d", adminID))
 }

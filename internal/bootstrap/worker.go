@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis/internal/config"
@@ -56,6 +57,10 @@ type WorkerApp struct {
 	EgressGateway   *egress.Gateway
 	OwnsEgress      bool
 	ShutdownTracing func(context.Context) error
+
+	// closeOnce 保证 Close 只执行一次：信号路径与 fx OnStop 都可能调用它，
+	// 重复关闭会二次 Stop Temporal Worker（SDK 内部 close 已关闭的 channel 直接 panic）。
+	closeOnce sync.Once
 }
 
 const (
@@ -140,6 +145,7 @@ func NewWorkerAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, man
 	}
 	pg := pgrepo.New(postgres)
 	egressService := service.NewEgressService(log, pg, egressGateway, cfg.Security.MasterKey, cfg.Egress)
+	egressService.AttachMihomo(ensureMihomoCore(cfg.EgressMihomo, "worker", log), ownsEgress, cfg.EgressMihomo.Mirror)
 	if err := egressService.Initialize(ctx); err != nil {
 		log.Warn("加载持久化的出海网关配置失败，沿用 .env 配置", zap.Error(err))
 	}
@@ -161,11 +167,14 @@ func NewWorkerAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, man
 	//
 	// 但**管理员收件箱必须接**：SLA 预警/超时是纯处理侧事件，收件人全是管理员，
 	// 少了它这条链路会静默变成 skipped，正是早期实现的坑。
-	workerNotificationService := service.NewNotificationService(log, pg, sessions, nil)
-	autoSignService.SetNotifier(workerNotificationService)
-	workerEmailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
 	// Worker 不持有 WebSocket 连接，实时推送经 NATS 广播由 API 实例分发给在线客户端
 	workerRealtimePublisher := service.NewNATSUserEventPublisher(log, natsConn)
+	// Worker 侧发出的站内信（签到、异常登录、自动签到、工单）同样经 NATS 实时推到用户设备
+	workerNotificationService := service.NewNotificationService(log, pg, sessions, workerRealtimePublisher)
+	autoSignService.SetNotifier(workerNotificationService)
+	eventService.SetNotificationService(workerNotificationService)
+	geoRiskService.SetNotificationService(workerNotificationService)
+	workerEmailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
 	workerAdminInboxService := service.NewAdminInboxService(log, pg, workerRealtimePublisher)
 	// 自动签到也算签到：被邀请人签满 N 天后结算邀请人奖励，与 API 实例同一条路径
 	workerInviteService := service.NewInviteService(log, pg)
@@ -225,6 +234,7 @@ func NewWorkerAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, man
 func (w *WorkerApp) Run(ctx context.Context) error {
 	if w.OwnsEgress && w.EgressGateway != nil {
 		w.EgressGateway.Start(ctx)
+		w.Egress.StartSync(ctx)
 	}
 	registerWorkerConfigHotReload(w.ConfigManager, w.Logger, w.AutoSign, w.Egress)
 	// Worker 侧同样采集：长事务与连接泄漏往往出在后台任务而非请求链路
@@ -366,6 +376,19 @@ func (w *WorkerApp) handleJSONMessage(msg *nats.Msg, handler func(context.Contex
 }
 
 func (w *WorkerApp) Close(ctx context.Context) {
+	w.closeOnce.Do(func() { w.close(ctx) })
+}
+
+// close 按"先停入口、再停后台、最后断连接"的顺序释放：
+//  1. Temporal Worker 先停止拉取任务，并等在途 Activity 跑完（它们还要用 DB/Redis）；
+//  2. NATS Drain 停止投递新消息并等在途 handler 处理完、Ack 落地；
+//  3. 后台巡检/治理协程收尾；
+//  4. 最后才关 Temporal 客户端、Redis 与 Postgres，连接池排空在途查询后断开。
+func (w *WorkerApp) close(ctx context.Context) {
+	if w.TemporalWorker != nil {
+		w.TemporalWorker.Stop()
+	}
+	drainNATS(ctx, w.NATSConn)
 	if w.Governance != nil {
 		w.Governance.Stop()
 	}
@@ -378,23 +401,16 @@ func (w *WorkerApp) Close(ctx context.Context) {
 	if w.Database != nil {
 		w.Database.Stop()
 	}
-	if w.PostgresHandle != nil {
-		w.PostgresHandle.Close(ctx)
-	} else if w.Postgres != nil {
-		w.Postgres.Close()
+	if w.Temporal != nil {
+		w.Temporal.Close()
 	}
 	if w.Redis != nil {
 		_ = w.Redis.Close()
 	}
-	if w.NATSConn != nil {
-		w.NATSConn.Drain()
-		w.NATSConn.Close()
-	}
-	if w.TemporalWorker != nil {
-		w.TemporalWorker.Stop()
-	}
-	if w.Temporal != nil {
-		w.Temporal.Close()
+	if w.PostgresHandle != nil {
+		w.PostgresHandle.Close(ctx)
+	} else if w.Postgres != nil {
+		w.Postgres.Close()
 	}
 	if w.ShutdownTracing != nil {
 		_ = w.ShutdownTracing(ctx)

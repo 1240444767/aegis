@@ -463,10 +463,11 @@ func (h *Handler) GetCDNConfig(c *gin.Context) {
 		return
 	}
 	if cdn == nil {
-		response.Error(c, http.StatusNotFound, 40400, "CDN 配置不存在")
+		// 没配过是常态，不是错误：控制台据此显示空表单。
+		response.Success(c, 200, "ok", nil)
 		return
 	}
-	response.Success(c, 200, "ok", cdn)
+	response.Success(c, 200, "ok", redactCDNConfig(cdn))
 }
 
 // UpsertCDNConfig 创建或更新 CDN 配置
@@ -497,8 +498,19 @@ func (h *Handler) UpsertCDNConfig(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "CDN 配置已更新", cdn)
+	response.Success(c, 200, "CDN 配置已更新", redactCDNConfig(cdn))
 	h.recordAudit(c, "storage.cdn.upsert", "storage_cdn", strconv.FormatInt(configID, 10), fmt.Sprintf("更新存储配置 #%d 的 CDN 配置", configID))
+}
+
+// redactCDNConfig 签名密钥出网抹除，只报告是否已配置。
+func redactCDNConfig(cdn *storagedomain.CDNConfig) *storagedomain.CDNConfig {
+	if cdn == nil {
+		return nil
+	}
+	copied := *cdn
+	copied.SignURLSecretSet = copied.SignURLSecret != ""
+	copied.SignURLSecret = ""
+	return &copied
 }
 
 // DeleteCDNConfig 删除 CDN 配置

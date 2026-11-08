@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -9,6 +11,7 @@ import (
 	"time"
 
 	authdomain "aegis/internal/domain/auth"
+	"aegis/internal/domain/leaderboard"
 	pointdomain "aegis/internal/domain/points"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
@@ -19,16 +22,18 @@ import (
 )
 
 type PointsService struct {
-	log      *zap.Logger
-	pg       *pgrepo.Repository
-	sessions *redisrepo.SessionRepository
-	location *time.Location
+	// publicIDs 排行榜上的 userId 换成对外 ID
+	publicIDs *UserPublicIDs
+	log       *zap.Logger
+	pg        *pgrepo.Repository
+	sessions  *redisrepo.SessionRepository
+	location  *time.Location
 	// 排行榜并发合并：多个用户同时请求同一榜单页时只打一次 DB
 	rankingFlight singleflight.Group
 }
 
 func NewPointsService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository) *PointsService {
-	return &PointsService{log: log, pg: pg, sessions: sessions, location: timeutil.DefaultLocation()}
+	return &PointsService{log: log, pg: pg, sessions: sessions, location: timeutil.DefaultLocation(), publicIDs: newUserPublicIDsFor(pg)}
 }
 
 func (s *PointsService) GetOverview(ctx context.Context, session *authdomain.Session) (*pointdomain.Overview, error) {
@@ -50,8 +55,9 @@ func (s *PointsService) ListExperienceTransactions(ctx context.Context, session 
 	return s.pg.ListExperienceTransactions(ctx, session.UserID, session.AppID, page, limit)
 }
 
-func (s *PointsService) ListLevels(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	return s.pg.ListLevelConfigs(ctx)
+// ListLevels 应用的全部等级（docs/levels.md）；userID 不为 0 时标出已达到的等级、按体系隐藏未达到的。
+func (s *PointsService) ListLevels(ctx context.Context, appID, userID int64) ([]pointdomain.LevelConfig, error) {
+	return s.pg.ListLevelConfigs(ctx, appID, userID)
 }
 
 func (s *PointsService) GetMyLevel(ctx context.Context, session *authdomain.Session) (*pointdomain.LevelProfile, error) {
@@ -65,7 +71,59 @@ func (s *PointsService) GetMyLevel(ctx context.Context, session *authdomain.Sess
 	return profile, nil
 }
 
+// GetRankings 旧版排行榜。account 一律脱敏后返回（字段名不变，兼容老客户端）：
+// 账号可能就是手机号、邮箱，排行榜是给所有人看的。规则同新排行榜（docs/leaderboard.md「身份展示」）。
 func (s *PointsService) GetRankings(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {
+	resp, err := s.getRankings(ctx, session, rankingType, page, limit)
+	if err != nil || resp == nil {
+		return resp, err
+	}
+	out := maskRankingAccounts(resp)
+	publicizeRankingUsers(ctx, s.publicIDs, out)
+	return out, nil
+}
+
+// SetPublicIDs 接上全进程共用的对外 ID 换算。
+func (s *PointsService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
+}
+
+// maskRankingAccounts 返回一份账号已脱敏的副本：singleflight 的结果在并发请求之间共享，不能原地改。
+func maskRankingAccounts(resp *pointdomain.RankingResponse) *pointdomain.RankingResponse {
+	out := *resp
+	out.Items = make([]pointdomain.RankingItem, len(resp.Items))
+	for i, item := range resp.Items {
+		item.Account = leaderboard.MaskAccount(item.Account)
+		out.Items[i] = item
+	}
+	if resp.MyRank != nil {
+		my := *resp.MyRank
+		my.Account = leaderboard.MaskAccount(my.Account)
+		out.MyRank = &my
+	}
+	return &out
+}
+
+// publicizeRankingUsers 在 maskRankingAccounts 的副本上把 userId 换成对外 ID（docs/user-public-id.md）。
+// 换不到的（刚注销）写 0，不把主键留在榜上。
+func publicizeRankingUsers(ctx context.Context, publicIDs *UserPublicIDs, resp *pointdomain.RankingResponse) {
+	ids := make([]int64, 0, len(resp.Items)+1)
+	for _, item := range resp.Items {
+		ids = append(ids, item.UserID)
+	}
+	if resp.MyRank != nil {
+		ids = append(ids, resp.MyRank.UserID)
+	}
+	public := publicIDs.Map(ctx, ids)
+	for i := range resp.Items {
+		resp.Items[i].UserID = public[resp.Items[i].UserID]
+	}
+	if resp.MyRank != nil {
+		resp.MyRank.UserID = public[resp.MyRank.UserID]
+	}
+}
+
+func (s *PointsService) getRankings(ctx context.Context, session *authdomain.Session, rankingType string, page int, limit int) (*pointdomain.RankingResponse, error) {
 	switch rankingType {
 	case "", "integral":
 		return s.getCachedPointsRanking(ctx, session, "integral", page, limit)
@@ -235,12 +293,10 @@ func (s *PointsService) AdminAdjustIntegral(ctx context.Context, in pointdomain.
 	return result, nil
 }
 
-// AdminAdjustExperience 管理员增加经验。经验只增不减，负数直接拒绝。
+// AdminAdjustExperience 管理员调整经验：正数增加，负数扣减。扣减时 in.LevelMode 决定等级怎么处理
+// （keep 保留现有等级，recalc 按扣减后的经验重新判定、可以降级）；已发的等级奖励都不收回。
 func (s *PointsService) AdminAdjustExperience(ctx context.Context, in pointdomain.AdjustInput, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
 	in.Kind = pointdomain.KindExperience
-	if in.Amount < 0 {
-		return nil, mapPointsAdjustError(in.Kind, pgrepo.ErrExperienceDeduction)
-	}
 	if err := in.Validate(); err != nil {
 		return nil, mapPointsAdjustError(in.Kind, err)
 	}
@@ -264,7 +320,7 @@ func (s *PointsService) AdjustUserIntegral(ctx context.Context, userID int64, ap
 	return result, nil
 }
 
-// AdjustUserExperience 内部增加经验，数量必须为正。
+// AdjustUserExperience 内部增加经验，数量必须为正（云函数等自动路径不能扣经验，扣减只开放给管理员）。
 func (s *PointsService) AdjustUserExperience(ctx context.Context, userID int64, appID int64, amount int64, reason string, options pointdomain.AdminAdjustOptions) (*pointdomain.ExperienceAdjustResult, error) {
 	if amount < 0 {
 		return nil, mapPointsAdjustError(pointdomain.KindExperience, pgrepo.ErrExperienceDeduction)
@@ -359,6 +415,79 @@ func (s *PointsService) BatchAdjustUserIntegral(ctx context.Context, userIDs []i
 	}, nil
 }
 
+// BatchAdjustUserExperience 管理员批量调整经验。amount 为正数，方向由 operationType（add / consume）决定；
+// 扣减时 levelMode 决定等级处理。逐人在自己的事务里执行（等级要逐人判定），一个人失败不影响其他人；
+// 带请求编号时每人的编号为「编号-用户ID」，整批重试只会补上没成功的人。
+func (s *PointsService) BatchAdjustUserExperience(ctx context.Context, userIDs []int64, appID int64, amount int64, operationType string,
+	reason string, requestID string, levelMode string, options pointdomain.AdminAdjustOptions) (*pointdomain.BatchExperienceAdjustResult, error) {
+	kind := pointdomain.KindExperience
+	if appID <= 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "缺少应用 ID（appid）")
+	}
+	ids := uniquePositiveIDs(userIDs)
+	if len(ids) == 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "用户 ID 列表不能为空")
+	}
+	if len(ids) > pointdomain.MaxAdminBatchUsers {
+		return nil, apperrors.New(40000, http.StatusBadRequest, fmt.Sprintf("批量操作最多支持 %d 个用户", pointdomain.MaxAdminBatchUsers))
+	}
+	if amount <= 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "调整数量必须大于 0，扣减请使用 operation_type=consume")
+	}
+	if err := pointdomain.ValidateAmount(kind, amount); err != nil {
+		return nil, mapPointsAdjustError(kind, err)
+	}
+	mode, err := pointdomain.NormalizeLevelMode(levelMode)
+	if err != nil {
+		return nil, mapPointsAdjustError(kind, err)
+	}
+	requestID, err = pointdomain.NormalizeRequestID(requestID)
+	if err != nil {
+		return nil, mapPointsAdjustError(kind, err)
+	}
+	op := strings.ToLower(strings.TrimSpace(operationType))
+	if op == "" {
+		op = "add"
+	}
+	if op != "add" && op != "consume" {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "操作类型必须为 add 或 consume")
+	}
+	signed := amount
+	if op == "consume" {
+		signed = -amount
+	}
+	out := &pointdomain.BatchExperienceAdjustResult{
+		AppID: appID, OperationType: op, Amount: amount, RequestedCount: len(ids),
+		Results: []pointdomain.ExperienceAdjustResult{}, Failures: []pointdomain.BatchAdjustFailure{},
+	}
+	if op == "consume" {
+		out.LevelMode = mode
+	}
+	for _, id := range ids {
+		in := pointdomain.AdjustInput{Kind: kind, AppID: appID, UserID: id, Amount: signed, Reason: reason, LevelMode: mode}
+		if requestID != "" {
+			// 编号最长 64 位：超出时用摘要
+			perUser := fmt.Sprintf("%s-%d", requestID, id)
+			if len(perUser) > 64 {
+				sum := sha256.Sum256([]byte(perUser))
+				perUser = "b_" + hex.EncodeToString(sum[:20])
+			}
+			in.RequestID = perUser
+		}
+		result, err := s.AdminAdjustExperience(ctx, in, options)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			out.Failures = append(out.Failures, pointdomain.BatchAdjustFailure{UserID: id, Error: err.Error()})
+			continue
+		}
+		out.Results = append(out.Results, *result)
+	}
+	out.SuccessCount, out.FailedCount = len(out.Results), len(out.Failures)
+	return out, nil
+}
+
 // mapPointsAdjustError 把仓储与校验错误翻译成带业务码的错误，提示里带上当前余额。
 func mapPointsAdjustError(kind pointdomain.Kind, err error) error {
 	var validation *pointdomain.ValidationError
@@ -369,7 +498,7 @@ func mapPointsAdjustError(kind pointdomain.Kind, err error) error {
 	case errors.Is(err, pgrepo.ErrUserNotFound):
 		return apperrors.New(40401, http.StatusNotFound, "用户不存在或不属于该应用")
 	case errors.Is(err, pgrepo.ErrExperienceDeduction):
-		return apperrors.New(40000, http.StatusBadRequest, "经验只能增加，不支持扣减")
+		return apperrors.New(40000, http.StatusBadRequest, "自动发放的经验不能为负数，扣减经验请由管理员调整")
 	case errors.Is(err, pgrepo.ErrRequestIDConflict):
 		return apperrors.New(40921, http.StatusConflict, "请求编号已用于另一笔调整，请刷新后重试")
 	case errors.As(err, &balance) && errors.Is(err, pointdomain.ErrBalanceOverflow):

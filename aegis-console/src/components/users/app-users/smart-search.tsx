@@ -52,6 +52,18 @@ export function detectIntents(raw: string): SearchIntent[] {
   const value = raw.trim();
   if (!value) return [];
 
+  // 16 位纯数字是用户报来的对外 ID（带不带 # 都行），较短的 #数字 是后台主键
+  if (/^#?\s*\d{16}$/.test(value)) {
+    return [
+      {
+        key: "keyword",
+        label: "按对外 ID 直达",
+        description: `对外 ID = ${value.replace(/\D/g, "")}`,
+        icon: Hash
+      }
+    ];
+  }
+
   if (/^#\s*\d+$/.test(value)) {
     return [
       {

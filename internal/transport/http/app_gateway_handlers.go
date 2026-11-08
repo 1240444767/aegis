@@ -50,6 +50,20 @@ func (h *Handler) AppConfig(c *gin.Context) {
 	if h.invite != nil {
 		config.Auth.Invite = h.invite.Capability(c.Request.Context(), app.ID)
 	}
+	if h.security != nil {
+		config.Auth.Passkey.Enabled, config.Auth.Passkey.RPID = h.security.PasskeyAvailability(app)
+	}
+	// 版本管控通道的公钥随 config 下发；取不到时不下发，客户端沿用已保存的裁决。
+	// 失败原因挂到访问日志上：典型是管控私钥由另一把主密钥加密（换过 root secret），
+	// 否则 clientControl 只是静静地从 config 里消失，看不出缘由。
+	if h.clientControl != nil {
+		spec, err := h.clientControl.Spec(c.Request.Context(), app)
+		if err != nil {
+			_ = c.Error(fmt.Errorf("client control spec for app %d: %w", app.ID, err))
+		} else {
+			config.ClientControl = spec
+		}
+	}
 	// sealed 档的公钥有轮换窗口，缓存时间必须短于轮换后的 24h 兼容期。
 	c.Header("Cache-Control", "public, max-age=60, stale-while-revalidate=300")
 	response.Success(c, http.StatusOK, "获取成功", config)
@@ -318,6 +332,9 @@ func (h *Handler) AppSMSCode(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	if !h.guardVerifyCode(c, app.ID, req.Phone, purpose, req.CaptchaID, req.CaptchaAnswer) {
+		return
+	}
 	result, err := h.captcha.SendSMSCode(c.Request.Context(), captchadomain.SMSSendRequest{
 		AppID: app.ID, Phone: req.Phone, Purpose: purpose, ClientIP: c.ClientIP(),
 		CaptchaID: req.CaptchaID, CaptchaAnswer: req.CaptchaAnswer,
@@ -360,6 +377,7 @@ func (h *Handler) AppSecondFactor(c *gin.Context) {
 	if _, _, ok := h.resolveGatewayApp(c); !ok {
 		return
 	}
+	markDeviceLimitChallenge(c)
 	h.VerifySecondFactor(c)
 }
 
@@ -564,7 +582,7 @@ func (h *Handler) resolveGatewayDevice(c *gin.Context, bodyDeviceID, bodyDevice 
 func (h *Handler) verifyGatewayCaptcha(c *gin.Context, policy *authprotocol.Policy, appID int64, captchaID, answer string, purpose captchadomain.Purpose) bool {
 	required := h.resolveCaptchaRequirement(c, appID, policy)
 	if !required.Required(captchaEntryForPurpose(purpose)) {
-		return true
+		return h.verifyRiskStepUpCaptcha(c, appID, captchaID, answer, purpose)
 	}
 	return h.enforceCaptcha(c, appID, captchaID, answer, purpose)
 }

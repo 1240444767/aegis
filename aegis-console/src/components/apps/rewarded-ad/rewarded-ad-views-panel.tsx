@@ -212,10 +212,11 @@ export function RewardedAdViewsPanel({ appKey }: { appKey: string }) {
                     <span className="text-xs text-muted-foreground">—</span>
                   ) : (
                     <div className="flex flex-wrap gap-1">
-                      {item.results.map((result) => (
+                      {/* 折算后同一档可能出现两次（原有的积分与折算出的积分），不能拿 type 当 key */}
+                      {item.results.map((result, index) => (
                         <Badge
-                          key={result.type}
-                          variant="outline"
+                          key={`${result.type}-${index}`}
+                          variant={result.type === "conversion" ? "secondary" : "outline"}
                           size="sm"
                           className="font-normal"
                           title={result.transactionNo ? `流水 ${result.transactionNo}` : undefined}

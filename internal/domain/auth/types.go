@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"aegis/internal/domain/devicelimit"
 	"time"
 
+	"aegis/internal/domain/accountdeletion"
 	devicedomain "aegis/internal/domain/device"
 )
 
@@ -101,12 +103,15 @@ type SecondFactorChallenge struct {
 }
 
 type LoginResult struct {
-	AccessToken          string                 `json:"accessToken,omitempty"`
-	RefreshToken         string                 `json:"refreshToken,omitempty"`
-	ExpiresAt            time.Time              `json:"expiresAt,omitempty"`
-	RefreshExpiresAt     time.Time              `json:"refreshExpiresAt,omitempty"`
-	TokenType            string                 `json:"tokenType,omitempty"`
-	UserID               int64                  `json:"userId"`
+	AccessToken      string    `json:"accessToken,omitempty"`
+	RefreshToken     string    `json:"refreshToken,omitempty"`
+	ExpiresAt        time.Time `json:"expiresAt,omitempty"`
+	RefreshExpiresAt time.Time `json:"refreshExpiresAt,omitempty"`
+	TokenType        string    `json:"tokenType,omitempty"`
+	// UserID 数据库主键，服务端内部用（登录后的邀请绑定、钩子等），不下发
+	UserID int64 `json:"-"`
+	// PublicUserID 对外用户 ID，响应里的 userId 就是它（docs/user-public-id.md）
+	PublicUserID         int64                  `json:"userId"`
 	Account              string                 `json:"account"`
 	Provider             string                 `json:"provider,omitempty"`
 	RequiresSecondFactor bool                   `json:"requiresSecondFactor,omitempty"`
@@ -118,6 +123,12 @@ type LoginResult struct {
 	// OAuthLink 第三方身份已核实但还没有关联任何账号（原生换会话时带了 deferRegistration）。
 	// 此时不签发令牌：客户端让用户选「快速注册」或「绑定已有账号」，再凭 Ticket 继续
 	OAuthLink *OAuthLinkTicket `json:"oauthLink,omitempty"`
+	// AccountDeletion 账号处于注销冷静期或待审核时出现；Cancelled 为真表示这次登录撤销了冷静期。
+	// 客户端据此提示「账号将于某日注销」或「注销已撤销」
+	AccountDeletion *accountdeletion.LoginNotice `json:"accountDeletion,omitempty"`
+	// DeviceLimit 登录设备数已满、需要用户选择下线哪台时出现（authenticationState=device_limit_required）。
+	// 此时不签发令牌：客户端展示设备列表，凭 Ticket 调 /auth/device-limit/resolve 完成登录（docs/device-limit.md）
+	DeviceLimit *devicelimit.Challenge `json:"deviceLimit,omitempty"`
 }
 
 // OAuthLinkTicket 待关联的第三方身份。

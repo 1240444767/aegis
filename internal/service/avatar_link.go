@@ -80,34 +80,58 @@ func (s *avatarLinkSigner) EncodeOwner(owner avatardomain.Owner) string {
 	return avatarTokenEncoding.EncodeToString([]byte(payload)) + "." + avatarTokenEncoding.EncodeToString(s.sign(payload))
 }
 
-// DecodeOwner 解析并验签。签名不过一律当作"这个令牌不存在"，
-// 不区分"格式不对"与"签名不对" —— 区分开等于告诉刷库的人还差哪一步。
+// EncodePublicUser 应用用户的令牌：载荷是对外用户 ID 而不是主键（docs/user-public-id.md）。
+// 头像地址出现在排行榜、邮件、OIDC 的 picture 里，载荷又是明文，放主键等于把主键贴到了全网。
+func (s *avatarLinkSigner) EncodePublicUser(appID, publicID int64) string {
+	if s == nil || appID <= 0 || publicID <= 0 {
+		return ""
+	}
+	payload := avatarPublicUserPayload(appID, publicID)
+	return avatarTokenEncoding.EncodeToString([]byte(payload)) + "." + avatarTokenEncoding.EncodeToString(s.sign(payload))
+}
+
+// DecodeOwner 解析并验签旧形态（主键）的令牌；对外 ID 形态的令牌要换算，走 DecodeToken。
 func (s *avatarLinkSigner) DecodeOwner(token string) (avatardomain.Owner, bool) {
-	if s == nil {
+	owner, public, ok := s.DecodeToken(token)
+	if !ok || public {
 		return avatardomain.Owner{}, false
+	}
+	return owner, true
+}
+
+// DecodeToken 解析并验签。签名不过一律当作"这个令牌不存在"，
+// 不区分"格式不对"与"签名不对" —— 区分开等于告诉刷库的人还差哪一步。
+// public 为真时 owner.ID 是对外用户 ID，调用方要换回主键。
+func (s *avatarLinkSigner) DecodeToken(token string) (owner avatardomain.Owner, public bool, ok bool) {
+	if s == nil {
+		return avatardomain.Owner{}, false, false
 	}
 	token = strings.TrimSpace(token)
 	idx := strings.LastIndex(token, ".")
 	if idx <= 0 || idx == len(token)-1 {
-		return avatardomain.Owner{}, false
+		return avatardomain.Owner{}, false, false
 	}
 	payloadRaw, err := avatarTokenEncoding.DecodeString(token[:idx])
 	if err != nil {
-		return avatardomain.Owner{}, false
+		return avatardomain.Owner{}, false, false
 	}
 	sig, err := avatarTokenEncoding.DecodeString(token[idx+1:])
 	if err != nil {
-		return avatardomain.Owner{}, false
+		return avatardomain.Owner{}, false, false
 	}
 	payload := string(payloadRaw)
 	if !hmac.Equal(sig, s.sign(payload)) {
-		return avatardomain.Owner{}, false
+		return avatardomain.Owner{}, false, false
 	}
-	owner, ok := parseAvatarOwnerPayload(payload)
+	if strings.HasPrefix(payload, "p") {
+		owner, ok = parseAvatarPublicUserPayload(payload)
+		return owner, ok, ok
+	}
+	owner, ok = parseAvatarOwnerPayload(payload)
 	if !ok || !owner.Valid() {
-		return avatardomain.Owner{}, false
+		return avatardomain.Owner{}, false, false
 	}
-	return owner, true
+	return owner, false, true
 }
 
 func (s *avatarLinkSigner) sign(payload string) []byte {
@@ -118,8 +142,29 @@ func (s *avatarLinkSigner) sign(payload string) []byte {
 
 // avatarOwnerPayload 主体的紧凑表示。
 //
-// 明文编码而不是加密：这里没有秘密（用户 ID 在任何一个列表接口里都能拿到），
-// 而可读的载荷让排障时一眼能看出「这个头像地址是谁的」。
+// 明文编码而不是加密：可读的载荷让排障时一眼能看出「这个头像地址是谁的」。
+// 应用用户的地址现在用 avatarPublicUserPayload（对外 ID）；这里的主键形态只剩两种用途：
+// 识别切换前流出去的旧地址（它们必须永远有效），以及服务端内部的缓存键、默认头像种子。
+func avatarPublicUserPayload(appID, publicID int64) string {
+	return "p" + strconv.FormatInt(appID, 10) + "." + strconv.FormatInt(publicID, 10)
+}
+
+func parseAvatarPublicUserPayload(payload string) (avatardomain.Owner, bool) {
+	parts := strings.SplitN(strings.TrimPrefix(payload, "p"), ".", 2)
+	if len(parts) != 2 {
+		return avatardomain.Owner{}, false
+	}
+	appID, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || appID <= 0 {
+		return avatardomain.Owner{}, false
+	}
+	publicID, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || publicID <= 0 {
+		return avatardomain.Owner{}, false
+	}
+	return avatardomain.Owner{Type: avatardomain.OwnerUser, AppID: appID, ID: publicID}, true
+}
+
 func avatarOwnerPayload(owner avatardomain.Owner) string {
 	if owner.Type == avatardomain.OwnerAdmin {
 		return "a" + strconv.FormatInt(owner.ID, 10)

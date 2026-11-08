@@ -85,6 +85,29 @@ type RiskEvalEnv struct {
 	GeoCity    string `expr:"geo_city" json:"geo_city"`
 	GeoKnown   bool   `expr:"geo_known" json:"geo_known"`
 
+	// ── 账号 ──
+	UserKnown          bool    `expr:"user_known" json:"user_known"`
+	UserAgeHours       float64 `expr:"user_age_hours" json:"user_age_hours"`
+	AccountKind        string  `expr:"account_kind" json:"account_kind"`
+	EmailDomain        string  `expr:"email_domain" json:"email_domain"`
+	AccountRiskTrail   int64   `expr:"account_risk_trail" json:"account_risk_trail"`
+	AccountLastCountry string  `expr:"account_last_country" json:"account_last_country"`
+	GeoChanged         bool    `expr:"geo_changed" json:"geo_changed"`
+
+	// ── 设备扩散 ──
+	DeviceIPsSeen int64 `expr:"device_ips_seen" json:"device_ips_seen"`
+
+	// ── 场景小时频次 ──
+	SceneSubjectHourly int64 `expr:"scene_subject_hourly" json:"scene_subject_hourly"`
+	SceneDeviceHourly  int64 `expr:"scene_device_hourly" json:"scene_device_hourly"`
+	SceneIPHourly      int64 `expr:"scene_ip_hourly" json:"scene_ip_hourly"`
+
+	// ── 名单 ──
+	ListWatch      bool     `expr:"list_watch" json:"list_watch"`
+	ListWatchTypes []string `expr:"list_watch_types" json:"list_watch_types"`
+
+	CaptchaPassed bool `expr:"captcha_passed" json:"captcha_passed"`
+
 	// ── 调用方透传 ──
 	Extra map[string]any `expr:"extra" json:"extra"`
 
@@ -143,13 +166,14 @@ func (e *RiskEvalEnv) applyUserAgent(raw string) {
 // 后者会让 `ip_risk_score > 50` 这类比较在运行期报错而不是判假。
 func newRiskEvalEnv(now time.Time) *RiskEvalEnv {
 	return &RiskEvalEnv{
-		UADeviceClass: deviceClassUnknown,
-		DeviceRiskTag: securitydomain.TagNormal,
-		IPRiskTag:     securitydomain.TagNormal,
-		Extra:         map[string]any{},
-		HourOfDay:     now.Hour(),
-		Weekday:       int(now.Weekday()),
-		evaluatedAt:   now,
+		UADeviceClass:  deviceClassUnknown,
+		DeviceRiskTag:  securitydomain.TagNormal,
+		IPRiskTag:      securitydomain.TagNormal,
+		Extra:          map[string]any{},
+		ListWatchTypes: []string{},
+		HourOfDay:      now.Hour(),
+		Weekday:        int(now.Weekday()),
+		evaluatedAt:    now,
 	}
 }
 
@@ -211,6 +235,10 @@ func (e *RiskEvalEnv) Snapshot() map[string]any {
 			if len(typed) == 0 {
 				continue
 			}
+		case []string:
+			if len(typed) == 0 {
+				continue
+			}
 		}
 		out[k] = v
 	}
@@ -236,8 +264,32 @@ func riskEnvFromSnapshot(snapshot map[string]any, now time.Time) *RiskEvalEnv {
 	if env.UADeviceClass == "" {
 		env.UADeviceClass = deviceClassUnknown
 	}
+	if env.ListWatchTypes == nil {
+		env.ListWatchTypes = []string{}
+	}
 	env.evaluatedAt = now
 	env.HourOfDay = now.Hour()
 	env.Weekday = int(now.Weekday())
 	return env
+}
+
+// accountShape 把账号分成邮箱 / 手机号 / 普通名三种形态，邮箱再取域名。
+// 临时邮箱、号段名单都靠它：在规则里写 `account endsWith "@mailinator.com"` 漏掉大小写与子域名。
+func accountShape(account string) (kind, emailDomain, phone string) {
+	account = strings.TrimSpace(account)
+	if account == "" {
+		return "", "", ""
+	}
+	if at := strings.LastIndex(account, "@"); at > 0 && at < len(account)-1 {
+		return "email", strings.ToLower(account[at+1:]), ""
+	}
+	raw := strings.TrimPrefix(account, "+")
+	if len(raw) >= 7 && len(raw) <= 15 && strings.IndexFunc(raw, func(r rune) bool { return r < '0' || r > '9' }) < 0 {
+		// 带国家码的大陆号码（86 + 11 位）去掉国家码，号段名单按本地号码写
+		if strings.HasPrefix(raw, "86") && len(raw) == 13 {
+			raw = raw[2:]
+		}
+		return "phone", "", raw
+	}
+	return "name", "", ""
 }

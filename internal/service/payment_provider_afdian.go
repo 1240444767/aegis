@@ -268,11 +268,18 @@ type afdianOrderPage struct {
 	TotalPage  int               `json:"total_page"`
 }
 
+// afdianEmptyParams 爱发电把空对象 "{}" 判为非法 params（ec=400003 params was not valid json string），
+// 不需要参数的接口（如 ping）只能塞一个无意义字段，官方样例用的就是 {"a":333}。
+const afdianEmptyParams = `{"a":333}`
+
 // afdianCall 调用开放 API，ec 不为 200 一律视为失败
 func (p *afdianProvider) afdianCall(ctx context.Context, cfg *afdianConfig, endpoint string, params any) (json.RawMessage, error) {
 	paramsJSON, err := json.Marshal(params)
 	if err != nil {
 		return nil, err
+	}
+	if s := string(paramsJSON); s == "{}" || s == "null" {
+		paramsJSON = []byte(afdianEmptyParams)
 	}
 	ts := time.Now().Unix()
 	body := map[string]any{
@@ -402,7 +409,7 @@ func (p *afdianProvider) TestConnection(ctx context.Context, data map[string]any
 		return nil, apperrors.New(40078, http.StatusBadRequest, "爱发电配置不完整：缺少 user_id 或 API Token")
 	}
 	// ping 只校验签名；顺带取两页统计，确认 Token 对订单与赞助者接口都有权限
-	if _, err := p.afdianCall(ctx, cfg, "ping", map[string]any{}); err != nil {
+	if _, err := p.afdianCall(ctx, cfg, "ping", nil); err != nil {
 		return map[string]any{"config_valid": true, "api_accessible": false, "error": err.Error()}, nil
 	}
 	result := map[string]any{"config_valid": true, "api_accessible": true}

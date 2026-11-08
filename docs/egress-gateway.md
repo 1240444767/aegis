@@ -53,7 +53,41 @@ stripeAPI.Init(key, stripe.NewBackends(egress.NewClient(egress.Profile{Name: "pa
 
 // 裸 TCP（SMTP / LDAP / 自定义协议）
 conn, err := egress.DialContext(ctx, "tcp", "smtp.example.com:465")
+
+// UDP：已连接的数据报连接，每次 Write / Read 一个报文；带调用方身份用 egress.Dial
+conn, err := egress.Dial(ctx, egress.Profile{Name: "ntp"}, "udp", "time.google.com:123")
+
+// 一个套接字发往多个目标（QUIC、STUN）：按每个目标各自路由，目标是域名时用 egress.Addr
+pc, err := egress.ListenPacket(ctx, egress.Profile{Name: "stun"})
+pc.WriteTo(payload, egress.Addr{Host: "stun.l.google.com", Port: 19302})
+
+// 经网关解析 DNS（指定境外服务器，路由表把它送进代理即可避开本地污染）
+resolver := egress.Resolver(egress.Profile{Name: "dns"}, "1.1.1.1:53")
+
+// HTTP/3：QUIC 报文按路由表走（pkg/egress/egressh3，单独成包以免核心依赖 quic-go）
+client := egressh3.NewClient(egress.Profile{Name: "h3.api", Timeout: 15 * time.Second})
 ```
+
+## UDP
+
+| 线路协议 | UDP 怎么承载 | 能否接在跳板后面 |
+|---|---|---|
+| direct | 系统 UDP 套接字 | — |
+| socks5 / socks5h | UDP ASSOCIATE：TCP 控制连接 + 到中继地址的 UDP（服务端回 0.0.0.0 时用代理主机） | 跳板也要能承载 UDP |
+| shadowsocks | UDP relay，每个报文单独 AEAD 加密 | 跳板也要能承载 UDP |
+| trojan | UDP ASSOCIATE，报文按「地址 + 长度 + CRLF + 载荷」封装在 TLS 流里 | 任意跳板（只需要 TCP） |
+| mihomo | 经核心的专用 SOCKS5 入站，节点自己的 UDP 能力由核心决定（节点上的 `udp`） | — |
+| http / https / ssh | 不支持（CONNECT 与 direct-tcpip 都只有 TCP） | — |
+
+- **选路**：UDP 流量只在能承载 UDP 的线路里选；规则连的线路都不能承载时这次连接失败（不悄悄直连），画布编译时会提醒。
+  线路上 `udp: false`（DSL 写 `?udp=false`）可以让它只走 TCP，例如服务端没开 UDP 转发。
+- **匹配**：规则多了「传输层」维度 `networks: ["udp"]`，与其它条件同时满足才命中，常用来单独管 QUIC（UDP 443）或 DNS。
+- **健康**：UDP 健康单独记——TCP 通而 UDP 不通（服务端没开 UDP）很常见，不能让 UDP 的失败把 TCP 流量也赶走。
+  主动探测对能承载 UDP 的线路经它向 `udpProbeServer`（默认 `1.1.1.1:53`）查一次 `udpProbeName`，
+  被动熔断也按传输层分开记；「最低延迟」策略对 UDP 用 UDP 探测的延迟。
+- **统计**：每条线路的 UDP 会话数与收发报文数；网关的 UDP 判定数。
+- **自测与解释**：`POST /egress/test` 带 `network: "udp"` 时经路由表（或指定线路）向 DNS 服务器发一次查询并返回解析结果；
+  `POST /egress/explain` 带 `network: "udp"` 按 UDP 判定。
 
 未装配网关时自动退化为直连，单元测试与 CLI 不需要任何初始化。
 
@@ -137,11 +171,15 @@ EGRESS_RULES=hk=*.google.com,*.googleapis.com,*.gstatic.com;us=*.stripe.com,*.pa
 ## 配置优先级与热重载
 
 ```
-控制台（platform_settings.platform.egress）  ←  优先
+控制台画布（platform_settings.platform.egress.graph）  ←  优先（已应用的那一版）
+旧版控制台（platform_settings.platform.egress）        ←  没有画布时
         ↑ 落库 + 立即生效
-.env / EGRESS_CONFIG_FILE                    ←  基线
+.env / EGRESS_CONFIG_FILE                             ←  基线
         ↑ fsnotify 热重载
 ```
+
+- 用旧接口 `PUT /egress` 改过配置，会撤掉已应用的画布（草稿保留），以免下次启动又按画布覆盖回去；
+  画布里有 mihomo 线路时旧接口直接拒绝
 
 - 数据库里存在覆盖时，保存 `.env` **只更新基线**，不会冲掉控制台里配好的路由
 - `POST /api/admin/system/egress/reset` 丢弃数据库覆盖，回到 `.env`
@@ -165,9 +203,7 @@ EGRESS_RULES=hk=*.google.com,*.googleapis.com,*.gstatic.com;us=*.stripe.com,*.pa
 `PUT` 时密钥字段留空表示保持原值，要真正清空需把该端点的 `clearSecrets` 置为 `true`。
 落库前口令 / SSH 私钥 / 客户端证书私钥用 AES-GCM 加密，密钥派生自 `SECURITY_MASTER_KEY`。
 
-控制台入口：**配置 → 出海代理**（`/configuration?tab=egress`，仅超管可见）。
-一屏同时承载配置（端点 / 规则 / 健康 / 连接参数）与运行态（端点健康、延迟、流量、规则命中数），
-右下角内置「连通性自测」与「路由解释」两个排障工具。
+控制台入口：**配置 → 出海代理**（`/configuration?tab=egress`，仅超管可见），见下一节「画布与 mihomo」。
 
 排障建议先打 `explain`：
 
@@ -181,6 +217,103 @@ curl -X POST .../api/admin/system/egress/explain \
 
 `test` 把 URL 指向「查询出口 IP」类服务，响应体会被截断保留在 `body` 里，
 可以直接确认落地是否真的在境外。
+
+## 画布与 mihomo
+
+控制台用一张画布（Flowgram 自由布局，与物品发放、等级体系同形）同时编排网关路由表与 mihomo 核心：
+
+```
+网关设置 ──规则链──▶ 规则 ──下一条──▶ 规则 ──▶ …        自上而下依次匹配，都没命中走「未命中」
+   │                  │
+   └──未命中──▶        └──命中──▶ 网关线路 / 策略组 / mihomo 节点 / mihomo 分流
+网关线路 ──经由──▶ 网关线路                               代理链（跳板 → 落地）
+策略组 ──成员──▶ 节点 / 策略组 / 订阅                      select / url-test / fallback / load-balance / relay
+节点、订阅 ──前置代理──▶ 节点 / 策略组                     dialer-proxy
+```
+
+后端 `internal/domain/egressgraph` 把画布编译成两份东西：网关的 `egress.Config`，以及交给核心的
+`mihomo.Profile`（节点、订阅、策略组保持 mihomo 原生键值，核心支持的协议与字段都能写；控制台表单覆盖常用字段，
+其余在节点的「YAML」页签里编辑）。规则顺序由规则链决定，不再填优先级。
+
+### mihomo 怎么接进来
+
+mihomo（Clash Meta）以 GPL-3.0 发布，网关**不把它编进本程序**，而是作为旁车进程托管（`pkg/egress/mihomo`）：
+
+- **安装**：画布里第一次出现 mihomo 节点时，从 [MetaCubeX/mihomo 发布页](https://github.com/MetaCubeX/mihomo/releases)
+  下载当前平台的包（amd64 选 compatible 版），逐字节校验发布页给出的 sha256，再跑一次 `-v` 确认能执行。
+  下载先走 `EGRESS_MIHOMO_MIRROR` 前缀，失败回落直连（经网关）。也可以在控制台手动安装 / 升级，或用
+  `EGRESS_MIHOMO_BINARY` 指向自带的程序。核心是静态编译的 Go 程序，Alpine 镜像里可以直接跑。
+  部署平台每次发布清空本地盘时（Zeabur 无持久卷），核心会在启动后重新下载；想避免就把 `EGRESS_MIHOMO_HOME` 放到持久卷上。
+- **运行**：配置先用核心自己的 `-t` 校验，再落盘、经 external-controller `PUT /configs` 热重载；
+  首次启动等控制器就绪。进程意外退出按 1、2、4…64 秒退避自动拉起；Linux 上设了 `Pdeathsig`，网关进程被强杀时核心一起退出。
+- **接入**：画布里每个被规则引用的策略组 / 节点，编译成一条 `mihomo` 协议的网关端点（`mihomo.<节点 ID>`），
+  在核心里对应一个专用的 SOCKS5 入站（监听 `127.0.0.1`、带鉴权、开 UDP，`listeners[].proxy` 指向这个目标），
+  TCP 与 UDP 都直达目标、不经分流规则；健康检查、故障转移、统计都照常按网关端点算。另有一个不指定目标的入站，
+  连到「mihomo 分流」的流量从这里进，按核心自己的分流表走。目标的入站端口在热重载之间保持不变，核心会原样保留这些入站。
+  不用 `IN-USER` 按用户名分发，是因为核心的 SOCKS UDP 中继不带入站用户，UDP 会落到分流规则上。
+- **托管键**：入站、控制器、TUN、`allow-lan`、`external-ui` 这些由网关托管，导入或「其它顶层键」里写了一律剔除。
+- **多进程**：每个进程（API、Worker、多副本）各托管一份核心，家目录 `EGRESS_MIHOMO_HOME/<api|worker>` 分开
+  （核心的缓存文件有独占锁）；Unified 模式共用一份。应用只发生在收到请求的进程里，其余进程每 20 秒比对已应用版本号，
+  变了就跟着应用。
+
+### 草稿、应用与版本
+
+- **保存草稿**不影响线上；**应用** = 编译 → 核心接受新配置 → 网关热替换 → 落库并记一个版本（保留最近 20 个）。
+  核心拒绝就不动网关；网关拒绝就把核心退回旧配置。
+- 草稿带修订号，别人先保存过会得到 40900，刷新后再保存。
+- **回滚**把某个历史版本重新应用一次（记为新版本）；版本也可以先载入画布查看、改完再应用。
+- **密钥**：读回的画布里所有密钥（口令、UUID、私钥、预共享密钥、订阅地址……）都是占位
+  `__AEGIS_SECRET_KEPT__`，原样提交即保持原值，提交空串即清空；复制出来的节点按「类型 + 名称」找回原值。
+  落库前逐个用 `SECURITY_MASTER_KEY` 派生的密钥 AES-GCM 加密。导出核心 YAML 默认打码。
+
+### 导入
+
+画布顶栏「导入」接受：Clash / mihomo 的 YAML 配置；分享链接（ss、ssr、vmess、vless 含 REALITY、trojan、hysteria、
+hy2、tuic、anytls、socks、http，一行一条，也接受整段 base64 的 v2ray 订阅）；订阅地址（推荐作为「订阅」节点由核心定时更新，
+也可以一次性展开成节点）。可以并入画布，或替换画布上的 mihomo 部分（网关规则按名字接回新节点）。
+按进程、UID、入站端口匹配的分流规则会被去掉（网关是唯一的入站）。
+
+### 运行态
+
+出海代理页的上半部分是网关判定计数与核心状态（每秒速率曲线、内存、版本、PID）；下半部分页签：
+线路健康与规则命中、策略组（全组测速、点选切换、取消固定）、订阅用量与规则集更新、在途连接（可关闭）、
+核心日志（最近 2000 行，含托管器自己的事件）、诊断（出站自测、路由解释、核心 DNS、核心生效的规则）、版本。
+画布卡片上也叠着这些运行态，右侧「追踪」输入域名后把 规则 → 线路 → 策略组当前成员 这条路径在画布上点亮。
+
+### 画布与核心的管理端 API
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/egress/graph` | 画布（打码）+ 编译结果 + 目录 + 核心状态 + 网关运行态；没有画布时由当前配置生成 |
+| `PUT` | `/egress/graph` | 保存草稿（带 `revision`） |
+| `POST` | `/egress/graph/validate` | 编译校验，附路由表与核心 YAML 预览 |
+| `POST` | `/egress/graph/apply` | 应用（同时保存草稿、记版本） |
+| `POST` | `/egress/graph/discard` | 丢弃草稿，回到已应用的版本 |
+| `POST` | `/egress/graph/import` | 导入 YAML / 分享链接 / 订阅地址，返回新画布（不保存） |
+| `POST` | `/egress/graph/export` | 导出核心 YAML（`includeSecrets` 默认 false） |
+| `GET` | `/egress/graph/history` · `/egress/graph/history/:version` | 版本记录 · 某一版的画布 |
+| `POST` | `/egress/graph/rollback` | 回滚到某一版 |
+| `GET` | `/egress/mihomo/status` | 核心状态 + 最近 5 分钟每秒流量采样 |
+| `POST` | `/egress/mihomo/install` · `restart` · `stop` | 安装或升级（`version` 留空为最新）、重启、停止 |
+| `GET` | `/egress/mihomo/proxies` | 节点、策略组、订阅、规则集运行态 |
+| `POST` | `/egress/mihomo/delay` · `select` | 测速（单个或全组）· 切换策略组节点（`name` 留空取消固定） |
+| `GET` / `POST` | `/egress/mihomo/connections` · `connections/close` | 在途连接 · 关闭一条或全部 |
+| `POST` | `/egress/mihomo/providers` | 订阅 / 规则集更新、订阅健康检查 |
+| `GET` | `/egress/mihomo/rules` · `logs?after=` | 核心生效的规则 · 日志 |
+| `POST` | `/egress/mihomo/dns` · `maintenance` | 经核心解析 · 更新 Geo 数据库或清空 DNS 缓存 |
+
+### 测法
+
+```bash
+# UDP 互操作（go-socks5 的 UDP ASSOCIATE、官方 Shadowsocks、最小 Trojan 服务端）与 HTTP/3 经 SOCKS5
+go test ./pkg/egress ./pkg/egress/egressh3
+# 自动安装真实核心到指定目录，端到端跑一遍（专用入站的 TCP 与 UDP、分流拒绝、切换、热重载、重启）
+MIHOMO_INSTALL_DIR=/tmp/mihomo MIHOMO_MIRROR=https://axisnow.gh-proxy.org/ go test ./pkg/egress/mihomo -run TestCoreEndToEnd -v
+# 服务层：真实 Postgres + 真实核心（草稿打码与并发保护、应用、回滚、另一进程按画布启动、恢复为环境变量）
+AEGIS_TEST_PG_DSN=postgres://postgres@127.0.0.1:55441/postgres MIHOMO_BINARY=/tmp/mihomo/bin/mihomo \
+  go test ./internal/service -run TestEgressGraphIntegration -v
+go test ./internal/domain/egressgraph ./pkg/egress/...
+```
 
 ## 选路与健康
 

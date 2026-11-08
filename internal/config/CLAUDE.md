@@ -20,6 +20,7 @@ Config
 ├── AdminAPIToken / AdminSessionTTL / AdminBootstrap
 ├── ReadTimeout / WriteTimeout / ShutdownTimeout
 ├── ClientIP   → clientip.Config (受信代理网段 + 判定方式 + 平台探测)
+├── TLSServer  → TLSServerConfig (HTTPS + HTTP/3 监听、证书文件/ACME、HSTS、0-RTT，见 docs/http3.md)
 ├── CORS       → CORSConfig
 ├── JWT        → JWTConfig (Secret, Issuer, TTL, RefreshTTL)
 ├── Firewall   → FirewallConfig (WAF、限流、CIDR 黑白名单、UA 过滤)
@@ -28,7 +29,7 @@ Config
 ├── LegacyMySQL → LegacyMySQLConfig (迁移用)
 ├── Redis      → RedisConfig (Addr, Password, DB, KeyPrefix)
 ├── Egress     → egress.Config (出海代理端点 + 域名后缀规则 + 健康检查)
-├── GeoIP      → GeoIPConfig (mmdb 路径、自动更新)
+├── GeoIP      → GeoIPConfig (开关、来源优先级 GEOIP_PROVIDERS、UAPIs 密钥/档位/限速)
 ├── NATS       → NATSConfig (URL, StreamName)
 ├── Temporal   → TemporalConfig (HostPort, Namespace, TaskQueue, 超时)
 ├── AutoSign   → AutoSignConfig (定时签到参数)
@@ -56,11 +57,10 @@ Config
 | ADMIN_SESSION_TTL | 12h |
 | JWT_TTL | 720h (30天) |
 | JWT_REFRESH_TTL | 168h (7天) |
-| POSTGRES_MAX_CONNS | 10 |
+| POSTGRES_MAX_CONNS | 每核 4 条，16–40（DefaultPostgresMaxConns） |
 | REDIS_KEY_PREFIX | "aegis" |
 | NATS_STREAM_NAME | "AEGIS_EVENTS" |
 | TEMPORAL_TASK_QUEUE | "aegis-workflow" |
-| GEOIP_DATABASE_DIR | ".runtime/geoip" |
 | AUTO_SIGN_TICK_INTERVAL | 1m |
 | AUTO_SIGN_REBUILD_INTERVAL | 15m |
 | BANNER_STYLE | auto（跟随终端能力） |

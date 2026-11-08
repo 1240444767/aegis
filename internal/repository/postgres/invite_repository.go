@@ -13,6 +13,7 @@ import (
 	"github.com/shopspring/decimal"
 
 	"aegis/internal/domain/invite"
+	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
 	vipdomain "aegis/internal/domain/vip"
 	walletdomain "aegis/internal/domain/wallet"
@@ -341,11 +342,10 @@ func (r *Repository) GetInviteUserFacts(ctx context.Context, appID, userID int64
 		return nil, err
 	}
 	facts.IsVip = vipdomain.Evaluate(*entitlement, time.Now()).IsVIP
-	levels, err := r.getActiveLevels(ctx)
+	facts.Level, _, err = r.userLevelQ(ctx, r.pool, appID, userID, experience)
 	if err != nil {
 		return nil, err
 	}
-	facts.Level = r.resolveLevelState(levels, experience).CurrentLevel
 	return &facts, nil
 }
 
@@ -594,11 +594,11 @@ func (r *Repository) inviterEligibleTx(ctx context.Context, tx pgx.Tx, cfg invit
 		if err := tx.QueryRow(ctx, `SELECT experience FROM users WHERE id = $1`, inviterID).Scan(&experience); err != nil {
 			return false, err
 		}
-		levels, err := r.getActiveLevels(ctx)
+		var err error
+		level, _, err = r.userLevelQ(ctx, tx, appID, inviterID, experience)
 		if err != nil {
 			return false, err
 		}
-		level = r.resolveLevelState(levels, experience).CurrentLevel
 	}
 	ok, _ := invite.EvaluateInviter(cfg, isVip, level)
 	return ok, nil
@@ -799,6 +799,10 @@ type inviteGrant struct {
 	Title    string
 	Plans    map[int64]pointstore.PlanRef
 	Features map[string]pointstore.FeatureRef
+	// Ref / Meta 不挂在邀请关系上的发放（推广活动）自带的账本引用与流水元数据；
+	// Ref 为空时按关系 ID 生成，此时 RelationID 为 0 的流水不记 source_id
+	Ref  string
+	Meta map[string]any
 }
 
 // grantInviteRewardsTx 逐项发放。这里的 switch 与 invite 的权益目录双向钉死
@@ -806,8 +810,20 @@ type inviteGrant struct {
 func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant inviteGrant, rewards []invite.Reward) ([]invite.RewardResult, error) {
 	appID, userID := grant.AppID, grant.UserID
 	relationID := grant.RelationID
-	meta := map[string]any{"inviteRelationId": relationID, "inviteGrant": grant.Key}
-	ref := "INV" + strconv.FormatInt(relationID, 10)
+	meta := map[string]any{"inviteGrant": grant.Key}
+	ref := grant.Ref
+	sourceID := &relationID
+	if relationID != 0 {
+		meta["inviteRelationId"] = relationID
+	} else {
+		sourceID = nil
+	}
+	if ref == "" {
+		ref = "INV" + strconv.FormatInt(relationID, 10)
+	}
+	for key, value := range grant.Meta {
+		meta[key] = value
+	}
 	out := make([]invite.RewardResult, 0, len(rewards))
 	for _, reward := range invite.NormalizeRewards(rewards) {
 		described := invite.DescribeReward(reward, grant.Plans, grant.Features)
@@ -816,7 +832,7 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 		switch reward.Type {
 		case invite.RewardPoints:
 			_, after, txnNo, err := applyIntegralChangeTx(ctx, tx, userID, appID, reward.Amount,
-				"earn", invite.IntegralCategory, grant.Title, "", invite.SourceType, &relationID, meta)
+				"earn", invite.IntegralCategory, grant.Title, "", invite.SourceType, sourceID, meta)
 			if err != nil {
 				return nil, err
 			}
@@ -836,32 +852,34 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
 				UserID: userID, AppID: appID, PlanID: &planID, PlanName: plan.Name, Features: plan.Features,
 				DurationDays: plan.DurationDays, Lifetime: plan.Lifetime,
-				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta,
+				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta, ConvertOwned: true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.Detail = plan.Name + "（" + plan.TermLabel() + "）"
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case pointstore.RewardVipDays:
 			txn, err := extendUserVipTx(ctx, tx, vipdomain.Grant{
 				UserID: userID, AppID: appID, PlanName: grant.Title, DurationDays: int(reward.Amount),
-				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta,
+				PayChannel: vipdomain.ChannelInvite, PayAmount: decimal.Zero, Metadata: meta, ConvertOwned: true,
 			})
 			if err != nil {
 				return nil, err
 			}
 			result.TransactionNo = txn.TransactionNo
+			applyVipConversionDetail(&result.Detail, &result.Conversion, txn)
 
 		case pointstore.RewardFeature:
 			if feature, ok := grant.Features[reward.Tag]; !ok || !feature.IsActive {
 				return nil, &InviteUnavailableError{Reason: invite.ReasonRewardUnavailable}
 			}
-			unlock, err := grantFeatureUnlockTx(ctx, tx, FeatureUnlockGrant{
+			outcome, err := grantFeatureUnlockOrConvertTx(ctx, tx, FeatureUnlockGrant{
 				AppID: appID, UserID: userID, Tag: reward.Tag, Days: int(reward.Amount),
 				Source: vipdomain.UnlockSourceInvite, SourceRef: ref,
-			})
+			}, vipdomain.ChannelInvite)
 			if errors.Is(err, ErrFeatureUnlockOwned) {
 				// 已永久拥有：这一项没有可发的，记一笔说明而不是让整次邀请失败
 				result.Detail += "（已永久拥有）"
@@ -871,12 +889,20 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			if err != nil {
 				return nil, err
 			}
+			if outcome.Conversion != nil {
+				result.Detail = outcome.Conversion.Message
+				result.Conversion = outcome.Conversion.Summary()
+				result.TransactionNo = outcome.Conversion.ConversionNo
+				out = append(out, result)
+				continue
+			}
+			unlock := outcome.Unlock
 			result.ExpireAt = unlock.EndsAt
 			result.TransactionNo = strconv.FormatInt(unlock.ID, 10)
 
 		case pointstore.RewardExperience:
 			expResult, err := r.applyExperienceChangeTx(ctx, tx, userID, appID, reward.Amount,
-				invite.IntegralCategory, grant.Title, "", invite.SourceType, &relationID, meta)
+				invite.IntegralCategory, grant.Title, "", invite.SourceType, sourceID, meta)
 			if err != nil {
 				return nil, err
 			}
@@ -897,7 +923,10 @@ func (r *Repository) grantInviteRewardsTx(ctx context.Context, tx pgx.Tx, grant 
 			result.TransactionNo = change.Transaction.TransactionNo
 
 		case pointstore.RewardLotteryDraws:
-			balance, err := grantLotteryDrawsTx(ctx, tx, appID, userID, reward.Amount)
+			balance, err := grantLotteryDrawsTx(ctx, tx, lotterydomain.TicketGrant{
+				AppID: appID, UserID: userID, Amount: reward.Amount, Origin: lotterydomain.TicketOriginInvite,
+				Ref: ref, Title: grant.Title,
+			})
 			if err != nil {
 				return nil, err
 			}

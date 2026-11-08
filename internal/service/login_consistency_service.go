@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appdomain "aegis/internal/domain/app"
+	devicedomain "aegis/internal/domain/device"
 	redisrepo "aegis/internal/repository/redis"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
@@ -71,7 +72,7 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 		return nil
 	}
 
-	deviceID = strings.TrimSpace(deviceID)
+	deviceID = devicedomain.NormalizeID(deviceID)
 	ip = strings.TrimSpace(ip)
 
 	current, err := s.baseline.Get(ctx, appID, userID)
@@ -79,6 +80,15 @@ func (s *LoginConsistencyService) Enforce(ctx context.Context, policy appdomain.
 		s.log.Warn("登录基线读取失败（fail-open）",
 			zap.Int64("app_id", appID), zap.Int64("user_id", userID), zap.Error(err))
 		return nil
+	}
+	if current != nil && devicedomain.IsPlaceholderID(current.DeviceID) {
+		// 修复前绑下的全零等占位设备码：所有这类设备都一样，算没绑定，
+		// 客户端换成真实标识后直接重新绑定，不触发换绑冷却
+		current.DeviceID = ""
+	}
+	if current != nil && deviceID != "" && current.DeviceID != "" && current.DeviceID == devicedomain.PreviousIDFrom(ctx) {
+		// 绑定的是这台设备以前的设备码（客户端换了生成方式）：仍是同一台，改记新码，不算换绑
+		current.DeviceID = deviceID
 	}
 
 	now := timeutil.NowUTC()
@@ -155,6 +165,19 @@ func (s *LoginConsistencyService) Reset(ctx context.Context, appID, userID int64
 
 // commit 写入基线。写失败只告警：本次登录已经通过校验，
 // 因为一次写失败把用户挡在外面是更坏的结果。
+// MigrateDevice 客户端换了设备码生成方式：基线绑定的若是旧码，改记新码，换绑时间不变。
+func (s *LoginConsistencyService) MigrateDevice(ctx context.Context, appID, userID int64, from, to string) {
+	if s == nil || s.baseline == nil || appID <= 0 || userID <= 0 || from == "" || to == "" || from == to {
+		return
+	}
+	current, err := s.baseline.Get(ctx, appID, userID)
+	if err != nil || current == nil || current.DeviceID != from {
+		return
+	}
+	current.DeviceID = to
+	s.commit(ctx, appID, userID, *current)
+}
+
 func (s *LoginConsistencyService) commit(ctx context.Context, appID, userID int64, baseline appdomain.LoginBaseline) {
 	if err := s.baseline.Set(ctx, appID, userID, baseline, loginBaselineTTL); err != nil {
 		s.log.Warn("登录基线写入失败",
@@ -164,7 +187,7 @@ func (s *LoginConsistencyService) commit(ctx context.Context, appID, userID int6
 
 // resolveRegion 归一化属地标识（国家码/省）。
 // 取不到属地时返回空串，由调用方按「不判定」处理 —— 内网 IP、
-// mmdb 未覆盖的地址都会走到这里，把它们当成「属地变更」会造成大面积误拦。
+// 归属地接口查不到的地址（如 IPv6）都会走到这里，把它们当成「属地变更」会造成大面积误拦。
 func (s *LoginConsistencyService) resolveRegion(ctx context.Context, ip string) string {
 	if s.location == nil || ip == "" {
 		return ""

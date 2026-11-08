@@ -67,6 +67,9 @@ const (
 	// JSONWriteLimit JSON 请求体写入的内容上限（解码后）。网关 JSON 请求体上限是 8 MiB，
 	// base64 膨胀之后 6 MiB 的原始字节恰好装得下；更大的内容请走 multipart 上传。
 	JSONWriteLimit int64 = 6 << 20
+	// DatabaseCopyLimit 不超过这个大小的修订在数据库里另存一份内容，读取时优先用它：
+	// 存储桶里的对象丢了（本地存储随容器重建被清空）也读得回来。
+	DatabaseCopyLimit int64 = 1 << 20
 )
 
 var (
@@ -416,6 +419,7 @@ type Stats struct {
 // StorageTarget 内容实际写往的存储配置（控制台展示「写到了哪里」）。
 type StorageTarget struct {
 	ConfigID   int64  `json:"configId"`
+	PoolID     int64  `json:"poolId,omitempty"`
 	ConfigName string `json:"configName"`
 	Provider   string `json:"provider"`
 	Scope      string `json:"scope"`

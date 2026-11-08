@@ -44,6 +44,8 @@ type CDNConfig struct {
 	IPWhitelist      []string  `json:"ipWhitelist"`
 	SignURLEnabled   bool      `json:"signUrlEnabled"`
 	SignURLSecret    string    `json:"signUrlSecret,omitempty"`
+	// SignURLSecretSet 出网时签名密钥被抹掉，这里告诉控制台是否已配置。
+	SignURLSecretSet bool `json:"signUrlSecretSet"`
 	SignURLTTL       int       `json:"signUrlTtl"`
 	CreatedAt        time.Time `json:"createdAt"`
 	UpdatedAt        time.Time `json:"updatedAt"`

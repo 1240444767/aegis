@@ -17,12 +17,18 @@ const (
 	ChannelAdReward     = "ad_reward"     // 看激励广告领取
 	ChannelPointsStore  = "points_store"  // 积分兑换
 	ChannelInvite       = "invite"        // 邀请奖励
+	ChannelLeaderboard  = "leaderboard"   // 排行榜奖励
+	ChannelLottery      = "lottery"       // 抽奖奖品
+	ChannelItemGrant    = "item_grant"    // 物品发放
 	// ChannelAdminRevoke 扣减天数 / 取消永久会员（管理员 / 远程函数 vip.revoke、vip.revokeLifetime）。
 	// 它是账本里的一条留痕记录，不是一段会员期：不贡献功能，也不会成为「当前套餐」。
 	ChannelAdminRevoke = "admin_revoke"
 	// ChannelLegacyImport 老系统迁移进来的永久会员（vip_time = 999999999），由迁移补记。
 	// 老系统没有留下凭什么，判定时归为来源不明。
 	ChannelLegacyImport = "legacy_import"
+	// ChannelLifetimeConvert 开通永久会员时折掉被覆盖的存量（负时长的说明行），
+	// 以及取消永久会员后把折掉的会员时长还回来（正时长，是一段会员期）。见 conversion.go。
+	ChannelLifetimeConvert = "lifetime_convert"
 )
 
 // LegacyLifetimeExpireAt 老系统永久会员（vip_time = 999999999）导入时被映射成的到期时间。
@@ -61,7 +67,10 @@ type Plan struct {
 	// 防的是"注册小号反复领试用"，代价是请求必须带设备标识（否则拒领而不是放行 ——
 	// 开着的开关放行等于没有这个开关）。
 	TrialDeviceLimited bool `json:"trialDeviceLimited"`
-	// Features 这个套餐包含的功能标识（引用 vip_features.tag）。
+	// TierID / TierName 这个套餐卖的档位（见 tier.go）。权益属于档位，套餐只是售卖规格。
+	TierID   int64  `json:"tierId"`
+	TierName string `json:"tierName,omitempty"`
+	// Features 这个套餐包含的功能标识（引用 vip_features.tag）：就是所属档位当前的功能，只读。
 	// 空数组即"只是会员"，不带任何细分权益。
 	Features      []string         `json:"features"`
 	DurationDays  int              `json:"durationDays"`
@@ -76,6 +85,8 @@ type Plan struct {
 	// Included 当前用户的永久会员已经包含这个套餐的全部权益，再买拿不到任何新东西。
 	// 只在用户侧的在售列表里按当前用户填充；购买与下单会以 40378 拒绝这样的套餐。
 	Included bool `json:"included,omitempty"`
+	// UpgradePreview 永久套餐：当前用户开通之后，原有的限时会员等存量会怎样（没有存量时为空）
+	UpgradePreview *UpgradePreview `json:"upgradePreview,omitempty"`
 }
 
 // IsTrial 是否试用套餐。
@@ -97,7 +108,10 @@ type PlanMutation struct {
 	Kind               *string
 	Lifetime           *bool
 	TrialDeviceLimited *bool
-	// Features nil 表示不变更；空切片表示清空
+	// TierID 套餐卖的档位。新建时为空：有功能完全相同的档位就并进去，否则按套餐名新建一个。
+	// 改档位只影响以后的售卖，已开通的会员仍在原档位。
+	TierID *int64
+	// Features 改的是所属档位的功能（同档位的套餐一起变）。nil 表示不变更；空切片表示清空
 	Features      *[]string
 	DurationDays  *int
 	Price         *decimal.Decimal
@@ -118,8 +132,14 @@ type Grant struct {
 	//
 	// 它**不是**判定依据：套餐还在时权益按套餐当前配置算（见 Segment），
 	// 快照只在两种情况下生效 —— 这笔不是按套餐开的（自定义发放），或套餐已被删除。
-	Features     []string
-	DurationDays int
+	Features []string
+	// TierID 不挂套餐的发放归入的档位，Features 则是档位之外另给的功能。
+	// 挂套餐时取套餐的档位，这里忽略；不挂套餐的永久开通为空时归入应用的永久档位（看广告领的除外）。
+	// 档位在发放事务里解析（resolveGrantTierTx），Features 随之并上档位的功能。
+	TierID *int64
+	// ExtraFeatures 档位之外另给的功能，由 resolveGrantTierTx 填，调用方不用设
+	ExtraFeatures []string
+	DurationDays  int
 	// Lifetime 永久开通：DurationDays 忽略，不动限时那条线的到期时间，
 	// 只把用户标记为永久会员并记一段没有终点的会员期。
 	Lifetime       bool
@@ -129,6 +149,14 @@ type Grant struct {
 	BonusIntegral  int64
 	Operator       string
 	Metadata       map[string]any
+	// Seconds 大于 0 时按秒顺延（DurationDays 只作账本展示）：还回折掉的会员时长要精确到秒
+	Seconds int64
+	// ConvertOwned 按应用的折算策略处理「已拥有」：这一笔对他是空的（永久会员已包含）时折成积分，不记会员段。
+	// 只有赠送类入口（管理员、卡密、邀请、排行榜、远程函数）打开；购买、试用、积分商城在下单前就拦了，
+	// 抽奖与激励广告有自己的活动 / 场景级处理，都不走这里。
+	ConvertOwned bool
+	// UpgradeMode 永久开通时被覆盖的存量怎么办：空为按应用策略，UpgradeConvert / UpgradeKeep 为这一笔单独指定
+	UpgradeMode string
 }
 
 // Transaction VIP 开通/续费记录
@@ -140,6 +168,9 @@ type Transaction struct {
 	PlanID        *int64   `json:"planId,omitempty"`
 	PlanName      string   `json:"planName"`
 	Features      []string `json:"features"`
+	// TierID 这段会员期所属档位；ExtraFeatures 档位之外另给的功能
+	TierID        *int64   `json:"tierId,omitempty"`
+	ExtraFeatures []string `json:"extraFeatures,omitempty"`
 	DurationDays  int      `json:"durationDays"`
 	// Lifetime 永久开通（durationDays 为 0、expireAfter 为空），
 	// 或 admin_revoke 渠道下的「取消永久会员」留痕。
@@ -158,6 +189,8 @@ type Transaction struct {
 	RevokedAt    *time.Time `json:"revokedAt,omitempty"`
 	RevokeReason string     `json:"revokeReason,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
+	// Conversion 这一行对应的折算（已拥有发放被折成积分，或开通永久折掉了存量）
+	Conversion *ConversionSummary `json:"conversion,omitempty"`
 }
 
 // Revoke 一次扣减会员天数的指令（仓储层单事务执行：锁用户 → 从链尾截断 → 记账）。

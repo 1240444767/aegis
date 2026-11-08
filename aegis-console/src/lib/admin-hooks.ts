@@ -5,7 +5,6 @@ import { evictAvatarCache } from "@/components/ui/avatar";
 import * as appOAuth from "@/lib/api/app-oauth";
 import * as authProtocol from "@/lib/api/app-auth-protocol";
 import * as database from "@/lib/api/database";
-import * as reports from "@/lib/api/reports";
 import * as risk from "@/lib/api/risk";
 import * as userMaster from "@/lib/api/user-master";
 import * as storageRes from "@/lib/api/storage-resource";
@@ -34,16 +33,11 @@ import {
   getAdminPaymentOrders,
   getAdminVipPlans,
   getAdminVipTransactions,
-  grantAdminVip,
   saveAdminVipPlan,
-  createAppStorageConfig,
-  createGlobalStorageConfig,
   createWorkflow,
   createWorkflowFromTemplate,
   deleteAdminPaymentConfig,
   deleteAdminSite,
-  deleteAppStorageConfig,
-  deleteGlobalStorageConfig,
   deleteWorkflow,
   getAdminAppPasswordPolicy,
   getAdminAppSignInRecords,
@@ -98,10 +92,6 @@ import {
   getAdminDashboard,
   getAppOnlineStats,
   getAppOnlineUsers,
-  getAppStorageConfigDetail,
-  getAppStorageConfigs,
-  getGlobalStorageConfigDetail,
-  getGlobalStorageConfigs,
   getSystemOnlineStats,
   getWorkflowDetail,
   getWorkflowEngineStatus,
@@ -129,8 +119,6 @@ import {
   testAdminAppPasswordPolicy,
   testAdminAppSignInReward,
   testAdminPaymentConfig,
-  testAppStorageConfig,
-  testGlobalStorageConfig,
   completeWorkflowTask,
   toggleAdminSitePin,
   updateAdminAccountAccess,
@@ -166,8 +154,6 @@ import {
   adjustUserExperience,
   updateAdminPaymentConfig,
   updateAdminSite,
-  updateAppStorageConfig,
-  updateGlobalStorageConfig,
   updateWorkflow,
   uploadAdminAvatar,
   validateWorkflowDefinition,
@@ -207,21 +193,6 @@ import {
 import type { FirewallLogListParams, IPBanListParams } from "@/lib/api/system";
 import type { AdminAppUserListParams, PointsAdjustPayload } from "@/lib/api/apps";
 import type { StorageBatchAction, StorageObjectQuery } from "@/lib/api/types";
-import {
-  getAdminLotteryActivities,
-  getAdminLotteryActivity,
-  createAdminLotteryActivity,
-  updateAdminLotteryActivity,
-  deleteAdminLotteryActivity,
-  getAdminLotteryPrizes,
-  createAdminLotteryPrize,
-  updateAdminLotteryPrize,
-  deleteAdminLotteryPrize,
-  commitLotterySeed,
-  revealLotterySeed,
-  getAdminLotteryDraws,
-  getAdminLotteryStats
-} from "@/lib/api/lottery";
 import {
   bulkDeletePlatformBanners,
   createPlatformBanner,
@@ -358,7 +329,7 @@ export function useAdminAppSessionAuditsQuery(
 
 export function useAdminAppNotificationsQuery(
   appKey?: string | null,
-  params?: { keyword?: string; type?: string; level?: string; page?: number; limit?: number }
+  params?: { keyword?: string; category?: string; type?: string; level?: string; page?: number; limit?: number }
 ) {
   const token = useAdminToken();
   return useQuery({
@@ -367,6 +338,7 @@ export function useAdminAppNotificationsQuery(
       token,
       appKey,
       params?.keyword,
+      params?.category,
       params?.type,
       params?.level,
       params?.page,
@@ -598,23 +570,8 @@ export function useRevokeDelegationMutation() {
 // 大盘、IP 库与设备库五张表，散在这里会漏。
 
 // ── 报表分析 Hooks ──
-
-function useReportQuery<T>(key: string, appKey: string | undefined, fn: (token: string, appKey: string, p: { start: string; end: string }) => Promise<T>, start?: string, end?: string) {
-  const token = useAdminToken();
-  return useQuery({ queryKey: [key, appKey, start, end, token], queryFn: () => fn(token as string, appKey as string, { start: start!, end: end! }), enabled: Boolean(token && appKey && start && end) });
-}
-export function useRegistrationReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-registration", appKey, reports.getRegistrationReport, start, end); }
-export function useLoginReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-login", appKey, reports.getLoginReport, start, end); }
-export function useRetentionReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-retention", appKey, reports.getRetentionReport, start, end); }
-export function useActiveReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-active", appKey, reports.getActiveReport, start, end); }
-export function useDeviceReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-device", appKey, reports.getDeviceReport, start, end); }
-export function useRegionReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-region", appKey, reports.getRegionReport, start, end); }
-export function useChannelReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-channel", appKey, reports.getChannelReport, start, end); }
-export function usePaymentReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-payment", appKey, reports.getPaymentReport, start, end); }
-export function useNotificationReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-notification", appKey, reports.getNotificationReport, start, end); }
-export function useRiskReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-risk", appKey, reports.getRiskReport, start, end); }
-export function useActivityReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-activity", appKey, reports.getActivityReport, start, end); }
-export function useFunnelReportQuery(appKey?: string, start?: string, end?: string) { return useReportQuery("report-funnel", appKey, reports.getFunnelReport, start, end); }
+//
+// 已迁至 lib/report-hooks.ts。
 
 // ── 用户主数据 Hooks ──
 
@@ -1713,18 +1670,6 @@ export function useDeleteAdminVipPlanMutation(appId?: number | null) {
   });
 }
 
-export function useGrantAdminVipMutation(appId?: number | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof grantAdminVip>[2]) =>
-      grantAdminVip(token as string, appId as number, payload),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-vip-transactions"] });
-    }
-  });
-}
-
 export function useAdminVipTransactionsQuery(
   appId?: number | null,
   params?: { userId?: number; page?: number; limit?: number }
@@ -1949,146 +1894,6 @@ export function useBatchReviewAdminRoleApplicationsMutation() {
         queryClient.invalidateQueries({ queryKey: ["admin-role-application-statistics"] })
       ]);
     }
-  });
-}
-
-export function useGlobalStorageConfigsQuery(provider?: string) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-global", token, provider],
-    queryFn: () => getGlobalStorageConfigs(token as string, provider),
-    enabled: Boolean(token)
-  });
-}
-
-export function useAppStorageConfigsQuery(appid?: number | null, provider?: string) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-app", token, appid, provider],
-    queryFn: () => getAppStorageConfigs(token as string, appid as number, provider),
-    enabled: Boolean(token && appid)
-  });
-}
-
-export function useGlobalStorageConfigDetailQuery(configId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-global-detail", token, configId],
-    queryFn: () => getGlobalStorageConfigDetail(token as string, configId as number),
-    enabled: Boolean(token && configId)
-  });
-}
-
-export function useAppStorageConfigDetailQuery(appid?: number | null, configId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["storage-app-detail", token, appid, configId],
-    queryFn: () => getAppStorageConfigDetail(token as string, appid as number, configId as number),
-    enabled: Boolean(token && appid && configId)
-  });
-}
-
-export function useCreateGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createGlobalStorageConfig>[1]) =>
-      createGlobalStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useUpdateGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof updateGlobalStorageConfig>[1]) =>
-      updateGlobalStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useDeleteGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (configId: number) => deleteGlobalStorageConfig(token as string, configId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-global"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-global-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useTestGlobalStorageConfigMutation() {
-  const token = useAdminToken();
-  return useMutation({
-    mutationFn: (configId: number) => testGlobalStorageConfig(token as string, configId)
-  });
-}
-
-export function useCreateAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createAppStorageConfig>[1]) =>
-      createAppStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useUpdateAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof updateAppStorageConfig>[1]) =>
-      updateAppStorageConfig(token as string, payload),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useDeleteAppStorageConfigMutation() {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: { appid: number; configId: number }) =>
-      deleteAppStorageConfig(token as string, payload.appid, payload.configId),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["storage-app"] }),
-        queryClient.invalidateQueries({ queryKey: ["storage-app-detail"] })
-      ]);
-    }
-  });
-}
-
-export function useTestAppStorageConfigMutation() {
-  const token = useAdminToken();
-  return useMutation({
-    mutationFn: (payload: { appid: number; configId: number }) =>
-      testAppStorageConfig(token as string, payload.appid, payload.configId)
   });
 }
 
@@ -2778,161 +2583,6 @@ export function useOIDCPublicConfigQuery() {
     queryFn: () => getOIDCPublicConfig(),
     staleTime: 60_000,
     retry: false
-  });
-}
-
-// ── 抽奖系统 ──────────────────────────
-
-export function useAdminLotteryActivitiesQuery(
-  appKey?: string | null,
-  params?: { status?: string; keyword?: string; page?: number; limit?: number }
-) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["admin-lottery-activities", token, appKey, params],
-    queryFn: () => getAdminLotteryActivities(token!, appKey!, params),
-    enabled: Boolean(token && appKey)
-  });
-}
-
-export function useAdminLotteryActivityQuery(appKey?: string | null, id?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["admin-lottery-activity", token, appKey, id],
-    queryFn: () => getAdminLotteryActivity(token!, appKey!, id!),
-    enabled: Boolean(token && appKey && id)
-  });
-}
-
-export function useCreateAdminLotteryActivityMutation(appKey?: string | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createAdminLotteryActivity>[2]) =>
-      createAdminLotteryActivity(token!, appKey!, payload),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-lottery-activities"] });
-    }
-  });
-}
-
-export function useUpdateAdminLotteryActivityMutation(appKey?: string | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: { id: number; data: Record<string, unknown> }) =>
-      updateAdminLotteryActivity(token!, appKey!, payload.id, payload.data),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activities"] }),
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activity"] })
-      ]);
-    }
-  });
-}
-
-export function useDeleteAdminLotteryActivityMutation(appKey?: string | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => deleteAdminLotteryActivity(token!, appKey!, id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-lottery-activities"] });
-    }
-  });
-}
-
-export function useAdminLotteryPrizesQuery(appKey?: string | null, activityId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["admin-lottery-prizes", token, appKey, activityId],
-    queryFn: () => getAdminLotteryPrizes(token!, appKey!, activityId!),
-    enabled: Boolean(token && appKey && activityId)
-  });
-}
-
-export function useCreateAdminLotteryPrizeMutation(appKey?: string | null, activityId?: number | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: Parameters<typeof createAdminLotteryPrize>[3]) =>
-      createAdminLotteryPrize(token!, appKey!, activityId!, payload),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-lottery-prizes"] });
-    }
-  });
-}
-
-export function useUpdateAdminLotteryPrizeMutation(appKey?: string | null, activityId?: number | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (payload: { prizeId: number; data: Record<string, unknown> }) =>
-      updateAdminLotteryPrize(token!, appKey!, activityId!, payload.prizeId, payload.data),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-lottery-prizes"] });
-    }
-  });
-}
-
-export function useDeleteAdminLotteryPrizeMutation(appKey?: string | null, activityId?: number | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (prizeId: number) => deleteAdminLotteryPrize(token!, appKey!, activityId!, prizeId),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["admin-lottery-prizes"] });
-    }
-  });
-}
-
-export function useCommitLotterySeedMutation(appKey?: string | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => commitLotterySeed(token!, appKey!, id),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activities"] }),
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activity"] })
-      ]);
-    }
-  });
-}
-
-export function useRevealLotterySeedMutation(appKey?: string | null) {
-  const token = useAdminToken();
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (id: number) => revealLotterySeed(token!, appKey!, id),
-    onSuccess: async () => {
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activities"] }),
-        queryClient.invalidateQueries({ queryKey: ["admin-lottery-activity"] })
-      ]);
-    }
-  });
-}
-
-export function useAdminLotteryDrawsQuery(
-  appKey?: string | null,
-  activityId?: number | null,
-  params?: { page?: number; limit?: number }
-) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["admin-lottery-draws", token, appKey, activityId, params],
-    queryFn: () => getAdminLotteryDraws(token!, appKey!, activityId!, params),
-    enabled: Boolean(token && appKey && activityId)
-  });
-}
-
-export function useAdminLotteryStatsQuery(appKey?: string | null, activityId?: number | null) {
-  const token = useAdminToken();
-  return useQuery({
-    queryKey: ["admin-lottery-stats", token, appKey, activityId],
-    queryFn: () => getAdminLotteryStats(token!, appKey!, activityId!),
-    enabled: Boolean(token && appKey && activityId)
   });
 }
 

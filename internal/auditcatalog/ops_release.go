@@ -15,11 +15,20 @@ func init() {
 		Write("POST /api/admin/apps/:appkey/releases/assets/presign", "申请安装包直传地址", "安装包", SeverityLow),
 		Write("POST /api/admin/apps/:appkey/releases/assets/complete", "完成安装包直传", "安装包", SeverityLow),
 		View("POST /api/admin/apps/:appkey/releases/simulate", "模拟检测更新", ""),
+		View("POST /api/admin/apps/:appkey/releases/notes/preview", "预览更新说明", ""),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/publish", "发布版本", "版本", SeverityHigh),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/pause", "暂停下发", "版本", SeverityMedium),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/resume", "恢复下发", "版本", SeverityMedium),
 		Write("POST /api/admin/apps/:appkey/releases/:rid/revoke", "撤回版本", "版本", SeverityHigh),
 		Write("PUT /api/admin/apps/:appkey/releases/:rid/rollout", "调整灰度比例", "版本", SeverityMedium),
+
+		// 崩溃报告（docs/crash-reports.md）
+		View("GET /api/admin/apps/:appkey/crash-reports", "查看崩溃报告列表", ""),
+		View("GET /api/admin/apps/:appkey/crash-reports/facets", "查看崩溃报告摘要", ""),
+		View("GET /api/admin/apps/:appkey/crash-reports/:crashId", "查看崩溃报告详情", "崩溃报告"),
+		Write("POST /api/admin/apps/:appkey/crash-reports/resolve", "标记崩溃报告处理状态", "崩溃报告", SeverityLow),
+		Write("DELETE /api/admin/apps/:appkey/crash-reports/:crashId", "删除崩溃报告", "崩溃报告", SeverityMedium),
+		Write("POST /api/admin/apps/:appkey/crash-reports/delete", "批量删除崩溃报告", "崩溃报告", SeverityMedium),
 
 		View("GET /api/admin/apps/:appkey/channels", "查看发布渠道", ""),
 		View("GET /api/admin/apps/:appkey/channels/:cid", "查看渠道详情", "渠道"),

@@ -9,7 +9,6 @@ export * from "./configuration";
 export * from "./monitor";
 export * from "./releases";
 export * from "./reviews";
-export * from "./storage";
 export * from "./workflow";
 export * from "./system";
 export * from "./egress";

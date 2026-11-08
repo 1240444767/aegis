@@ -1,11 +1,14 @@
 "use client";
 
-import type { ComponentType, ReactNode } from "react";
-import { Bell, CalendarCheck, Lock, Palette, Settings2, ShieldCheck, SlidersHorizontal } from "lucide-react";
+import { useState, type ComponentType, type ReactNode } from "react";
+import { Bell, Braces, CalendarCheck, ChevronRight, Lock, Palette, Settings2, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import type { AdminAppUserDetail, AdminUserSettingsRecord } from "@/lib/api/types";
+import { formatDateTime, formatRelative } from "@/lib/datetime";
 import { cn } from "@/lib/utils";
-import { ValueTree, formatTime, relativeTime } from "./user-detail-shared";
+import { RecordSheet, Section, ToneIcon, type Tone } from "./kit";
+import { ValueTree } from "./user-detail-shared";
 
 /**
  * 用户端偏好设置的可读呈现。
@@ -14,8 +17,9 @@ import { ValueTree, formatTime, relativeTime } from "./user-detail-shared";
  * `profileVisibility: "public"` 翻译成「主页对所有人可见」。这里按分类写好
  * 说法：开关画成开 / 关两种状态，枚举翻成中文，数值带单位；认不出的键
  * 仍然按通用规则显示（驼峰拆词、布尔转开关），不会因为客户端多存了一个字段就丢掉。
+ * 每个分类可点开抽屉看版本、启用状态、时间与原始 JSON。
  *
- * 只读：偏好是用户自己的选择，管理端不代为修改。
+ * 只读：偏好是用户自己的选择，管理端不代为修改（后端也没有管理端写接口）。
  */
 
 type Row = { label: string; value: ReactNode; muted?: boolean };
@@ -23,7 +27,8 @@ type Row = { label: string; value: ReactNode; muted?: boolean };
 type CategorySpec = {
   title: string;
   icon: ComponentType<{ className?: string }>;
-  /** 按已知键生成行；返回 null 表示该键已被消化，不再进通用渲染 */
+  tone: Tone;
+  /** 按已知键生成行；used 里的键已被消化，不再进通用渲染 */
   rows: (s: Record<string, unknown>) => { rows: Row[]; used: string[] };
 };
 
@@ -62,7 +67,7 @@ export function OnOff({ on, onText = "开启", offText = "关闭" }: { on: boole
   );
 }
 
-/** 一组可多选项的开关状态：开的实心、关的描边。 */
+/** 一组可多选项的开关状态：开的实心、关的描边加删除线。 */
 function Pills({ items }: { items: Array<{ label: string; on: boolean }> }) {
   return (
     <span className="flex flex-wrap justify-end gap-1">
@@ -70,8 +75,8 @@ function Pills({ items }: { items: Array<{ label: string; on: boolean }> }) {
         <span
           key={item.label}
           className={cn(
-            "rounded-full px-2 py-0.5 text-[11px]",
-            item.on ? "bg-foreground/[0.07] text-foreground" : "text-muted-foreground line-through decoration-muted-foreground/40"
+            "rounded-full border px-2 py-px text-xs",
+            item.on ? "border-transparent bg-foreground/[0.07] text-foreground" : "text-muted-foreground line-through decoration-muted-foreground/40"
           )}
         >
           {item.label}
@@ -95,6 +100,7 @@ const SPECS: Record<string, CategorySpec> = {
   general: {
     title: "通用",
     icon: SlidersHorizontal,
+    tone: "primary",
     rows: (s) => ({
       used: ["language", "displayName", "bio", "profileVisibility"],
       rows: [
@@ -108,6 +114,7 @@ const SPECS: Record<string, CategorySpec> = {
   autoSign: {
     title: "自动签到",
     icon: CalendarCheck,
+    tone: "success",
     rows: (s) => {
       const enabled = bool(s.enabled);
       const time = str(s.time) || "08:00";
@@ -129,6 +136,7 @@ const SPECS: Record<string, CategorySpec> = {
   notifications: {
     title: "通知",
     icon: Bell,
+    tone: "info",
     rows: (s) => {
       const enabled = bool(s.enabled);
       return {
@@ -148,6 +156,7 @@ const SPECS: Record<string, CategorySpec> = {
   privacy: {
     title: "隐私",
     icon: Lock,
+    tone: "violet",
     rows: (s) => ({
       used: ["showOnlineStatus", "allowDirectMessage", "shareActivityStatus"],
       rows: [
@@ -160,6 +169,7 @@ const SPECS: Record<string, CategorySpec> = {
   ui: {
     title: "界面",
     icon: Palette,
+    tone: "warning",
     rows: (s) => ({
       used: ["theme", "language", "timezone", "dateFormat", "timeFormat"],
       rows: [
@@ -168,9 +178,10 @@ const SPECS: Record<string, CategorySpec> = {
         { label: "时区", value: str(s.timezone) || "默认" },
         {
           label: "日期时间",
-          value: [str(s.dateFormat), str(s.timeFormat) === "12h" ? "12 小时制" : str(s.timeFormat) === "24h" ? "24 小时制" : str(s.timeFormat)]
-            .filter(Boolean)
-            .join("，") || "默认"
+          value:
+            [str(s.dateFormat), str(s.timeFormat) === "12h" ? "12 小时制" : str(s.timeFormat) === "24h" ? "24 小时制" : str(s.timeFormat)]
+              .filter(Boolean)
+              .join("，") || "默认"
         }
       ]
     })
@@ -178,6 +189,7 @@ const SPECS: Record<string, CategorySpec> = {
   security: {
     title: "安全提醒",
     icon: ShieldCheck,
+    tone: "danger",
     rows: (s) => ({
       used: ["twoFactorEnabled", "loginNotification", "suspiciousActivityAlert", "sessionTimeout"],
       rows: [
@@ -203,7 +215,7 @@ export function humanizeKey(key: string) {
   return words ? words[0].toUpperCase() + words.slice(1) : key;
 }
 
-/** 认不出的值：布尔画开关、数字千分位、短字符串原样，其余收进折叠的树。 */
+/** 认不出的值：布尔画开关、数字千分位、链接可点、时间本地化，其余收进折叠的树。 */
 export function readableValue(value: unknown): ReactNode {
   if (typeof value === "boolean") return <OnOff on={value} onText="是" offText="否" />;
   if (typeof value === "number") return <span className="tabular-nums">{value.toLocaleString("zh-CN")}</span>;
@@ -217,7 +229,7 @@ export function readableValue(value: unknown): ReactNode {
         </a>
       );
     }
-    if (/^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v))) return <span title={v}>{formatTime(v)}</span>;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(v) && !Number.isNaN(Date.parse(v))) return <span title={v}>{formatDateTime(v)}</span>;
     return <span className="break-all">{v}</span>;
   }
   if (value === null || value === undefined) return <span className="text-muted-foreground">空</span>;
@@ -227,7 +239,7 @@ export function readableValue(value: unknown): ReactNode {
   return (
     <details className="text-left">
       <summary className="cursor-pointer list-none text-xs text-muted-foreground select-none hover:text-foreground">
-        {Array.isArray(value) ? `${value.length} 项` : `${Object.keys(value as object).length} 个字段`}
+        {Array.isArray(value) ? `${value.length} 项，展开` : `${Object.keys(value as object).length} 个字段，展开`}
       </summary>
       <div className="mt-1 rounded-lg bg-muted/40 px-2 py-1.5">
         <ValueTree value={value} />
@@ -244,61 +256,134 @@ function collectCategories(user: AdminAppUserDetail) {
   return Array.from(set).filter((c) => SPECS[c] || user.settings?.settings?.[c]);
 }
 
+/** 「3 天前更新」；超过 30 天 formatRelative 给日期，补个空格。 */
+export function updatedText(stamp?: string | null) {
+  const rel = formatRelative(stamp, "");
+  if (!rel) return "";
+  return /[前后刚]$|^刚刚$/.test(rel) ? `${rel}更新` : `${rel} 更新`;
+}
+
+function categoryTitle(category: string) {
+  return SPECS[category]?.title ?? humanizeKey(category);
+}
+
 export function UserPreferences({ user }: { user: AdminAppUserDetail }) {
   const categories = collectCategories(user);
-  const configured = user.settings?.configuredCategories?.length ?? 0;
+  const records = user.settings?.settings ?? {};
+  const configured = categories.filter((c) => records[c]).length;
+  const [open, setOpen] = useState<string | null>(null);
+  const [rawAll, setRawAll] = useState(false);
+
+  const openRecord = open ? (records[open] as AdminUserSettingsRecord | undefined) : undefined;
+  const openInfo = open ? user.settings?.recordInfo?.[open] : undefined;
 
   return (
-    <section className="space-y-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-2 px-1">
-        <h3 className="flex items-center gap-2 text-sm font-semibold">
-          <Settings2 className="size-4 text-muted-foreground" />
-          偏好设置
-        </h3>
-        <span className="text-xs text-muted-foreground">
-          用户在客户端里的选择，{configured ? `已保存 ${configured} 类` : "尚未保存过"}
-        </span>
-      </div>
+    <Section
+      title="偏好设置"
+      icon={Settings2}
+      tone="violet"
+      description={
+        configured
+          ? `用户在客户端里的选择，已保存 ${configured} 类，其余按默认值工作。管理端只读。`
+          : "用户尚未保存过任何偏好，客户端全部按默认值工作。管理端只读。"
+      }
+      actions={
+        configured ? (
+          <Button size="sm" variant="outline" onClick={() => setRawAll(true)}>
+            <Braces />
+            原始数据
+          </Button>
+        ) : null
+      }
+    >
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {categories.map((category) => (
           <PreferenceCard
             key={category}
             category={category}
-            record={user.settings?.settings?.[category] as AdminUserSettingsRecord | undefined}
+            record={records[category] as AdminUserSettingsRecord | undefined}
             updatedAt={user.settings?.recordInfo?.[category]?.updatedAt}
+            onOpen={() => setOpen(category)}
           />
         ))}
       </div>
-    </section>
+
+      <RecordSheet
+        open={open !== null}
+        onOpenChange={(next) => !next && setOpen(null)}
+        title={open ? `${categoryTitle(open)}偏好` : ""}
+        description={open ? `分类键 ${open}` : undefined}
+        fields={
+          open
+            ? [
+                { label: "状态", value: openRecord ? (openRecord.isActive === false ? "已停用" : "生效中") : "未保存，使用默认值" },
+                { label: "版本", value: openRecord?.version ?? openInfo?.version, mono: true },
+                { label: "首次保存", value: formatDateTime(openRecord?.createdAt ?? openInfo?.createdAt) },
+                {
+                  label: "最近更新",
+                  value: formatDateTime(openRecord?.updatedAt ?? openInfo?.updatedAt),
+                  hint: openRecord?.updatedAt ?? openInfo?.updatedAt ? formatRelative(openRecord?.updatedAt ?? openInfo?.updatedAt) : undefined
+                },
+                { label: "选项数", value: openRecord ? Object.keys(openRecord.settings ?? {}).length : 0 }
+              ]
+            : undefined
+        }
+        raw={openRecord?.settings}
+      />
+
+      <RecordSheet
+        open={rawAll}
+        onOpenChange={setRawAll}
+        title="全部偏好原始数据"
+        description={`共 ${configured} 类已保存的设置`}
+        raw={Object.fromEntries(Object.entries(records).map(([key, record]) => [key, (record as AdminUserSettingsRecord)?.settings ?? {}]))}
+      />
+    </Section>
   );
 }
 
-function PreferenceCard({ category, record, updatedAt }: { category: string; record?: AdminUserSettingsRecord; updatedAt?: string }) {
+function PreferenceCard({
+  category,
+  record,
+  updatedAt,
+  onOpen
+}: {
+  category: string;
+  record?: AdminUserSettingsRecord;
+  updatedAt?: string;
+  onOpen: () => void;
+}) {
   const spec = SPECS[category];
-  const Icon = spec?.icon ?? SlidersHorizontal;
   const settings = record?.settings ?? {};
   const known = spec ? spec.rows(settings) : { rows: [], used: [] };
   const extra = Object.entries(settings).filter(([key]) => !known.used.includes(key));
   const configured = Boolean(record);
   const stamp = record?.updatedAt ?? updatedAt;
+  const inactive = configured && record?.isActive === false;
 
   return (
-    <div className="flex flex-col rounded-2xl border bg-card">
+    <div className="flex min-w-0 flex-col rounded-xl border bg-card">
       <div className="flex items-center justify-between gap-2 px-4 pt-3.5">
-        <div className="flex items-center gap-2 text-sm font-medium">
-          <span className="grid size-7 place-items-center rounded-lg bg-muted text-muted-foreground">
-            <Icon className="size-3.5" />
-          </span>
-          {spec?.title ?? humanizeKey(category)}
+        <div className="flex min-w-0 items-center gap-2.5 text-sm font-medium">
+          <ToneIcon icon={spec?.icon ?? SlidersHorizontal} tone={configured ? spec?.tone ?? "neutral" : "neutral"} size="sm" />
+          <span className="truncate">{categoryTitle(category)}</span>
         </div>
-        {configured ? null : (
+        {inactive ? (
+          <Badge variant="warning" size="sm">
+            已停用
+          </Badge>
+        ) : configured ? (
+          <Badge variant="success" size="sm">
+            已保存
+          </Badge>
+        ) : (
           <Badge variant="outline" size="sm">
             默认值
           </Badge>
         )}
       </div>
       {configured ? (
-        <dl className="flex-1 space-y-2 px-4 py-3 text-xs">
+        <dl className="flex flex-1 flex-col gap-2 px-4 py-3 text-xs">
           {known.rows.map((row) => (
             <div key={row.label} className="flex items-start justify-between gap-4">
               <dt className="shrink-0 text-muted-foreground">{row.label}</dt>
@@ -307,19 +392,26 @@ function PreferenceCard({ category, record, updatedAt }: { category: string; rec
           ))}
           {extra.map(([key, value]) => (
             <div key={key} className="flex items-start justify-between gap-4">
-              <dt className="shrink-0 text-muted-foreground">{humanizeKey(key)}</dt>
+              <dt className="shrink-0 text-muted-foreground" title={key}>
+                {humanizeKey(key)}
+              </dt>
               <dd className="min-w-0 text-right">{readableValue(value)}</dd>
             </div>
           ))}
           {known.rows.length === 0 && extra.length === 0 ? <div className="text-muted-foreground">没有保存任何选项</div> : null}
         </dl>
       ) : (
-        <p className="flex-1 px-4 py-3 text-xs leading-5 text-muted-foreground">
-          用户还没有改过这一类设置，客户端按默认值工作。
-        </p>
+        <p className="flex-1 px-4 py-3 text-xs leading-5 text-muted-foreground">用户还没有改过这一类设置，客户端按默认值工作。</p>
       )}
-      <div className="border-t px-4 py-2 text-[11px] text-muted-foreground" title={stamp ? formatTime(stamp) : undefined}>
-        {configured && stamp ? `${relativeTime(stamp)}更新` : "未保存"}
+      <div className="flex items-center justify-between gap-2 border-t px-4 py-1.5 text-xs text-muted-foreground">
+        <span className="min-w-0 truncate tabular-nums" title={stamp ? formatDateTime(stamp) : undefined}>
+          {configured && stamp ? updatedText(stamp) : "未保存"}
+          {configured && record?.version ? `，第 ${record.version} 版` : ""}
+        </span>
+        <Button size="xs" variant="ghost" onClick={onOpen}>
+          详情
+          <ChevronRight />
+        </Button>
       </div>
     </div>
   );

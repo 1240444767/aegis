@@ -2,60 +2,69 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { Ban, Loader2, PackageCheck, ReceiptText } from "lucide-react";
-import { toast } from "sonner";
-import { SectionCard } from "@/components/apps/app-config-primitives";
-import { AdPolicyPager } from "@/components/apps/ad-policy/ad-policy-pager";
+import { Ban, ExternalLink, PackageCheck, ReceiptText, RotateCw, X } from "lucide-react";
+import { RedemptionHandleDialog, type HandleRequest } from "@/components/apps/points-store/points-store-handle-dialog";
 import {
   RedemptionStatusBadge,
   formatPoints,
-  formatStoreDate
+  redemptionStatusLabel
 } from "@/components/apps/points-store/points-store-shared";
-import { Badge } from "@/components/ui/badge";
+import {
+  ExportButton,
+  ResultChips,
+  ResultList,
+  exportStamp,
+  resultsCsv,
+  usePaging
+} from "@/components/users/detail/records/records-shared";
+import {
+  FilterBar,
+  FilterSelect,
+  Pager,
+  RecordSheet,
+  RecordTable,
+  ResetButton,
+  SearchField,
+  Section,
+  StateBlock,
+  TimeRangePicker,
+  formatInt,
+  rangeToParams,
+  useDebouncedValue,
+  type Column,
+  type CsvColumn,
+  type TimeRange
+} from "@/components/users/detail/kit";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useAdminToken } from "@/lib/admin-hooks";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+  listPointsStoreRedemptions,
+  type PointsStoreRedemption,
+  type PointsStoreRedemptionStatus
+} from "@/lib/api/points-store";
+import { formatDateTime, formatRelative } from "@/lib/datetime";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/components/ui/select";
-import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from "@/components/ui/table";
-import { Textarea } from "@/components/ui/textarea";
-import { ApiError } from "@/lib/api/client";
-import type { PointsStoreRedemption, PointsStoreRedemptionStatus } from "@/lib/api/points-store";
-import {
-  useHandlePointsStoreRedemptionMutation,
   usePointsStoreItemsQuery,
+  usePointsStoreRedemptionCountsQuery,
   usePointsStoreRedemptionsQuery
 } from "@/lib/points-store-hooks";
-import { useDebouncedValue } from "@/lib/use-debounced-value";
+import { cn } from "@/lib/utils";
 
-const LIMIT = 20;
+const STATUS_TABS: Array<{ value: "" | PointsStoreRedemptionStatus; label: string; countKey: "all" | PointsStoreRedemptionStatus }> = [
+  { value: "", label: "全部", countKey: "all" },
+  { value: "pending", label: "待发放", countKey: "pending" },
+  { value: "completed", label: "已到账", countKey: "completed" },
+  { value: "cancelled", label: "已取消", countKey: "cancelled" }
+];
 
 /**
  * 兑换记录。
  *
  * 展示 `results`（实际发出去了什么），不是商品上配的权益 —— 两者的差别正是排障要看的。
- * 人工发放的记录在这里处理：发放时写给用户的话（兑换码、快递单号）进站内信，
- * 取消即退回积分、库存加回。只有待发放的能处理。
+ * 状态页签带当前筛选下的笔数；待发放的记录可以勾选后批量发放或取消（逐笔提交，各自成败），
+ * 也可以点开详情单独处理。发放时写给用户的话（兑换码、快递单号）进站内信，取消即退积分、加回库存。
+ * 时间区间按浏览器时区，导出 CSV 与当前筛选一致（最多 5000 条）。
  */
 export function PointsStoreRedemptionsPanel({
   appKey,
@@ -70,211 +79,407 @@ export function PointsStoreRedemptionsPanel({
   onItemIdChange: (itemId?: number) => void;
   onStatusChange: (status?: PointsStoreRedemptionStatus) => void;
 }) {
+  const token = useAdminToken();
   const [keyword, setKeyword] = useState("");
-  const [page, setPage] = useState(1);
-  const [handling, setHandling] = useState<{ item: PointsStoreRedemption; action: "fulfill" | "cancel" } | null>(null);
-  const [note, setNote] = useState("");
+  const [range, setRange] = useState<TimeRange>({ preset: "all" });
+  const paging = usePaging(20);
+  const debouncedKeyword = useDebouncedValue(keyword.trim());
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [detail, setDetail] = useState<PointsStoreRedemption | null>(null);
+  const [request, setRequest] = useState<HandleRequest>(null);
 
-  const debouncedKeyword = useDebouncedValue(keyword, 300);
-  const itemsQuery = usePointsStoreItemsQuery(appKey);
-  const listQuery = usePointsStoreRedemptionsQuery(appKey, {
+  const filters = {
     itemId,
-    status,
     keyword: debouncedKeyword || undefined,
-    page,
-    limit: LIMIT
-  });
-  const handleMutation = useHandlePointsStoreRedemptionMutation(appKey);
+    ...rangeToParams(range)
+  };
+  const itemsQuery = usePointsStoreItemsQuery(appKey);
+  const countsQuery = usePointsStoreRedemptionCountsQuery(appKey, filters);
+  const listQuery = usePointsStoreRedemptionsQuery(appKey, { ...filters, status, page: paging.page, limit: paging.limit });
 
-  const items = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
-  const total = listQuery.data?.total ?? 0;
-  const totalPages = Math.max(1, listQuery.data?.totalPages ?? 1);
-  const filtered = Boolean(keyword || itemId || status);
+  const rows = useMemo(() => listQuery.data?.items ?? [], [listQuery.data]);
+  const pendingRows = rows.filter((row) => row.status === "pending");
+  const selectedRows = pendingRows.filter((row) => selectedIds.has(row.id));
+  const allPendingSelected = pendingRows.length > 0 && pendingRows.every((row) => selectedIds.has(row.id));
+  const filtered = Boolean(keyword || itemId || range.preset !== "all");
+  const pageCost = rows.filter((row) => row.status !== "cancelled").reduce((sum, row) => sum + row.cost, 0);
 
-  const userHref = (userId: number) => `/app-users/${encodeURIComponent(appKey)}/${userId}?tab=assets`;
-
-  const openHandle = (item: PointsStoreRedemption, action: "fulfill" | "cancel") => {
-    setNote("");
-    setHandling({ item, action });
+  const refilter = () => {
+    paging.reset();
+    setSelectedIds(new Set());
   };
 
-  const submitHandle = async () => {
-    if (!handling) return;
-    try {
-      await handleMutation.mutateAsync({ redemptionId: handling.item.id, action: handling.action, note: note.trim() });
-      toast.success(handling.action === "fulfill" ? "已标记为已发放" : "已取消，积分已退回");
-      setHandling(null);
-    } catch (error) {
-      toast.error(error instanceof ApiError ? error.message : "操作失败");
+  const toggle = (id: number, next: boolean) =>
+    setSelectedIds((current) => {
+      const copy = new Set(current);
+      if (next) copy.add(id);
+      else copy.delete(id);
+      return copy;
+    });
+
+  const userHref = (userId: number) =>
+    `/app-users/${encodeURIComponent(appKey)}/${userId}?tab=records&sub=points-store`;
+
+  const columns: Array<Column<PointsStoreRedemption>> = [
+    {
+      id: "select",
+      width: "36px",
+      header: (
+        <Checkbox
+          checked={allPendingSelected ? true : selectedRows.length ? "indeterminate" : false}
+          disabled={!pendingRows.length}
+          onCheckedChange={(next) => setSelectedIds(next ? new Set(pendingRows.map((row) => row.id)) : new Set())}
+          aria-label="选择本页待发放"
+        />
+      ),
+      cell: (row) =>
+        row.status === "pending" ? (
+          <span onClick={(event) => event.stopPropagation()}>
+            <Checkbox checked={selectedIds.has(row.id)} onCheckedChange={(next) => toggle(row.id, Boolean(next))} aria-label="选择" />
+          </span>
+        ) : null
+    },
+    {
+      id: "item",
+      header: "兑换",
+      cell: (row) => (
+        <div className="flex min-w-0 flex-col">
+          <span className="truncate font-medium">
+            {row.itemTitle}
+            {row.itemId ? null : <span className="ml-1.5 text-xs font-normal text-muted-foreground">已删除</span>}
+          </span>
+          <span className="truncate font-mono text-xs text-muted-foreground">{row.redemptionNo}</span>
+        </div>
+      )
+    },
+    {
+      id: "user",
+      header: "用户",
+      cell: (row) => (
+        <Link href={userHref(row.userId)} onClick={(event) => event.stopPropagation()} className="group flex min-w-0 flex-col">
+          <span className="truncate font-medium group-hover:underline">{row.nickname || row.account || `#${row.userId}`}</span>
+          <span className="truncate text-xs text-muted-foreground">{row.nickname && row.account ? row.account : `ID ${row.userId}`}</span>
+        </Link>
+      )
+    },
+    {
+      id: "cost",
+      header: "积分",
+      align: "right",
+      cell: (row) => (
+        <span className={cn("tabular-nums", row.status === "cancelled" ? "text-muted-foreground line-through" : "font-medium")}>
+          {formatPoints(row.cost)}
+        </span>
+      )
+    },
+    { id: "results", header: "实际发放", hideBelow: "lg", cell: (row) => <ResultChips results={row.results} /> },
+    {
+      id: "status",
+      header: "状态",
+      cell: (row) => (
+        <div className="flex flex-col items-start gap-0.5">
+          <RedemptionStatusBadge status={row.status} />
+          {row.handledBy ? <span className="text-xs text-muted-foreground">{row.handledBy}</span> : null}
+        </div>
+      )
+    },
+    {
+      id: "time",
+      header: "时间",
+      align: "right",
+      hideBelow: "md",
+      cell: (row) => (
+        <div className="flex flex-col items-end" title={formatDateTime(row.createdAt)}>
+          <span className="whitespace-nowrap tabular-nums">{formatDateTime(row.createdAt)}</span>
+          <span className="text-xs text-muted-foreground">{formatRelative(row.createdAt)}</span>
+        </div>
+      )
+    },
+    {
+      id: "actions",
+      header: "",
+      align: "right",
+      width: "120px",
+      cell: (row) =>
+        row.status === "pending" ? (
+          <div className="flex justify-end gap-1.5" onClick={(event) => event.stopPropagation()}>
+            <Button size="xs" variant="outline" onClick={() => setRequest({ action: "fulfill", items: [row] })}>
+              发放
+            </Button>
+            <Button size="xs" variant="ghost" className="text-muted-foreground" onClick={() => setRequest({ action: "cancel", items: [row] })}>
+              取消
+            </Button>
+          </div>
+        ) : null
     }
-  };
+  ];
+
+  const csvColumns: Array<CsvColumn<PointsStoreRedemption>> = [
+    { header: "兑换单号", value: (row) => row.redemptionNo },
+    { header: "时间", value: (row) => formatDateTime(row.createdAt, "") },
+    { header: "用户 ID", value: (row) => row.userId },
+    { header: "账号", value: (row) => row.account },
+    { header: "昵称", value: (row) => row.nickname },
+    { header: "商品", value: (row) => row.itemTitle },
+    { header: "商品 ID", value: (row) => row.itemId },
+    { header: "消耗积分", value: (row) => row.cost },
+    { header: "状态", value: (row) => redemptionStatusLabel(row.status) },
+    { header: "实际发放", value: (row) => resultsCsv(row.results) },
+    { header: "扣积分流水", value: (row) => row.integralTransactionNo },
+    { header: "退积分流水", value: (row) => row.refundTransactionNo },
+    { header: "备注", value: (row) => row.note },
+    { header: "处理人", value: (row) => row.handledBy },
+    { header: "处理时间", value: (row) => formatDateTime(row.handledAt, "") },
+    { header: "设备", value: (row) => row.deviceId },
+    { header: "IP", value: (row) => row.clientIp }
+  ];
 
   return (
-    <SectionCard icon={<ReceiptText className="size-4" />} title="兑换记录">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Input
-          value={keyword}
-          onChange={(event) => {
-            setKeyword(event.target.value);
-            setPage(1);
-          }}
-          placeholder="搜索账号、单号或商品"
-          className="h-8 w-56"
-        />
-        <Select
-          value={status ?? "all"}
-          onValueChange={(value) => {
-            onStatusChange(value === "all" ? undefined : (value as PointsStoreRedemptionStatus));
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="h-8 w-32">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="pending">待发放</SelectItem>
-            <SelectItem value="completed">已到账</SelectItem>
-            <SelectItem value="cancelled">已取消</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select
-          value={itemId ? String(itemId) : "all"}
-          onValueChange={(value) => {
-            onItemIdChange(value === "all" ? undefined : Number(value));
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="h-8 w-48">
-            <SelectValue placeholder="全部商品" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部商品</SelectItem>
-            {(itemsQuery.data ?? []).map((item) => (
-              <SelectItem key={item.id} value={String(item.id)}>
-                {item.title}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="flex flex-col gap-4">
+      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-0.5">
+        {STATUS_TABS.map((tab) => {
+          const active = (status ?? "") === tab.value;
+          const count = countsQuery.data?.[tab.countKey];
+          return (
+            <button
+              key={tab.countKey}
+              type="button"
+              onClick={() => {
+                onStatusChange(tab.value || undefined);
+                refilter();
+              }}
+              className={cn(
+                "flex min-w-[112px] shrink-0 flex-col gap-0.5 rounded-xl border bg-card px-4 py-2.5 text-left transition-colors",
+                active ? "border-primary ring-1 ring-primary" : "hover:bg-muted/40"
+              )}
+            >
+              <span className={cn("text-xs", active ? "text-primary" : "text-muted-foreground")}>{tab.label}</span>
+              <span
+                className={cn(
+                  "text-lg font-semibold tabular-nums",
+                  tab.countKey === "pending" && count ? "text-amber-600 dark:text-amber-400" : undefined
+                )}
+              >
+                {count === undefined ? "—" : formatInt(count)}
+              </span>
+            </button>
+          );
+        })}
       </div>
 
-      {listQuery.isLoading ? (
-        <div className="space-y-2">
-          {[0, 1, 2].map((index) => (
-            <Skeleton key={index} className="h-10 w-full" />
-          ))}
-        </div>
-      ) : items.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-xs text-muted-foreground">
-          {filtered ? "暂无匹配记录" : "暂无兑换记录"}
-        </p>
-      ) : (
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>商品</TableHead>
-                <TableHead>账号</TableHead>
-                <TableHead className="text-right">积分</TableHead>
-                <TableHead>实际发放</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="text-right">时间</TableHead>
-                <TableHead className="w-0" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((item) => (
-                <TableRow key={item.id}>
-                  <TableCell className="max-w-56">
-                    <p className="truncate text-xs font-medium">{item.itemTitle}</p>
-                    <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">{item.redemptionNo}</p>
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    <Link href={userHref(item.userId)} className="font-medium hover:underline">
-                      {item.account || `#${item.userId}`}
-                    </Link>
-                    {item.nickname ? <p className="mt-0.5 text-[11px] text-muted-foreground">{item.nickname}</p> : null}
-                  </TableCell>
-                  <TableCell className="text-right text-xs tabular-nums">{formatPoints(item.cost)}</TableCell>
-                  <TableCell className="max-w-72">
-                    <div className="flex flex-wrap gap-1">
-                      {item.results.map((result, index) => (
-                        <Badge
-                          key={`${result.type}-${index}`}
-                          variant={result.pending ? "warning" : "outline"}
-                          size="sm"
-                          className="font-normal"
-                          title={result.transactionNo ? `流水 ${result.transactionNo}` : undefined}
-                        >
-                          {result.detail || result.label}
-                        </Badge>
-                      ))}
-                    </div>
-                    {item.note ? <p className="mt-1 text-[11px] text-muted-foreground">{item.note}</p> : null}
-                  </TableCell>
-                  <TableCell>
-                    <RedemptionStatusBadge status={item.status} />
-                    {item.handledBy ? <p className="mt-0.5 text-[11px] text-muted-foreground">{item.handledBy}</p> : null}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-right text-xs text-muted-foreground">
-                    {formatStoreDate(item.createdAt)}
-                    {item.clientIp ? <p className="mt-0.5 font-mono text-[11px]">{item.clientIp}</p> : null}
-                  </TableCell>
-                  <TableCell>
-                    {item.status === "pending" ? (
-                      <div className="flex justify-end gap-1">
-                        <Button size="sm" variant="outline" className="h-7" onClick={() => openHandle(item, "fulfill")}>
-                          <PackageCheck className="size-3.5" /> 发放
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-7" onClick={() => openHandle(item, "cancel")}>
-                          <Ban className="size-3.5" /> 取消
-                        </Button>
-                      </div>
-                    ) : null}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
-
-      <AdPolicyPager total={total} page={page} totalPages={totalPages} onPage={setPage} />
-
-      <Dialog open={Boolean(handling)} onOpenChange={(open) => !open && setHandling(null)}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{handling?.action === "fulfill" ? "标记为已发放" : "取消兑换"}</DialogTitle>
-            <DialogDescription>
-              {handling?.action === "fulfill"
-                ? `${handling?.item.account || `#${handling?.item.userId}`}，${handling?.item.itemTitle}`
-                : `退回 ${formatPoints(handling?.item.cost)} 积分，库存加回。`}
-            </DialogDescription>
-          </DialogHeader>
-          <Textarea
-            value={note}
-            rows={3}
-            maxLength={500}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder={handling?.action === "fulfill" ? "兑换码、快递单号" : "取消原因"}
-          />
-          <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setHandling(null)}>
-              返回
-            </Button>
+      <Section
+        flush
+        title="兑换记录"
+        icon={ReceiptText}
+        tone="primary"
+        description="点开一行看完整字段；待发放的可勾选后批量处理，用户都会收到站内信"
+        actions={
+          <>
             <Button
-              size="sm"
-              variant={handling?.action === "cancel" ? "destructive" : "default"}
-              onClick={submitHandle}
-              disabled={handleMutation.isPending}
+              variant="ghost"
+              size="icon-sm"
+              aria-label="刷新"
+              onClick={() => {
+                listQuery.refetch();
+                countsQuery.refetch();
+              }}
             >
-              {handleMutation.isPending ? <Loader2 className="size-3.5 animate-spin" /> : null}
-              {handling?.action === "fulfill" ? "确认发放" : "确认取消"}
+              <RotateCw className={listQuery.isFetching ? "animate-spin" : undefined} />
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </SectionCard>
+            <ExportButton
+              filename={`积分商城兑换-${appKey}-${exportStamp()}`}
+              columns={csvColumns}
+              disabled={!token || !listQuery.data?.total}
+              fetchPage={(page, limit) => listPointsStoreRedemptions(token as string, appKey, { ...filters, status, page, limit })}
+            />
+          </>
+        }
+        toolbar={
+          selectedRows.length ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-sm font-medium tabular-nums">已选 {selectedRows.length} 笔待发放</span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                共 {formatPoints(selectedRows.reduce((sum, row) => sum + row.cost, 0))} 积分
+              </span>
+              <div className="mx-1 h-4 w-px bg-border" />
+              <Button size="sm" onClick={() => setRequest({ action: "fulfill", items: selectedRows })}>
+                <PackageCheck />
+                批量发放
+              </Button>
+              <Button size="sm" variant="outline" className="text-red-600 dark:text-red-400" onClick={() => setRequest({ action: "cancel", items: selectedRows })}>
+                <Ban />
+                批量取消
+              </Button>
+              <Button size="sm" variant="ghost" className="ml-auto text-muted-foreground" onClick={() => setSelectedIds(new Set())}>
+                <X />
+                取消选择
+              </Button>
+            </div>
+          ) : (
+            <FilterBar>
+              <SearchField
+                value={keyword}
+                onChange={(next) => {
+                  setKeyword(next);
+                  refilter();
+                }}
+                placeholder="搜索账号、昵称、单号、商品"
+              />
+              <FilterSelect
+                label="商品"
+                allLabel="全部商品"
+                value={itemId ? String(itemId) : ""}
+                onChange={(next) => {
+                  onItemIdChange(next ? Number(next) : undefined);
+                  refilter();
+                }}
+                options={(itemsQuery.data ?? []).map((item) => ({ value: String(item.id), label: item.title }))}
+                className="max-w-[240px]"
+              />
+              <TimeRangePicker
+                value={range}
+                onChange={(next) => {
+                  setRange(next);
+                  refilter();
+                }}
+              />
+              <ResetButton
+                visible={filtered}
+                onClick={() => {
+                  setKeyword("");
+                  setRange({ preset: "all" });
+                  onItemIdChange(undefined);
+                  refilter();
+                }}
+              />
+            </FilterBar>
+          )
+        }
+        footer={
+          listQuery.data?.total ? (
+            <Pager
+              page={paging.page}
+              limit={paging.limit}
+              total={listQuery.data.total}
+              onPage={(page) => {
+                paging.setPage(page);
+                setSelectedIds(new Set());
+              }}
+              onLimit={(limit) => {
+                paging.setLimit(limit);
+                setSelectedIds(new Set());
+              }}
+              summary={<span className="tabular-nums">本页消耗 {formatInt(pageCost)} 积分（不含已取消）</span>}
+            />
+          ) : null
+        }
+      >
+        <RecordTable
+          columns={columns}
+          rows={rows}
+          rowKey={(row) => row.id}
+          loading={listQuery.isLoading}
+          fetching={listQuery.isFetching}
+          error={listQuery.error}
+          onRetry={() => listQuery.refetch()}
+          onRowClick={setDetail}
+          rowClassName={(row) => (selectedIds.has(row.id) ? "bg-primary/5" : undefined)}
+          minWidth={820}
+          empty={
+            <StateBlock
+              icon={ReceiptText}
+              title={filtered || status ? "没有符合条件的兑换" : "暂无兑换记录"}
+              description={status === "pending" && !filtered ? "人工发放的商品兑换后会出现在这里" : undefined}
+            />
+          }
+        />
+      </Section>
+
+      <RecordSheet
+        open={Boolean(detail)}
+        onOpenChange={(open) => (!open ? setDetail(null) : undefined)}
+        title="兑换详情"
+        description={detail ? `${detail.redemptionNo}，${formatDateTime(detail.createdAt)}` : undefined}
+        hero={
+          detail ? (
+            <div className="flex flex-col gap-3 rounded-xl border p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex min-w-0 flex-col gap-1">
+                  <span className="truncate text-base font-semibold">{detail.itemTitle}</span>
+                  <RedemptionStatusBadge status={detail.status} />
+                </div>
+                <span className={cn("shrink-0 text-xl font-semibold tabular-nums", detail.status === "cancelled" && "text-muted-foreground line-through")}>
+                  {formatPoints(detail.cost)}
+                  <span className="ml-1 text-xs font-normal text-muted-foreground">积分</span>
+                </span>
+              </div>
+              <div className="flex items-center justify-between gap-3 border-t pt-3 text-sm">
+                <div className="flex min-w-0 flex-col">
+                  <span className="truncate font-medium">{detail.nickname || detail.account || `#${detail.userId}`}</span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {detail.account ? `${detail.account}，` : ""}ID {detail.userId}
+                  </span>
+                </div>
+                <Button asChild variant="outline" size="sm">
+                  <Link href={userHref(detail.userId)}>
+                    <ExternalLink />
+                    用户详情
+                  </Link>
+                </Button>
+              </div>
+            </div>
+          ) : null
+        }
+        fields={
+          detail
+            ? [
+                { label: "兑换单号", value: detail.redemptionNo, mono: true, copy: detail.redemptionNo },
+                { label: "商品 ID", value: detail.itemId ? String(detail.itemId) : "已删除" },
+                { label: "扣积分流水", value: detail.integralTransactionNo, mono: true, copy: detail.integralTransactionNo || null },
+                { label: "退积分流水", value: detail.refundTransactionNo, mono: true, copy: detail.refundTransactionNo || null },
+                { label: "处理备注", value: detail.note, wide: true },
+                { label: "处理人", value: detail.handledBy },
+                { label: "处理时间", value: detail.handledAt ? formatDateTime(detail.handledAt) : undefined },
+                { label: "请求 ID", value: detail.requestId, mono: true, copy: detail.requestId || null },
+                { label: "设备", value: detail.deviceId, mono: true, copy: detail.deviceId || null },
+                { label: "IP", value: detail.clientIp, mono: true, copy: detail.clientIp || null },
+                { label: "兑换时间", value: formatDateTime(detail.createdAt) },
+                { label: "更新时间", value: formatDateTime(detail.updatedAt) }
+              ]
+            : undefined
+        }
+        raw={detail}
+        actions={
+          detail?.status === "pending" ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setRequest({ action: "cancel", items: [detail] })}>
+                <Ban />
+                取消并退积分
+              </Button>
+              <Button size="sm" onClick={() => setRequest({ action: "fulfill", items: [detail] })}>
+                <PackageCheck />
+                发放
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        {detail ? <ResultList results={detail.results} title="实际发放" /> : null}
+      </RecordSheet>
+
+      <RedemptionHandleDialog
+        appKey={appKey}
+        request={request}
+        onClose={() => setRequest(null)}
+        onDone={({ updated, failedIds }) => {
+          const done = new Set(updated.map((row) => row.id));
+          setSelectedIds((current) => new Set([...current].filter((id) => failedIds.includes(id) && !done.has(id))));
+          if (detail) {
+            const fresh = updated.find((row) => row.id === detail.id);
+            if (fresh) setDetail(fresh);
+          }
+        }}
+      />
+    </div>
   );
 }

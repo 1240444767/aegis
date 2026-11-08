@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"context"
 	"net/http"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	authdomain "aegis/internal/domain/auth"
 	oauthdomain "aegis/internal/domain/oauth"
 	plugindomain "aegis/internal/domain/plugin"
+	"aegis/internal/domain/regip"
 	userdomain "aegis/internal/domain/user"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
@@ -257,15 +259,24 @@ func (s *AuthService) consumeOAuthLinkTicket(ctx context.Context, appID int64, t
 // 与密码、短信注册过同样的闸门（应用注册开关、平台治理、注册 IP 策略）。
 // 账号名取「渠道_第三方ID」；撞名（例如曾被管理员强制解绑后再次登录）时加随机后缀。
 // 用户与档案在同一个事务里落库，邀请码撞码换码重试。
-func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile authdomain.ProviderProfile, deviceID, device, ip, userAgent string) (*userdomain.User, error) {
+func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile authdomain.ProviderProfile, deviceID, device, ip, userAgent string) (user *userdomain.User, err error) {
 	if s.app != nil {
-		app, err := s.app.EnsureRegisterAllowed(ctx, appID)
-		if err != nil {
-			return nil, err
+		app, appErr := s.app.EnsureRegisterAllowed(ctx, appID)
+		if appErr != nil {
+			return nil, appErr
 		}
-		if err := s.validateRegisterPolicy(ctx, app, ip); err != nil {
-			return nil, err
+		ticket, admitErr := s.admitRegister(ctx, app, regip.MethodOAuth, ip, pgrepo.LegacyOAuthAccount(profile.Provider, profile.ProviderUserID), deviceID, userAgent)
+		if admitErr != nil {
+			return nil, admitErr
 		}
+		// 建号成功确认占位，任何一条失败路径都撤销
+		defer func() {
+			if err == nil && user != nil {
+				ticket.Commit(user.ID, user.Account)
+			} else {
+				ticket.Release()
+			}
+		}()
 	}
 	now := timeutil.NowUTC()
 	userProfile := userdomain.Profile{
@@ -281,8 +292,13 @@ func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile 
 		},
 	}
 	base := pgrepo.LegacyOAuthAccount(profile.Provider, profile.ProviderUserID)
+	if err := s.checkReregister(ctx, appID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: base},
+		RegisterIdentifier{Kind: accountdeletion.TombstoneEmail, Value: profile.Email},
+	); err != nil {
+		return nil, err
+	}
 	account := base
-	var user *userdomain.User
 	for attempt := 0; attempt < inviteCodeMaxAttempts && user == nil; attempt++ {
 		inviteCode, err := s.personalInviteCode(ctx, appID)
 		if err != nil {
@@ -310,6 +326,7 @@ func (s *AuthService) createOAuthUser(ctx context.Context, appID int64, profile 
 	}
 
 	userID := user.ID
+	s.trackAccountSetup(ctx, appID, userID, appdomain.AccountSetupSourceOAuth, profile.Provider)
 	s.runDetached("register.oauth.audit", 3*time.Second, func(actx context.Context) {
 		_ = s.pg.InsertLoginAudit(actx, appID, userID, "register", profile.Provider, "",
 			ip, deviceID, userAgent, "success", map[string]any{

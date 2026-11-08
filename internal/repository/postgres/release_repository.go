@@ -22,7 +22,8 @@ v.visibility, COALESCE(v.targeting, '{}'::jsonb), v.rollout_pct, v.channel_id,
 COALESCE(c.code, ''), COALESCE(c.name, ''), COALESCE(c.level, ''), COALESCE(c.color, ''),
 v.publish_at, COALESCE(v.published_at, CASE WHEN v.status = 'published' THEN v.created_at END),
 v.download_count, v.created_by, v.created_at, v.updated_at,
-COALESCE(v.download_url, ''), v.file_size, COALESCE(v.file_hash, '')`
+COALESCE(v.download_url, ''), v.file_size, COALESCE(v.file_hash, ''),
+v.notes_format, v.notes_markdown`
 
 const releaseFrom = ` FROM app_versions v LEFT JOIN app_version_channels c ON c.id = v.channel_id`
 
@@ -39,7 +40,8 @@ func scanRelease(row interface{ Scan(dest ...any) error }) (*appdomain.Release, 
 		&channelCode, &channelName, &channelLevel, &channelColor,
 		&item.PublishAt, &item.PublishedAt,
 		&item.DownloadCount, &item.CreatedBy, &item.CreatedAt, &item.UpdatedAt,
-		&legacyURL, &legacySize, &legacyHash); err != nil {
+		&legacyURL, &legacySize, &legacyHash,
+		&item.NotesFormat, &item.NotesMarkdown); err != nil {
 		return nil, err
 	}
 	_ = json.Unmarshal(targetingRaw, &item.Targeting)
@@ -195,22 +197,27 @@ func (r *Repository) SaveRelease(ctx context.Context, item appdomain.Release, as
 	if id == 0 {
 		err = tx.QueryRow(ctx, `INSERT INTO app_versions
 (appid, channel_id, version, version_code, title, release_notes, notes_summary, description, platform, min_os_version,
- update_type, force_update, min_supported_code, status, visibility, targeting, rollout_pct, publish_at, published_at, created_by, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7::text, $7::text, $8, $9, $10::text, $10::text = 'force', $11, $12, $13, $14, $15, $16, $17, $18, NOW(), NOW())
+ update_type, force_update, min_supported_code, status, visibility, targeting, rollout_pct, publish_at, published_at, created_by,
+ notes_format, notes_markdown, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7::text, $7::text, $8, $9, $10::text, $10::text = 'force', $11, $12, $13, $14, $15, $16, $17, $18,
+ $19, $20, NOW(), NOW())
 RETURNING id`,
 			item.AppID, channelID, item.Version, item.VersionCode, item.Title, item.Notes, item.Summary, item.Platform, item.MinOSVersion,
 			item.UpdateType, item.MinSupportedCode, item.Status, item.Visibility, targeting, item.RolloutPct, item.PublishAt, item.PublishedAt, item.CreatedBy,
+			item.NotesFormat, item.NotesMarkdown,
 		).Scan(&id)
 	} else {
 		var tag pgconnCommandTag
 		tag, err = tx.Exec(ctx, `UPDATE app_versions SET
 channel_id = $3, version = $4, version_code = $5, title = $6, release_notes = $7, notes_summary = $8::text, description = $8::text,
 platform = $9, min_os_version = $10, update_type = $11::text, force_update = $11::text = 'force', min_supported_code = $12,
-status = $13, visibility = $14, targeting = $15, rollout_pct = $16, publish_at = $17, published_at = $18, updated_at = NOW()
+status = $13, visibility = $14, targeting = $15, rollout_pct = $16, publish_at = $17, published_at = $18,
+notes_format = $19, notes_markdown = $20, updated_at = NOW()
 WHERE appid = $1 AND id = $2`,
 			item.AppID, id, channelID, item.Version, item.VersionCode, item.Title, item.Notes, item.Summary,
 			item.Platform, item.MinOSVersion, item.UpdateType, item.MinSupportedCode,
-			item.Status, item.Visibility, targeting, item.RolloutPct, item.PublishAt, item.PublishedAt)
+			item.Status, item.Visibility, targeting, item.RolloutPct, item.PublishAt, item.PublishedAt,
+			item.NotesFormat, item.NotesMarkdown)
 		if err == nil && tag.RowsAffected() == 0 {
 			return 0, pgx.ErrNoRows
 		}

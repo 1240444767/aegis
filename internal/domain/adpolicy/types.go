@@ -276,8 +276,10 @@ type ClientPolicy struct {
 	Vip     bool     `json:"vip"`
 	// AdFree 会员身份免广告。看广告赠送的会员按场景设置可以不免（见 vip.Entitlement.AdFree）。
 	AdFree bool `json:"adFree"`
-	// Exempt 会员免除：不受同意要求约束，也不展示开屏广告（adFree 且策略开了会员免除）。
+	// Exempt 会员免除：不受同意要求约束，也不展示开屏广告（adFree 且策略开了会员免除，或免广告时长有效期内）。
 	Exempt bool `json:"exempt"`
+	// AdFreeUntil 免广告时长（抽奖奖品）的到期时间；没有时为空
+	AdFreeUntil *time.Time `json:"adFreeUntil,omitempty"`
 	// DecisionRequired 需要（重新）选择：没选过，或选择所依据的条款版本已过期。
 	DecisionRequired bool `json:"decisionRequired"`
 	// Mode 当前账号的服务模式。未登录时总是按「还没选择」回答，客户端应以本机的选择为准。
@@ -296,6 +298,7 @@ type UserProfile struct {
 	Vip              bool          `json:"vip"`
 	AdFree           bool          `json:"adFree"`
 	Exempt           bool          `json:"exempt"`
+	AdFreeUntil      *time.Time    `json:"adFreeUntil,omitempty"`
 	DecisionRequired bool          `json:"decisionRequired"`
 	Mode             string        `json:"mode"`
 	Logs             []ConsentLog  `json:"logs"`

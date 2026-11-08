@@ -27,6 +27,42 @@ export type RewardedAdScene = {
    * features 只对「会员天数」生效（「会员套餐」跟随套餐）；adFree 不填按免广告。
    */
   membership?: RewardedAdMembership;
+  /**
+   * 永久会员（或已永久拥有某功能的人）看这个场景时，已拥有的权益怎么办。
+   * 不传按「按价值折算」：会员每天 10、功能时长每小时 10，折成积分。
+   */
+  lifetime?: RewardedAdLifetime;
+};
+
+export type RewardedAdLifetimePolicy = "convert" | "replace" | "hide" | "grant";
+
+export type RewardedAdLifetime = {
+  policy: RewardedAdLifetimePolicy;
+  /** convert / hide：折成哪一档（integral / ai_credit / experience / lottery_draws） */
+  target?: string;
+  /** 会员每 1 天折多少 */
+  perVipDay?: number;
+  /** 功能时长每 60 分钟折多少，不足一小时按比例向上取整 */
+  perFeatureHour?: number;
+  /** replace：改发的权益 */
+  rewards?: CardKeyReward[];
+};
+
+export type RewardedAdLifetimePolicySpec = {
+  key: RewardedAdLifetimePolicy;
+  label: string;
+  hint: string;
+};
+
+/** 一次观看里「场景配的是 A，发的是 B」 */
+export type RewardedAdConversion = {
+  policy: RewardedAdLifetimePolicy;
+  reason: "lifetime" | "feature";
+  owned: CardKeyReward[];
+  ownedLabel: string;
+  rewards: CardKeyReward[];
+  label: string;
+  message: string;
 };
 
 export type RewardedAdMembership = {
@@ -51,6 +87,8 @@ export type RewardedAdConfig = {
   catalog: CardKeyRewardSpec[];
   verifyModes: RewardedAdVerifyMode[];
   providers: string[];
+  lifetimePolicies?: RewardedAdLifetimePolicySpec[];
+  convertTargets?: string[];
 };
 
 export type SaveRewardedAdConfigPayload = {
@@ -87,6 +125,8 @@ export type RewardedAdView = {
   deviceId?: string;
   clientIp?: string;
   results: CardKeyRewardResult[];
+  /** 已拥有的权益折算或改发了什么，照常发放时为空 */
+  conversion?: RewardedAdConversion;
   grantedAt?: string;
   operator?: string;
   createdAt: string;
@@ -118,6 +158,7 @@ export type RewardedAdStatsDay = {
   granted: number;
   rejected: number;
   users: number;
+  converted?: number;
 };
 
 export type RewardedAdStats = {
@@ -129,9 +170,11 @@ export type RewardedAdStats = {
     todayUsers: number;
     pending: number;
     totalGranted: number;
+    totalConverted?: number;
+    convertedIntegral?: number;
   };
   trend: RewardedAdStatsDay[];
-  scenes: Array<{ scene: string; name?: string; views: number; granted: number }>;
+  scenes: Array<{ scene: string; name?: string; views: number; granted: number; converted?: number }>;
 };
 
 const base = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}/rewarded-ads`;

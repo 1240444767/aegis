@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+
+	vipdomain "aegis/internal/domain/vip"
 )
 
 // 商品状态。
@@ -24,11 +26,21 @@ const (
 	PeriodMonth = "month"
 )
 
+// 库存补货周期：每到一个新周期，剩余库存回到 restockQuantity。周期边界与限兑周期同一口径。
+const (
+	RestockNone  = "none"
+	RestockDay   = PeriodDay
+	RestockWeek  = PeriodWeek
+	RestockMonth = PeriodMonth
+)
+
 // 兑换对象。
 const (
 	AudienceAll    = "all"
 	AudienceVip    = "vip"     // 仅会员
 	AudienceNonVip = "non_vip" // 仅非会员
+	// AudienceLifetime 仅永久会员：永久会员已拥有全部会员与功能权益，给他们专属的兑换项
+	AudienceLifetime = "lifetime"
 )
 
 // 兑换记录状态。
@@ -59,6 +71,8 @@ const (
 	MaxStock            = 100_000_000
 	MaxLimitCount       = 10_000
 	MaxMinLevel         = 1000
+	// MinutesPerDay 每日开放时段的分钟刻度上限（关闭时刻可以写 24:00）
+	MinutesPerDay = 24 * 60
 )
 
 // Settings 应用的积分商城开关。
@@ -94,6 +108,8 @@ type RewardResult struct {
 	ExpireAt *time.Time `json:"expireAt,omitempty"`
 	// Pending 人工发放、尚未处理
 	Pending bool `json:"pending,omitempty"`
+	// Conversion 已拥有、按应用折算策略折成了积分（见 vip.Conversion）
+	Conversion *vipdomain.ConversionSummary `json:"conversion,omitempty"`
 }
 
 // Item 一件商品。
@@ -110,13 +126,29 @@ type Item struct {
 	// OriginalCost 划线价（高于 cost 才有意义）
 	OriginalCost *int64   `json:"originalCost,omitempty"`
 	Rewards      []Reward `json:"rewards"`
-	// Stock 剩余库存，nil 为不限
+	// Stock 剩余库存，nil 为不限。开了补货周期时是「本周期还剩多少」，跨周期后读到的值要经
+	// CurrentStock 换算（库里的数要等到新周期第一笔兑换才回写）
 	Stock     *int64 `json:"stock,omitempty"`
 	SoldCount int64  `json:"soldCount"`
+	// RestockPeriod 补货周期（none / day / week / month）；RestockQuantity 每个周期补到多少
+	RestockPeriod   string `json:"restockPeriod"`
+	RestockQuantity *int64 `json:"restockQuantity,omitempty"`
+	// StockWindowStart 库里的 Stock 属于哪个补货周期（该周期的起点）
+	StockWindowStart *time.Time `json:"stockWindowStart,omitempty"`
+	// GlobalLimitPeriod / GlobalLimitCount 全站名额：所有人合计每个周期最多兑多少份，0 为不限。
+	// 与库存的区别：名额按兑换记录计数，取消的那笔自动让出名额；库存是运营放进去的货
+	GlobalLimitPeriod string `json:"globalLimitPeriod"`
+	GlobalLimitCount  int    `json:"globalLimitCount"`
 	// LimitPeriod / LimitCount 每人限兑：limitCount 为 0 时不限
 	LimitPeriod string `json:"limitPeriod"`
 	LimitCount  int    `json:"limitCount"`
-	Audience    string `json:"audience"`
+	// UserTotalLimit 每人累计上限（与按周期限兑叠加，如「每日 1 次、累计 10 次」），0 为不限
+	UserTotalLimit int `json:"userTotalLimit"`
+	// DailyOpenMinute / DailyCloseMinute 每日开放时段（应用默认时区，自零点起的分钟数），
+	// 都为空时全天开放；开放晚于关闭表示跨零点（22:00–02:00）
+	DailyOpenMinute  *int   `json:"dailyOpenMinute,omitempty"`
+	DailyCloseMinute *int   `json:"dailyCloseMinute,omitempty"`
+	Audience         string `json:"audience"`
 	// MinLevel 等级门槛，0 为不限
 	MinLevel  int        `json:"minLevel"`
 	StartsAt  *time.Time `json:"startsAt,omitempty"`
@@ -140,15 +172,24 @@ type ItemInput struct {
 	OriginalCost *int64
 	Rewards      []Reward
 	Stock        *int64
-	LimitPeriod  string
-	LimitCount   int
-	Audience     string
-	MinLevel     int
-	StartsAt     *time.Time
-	EndsAt       *time.Time
-	Status       string
-	SortOrder    int
-	Operator     string
+	// RestockPeriod / RestockQuantity 见 Item；StockWindowStart 由服务层按保存时刻算好
+	RestockPeriod     string
+	RestockQuantity   *int64
+	StockWindowStart  *time.Time
+	GlobalLimitPeriod string
+	GlobalLimitCount  int
+	LimitPeriod       string
+	LimitCount        int
+	UserTotalLimit    int
+	DailyOpenMinute   *int
+	DailyCloseMinute  *int
+	Audience          string
+	MinLevel          int
+	StartsAt          *time.Time
+	EndsAt            *time.Time
+	Status            string
+	SortOrder         int
+	Operator          string
 }
 
 // AdminItem 管理端列表的一行：商品 + 兑换汇总。
@@ -162,6 +203,15 @@ type AdminItem struct {
 	PointsSpent int64 `json:"pointsSpent"`
 	// Pending 待人工发放的笔数
 	Pending int64 `json:"pending"`
+	// CurrentStock 此刻的剩余库存（已按补货周期换算），不限时为空
+	CurrentStock *int64 `json:"currentStock,omitempty"`
+	// NextRestockAt 下一次补货的时刻（开了补货周期才有）
+	NextRestockAt *time.Time `json:"nextRestockAt,omitempty"`
+	// GlobalUsed 本名额周期已用的份数；GlobalResetsAt 名额下次清零的时刻（累计名额为空）
+	GlobalUsed     int64      `json:"globalUsed"`
+	GlobalResetsAt *time.Time `json:"globalResetsAt,omitempty"`
+	// OpenNow 此刻是否在每日开放时段内
+	OpenNow bool `json:"openNow"`
 }
 
 // Redemption 一笔兑换。
@@ -202,8 +252,9 @@ type RedeemInput struct {
 	DeviceID  string
 	ClientIP  string
 	UserAgent string
-	// Windows 限兑周期的起点（服务层按应用默认时区算好）
-	Windows Windows
+	// Windows 限兑周期的起点（服务层按应用默认时区算好）；Location 是同一个时区，判每日开放时段用
+	Windows  Windows
+	Location *time.Location
 }
 
 // RedeemResult 兑换结果。
@@ -230,8 +281,11 @@ type RedemptionQuery struct {
 	ItemID  int64
 	Status  string
 	Keyword string
-	Page    int
-	Limit   int
+	// From / To 下单时间区间，左闭右开；为空不限
+	From  *time.Time
+	To    *time.Time
+	Page  int
+	Limit int
 }
 
 // Page 分页结果。
@@ -243,26 +297,41 @@ type Page[T any] struct {
 	TotalPages int   `json:"totalPages"`
 }
 
-// Usage 某人对某件商品的已兑次数（不含已取消），按周期分别计数。
-type Usage struct {
+// Counts 按周期分别计数的兑换次数（不含已取消）。
+type Counts struct {
 	Total int64 `json:"total"`
 	Day   int64 `json:"day"`
 	Week  int64 `json:"week"`
 	Month int64 `json:"month"`
 }
 
-// In 指定周期内的已兑次数。
-func (u Usage) In(period string) int64 {
+// In 指定周期内的次数。
+func (c Counts) In(period string) int64 {
 	switch period {
 	case PeriodDay:
-		return u.Day
+		return c.Day
 	case PeriodWeek:
-		return u.Week
+		return c.Week
 	case PeriodMonth:
-		return u.Month
+		return c.Month
 	default:
-		return u.Total
+		return c.Total
 	}
+}
+
+// Usage 判定一件商品所需的计数：这个人兑了几次（Total…Month），以及所有人合计兑了几次（Global）。
+type Usage struct {
+	Total int64 `json:"total"`
+	Day   int64 `json:"day"`
+	Week  int64 `json:"week"`
+	Month int64 `json:"month"`
+	// Global 全站合计，判全站名额用
+	Global Counts `json:"global"`
+}
+
+// In 这个人在指定周期内的已兑次数。
+func (u Usage) In(period string) int64 {
+	return Counts{Total: u.Total, Day: u.Day, Week: u.Week, Month: u.Month}.In(period)
 }
 
 // Windows 各限兑周期的起点。
@@ -270,6 +339,35 @@ type Windows struct {
 	Day   time.Time
 	Week  time.Time
 	Month time.Time
+}
+
+// Start 周期的起点；累计（total）与未知周期返回零值。
+func (w Windows) Start(period string) time.Time {
+	switch period {
+	case PeriodDay:
+		return w.Day
+	case PeriodWeek:
+		return w.Week
+	case PeriodMonth:
+		return w.Month
+	}
+	return time.Time{}
+}
+
+// Next 周期的下一个起点（即本周期何时结束、计数何时清零）；累计周期返回 nil。
+func (w Windows) Next(period string) *time.Time {
+	var next time.Time
+	switch period {
+	case PeriodDay:
+		next = w.Day.AddDate(0, 0, 1)
+	case PeriodWeek:
+		next = w.Week.AddDate(0, 0, 7)
+	case PeriodMonth:
+		next = w.Month.AddDate(0, 1, 0)
+	default:
+		return nil
+	}
+	return &next
 }
 
 // WindowsAt 按 loc 算出 now 所在的自然日、ISO 周（周一起）、自然月的起点。
@@ -295,11 +393,10 @@ type UserFacts struct {
 	Integral int64
 	Level    int
 	IsVip    bool
-	// IsLifetime 永久会员；LifetimeFeatures 他的永久开通里有哪些功能（判「已拥有」）
-	IsLifetime       bool
-	LifetimeFeatures []string
-	// PermanentUnlocks 永久解锁了哪些功能
-	PermanentUnlocks []string
+	// IsLifetime 永久会员
+	IsLifetime bool
+	// Holdings 已经永久拥有什么（判「已拥有」的统一判据 vip.Holdings）
+	Holdings vipdomain.Holdings
 	// Plans 商品引用到的会员套餐（判永久套餐是否已包含），按 ID 索引
 	Plans map[int64]PlanRef
 	// Features 功能目录（含停用的），按标识索引：判功能是否还在
@@ -325,15 +422,20 @@ type FeatureRef struct {
 
 // 不能兑换的原因。客户端按 reason 分支，不要匹配 message。
 const (
-	ReasonOK                 = "ok"
-	ReasonInactive           = "inactive"
-	ReasonNotStarted         = "not_started"
-	ReasonEnded              = "ended"
+	ReasonOK         = "ok"
+	ReasonInactive   = "inactive"
+	ReasonNotStarted = "not_started"
+	ReasonEnded      = "ended"
+	// ReasonClosedNow 不在每日开放时段内
+	ReasonClosedNow = "closed_now"
+	// ReasonQuotaReached 全站名额已满（所有人合计）
+	ReasonQuotaReached       = "quota_reached"
 	ReasonSoldOut            = "sold_out"
 	ReasonLimitReached       = "limit_reached"
 	ReasonLevelRequired      = "level_required"
 	ReasonVipOnly            = "vip_only"
 	ReasonNonVipOnly         = "non_vip_only"
+	ReasonLifetimeOnly       = "lifetime_only"
 	ReasonOwned              = "owned"
 	ReasonInsufficientPoints = "insufficient_points"
 	ReasonRewardUnavailable  = "reward_unavailable"
@@ -359,13 +461,33 @@ type ClientItem struct {
 	Rewards      []ClientReward `json:"rewards"`
 	// Kind 主权益的类型（第一项），客户端据此选图标
 	Kind string `json:"kind"`
-	// Stock 剩余库存，不限时为空
-	Stock       *int64 `json:"stock,omitempty"`
-	SoldCount   int64  `json:"soldCount"`
-	LimitPeriod string `json:"limitPeriod"`
-	LimitCount  int    `json:"limitCount"`
-	// Used 本周期已兑次数（limitCount 为 0 时是累计次数）
-	Used         int64        `json:"used"`
+	// Stock 此刻的剩余库存（已按补货周期换算），不限时为空
+	Stock     *int64 `json:"stock,omitempty"`
+	SoldCount int64  `json:"soldCount"`
+	// RestockPeriod 补货周期（none / day / week / month）；RestockQuantity 每次补到多少；
+	// NextRestockAt 下一次补货的时刻
+	RestockPeriod   string     `json:"restockPeriod"`
+	RestockQuantity *int64     `json:"restockQuantity,omitempty"`
+	NextRestockAt   *time.Time `json:"nextRestockAt,omitempty"`
+	// GlobalLimitPeriod / GlobalLimitCount 全站名额；GlobalUsed 本周期已被兑走的份数；
+	// GlobalResetsAt 名额下次清零的时刻（累计名额为空）
+	GlobalLimitPeriod string     `json:"globalLimitPeriod"`
+	GlobalLimitCount  int        `json:"globalLimitCount"`
+	GlobalUsed        int64      `json:"globalUsed"`
+	GlobalResetsAt    *time.Time `json:"globalResetsAt,omitempty"`
+	LimitPeriod       string     `json:"limitPeriod"`
+	LimitCount        int        `json:"limitCount"`
+	// Used 本周期已兑次数（limitCount 为 0 时是累计次数）；LimitResetsAt 次数下次清零的时刻
+	Used          int64      `json:"used"`
+	LimitResetsAt *time.Time `json:"limitResetsAt,omitempty"`
+	// UserTotalLimit 每人累计上限，0 为不限；UsedTotal 这个人累计已兑次数
+	UserTotalLimit int   `json:"userTotalLimit"`
+	UsedTotal      int64 `json:"usedTotal"`
+	// OpenHours 每日开放时段（如「10:00–22:00」），全天开放为空；OpenNow 此刻是否开放；
+	// NextOpenAt 不在时段内时下一次开放的时刻
+	OpenHours    string       `json:"openHours,omitempty"`
+	OpenNow      bool         `json:"openNow"`
+	NextOpenAt   *time.Time   `json:"nextOpenAt,omitempty"`
 	Audience     string       `json:"audience"`
 	MinLevel     int          `json:"minLevel"`
 	StartsAt     *time.Time   `json:"startsAt,omitempty"`
@@ -396,6 +518,8 @@ type ClientStore struct {
 	Categories []string     `json:"categories"`
 	Items      []ClientItem `json:"items"`
 	ServerTime time.Time    `json:"serverTime"`
+	// Timezone 周期边界与开放时段所用的时区（IANA 名）
+	Timezone string `json:"timezone"`
 }
 
 // Stats 管理端概览。
@@ -413,6 +537,8 @@ type StatsSummary struct {
 	Pending     int64 `json:"pending"`
 	ActiveItems int64 `json:"activeItems"`
 	Today       int64 `json:"today"`
+	// Cancelled 窗口内被取消（已退积分）的笔数，不计入上面的兑换汇总
+	Cancelled int64 `json:"cancelled"`
 }
 
 // StatsDay 按天的兑换。

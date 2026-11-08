@@ -39,6 +39,18 @@ data class AegisDevice @JvmOverloads constructor(
     val osVersion: String? = null,
     /** 客户端应用版本 → `X-App-Version` */
     val appVersion: String? = null,
+    /** 应用包名 → `X-App-Package`。带上它，服务端的版本管控闸门才会对这个请求生效 */
+    val packageName: String? = null,
+    /** 应用版本号（Android `versionCode`）→ `X-App-Version-Code` */
+    val versionCode: Long? = null,
+    /** 签名证书 SHA-256（64 位十六进制）→ `X-App-Cert` */
+    val certSha256: String? = null,
+    /**
+     * 本机以前用过的设备码 → `X-Device-Id-Previous`。客户端换了设备码的生成方式时带上，
+     * 服务端据此把旧码下的刷新令牌绑定、登录设备检查、设备登录数、卡密绑定迁到 [id]；
+     * 不带的话旧会话刷新会因设备绑定不符被拒（40104）。与 [id] 相同时不发。
+     */
+    val previousId: String? = null,
 ) {
 
     /** 要附加的请求头。空值不发；非 ASCII 的值按 UTF-8 百分号编码（HTTP 头只能放 ASCII）。 */
@@ -52,6 +64,10 @@ data class AegisDevice @JvmOverloads constructor(
         HEADER_OS to os,
         HEADER_OS_VERSION to osVersion,
         HEADER_APP_VERSION to appVersion,
+        HEADER_APP_PACKAGE to packageName,
+        HEADER_APP_VERSION_CODE to versionCode?.takeIf { it > 0 }?.toString(),
+        HEADER_APP_CERT to certSha256?.let { AegisClientControlApi.normalizeCert(it) },
+        HEADER_PREVIOUS_ID to previousId?.takeIf { it.trim() != id?.trim() },
     ).mapNotNull { (name, value) ->
         value?.trim()?.takeIf { it.isNotEmpty() }?.let { name to headerSafe(it) }
     }.toMap()
@@ -66,6 +82,10 @@ data class AegisDevice @JvmOverloads constructor(
         const val HEADER_OS = "X-Device-OS"
         const val HEADER_OS_VERSION = "X-Device-OS-Version"
         const val HEADER_APP_VERSION = "X-App-Version"
+        const val HEADER_APP_PACKAGE = "X-App-Package"
+        const val HEADER_APP_VERSION_CODE = "X-App-Version-Code"
+        const val HEADER_APP_CERT = "X-App-Cert"
+        const val HEADER_PREVIOUS_ID = "X-Device-Id-Previous"
 
         /**
          * 从 `android.os.Build` 读出本机信息。
@@ -102,6 +122,19 @@ data class AegisDevice @JvmOverloads constructor(
         internal fun headerSafe(value: String): String =
             if (value.all { it in ' '..'~' } && !value.contains('%')) value
             else URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+    }
+}
+
+/**
+ * 声明本客户端能让用户选择下线哪台设备（登录设备数已满时），见 [AegisClient.Builder.deviceLimitChoice]。
+ */
+internal object AegisDeviceLimitChoiceInterceptor : Interceptor {
+    const val HEADER = "X-Device-Limit-Challenge"
+
+    override fun intercept(chain: Interceptor.Chain): Response {
+        val request = chain.request()
+        if (request.header(HEADER) != null) return chain.proceed(request)
+        return chain.proceed(request.newBuilder().header(HEADER, "1").build())
     }
 }
 

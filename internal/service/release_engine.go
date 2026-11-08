@@ -178,8 +178,9 @@ func checkReleases(candidates []appdomain.Release, viewer releaseViewer, now tim
 		if i < releaseChangelogLimit {
 			result.Changelog = append(result.Changelog, appdomain.ReleaseChangelogEntry{
 				Version: rel.Version, VersionCode: rel.VersionCode, Title: rel.Title,
-				Summary: rel.Summary, Notes: rel.Notes, UpdateType: normalizeUpdateType(rel.UpdateType),
-				PublishedAt: rel.PublishedAt,
+				Summary: rel.Summary, Notes: rel.Notes,
+				NotesFormat: releaseNotesFormatOf(rel.NotesFormat), NotesMarkdown: releaseNotesMarkdownOf(rel),
+				UpdateType: normalizeUpdateType(rel.UpdateType), PublishedAt: rel.PublishedAt,
 			})
 		}
 		if appdomain.ReleaseUpdateRank(rel.UpdateType) > appdomain.ReleaseUpdateRank(result.UpdateType) {
@@ -242,7 +243,8 @@ func publicRelease(rel *appdomain.Release) appdomain.PublicRelease {
 	}
 	return appdomain.PublicRelease{
 		ID: rel.ID, Version: rel.Version, VersionCode: rel.VersionCode, Title: rel.Title,
-		Notes: rel.Notes, Summary: rel.Summary, Platform: rel.Platform, MinOSVersion: rel.MinOSVersion,
+		Notes: rel.Notes, NotesFormat: releaseNotesFormatOf(rel.NotesFormat), NotesMarkdown: releaseNotesMarkdownOf(rel),
+		Summary: rel.Summary, Platform: rel.Platform, MinOSVersion: rel.MinOSVersion,
 		UpdateType: normalizeUpdateType(rel.UpdateType), Channel: rel.Channel, Assets: assets, PublishedAt: rel.PublishedAt,
 	}
 }

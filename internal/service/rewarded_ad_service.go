@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -18,6 +19,7 @@ import (
 	"aegis/internal/config"
 	cardkeydomain "aegis/internal/domain/cardkey"
 	rewardedad "aegis/internal/domain/rewardedad"
+	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
@@ -51,6 +53,9 @@ const (
 // 密钥安全：平台的 Security Key 以 AES-GCM 密文落库（派生自 SECURITY_MASTER_KEY），
 // 管理端只看得到「配没配」与末尾提示，任何出网响应都不回传明文。
 type RewardedAdService struct {
+	riskHook
+	// publicIDs 广告用户标识里放对外 ID（SetPublicIDs）
+	publicIDs  *UserPublicIDs
 	log        *zap.Logger
 	pg         *pgrepo.Repository
 	secretKey  []byte
@@ -66,6 +71,7 @@ func NewRewardedAdService(log *zap.Logger, pg *pgrepo.Repository, cfg config.Con
 	secret := sha256.Sum256([]byte("aegis.rewarded-ad.master\x00" + cfg.Security.MasterKey))
 	user := sha256.Sum256([]byte("aegis.rewarded-ad.user\x00" + cfg.Security.MasterKey))
 	return &RewardedAdService{
+		publicIDs:  newUserPublicIDsFor(pg),
 		log:        log,
 		pg:         pg,
 		secretKey:  secret[:],
@@ -76,7 +82,7 @@ func NewRewardedAdService(log *zap.Logger, pg *pgrepo.Repository, cfg config.Con
 
 // ── 管理端：配置 ──
 
-// AdminConfig 读取配置。没配过时返回一份默认值（未启用、灰鲸、双方确认）。
+// AdminConfig 读取配置。没配过时返回一份默认值（未启用、Apex、双方确认）。
 func (s *RewardedAdService) AdminConfig(ctx context.Context, appID int64, appKey string) (*rewardedad.AdminConfig, error) {
 	cfg, err := s.pg.GetRewardedAdConfig(ctx, appID)
 	if err != nil {
@@ -102,9 +108,9 @@ func (s *RewardedAdService) SaveConfig(ctx context.Context, input rewardedad.Sav
 		UpdatedBy:     input.Operator,
 	}
 	if next.Provider == "" {
-		next.Provider = rewardedad.ProviderHuijing
+		next.Provider = rewardedad.ProviderApex
 	}
-	if next.Provider != rewardedad.ProviderHuijing {
+	if next.Provider != rewardedad.ProviderApex {
 		return nil, apperrors.New(40000, http.StatusBadRequest, "暂不支持该广告平台")
 	}
 	if !rewardedad.ValidProviderAppID(next.ProviderAppID) {
@@ -262,7 +268,7 @@ func (s *RewardedAdService) checkFeaturesExist(ctx context.Context, appID int64,
 func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *rewardedad.AdminConfig {
 	callback, absolute := s.callbackURL(appKey)
 	view := &rewardedad.AdminConfig{
-		Provider:         rewardedad.ProviderHuijing,
+		Provider:         rewardedad.ProviderApex,
 		VerifyMode:       rewardedad.VerifyDual,
 		Scenes:           []rewardedad.Scene{},
 		CallbackURL:      callback,
@@ -270,6 +276,8 @@ func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *re
 		Catalog:          rewardedad.RewardCatalog(),
 		VerifyModes:      rewardedad.VerifyModes(),
 		Providers:        rewardedad.Providers(),
+		LifetimePolicies: rewardedad.LifetimePolicyCatalog(),
+		ConvertTargets:   rewardedad.ConvertTargets(),
 	}
 	if cfg == nil {
 		return view
@@ -290,10 +298,10 @@ func (s *RewardedAdService) adminView(cfg *rewardedad.Config, appKey string) *re
 
 // callbackURL 填进广告平台「配置回调URL」的地址。
 //
-// 参数名与灰鲸后台默认模板一致（userId / transId / sign …），平台会把宏替换后以 GET 调用；
+// 参数名与 Apex 文档的回调模板一致（userId / transId / sign / extrainfo / placementId），平台会把宏替换后以 GET 调用；
 // 配了 API_BASE_URL 时给出绝对地址，否则只给路径，由控制台补上当前站点。
 func (s *RewardedAdService) callbackURL(appKey string) (string, bool) {
-	path := "/api/apps/" + url.PathEscape(appKey) + "/ads/huijing/callback"
+	path := "/api/apps/" + url.PathEscape(appKey) + "/ads/apex/callback"
 	if s.apiBaseURL == "" {
 		return path, false
 	}
@@ -450,7 +458,7 @@ func (s *RewardedAdService) ClientStatus(ctx context.Context, appID, userID int6
 	status.Provider = cfg.Provider
 	status.ProviderAppID = cfg.ProviderAppID
 	status.VerifyMode = cfg.VerifyMode
-	status.UserID = s.userToken(appID, userID)
+	status.UserID = s.userToken(ctx, appID, userID)
 	status.DailyLimit = cfg.DailyLimit
 
 	policy := s.policy(cfg, now)
@@ -463,14 +471,58 @@ func (s *RewardedAdService) ClientStatus(ctx context.Context, appID, userID int6
 		status.Remaining = max(cfg.DailyLimit-usage.TodayTotal, 0)
 	}
 
-	names := &rewardNames{plans: s.planNames(ctx, appID, cfg.Scenes), features: s.featureNames(ctx, appID, cfg.Scenes)}
+	plans, err := s.pg.RewardedAdScenePlans(ctx, appID, cfg.Scenes)
+	if err != nil {
+		return nil, err
+	}
+	coverage, err := s.pg.RewardedAdCoverage(ctx, appID, userID)
+	if err != nil {
+		return nil, err
+	}
+	names := &rewardNames{plans: make(map[int64]string, len(plans)), features: s.featureNames(ctx, appID, cfg.Scenes)}
+	for id, plan := range plans {
+		names.plans[id] = plan.Name
+	}
 	for _, scene := range cfg.Scenes {
 		if !scene.Enabled {
 			continue
 		}
-		status.Scenes = append(status.Scenes, buildClientScene(scene, usage, status.Remaining, names, now))
+		item, ok := buildPersonalScene(scene, coverage, plans, usage, status.Remaining, names, now)
+		if ok {
+			status.Scenes = append(status.Scenes, item)
+		}
 	}
 	return status, nil
+}
+
+// buildPersonalScene 这个人眼里的一个场景：已拥有的权益按场景的 lifetime 换成折算后实际会发的，
+// 摘要随之改写，并附上提示。hide 且有已拥有的权益时不展示（ok=false）。结算用的是同一个 rewardedad.Resolve。
+func buildPersonalScene(scene rewardedad.Scene, coverage rewardedad.Coverage, plans map[int64]vipdomain.Plan,
+	usage *rewardedad.Usage, appRemaining int, names *rewardNames, now time.Time) (rewardedad.ClientScene, bool) {
+	if names == nil {
+		names = &rewardNames{}
+	}
+	outcome := rewardedad.Resolve(scene, coverage, plans,
+		rewardedad.Labels{Plans: names.plans, Features: names.features})
+	if outcome.Hidden {
+		return rewardedad.ClientScene{}, false
+	}
+	if outcome.Conversion == nil {
+		return buildClientScene(scene, usage, appRemaining, names, now), true
+	}
+	shown := scene
+	shown.Rewards = outcome.GrantedRewards()
+	item := buildClientScene(shown, usage, appRemaining, names, now)
+	// rewards 与 membership 仍是场景配置的原样：已发布的客户端拿 rewards 找「发听歌时长」的场景、
+	// 判断领完要不要刷新会员缓存，改成折算后的会让这些判断落空。折算只体现在摘要与 lifetime 提示里。
+	item.Rewards = scene.Rewards
+	item.Membership = scene.Membership
+	hint := outcome.ClientHint()
+	item.Lifetime = hint
+	if item.RewardSummary == "" {
+		item.RewardSummary = hint.Message
+	}
+	return item, true
 }
 
 // rewardNames 权益摘要里要用到的展示名：套餐名、功能名（只含启用中的功能）。
@@ -538,6 +590,13 @@ func (s *RewardedAdService) Claim(ctx context.Context, input RewardedAdClaimInpu
 		return nil, apperrors.New(errCodeRewardedAdSceneUnavailable, http.StatusForbidden, "该奖励活动不存在或已下线")
 	}
 
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneAdReward, AppID: &input.AppID, UserID: &input.UserID,
+		IP: input.ClientIP, DeviceID: input.DeviceID,
+		Extra: map[string]any{"adScene": scene.Key, "placementId": input.PlacementID},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法领取奖励"}); err != nil {
+		return nil, err
+	}
 	view, err := s.pg.RecordRewardedAdView(ctx, rewardedad.RecordInput{
 		AppID:          input.AppID,
 		UserID:         input.UserID,
@@ -556,14 +615,18 @@ func (s *RewardedAdService) Claim(ctx context.Context, input RewardedAdClaimInpu
 	}
 
 	result := &rewardedad.ClaimResult{
-		TransID:   view.TransID,
-		Scene:     view.Scene,
-		Status:    view.Status,
-		Reason:    view.Reason,
-		Message:   rewardedad.ReasonMessage(view.Status, view.Reason),
-		Results:   view.Results,
-		GrantedAt: view.GrantedAt,
-		Remaining: -1,
+		TransID:    view.TransID,
+		Scene:      view.Scene,
+		Status:     view.Status,
+		Reason:     view.Reason,
+		Message:    rewardedad.ReasonMessage(view.Status, view.Reason),
+		Results:    view.Results,
+		Conversion: view.Conversion,
+		GrantedAt:  view.GrantedAt,
+		Remaining:  -1,
+	}
+	if view.Status == rewardedad.StatusGranted && view.Conversion != nil {
+		result.Message = view.Conversion.Message
 	}
 	// 剩余次数是展示用的，查不出来不影响这次结算的结论。
 	if usage, err := s.pg.RewardedAdUsage(ctx, input.AppID, input.UserID, s.policy(cfg, now).DayStart); err == nil {
@@ -597,8 +660,8 @@ func (s *RewardedAdService) MyViews(ctx context.Context, appID, userID int64, pa
 
 // ── 平台回调 ──
 
-// HuijingCallbackInput 灰鲸服务端回调带来的参数（GET 查询串）。
-type HuijingCallbackInput struct {
+// AdCallbackInput Apex 服务端回调带来的参数（GET 查询串）。
+type AdCallbackInput struct {
 	AppID        int64
 	UserID       string
 	TransID      string
@@ -610,18 +673,18 @@ type HuijingCallbackInput struct {
 	Extra        string
 }
 
-// HuijingCallback 处理一次平台回调，返回给平台的 isValid。
+// AdCallback 处理一次平台回调，返回给平台的 isValid。
 //
 // isValid 回答的是「这次观看算不算数」：验签不过、应用没开、用户认不出、被限额挡下都是 false；
 // 双方确认模式下等客户端上报时是 true（观看本身成立）。平台没收到响应会每 200ms 重试 3 次，
 // 重试落在同一行上，结论不变。
-func (s *RewardedAdService) HuijingCallback(ctx context.Context, input HuijingCallbackInput) (bool, string) {
+func (s *RewardedAdService) AdCallback(ctx context.Context, input AdCallbackInput) (bool, string) {
 	cfg, err := s.pg.GetRewardedAdConfig(ctx, input.AppID)
 	if err != nil {
 		s.log.Error("rewarded ad callback: load config failed", zap.Int64("appid", input.AppID), zap.Error(err))
 		return false, "internal"
 	}
-	if cfg == nil || !cfg.Enabled || cfg.Provider != rewardedad.ProviderHuijing {
+	if cfg == nil || !cfg.Enabled || cfg.Provider != rewardedad.ProviderApex {
 		return false, rewardedad.ReasonDisabled
 	}
 	transID := strings.TrimSpace(input.TransID)
@@ -639,7 +702,7 @@ func (s *RewardedAdService) HuijingCallback(ctx context.Context, input HuijingCa
 			s.log.Error("rewarded ad callback: decrypt key failed", zap.Int64("appid", input.AppID), zap.Error(err))
 			return false, "internal"
 		}
-		if !rewardedad.VerifyHuijingSign(key, transID, input.Sign) {
+		if !rewardedad.VerifyCallbackSign(key, transID, input.Sign) {
 			s.log.Warn("rewarded ad callback: bad signature",
 				zap.Int64("appid", input.AppID), zap.String("transId", transID))
 			return false, "bad_sign"
@@ -647,7 +710,7 @@ func (s *RewardedAdService) HuijingCallback(ctx context.Context, input HuijingCa
 	}
 
 	now := time.Now()
-	userID := s.parseUserToken(input.AppID, strings.TrimSpace(input.UserID))
+	userID := s.parseUserToken(ctx, input.AppID, strings.TrimSpace(input.UserID))
 	view, err := s.pg.RecordRewardedAdView(ctx, rewardedad.RecordInput{
 		AppID:        input.AppID,
 		UserID:       userID,
@@ -694,28 +757,6 @@ func rewardedAdDayStart(now time.Time, loc *time.Location) time.Time {
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
 }
 
-func (s *RewardedAdService) planNames(ctx context.Context, appID int64, scenes []rewardedad.Scene) map[int64]string {
-	names := map[int64]string{}
-	for _, scene := range scenes {
-		for _, reward := range scene.Rewards {
-			if reward.Type != cardkeydomain.RewardVipPlan {
-				continue
-			}
-			if len(names) == 0 {
-				plans, err := s.pg.ListVipPlans(ctx, appID, false)
-				if err != nil {
-					return names
-				}
-				for _, plan := range plans {
-					names[plan.ID] = plan.Name
-				}
-			}
-			return names
-		}
-	}
-	return names
-}
-
 // featureNames 场景会员权益与「功能时长」里用到的功能的展示名，只取启用中的：停用的功能不会落到会员头上，
 // 摘要里也不该说「会员可用」它（功能时长认不出名字时退回标识本身）。没有场景配了功能时不查库。
 func (s *RewardedAdService) featureNames(ctx context.Context, appID int64, scenes []rewardedad.Scene) map[string]string {
@@ -736,18 +777,34 @@ func (s *RewardedAdService) featureNames(ctx context.Context, appID int64, scene
 	return nil
 }
 
-// userToken 传给广告 SDK 的用户标识：「用户 ID.签名」。
+// userToken 传给广告 SDK 的用户标识：「对外用户 ID.签名」。
 //
 // 平台的回调签名只覆盖 trans_id，不覆盖 userId —— 不带签名的话，谁能伪造一次回调，
 // 谁就能把奖励记到任意账号头上。带上签名后，回调里的 userId 只能是我们发出去的那一个。
-func (s *RewardedAdService) userToken(appID, userID int64) string {
-	return strconv.FormatInt(userID, 10) + "." + s.userTag(appID, userID)
+//
+// 这串值会出现在客户端、广告平台后台和回调里，所以放对外 ID（docs/user-public-id.md）；
+// 客户端还会拿点号前那段和 /me 的 id 比对是不是同一个人，两边必须是同一种 ID。
+// 换不到对外 ID（库抖了）时退回主键形态：这一次拿不到广告归属，总好过发不出标识。
+func (s *RewardedAdService) userToken(ctx context.Context, appID, userID int64) string {
+	if publicID := s.publicIDs.Of(ctx, userID); publicID > 0 {
+		return signedAdUserToken(s, appID, publicID)
+	}
+	return signedAdUserToken(s, appID, userID)
 }
 
 // AdUserToken 同一个带签名的用户标识，供开屏等其他广告位传给 SDK：
 // 平台后台里同一个人的激励视频与开屏展示对得上，广告数据都挂在账号上。
-func (s *RewardedAdService) AdUserToken(appID, userID int64) string {
-	return s.userToken(appID, userID)
+func (s *RewardedAdService) AdUserToken(ctx context.Context, appID, userID int64) string {
+	return s.userToken(ctx, appID, userID)
+}
+
+// SetPublicIDs 接上全进程共用的对外 ID 换算。
+func (s *RewardedAdService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
+}
+
+func signedAdUserToken(s *RewardedAdService, appID, id int64) string {
+	return strconv.FormatInt(id, 10) + "." + s.userTag(appID, id)
 }
 
 func (s *RewardedAdService) userTag(appID, userID int64) string {
@@ -756,17 +813,25 @@ func (s *RewardedAdService) userTag(appID, userID int64) string {
 	return hex.EncodeToString(mac.Sum(nil))[:rewardedAdUserTagLen]
 }
 
-// parseUserToken 认出回调里的用户；认不出返回 0（记录仍落库，结论是 user_not_found）。
-func (s *RewardedAdService) parseUserToken(appID int64, token string) int64 {
+// parseUserToken 认出回调里的用户（主键）；认不出返回 0（记录仍落库，结论是 user_not_found）。
+// 两种形态都认：切换前发出去、还挂在平台那边没回调的标识是主键形态。
+func (s *RewardedAdService) parseUserToken(ctx context.Context, appID int64, token string) int64 {
 	idPart, tag, ok := strings.Cut(token, ".")
 	if !ok {
 		return 0
 	}
-	userID, err := strconv.ParseInt(idPart, 10, 64)
-	if err != nil || userID <= 0 {
+	id, err := strconv.ParseInt(idPart, 10, 64)
+	if err != nil || id <= 0 {
 		return 0
 	}
-	if !hmac.Equal([]byte(strings.ToLower(tag)), []byte(s.userTag(appID, userID))) {
+	if !hmac.Equal([]byte(strings.ToLower(tag)), []byte(s.userTag(appID, id))) {
+		return 0
+	}
+	if id < userPublicIDMin {
+		return id
+	}
+	userID, err := s.publicIDs.Resolve(ctx, appID, id)
+	if err != nil {
 		return 0
 	}
 	return userID

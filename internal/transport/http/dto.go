@@ -2,8 +2,10 @@ package httptransport
 
 import (
 	appdomain "aegis/internal/domain/app"
+	notificationdomain "aegis/internal/domain/notification"
 	userdomain "aegis/internal/domain/user"
 	auditmiddleware "aegis/internal/middleware"
+	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/response"
 	"aegis/pkg/timeutil"
@@ -20,6 +22,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/gin-gonic/gin/binding"
 	"github.com/go-playground/validator/v10"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type appIDResolver interface {
@@ -177,11 +180,14 @@ type LegacyRankingRequest struct {
 }
 
 type NotificationQuery struct {
+	// Status all | unread | read
 	Status string `form:"status"`
-	Type   string `form:"type"`
-	Level  string `form:"level"`
-	Page   int    `form:"page"`
-	Limit  int    `form:"limit"`
+	// Category 分类 key（docs/notification-center.md），空即全部
+	Category string `form:"category"`
+	Type     string `form:"type"`
+	Level    string `form:"level"`
+	Page     int    `form:"page"`
+	Limit    int    `form:"limit"`
 }
 
 type NotificationReadRequest struct {
@@ -192,10 +198,27 @@ type NotificationReadBatchRequest struct {
 	IDs []int64 `json:"ids" binding:"required"`
 }
 
+// NotificationReadAllRequest 全部标为已读；给了 category 只处理这一类。
+type NotificationReadAllRequest struct {
+	Category string `json:"category" form:"category"`
+}
+
+// NotificationDeleteBatchRequest 批量删除（≤ 200 条）。
+type NotificationDeleteBatchRequest struct {
+	IDs []int64 `json:"ids" binding:"required"`
+}
+
 type NotificationClearRequest struct {
-	Status string `json:"status" form:"status"`
-	Type   string `json:"type" form:"type"`
-	Level  string `json:"level" form:"level"`
+	// Status all | read（空即 all）
+	Status   string `json:"status" form:"status"`
+	Category string `json:"category" form:"category"`
+	Type     string `json:"type" form:"type"`
+	Level    string `json:"level" form:"level"`
+}
+
+// NotificationPreferencesRequest 分类 key → 是否提醒；只改传了的分类。
+type NotificationPreferencesRequest struct {
+	Categories map[string]bool `json:"categories" binding:"required"`
 }
 
 type AppIDQuery struct {
@@ -395,6 +418,7 @@ type AdminAppSignInStatsQuery struct {
 }
 
 type AdminAppSignInRecordQuery struct {
+	UserID    int64  `form:"userId"`
 	Keyword   string `form:"keyword"`
 	Source    string `form:"source"`
 	BonusType string `form:"bonusType"`
@@ -433,15 +457,24 @@ type AdminBulkNotificationRequest struct {
 	Content  string         `json:"content" binding:"required"`
 	Level    string         `json:"level"`
 	Metadata map[string]any `json:"metadata"`
+	// Category 分类 key，空即 announcement（公告活动）
+	Category string `json:"category"`
+	// Action 跳转动作：{type: route, target: 路由键} 或 {type: url, target: https 地址}
+	Action *notificationdomain.Action `json:"action"`
+	// Image 配图地址（https）
+	Image string `json:"image"`
+	// ExpiresAt 过期时间（RFC 3339），过期后不出现在用户的列表里
+	ExpiresAt *time.Time `json:"expiresAt"`
 }
 
 type AdminNotificationListQuery struct {
-	AppID   int64  `json:"appid" form:"appid"`
-	Keyword string `form:"keyword"`
-	Type    string `form:"type"`
-	Level   string `form:"level"`
-	Page    int    `form:"page"`
-	Limit   int    `form:"limit"`
+	AppID    int64  `json:"appid" form:"appid"`
+	Keyword  string `form:"keyword"`
+	Category string `form:"category"`
+	Type     string `form:"type"`
+	Level    string `form:"level"`
+	Page     int    `form:"page"`
+	Limit    int    `form:"limit"`
 }
 
 type LegacyAppNotificationCreateRequest struct {
@@ -462,10 +495,11 @@ type AdminNotificationDeleteRequest struct {
 }
 
 type AdminNotificationDeleteFilterRequest struct {
-	Keyword string `json:"keyword"`
-	Type    string `json:"type"`
-	Level   string `json:"level"`
-	Limit   int    `json:"limit"`
+	Keyword  string `json:"keyword"`
+	Category string `json:"category"`
+	Type     string `json:"type"`
+	Level    string `json:"level"`
+	Limit    int    `json:"limit"`
 }
 
 type AdminSettingsStatsQuery struct {
@@ -527,13 +561,15 @@ type AppAdjustIntegralRequest struct {
 	RequestID string `json:"request_id" form:"request_id"`
 }
 
-// AppAdjustExperienceRequest 文档用的请求模型；amount 必须为正（经验只增不减）。
+// AppAdjustExperienceRequest 文档用的请求模型；amount 为正增加、为负扣减。
+// level_mode 只对扣减有意义：keep（默认）保留现有等级，recalc 按扣减后的经验重新判定（可降级，不低于锁定的保底）。
 type AppAdjustExperienceRequest struct {
 	UserID    int64  `json:"user_id" form:"user_id" binding:"required"`
 	AppID     int64  `json:"appid" form:"appid" binding:"required"`
 	Amount    int64  `json:"amount" form:"amount" binding:"required"`
 	Reason    string `json:"reason" form:"reason"`
 	RequestID string `json:"request_id" form:"request_id"`
+	LevelMode string `json:"level_mode" form:"level_mode"`
 }
 
 // AppBatchAdjustIntegralRequest 文档用的请求模型。
@@ -544,6 +580,9 @@ type AppBatchAdjustIntegralRequest struct {
 	OperationType string  `json:"operation_type" form:"operation_type"`
 	Reason        string  `json:"reason" form:"reason"`
 	RequestID     string  `json:"request_id" form:"request_id"`
+	// Kind integral（默认）/ experience；LevelMode 扣减经验时的等级处理（keep / recalc）
+	Kind      string `json:"kind" form:"kind"`
+	LevelMode string `json:"level_mode" form:"level_mode"`
 }
 
 type SiteCreateRequest struct {
@@ -869,8 +908,20 @@ func (h *Handler) writeError(c *gin.Context, err error) {
 		response.Error(c, appErr.HTTPStatus, appErr.Code, appErr.Message)
 		return
 	}
+	// 客户端先断开了（连点取消、超时离开）：请求上下文被取消，事务已回滚。不是服务端错误，回 499
+	// （客户端已经收不到了），访问日志按普通请求记，不再混进 5xx
+	if errors.Is(err, context.Canceled) && c.Request.Context().Err() != nil {
+		c.AbortWithStatus(statusClientClosedRequest)
+		return
+	}
 	// 记录真实错误到 gin logger（控制台可见）
 	_ = c.Error(err)
+	// 锁等待超时、死锁、语句超时：库里一时挤不进去，不是程序错误。回 503 + Retry-After，客户端退避重试
+	if databaseBusy(err) {
+		c.Header("Retry-After", "1")
+		response.Error(c, http.StatusServiceUnavailable, errCodeDatabaseBusy, "服务繁忙，请稍后重试")
+		return
+	}
 	// 直接输出摘要信息（绕过 sanitizeMessage 对 500 的脱敏）
 	summary := err.Error()
 	if len(summary) > 200 {
@@ -946,4 +997,19 @@ func resolveAppID(c *gin.Context, appService appIDResolver) (int64, bool) {
 	}
 	response.Error(c, http.StatusNotFound, 40404, "应用不存在")
 	return 0, false
+}
+
+// statusClientClosedRequest 客户端在服务端答复之前断开（nginx 的 499）。
+const statusClientClosedRequest = 499
+
+// errCodeDatabaseBusy 数据库一时繁忙（锁等待超时、死锁、语句超时）。
+const errCodeDatabaseBusy = 50310
+
+// databaseBusy 错误是不是「稍后重试就能成功」的数据库拥塞。
+func databaseBusy(err error) bool {
+	if pgrepo.IsLockContention(err) {
+		return true
+	}
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "57014" // query_canceled：statement_timeout 到点
 }

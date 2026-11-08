@@ -448,6 +448,9 @@ func (h *Handler) SendSMSCode(c *gin.Context) {
 		h.writeError(c, err)
 		return
 	}
+	if !h.guardVerifyCode(c, req.AppID, req.Phone, smsReq.Purpose, req.CaptchaID, req.CaptchaAnswer) {
+		return
+	}
 	result, err := h.captcha.SendSMSCode(c.Request.Context(), smsReq, providerCfg)
 	if err != nil {
 		h.writeError(c, err)

@@ -75,12 +75,16 @@ func gatewayRequestModels() map[string]any {
 		"passkeyRegister": PasskeyRegistrationFinishRequest{},
 
 		// 资料与设置
-		"profileUpdate":  UpdateProfileRequest{},
-		"profileConfirm": ConfirmProfileChangeRequest{},
-		"settings":       SettingsCategoryQuery{},
-		"settingsUpdate": UpdateSettingsRequest{},
-		"autoSignUpdate": AutoSignUpdateRequest{},
-		"avatarRestore":  AvatarRestoreRequest{},
+		"profileUpdate":        UpdateProfileRequest{},
+		"profileConfirm":       ConfirmProfileChangeRequest{},
+		"settings":             SettingsCategoryQuery{},
+		"settingsUpdate":       UpdateSettingsRequest{},
+		"autoSignUpdate":       AutoSignUpdateRequest{},
+		"accountSetupComplete": AccountSetupRequest{},
+		"accountSetupCheck":    AccountSetupCheckRequest{},
+		"deletionCode":         AccountDeletionCodeRequest{},
+		"deletionSubmit":       AccountDeletionSubmitRequest{},
+		"avatarRestore":        AvatarRestoreRequest{},
 
 		// 二次认证
 		"totpEnable":              TOTPEnableRequest{},
@@ -103,6 +107,10 @@ func gatewayRequestModels() map[string]any {
 		"pointsStoreRedeem":      PointsStoreRedeemRequest{},
 		"pointsStoreRedemptions": PaginationQuery{},
 
+		// 抽奖
+		"lotteryDraw":  LotteryDrawRequest{},
+		"lotteryDraws": LotteryDrawsQuery{},
+
 		// 功能时长
 		"featureTimeLease":  FeatureTimeLeaseRequest{},
 		"featureTimeSettle": FeatureTimeSettleRequest{},
@@ -113,11 +121,27 @@ func gatewayRequestModels() map[string]any {
 		"inviteCode":     InviteCodeUpdateRequest{},
 		"invitePreview":  InvitePreviewRequest{},
 
+		// 推广活动
+		"promoClaimTier":   PromoClaimRequest{},
+		"promoSubmissions": PaginationQuery{},
+		"promoSubmit":      PromoSubmitRequest{},
+
+		// 积分排行榜
+		"leaderboardBoard":            LeaderboardPageQuery{},
+		"leaderboardPeriods":          LeaderboardPeriodsQuery{},
+		"leaderboardPeriod":           LeaderboardPageQuery{},
+		"leaderboardRewards":          LeaderboardPageQuery{},
+		"leaderboardPreferenceUpdate": LeaderboardPreferenceRequest{},
+
 		// 站内信
-		"notifications":         NotificationQuery{},
-		"notificationRead":      NotificationReadRequest{},
-		"notificationReadBatch": NotificationReadBatchRequest{},
-		"notificationClear":     NotificationClearRequest{},
+		"notifications":                 NotificationQuery{},
+		"notificationRead":              NotificationReadRequest{},
+		"notificationUnread":            NotificationReadRequest{},
+		"notificationReadBatch":         NotificationReadBatchRequest{},
+		"notificationReadAll":           NotificationReadAllRequest{},
+		"notificationDeleteBatch":       NotificationDeleteBatchRequest{},
+		"notificationClear":             NotificationClearRequest{},
+		"notificationPreferencesUpdate": NotificationPreferencesRequest{},
 
 		// 激励广告
 		"rewardedAdClaim":   RewardedAdClaimRequest{},
@@ -126,6 +150,9 @@ func gatewayRequestModels() map[string]any {
 		// 广告服务策略
 		"adConsent":      AdConsentRequest{},
 		"splashAdEvents": AdSplashReportRequest{},
+
+		// 崩溃报告
+		"crashReport": CrashReportRequest{},
 
 		// 钱包 / 会员 / 支付
 		"walletTransactions": WalletTransactionsQuery{},
@@ -294,7 +321,8 @@ type AppOAuthURLRequest struct {
 type AppEmailCodeRequest struct {
 	Email string `json:"email" form:"email" binding:"required"`
 	// Purpose 验证码用途，如 register / bind / reset
-	Purpose       string `json:"purpose" form:"purpose"`
+	Purpose string `json:"purpose" form:"purpose"`
+	// ExpireMinutes 有效期（分钟）。不传按应用邮件策略；传了也只能比策略里的短
 	ExpireMinutes int    `json:"expireMinutes" form:"expireMinutes"`
 	ConfigName    string `json:"configName" form:"configName"`
 }
@@ -307,7 +335,8 @@ type AppEmailVerifyRequest struct {
 
 type AppPasswordForgotRequest struct {
 	Email string `json:"email" form:"email" binding:"required"`
-	// ResetURL 重置页地址，验证令牌会作为查询参数附加在它后面
+	// ResetURL 重置页地址，验证令牌会作为查询参数附加在它后面。
+	// 必须落在应用邮件策略登记的前缀内，不传则用登记的第一条
 	ResetURL   string `json:"resetUrl" form:"resetUrl"`
 	ConfigName string `json:"configName" form:"configName"`
 }
@@ -371,10 +400,12 @@ type AppPasskeyOptionsRequest struct {
 type AppPasskeyLoginRequest struct {
 	// Credential 是 WebAuthn 断言，结构由浏览器 / 平台 API 给出
 	Credential map[string]any `json:"credential" binding:"required"`
-	SessionID  string         `json:"sessionId" form:"sessionId"`
-	DeviceID   string         `json:"deviceId" form:"deviceId"`
-	Device     string         `json:"device" form:"device"`
-	MarkCode   string         `json:"markCode" form:"markCode"`
+	// ChallengeID 取自 options 返回的 session.challengeId；SessionID 是它的旧名，两者都收
+	ChallengeID string `json:"challengeId" form:"challengeId"`
+	SessionID   string `json:"sessionId" form:"sessionId"`
+	DeviceID    string `json:"deviceId" form:"deviceId"`
+	Device      string `json:"device" form:"device"`
+	MarkCode    string `json:"markCode" form:"markCode"`
 }
 
 // gatewayDocMethods 供测试断言目录里出现的方法都被规范支持。

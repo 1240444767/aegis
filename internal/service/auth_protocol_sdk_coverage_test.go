@@ -21,6 +21,8 @@ func TestKotlinSDKCoversEveryGatewayOperation(t *testing.T) {
 	sources := []string{
 		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisApi.kt",
 		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisClient.kt",
+		// 版本管控自带加密通道，单独成文件
+		"../../sdk/kotlin/src/main/kotlin/dev/aegis/sdk/AegisClientControl.kt",
 	}
 	var combined strings.Builder
 	for _, path := range sources {
@@ -60,11 +62,12 @@ func TestKotlinSDKCoversEveryGatewayOperation(t *testing.T) {
 // kotlinPathPattern 把目录里的 `/tickets/{ticketId}/rating`
 // 转成能匹配 SDK 里 `"/tickets/$ticketId/rating"` 的正则。
 // 参数名两边不要求一致 —— 要钉的是路径形状，不是变量怎么起名。
+// 也认 `${encodePathSegment(key)}` 这种在模板里直接编码的写法。
 func kotlinPathPattern(path string) string {
 	segments := strings.Split(path, "/")
 	for i, segment := range segments {
 		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
-			segments[i] = `\$\{?[A-Za-z_][A-Za-z0-9_.]*\}?`
+			segments[i] = `\$(?:\{[A-Za-z_][A-Za-z0-9_.]*(?:\([A-Za-z0-9_.]*\))?\}|[A-Za-z_][A-Za-z0-9_.]*)`
 			continue
 		}
 		segments[i] = regexp.QuoteMeta(segment)

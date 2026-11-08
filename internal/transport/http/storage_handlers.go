@@ -17,6 +17,11 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// AdminStorageProviders 存储提供商目录：驱动控制台的「添加存储」与动态配置表单。
+func (h *Handler) AdminStorageProviders(c *gin.Context) {
+	response.Success(c, 200, "获取成功", gin.H{"providers": storagedomain.Catalog()})
+}
+
 func (h *Handler) AdminAppStorageConfigList(c *gin.Context) {
 	h.adminStorageConfigList(c, storagedomain.ScopeApp)
 }
@@ -34,6 +39,9 @@ func (h *Handler) adminStorageConfigList(c *gin.Context, scope string) {
 	if err != nil {
 		h.writeError(c, err)
 		return
+	}
+	for i := range items {
+		items[i] = storagedomain.RedactConfig(items[i])
 	}
 	response.Success(c, 200, "获取成功", items)
 }
@@ -56,7 +64,7 @@ func (h *Handler) adminStorageConfigDetail(c *gin.Context, scope string) {
 		h.writeError(c, err)
 		return
 	}
-	response.Success(c, 200, "获取成功", item)
+	response.Success(c, 200, "获取成功", storagedomain.RedactConfig(*item))
 }
 
 func (h *Handler) AdminAppStorageConfigCreate(c *gin.Context) {
@@ -117,7 +125,7 @@ func (h *Handler) adminStorageConfigSaveWithReq(c *gin.Context, scope string, re
 	if id > 0 {
 		message = "更新成功"
 	}
-	response.Success(c, 200, message, item)
+	response.Success(c, 200, message, storagedomain.RedactConfig(*item))
 }
 
 func (h *Handler) AdminAppStorageConfigDelete(c *gin.Context) {
@@ -236,7 +244,10 @@ func (h *Handler) StorageObjectLink(c *gin.Context) {
 }
 
 func (h *Handler) StorageProxyDownload(c *gin.Context) {
-	ticket, _, reader, err := h.storage.OpenProxyObject(c.Request.Context(), c.Param("ticket"))
+	ticket, cfg, reader, err := h.storage.OpenProxyObjectFor(c.Request.Context(), c.Param("ticket"), service.ProxyRequest{
+		ClientIP: c.ClientIP(),
+		Referer:  c.GetHeader("Referer"),
+	})
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -259,7 +270,10 @@ func (h *Handler) StorageProxyDownload(c *gin.Context) {
 		c.Header("Content-Security-Policy", "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'")
 		c.Header("X-Frame-Options", "DENY")
 	}
-	if reader.CacheControl != "" {
+	if policy := h.storage.ProxyCacheControl(c.Request.Context(), cfg.ID); policy != "" {
+		// CDN 与安全里配的缓存时长优先：那是管理员对这个存储的明确要求。
+		c.Header("Cache-Control", policy)
+	} else if reader.CacheControl != "" {
 		c.Header("Cache-Control", reader.CacheControl)
 	} else if ticket != nil && ticket.ExpiresAt.IsZero() {
 		// 永久地址：同一地址永远指向同一个对象键。对象键可能被覆盖写，

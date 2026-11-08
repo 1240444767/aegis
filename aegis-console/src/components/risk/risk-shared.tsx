@@ -1,12 +1,17 @@
 "use client";
 
 import { createContext, useContext, useMemo, type ReactNode } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { ChartConfig } from "@/components/ui/chart";
 import type {
-  RiskCatalogEntry, RiskConditionCatalog, RiskLevelCatalog, RiskMetadata,
+  RiskCatalogEntry, RiskConditionCatalog, RiskLevelCatalog, RiskListTypeCatalog, RiskMetadata,
+  RiskSceneCatalog, RiskTemplateSummary,
 } from "@/lib/api/types";
+import { formatDate, formatDateTime, formatRelative } from "@/lib/datetime";
 import { useRiskMetadataQuery } from "@/lib/risk-hooks";
 import { cn } from "@/lib/utils";
 
@@ -26,14 +31,31 @@ type RiskCatalog = {
   levelLabel: (value: string) => string;
   actionLabel: (value: string) => string;
   conditionLabel: (value: string) => string;
+  dimensionLabel: (value: string) => string;
+  listKindLabel: (value: string) => string;
+  listTypeLabel: (value: string) => string;
+  banTargetLabel: (value: string) => string;
+  decisionLabel: (value: string) => string;
+  modeLabel: (value: string) => string;
   condition: (value: string) => RiskConditionCatalog | undefined;
+  scene: (value: string) => RiskSceneCatalog | undefined;
   levels: RiskLevelCatalog[];
-  scenes: RiskCatalogEntry[];
+  scenes: RiskSceneCatalog[];
   actions: RiskCatalogEntry[];
   conditions: RiskConditionCatalog[];
+  dimensions: RiskCatalogEntry[];
+  ruleModes: RiskCatalogEntry[];
+  listKinds: RiskCatalogEntry[];
+  listTypes: RiskListTypeCatalog[];
+  banTargets: RiskCatalogEntry[];
+  decisionBy: RiskCatalogEntry[];
+  templates: RiskTemplateSummary[];
   deviceTags: RiskCatalogEntry[];
   ipTags: RiskCatalogEntry[];
 };
+
+/** 规则与策略的「全部场景」取值，与后端 SceneAll 对应 */
+export const SCENE_ALL = "*";
 
 const RiskCatalogContext = createContext<RiskCatalog | null>(null);
 
@@ -51,18 +73,35 @@ export function RiskCatalogProvider({ children }: { children: ReactNode }) {
   const value = useMemo<RiskCatalog>(() => {
     const conditions = metadata?.conditionTypes ?? [];
     const conditionMap = new Map(conditions.map((c) => [c.value, c]));
+    const scenes = metadata?.scenes ?? [];
+    const sceneMap = new Map(scenes.map((s) => [s.value, s]));
+    const sceneLookup = labelLookup(scenes);
     return {
       metadata,
       isLoading: query.isLoading,
-      sceneLabel: labelLookup(metadata?.scenes),
+      sceneLabel: (v: string) => (v === SCENE_ALL ? "全部场景" : sceneLookup(v)),
       levelLabel: labelLookup(metadata?.levels),
       actionLabel: labelLookup(metadata?.actions),
       conditionLabel: labelLookup(conditions),
+      dimensionLabel: labelLookup(metadata?.dimensions),
+      listKindLabel: labelLookup(metadata?.listKinds),
+      listTypeLabel: labelLookup(metadata?.listTypes),
+      banTargetLabel: labelLookup(metadata?.banTargets),
+      decisionLabel: labelLookup(metadata?.decisionBy),
+      modeLabel: labelLookup(metadata?.ruleModes),
       condition: (v: string) => conditionMap.get(v),
+      scene: (v: string) => sceneMap.get(v),
       levels: metadata?.levels ?? [],
-      scenes: metadata?.scenes ?? [],
+      scenes,
       actions: metadata?.actions ?? [],
       conditions,
+      dimensions: metadata?.dimensions ?? [],
+      ruleModes: metadata?.ruleModes ?? [],
+      listKinds: metadata?.listKinds ?? [],
+      listTypes: metadata?.listTypes ?? [],
+      banTargets: metadata?.banTargets ?? [],
+      decisionBy: metadata?.decisionBy ?? [],
+      templates: metadata?.templates ?? [],
       deviceTags: metadata?.deviceTags ?? [],
       ipTags: metadata?.ipTags ?? [],
     };
@@ -106,6 +145,51 @@ export const ACTION_COLORS: Record<string, ThemedColor> = {
   block: { light: "#fb7185", dark: "#f43f5e" },
   ban: { light: "#be123c", dark: "#9f1239" },
 };
+
+/**
+ * 风险维度色。维度是「问题出在哪一面」，与等级（多严重）、动作（怎么处置）
+ * 再分一套色系，三者同屏出现时不会互相混淆。
+ */
+export const DIMENSION_COLORS: Record<string, ThemedColor> = {
+  network: { light: "#0ea5e9", dark: "#38bdf8" },
+  device: { light: "#8b5cf6", dark: "#a78bfa" },
+  account: { light: "#e11d48", dark: "#fb7185" },
+  behavior: { light: "#f59e0b", dark: "#fbbf24" },
+  geo: { light: "#14b8a6", dark: "#2dd4bf" },
+  client: { light: "#64748b", dark: "#94a3b8" },
+  list: { light: "#be123c", dark: "#f43f5e" },
+  custom: { light: "#6366f1", dark: "#818cf8" },
+};
+
+export const LIST_KIND_COLORS: Record<string, ThemedColor> = {
+  block: { light: "#f43f5e", dark: "#fb7185" },
+  allow: { light: "#10b981", dark: "#34d399" },
+  watch: { light: "#f59e0b", dark: "#fbbf24" },
+};
+
+export const DECISION_COLORS: Record<string, ThemedColor> = {
+  allowlist: { light: "#10b981", dark: "#34d399" },
+  blocklist: { light: "#f43f5e", dark: "#fb7185" },
+  rule: { light: "#f59e0b", dark: "#fbbf24" },
+  policy: { light: "#6366f1", dark: "#818cf8" },
+  none: { light: "#a1a1aa", dark: "#71717a" },
+};
+
+export function dimensionChartConfig(dimensions: RiskCatalogEntry[]): ChartConfig {
+  const config: ChartConfig = {};
+  for (const dim of dimensions) {
+    config[dim.value] = { label: dim.label, theme: DIMENSION_COLORS[dim.value] ?? CATEGORICAL_COLORS[0] };
+  }
+  return config;
+}
+
+export function decisionChartConfig(entries: RiskCatalogEntry[]): ChartConfig {
+  const config: ChartConfig = {};
+  for (const entry of entries) {
+    config[entry.value] = { label: entry.label, theme: DECISION_COLORS[entry.value] ?? CATEGORICAL_COLORS[0] };
+  }
+  return config;
+}
 
 /** 分类色轮：给场景 / 国家这类没有固有语义的维度用。 */
 export const CATEGORICAL_COLORS: ThemedColor[] = [
@@ -181,7 +265,116 @@ export function TagBadge({ tag, kind, className }: { tag: string; kind: "device"
 
 export function SceneBadge({ scene, className }: { scene: string; className?: string }) {
   const { sceneLabel } = useRiskCatalog();
-  return <Badge variant="outline" size="sm" className={className}>{sceneLabel(scene)}</Badge>;
+  return (
+    <Badge variant={scene === SCENE_ALL ? "secondary" : "outline"} size="sm" className={className}>
+      {sceneLabel(scene)}
+    </Badge>
+  );
+}
+
+function Dot({ color }: { color?: ThemedColor }) {
+  return <span className="size-1.5 shrink-0 rounded-full" style={{ background: color?.light ?? "#a1a1aa" }} />;
+}
+
+export function DimensionBadge({ dimension, className }: { dimension?: string; className?: string }) {
+  const { dimensionLabel } = useRiskCatalog();
+  if (!dimension) return null;
+  return (
+    <Badge variant="outline" size="sm" className={cn("gap-1", className)}>
+      <Dot color={DIMENSION_COLORS[dimension]} />
+      {dimensionLabel(dimension)}
+    </Badge>
+  );
+}
+
+export function ListKindBadge({ kind, className }: { kind: string; className?: string }) {
+  const { listKinds } = useRiskCatalog();
+  const entry = listKinds.find((k) => k.value === kind);
+  return <Badge variant={toneVariant(entry?.tone)} size="sm" className={className}>{entry?.label ?? kind}</Badge>;
+}
+
+export function DecisionBadge({ decisionBy, className }: { decisionBy?: string; className?: string }) {
+  const { decisionBy: entries } = useRiskCatalog();
+  if (!decisionBy || decisionBy === "none") return null;
+  const entry = entries.find((e) => e.value === decisionBy);
+  return (
+    <Badge variant="outline" size="sm" className={cn("gap-1", className)}>
+      <Dot color={DECISION_COLORS[decisionBy]} />
+      {entry?.label ?? decisionBy}
+    </Badge>
+  );
+}
+
+export function ModeBadge({ mode, className }: { mode?: string; className?: string }) {
+  const { ruleModes } = useRiskCatalog();
+  if (!mode || mode === "enforce") return null;
+  const entry = ruleModes.find((m) => m.value === mode);
+  return <Badge variant={toneVariant(entry?.tone ?? "info")} size="sm" className={className}>{entry?.label ?? mode}</Badge>;
+}
+
+/**
+ * 维度得分迷你条：各维度按得分占比分段。表格里一眼看出「这 75 分是网络给的还是账号给的」。
+ */
+export function DimensionBar({ scores, className, width = 72 }: {
+  scores?: Record<string, number> | null; className?: string; width?: number;
+}) {
+  const { dimensionLabel } = useRiskCatalog();
+  const entries = Object.entries(scores ?? {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const total = entries.reduce((sum, [, v]) => sum + v, 0);
+  if (total === 0) {
+    return <span className={cn("block h-1.5 rounded-full bg-muted", className)} style={{ width }} />;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("flex h-1.5 overflow-hidden rounded-full bg-muted", className)} style={{ width }}>
+          {entries.map(([dim, value]) => (
+            <span key={dim} style={{ width: `${(value / total) * 100}%`, background: DIMENSION_COLORS[dim]?.light ?? "#a1a1aa" }} />
+          ))}
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>
+        <div className="space-y-0.5 text-[11px]">
+          {entries.map(([dim, value]) => (
+            <div key={dim} className="flex items-center gap-2">
+              <Dot color={DIMENSION_COLORS[dim]} />
+              <span className="flex-1">{dimensionLabel(dim)}</span>
+              <span className="font-mono tabular-nums">+{value}</span>
+            </div>
+          ))}
+        </div>
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/** 维度得分明细：每个维度一行条形，详情抽屉与模拟结果共用。 */
+export function DimensionBreakdown({ scores }: { scores?: Record<string, number> | null }) {
+  const { dimensions } = useRiskCatalog();
+  const values = scores ?? {};
+  const max = Math.max(1, ...Object.values(values));
+  const rows = dimensions.filter((d) => (values[d.value] ?? 0) > 0);
+  if (rows.length === 0) {
+    return <p className="rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">各维度均无得分</p>;
+  }
+  return (
+    <div className="space-y-1.5">
+      {rows.map((dim) => {
+        const value = values[dim.value] ?? 0;
+        return (
+          <div key={dim.value} className="flex items-center gap-2 text-[11px]">
+            <span className="w-14 shrink-0 text-muted-foreground">{dim.label}</span>
+            <span className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+              <span className="block h-full rounded-full" style={{
+                width: `${(value / max) * 100}%`, background: DIMENSION_COLORS[dim.value]?.light ?? "#a1a1aa",
+              }} />
+            </span>
+            <span className="w-10 shrink-0 text-right font-mono tabular-nums">+{value}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -199,17 +392,11 @@ export function fmtPercent(value: number | undefined | null, digits = 1) {
 }
 
 export function fmtDateTime(iso?: string | null) {
-  if (!iso) return "--";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "--";
-  return date.toLocaleString("zh-CN", { hour12: false });
+  return formatDateTime(iso, "--");
 }
 
 export function fmtDate(iso?: string | null) {
-  if (!iso) return "--";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "--";
-  return date.toLocaleDateString("zh-CN");
+  return formatDate(iso, "--");
 }
 
 /** 图表 X 轴的时间刻度：按小时聚合时不显示年份，按天聚合时不显示时分。 */
@@ -224,15 +411,16 @@ export function fmtBucket(iso: string, bucket: string) {
 
 /** 相对时间。「3 分钟前」比一个绝对时间戳更能说明「现在还在打」。 */
 export function fmtRelative(iso?: string | null) {
-  if (!iso) return "--";
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "--";
-  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return "刚刚";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
-  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
-  if (seconds < 30 * 86400) return `${Math.floor(seconds / 86400)} 天前`;
-  return fmtDate(iso);
+  return formatRelative(iso, "--");
+}
+
+/** 到期时间：空为永久，已过期标明 */
+export function fmtExpiry(iso?: string | null) {
+  if (!iso) return "永久";
+  const at = new Date(iso).getTime();
+  if (Number.isNaN(at)) return "--";
+  if (at <= Date.now()) return "已过期";
+  return formatDateTime(iso, "--");
 }
 
 /** 中间省略。设备指纹动辄 64 位十六进制，头尾各留一截才认得出是不是同一台。 */
@@ -241,6 +429,15 @@ export function ellipsisMiddle(text: string, head = 10, tail = 6) {
   if (text.length <= head + tail + 1) return text;
   return `${text.slice(0, head)}…${text.slice(-tail)}`;
 }
+
+/** 处置 / 名单的时长预设（秒，0 = 永久） */
+export const DURATION_PRESETS = [
+  { value: 3600, label: "1 小时" },
+  { value: 86400, label: "1 天" },
+  { value: 7 * 86400, label: "7 天" },
+  { value: 30 * 86400, label: "30 天" },
+  { value: 0, label: "永久" },
+] as const;
 
 export function fmtDuration(seconds: number) {
   if (seconds <= 0) return "--";
@@ -299,6 +496,66 @@ export function DetailRow({ label, children, mono }: { label: string; children: 
     <div className="flex items-start gap-3 py-1.5 text-xs">
       <span className="w-24 shrink-0 text-muted-foreground">{label}</span>
       <span className={cn("min-w-0 flex-1 break-all", mono && "font-mono")}>{children}</span>
+    </div>
+  );
+}
+
+export function SectionTitle({ children, className }: { children: ReactNode; className?: string }) {
+  return (
+    <h4 className={cn("text-[10px] font-semibold uppercase tracking-widest text-muted-foreground", className)}>
+      {children}
+    </h4>
+  );
+}
+
+/** 页内分段切换（大盘趋势视图、规则策略分区、实体画像类型共用） */
+export function SegmentedControl<T extends string>({ value, options, onChange, className }: {
+  value: T;
+  options: ReadonlyArray<{ key: T; label: string; count?: number }>;
+  onChange: (next: T) => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex w-fit items-center gap-0.5 rounded-lg border bg-muted/50 p-0.5", className)}>
+      {options.map((option) => (
+        <button key={option.key} type="button" onClick={() => onChange(option.key)}
+          className={cn("flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] transition-colors",
+            value === option.key ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground")}>
+          {option.label}
+          {option.count != null && <span className="font-mono tabular-nums text-muted-foreground">{option.count}</span>}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function Pagination({ page, totalPages, total, onChange }: {
+  page: number; totalPages: number; total: number; onChange: (page: number) => void;
+}) {
+  return (
+    <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+      <span className="tabular-nums">共 {fmtNumber(total)} 条，第 {page} / {totalPages} 页</span>
+      <div className="flex items-center gap-1">
+        <Button variant="outline" size="sm" className="h-7 px-2" disabled={page <= 1}
+          onClick={() => onChange(page - 1)}>
+          <ChevronLeft className="size-3.5" />
+        </Button>
+        <Button variant="outline" size="sm" className="h-7 px-2" disabled={page >= totalPages}
+          onClick={() => onChange(page + 1)}>
+          <ChevronRight className="size-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** 表格加载占位行 */
+export function RowsSkeleton({ rows = 8, height = 44 }: { rows?: number; height?: number }) {
+  return (
+    <div className="space-y-1.5">
+      {Array.from({ length: rows }, (_, i) => (
+        <Skeleton key={i} className="w-full rounded-lg" style={{ height }} />
+      ))}
     </div>
   );
 }

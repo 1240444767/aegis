@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"crypto/rand"
 	"encoding/json"
@@ -30,6 +31,7 @@ import (
 )
 
 type PaymentService struct {
+	riskHook
 	log        *zap.Logger
 	pg         *pgrepo.Repository
 	client     *resty.Client
@@ -446,6 +448,16 @@ func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Se
 		return nil, nil, err
 	}
 
+	// 风控：落单之前判。拦在这里没有任何订单要清理
+	amountValue, _ := parsedAmount.Float64()
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.ScenePayment, AppID: &session.AppID, UserID: &session.UserID, Account: session.Account,
+		IP: clientIP, DeviceID: session.DeviceID, UserAgent: session.UserAgent,
+		Extra: map[string]any{"amount": amountValue, "method": config.PaymentMethod, "purpose": metaString(metadata, paymentdomain.MetaKeyPurpose)},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法下单"}); err != nil {
+		return nil, nil, err
+	}
+
 	// 履约 purpose 处理：校验参数合法性并把套餐/积分快照固化进订单 metadata，
 	// 价格以服务端配置为准（防客户端改价），支付成功后按快照自动履约
 	metadata, err = s.prepareFulfillmentMetadata(ctx, session.AppID, session.UserID, parsedAmount, metadata)
@@ -500,7 +512,7 @@ func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Se
 			appID := session.AppID
 			uid := session.UserID
 			go s.plugin.ExecuteHook(context.Background(), HookPaymentCreated, map[string]any{"orderId": order.ID}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
-			go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{"orderId": order.ID}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
+			go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{"orderId": order.ID, "amount": order.Amount.String()}, plugindomain.HookMetadata{AppID: &appID, UserID: &uid})
 		}
 		return payload, order, nil
 	}
@@ -878,7 +890,8 @@ func (s *PaymentService) applyVerifiedResult(ctx context.Context, order *payment
 				appID := order.AppID
 				go s.plugin.ExecuteHook(context.Background(), HookPaymentCompleted, map[string]any{
 					"orderId": order.ID,
-				}, plugindomain.HookMetadata{AppID: &appID})
+					"amount":  order.Amount.String(),
+				}, plugindomain.HookMetadata{AppID: &appID, UserID: order.UserID})
 			}
 		}
 	} else {
@@ -936,11 +949,11 @@ func (s *PaymentService) prepareFulfillmentMetadata(ctx context.Context, appID i
 		}
 		// 永久会员已经包含这个套餐：拦在付钱之前。履约时不再拦 —— 钱收了就得发，
 		// 两单并发都走到这里的极端情况，由运营在控制台退掉多余的那一单。
-		lifetime, features, err := s.pg.GetVipLifetimeCoverage(ctx, appID, userID)
+		holdings, err := s.pg.GetVipHoldings(ctx, appID, userID)
 		if err != nil && !errors.Is(err, pgrepo.ErrUserNotFound) {
 			return nil, err
 		}
-		if vipdomain.LifetimeIncludes(lifetime, features, *plan) {
+		if holdings.CoversPlan(*plan) {
 			return nil, errVipLifetimeIncluded()
 		}
 		out[paymentdomain.MetaKeyVipPlanID] = plan.ID

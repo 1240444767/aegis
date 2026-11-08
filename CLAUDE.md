@@ -38,7 +38,7 @@ graph TD
     NATS[("NATS JetStream")]
     Temporal[("Temporal")]
     MySQL[("Legacy MySQL")]
-    GeoIP[("GeoIP2 mmdb")]
+    GeoIP[("IP 归属地接口<br/>美团 / 宝塔 / UAPIs")]
   end
 
   subgraph pkg["共享包 (pkg/)"]
@@ -94,6 +94,7 @@ graph TD
 | **平台治理** | 全站应用的冻结 / 封禁 / 限制 / 申诉（超管与平台管理员） | [docs](docs/platform-governance.md) |
 | `pkg/clientip/` | **真实客户端 IP**：受信代理网段 + 平台探测 + 转发链判定 | [docs](docs/client-ip.md) |
 | `pkg/egress/` | **出海代理网关**：域名后缀路由 + 多协议端点 + 健康检查 | [docs](docs/egress-gateway.md) |
+| `pkg/httpserve/` | **HTTPS + HTTP/3（QUIC）**：自己终止 TLS 时同端口号 TCP/UDP 双监听、Alt-Svc 宣告、证书热加载 / ACME、0-RTT 非幂等请求回 425；CDN 后面不必开 | [docs](docs/http3.md) |
 | `pkg/banner/` | **启动横幅渲染引擎**：FIGlet 艺术字 + 明细表格 + 终端能力降级 | [bootstrap](internal/bootstrap/CLAUDE.md#启动横幅) |
 | `pkg/routetable/` | **路由清单渲染**：分组表格 / 树形 / Markdown / CSV / HTML / JSON，宽度自适应 | [transport/http](internal/transport/http/CLAUDE.md#路由清单与分组规则) |
 | `pkg/gifcaptcha/` | **动态图片验证码**：逐帧动画 GIF（字形位移/旋转/变色 + 漂移噪点 + 干扰线 + 水波扭曲），纯 Go、字体内嵌 | [service](internal/service/CLAUDE.md#动态图片验证码gifcaptcha) |
@@ -103,15 +104,32 @@ graph TD
 | `pkg/receipt/` | **支付凭证 PDF**：10 语言 A4 排版 + 字体决策 + 分页 | [docs](docs/payment-receipt.md) |
 | **交易与凭证** | 订单与钱包流水**两类主体**都能出凭证；同一笔钱只出一份（挂着订单的流水由订单出具） | [docs](docs/payment-receipt.md#两类凭证主体) |
 | **会员与试用** | 会员判定收成一个入口（是不是会员 / 还剩多久 / 是不是**试用** / 试用还能不能领）；试用是套餐的一种，一人一次由唯一约束保证。功能权益**跟随套餐当前配置**（改套餐即对在期会员生效，含降级），退款冲正与扣减会让对应那段会员期不再算数 | [service](internal/service/CLAUDE.md#权益跟随套餐会员段segmentgo--vip_segment_repositorygo) |
+| **会员权益折算** | 「已拥有」只有一个判据（`vip.Holdings`）。永久会员收到已包含的会员 / 功能时按应用策略折成积分、不记会员段；**开通永久时**被覆盖的限时会员、限时功能解锁、功能时长、免广告时长按剩余时间折成积分并结束（后面没被覆盖的段前移）；取消永久 / 退款时还回并收回积分。策略、记录、发放预览都有接口 | [docs](docs/vip-conversion.md) |
+| **会员档位** | 权益只属于档位，套餐只是售卖规格；每段会员期记档位、按档位当前功能算，删套餐 / 重新上架不影响会员。不挂套餐的永久会员归入应用的永久档位；删档位须指定迁往。解析唯一入口 `resolveGrantTierTx` | [docs](docs/vip-tiers.md) |
+| **存储中心** | 十二家提供商（含 Cloudflare R2，S3 与 R2 共用 aws-sdk-go-v2 内核）；**存储池**按优先级 / 轮询 / 权重 / 最少占用选成员，满了或出错自动换成员，失败指数退避 + 后台探活恢复；读取支持迁移后的转向与池内回退；跨存储迁移断点续传；上传规则、CDN 防盗链、永久删除真删对象 | [docs](docs/storage.md) |
 | **用户云存储** | 每个用户一块私有空间，按「命名空间 / 键」存任意文档；内容走应用的存储配置（十一家提供商通用），库里只存索引与账目。修订号乐观并发、修订可回滚、删除先进回收站；配额计入全部留存修订，管理员可逐人覆盖与冻结 | [docs](docs/cloud-storage.md) |
 | **激励广告** | 看完激励视频按场景发会员 / 积分 / 经验 / 抽奖次数。平台回调验签（`sha256(securityKey:transId)`）与客户端上报靠 `transId` 对上，默认**两方到齐才发**；限额与冷却在锁住用户行后判定，`UNIQUE(appid, trans_id)` 兜底一次一发。送出的会员带场景的**会员权益**（功能、是否免广告），跟随场景当前配置 | [docs](docs/rewarded-ads.md) |
 | **广告服务策略** | 是否同意广告服务记在**账号**上：拒绝或未选择的用户只有应用配置的**基础服务**，有效会员可免除；条款版本只升不降，调高即全员重新选择。未登录时客户端记本机、登录后 `ifAbsent` 同步；开屏广告逐次记录并挂到账号上，`eventId` 去重、按账号/设备频控 | [docs](docs/ad-policy.md) |
-| **OAuth2 授权服务器** | Ory Hydra 承载协议，Aegis 做 login / consent / logout provider：客户端按应用绑定（`owner=aegis-app:<id>`），`sub` 即用户 ID；登录页复用网关登录关卡，令牌钩子在每次签发与刷新时重判账号与应用状态；compose 的 `oauth2` profile 部署 | [docs](docs/oauth2-provider.md) |
-| **卡密** | 一张卡两种形态：**授权卡**（卡即登录凭证，绑设备、有授权期）与**兑换卡**（发会员/积分/经验/余额/抽奖次数/设备位）。七档权益由目录驱动，一码一用由三道保证叠出来 | [docs](docs/card-key.md) |
+| **崩溃报告** | 客户端在崩溃屏上经用户**逐份同意**后免登录上报一份纯文本报告（`POST /crash-reports`，带令牌时挂账号）：`reportId` 应用内去重、重传返回原来那条；同一设备 / 同一 IP 各自每小时 20 份（数库，重传不吃额度）；记客户端 IP、本地 GeoIP 位置与设备请求头。管理端按应用列表筛选、看正文、标记已处理、删除 | [docs](docs/crash-reports.md) |
+| **OAuth2 授权服务器** | Ory Hydra 承载协议，Aegis 做 login / consent / logout provider：客户端按应用绑定（`owner=aegis-app:<id>`），`sub` 即对外用户 ID；登录页复用网关登录关卡，令牌钩子在每次签发与刷新时重判账号与应用状态；compose 的 `oauth2` profile 部署 | [docs](docs/oauth2-provider.md) |
+| **卡密** | 一张卡两种形态：**授权卡**（卡即登录凭证，绑设备、有授权期、可自助解绑）与**兑换卡**（一卡一用或多人各用一次的活动码）。九档权益由目录驱动（含功能解锁、续费卡），每人限兑 / 领取对象 / 生效时间，导入、补发、提卡、统计；每人恰好一次由四道保证叠出来，输错卡密按账号与 IP 锁定 | [docs](docs/card-key.md) |
+| **账号初始化与多标识登录** | 第三方 / 短信 / 卡密快速登录建的号登录后引导补设用户名与密码（应用策略：建号方式、要求项、首次弹窗之后横幅、横幅静默时长）；密码登录按接入策略 identifiers 认账号名 / 用户 ID / 邮箱 / 手机号，共享邮箱按密码区分；管理端改用户名与要求重新设置 | [docs](docs/account-setup.md) |
 | **自动签到** | 开放策略（管理员：不开放 / 所有用户 / 会员 / 永久会员 / 持有指定功能）与个人设置（用户：开关、时刻、重试、通知）两层分开；资格判定一个纯函数四处共用，到点失去资格即暂停并通知、资格恢复自动续上。首次取用户信息时各类个人设置默认值落库 | [docs](docs/auto-sign.md) |
 | **功能时长** | 按实际使用的秒数计量的功能权益（如非会员看激励广告换「在线听歌 60 分钟」）：客户端**先租后用**（每次 ≤ 600 秒，先从余额扣走），停用时结算退回没用完的；租约 2 小时过期、过期不退；会员或已拥有该功能免扣。发放只来自激励广告的 `feature_minutes` 权益 | [docs](docs/feature-time.md) |
 | **积分商城** | 用积分兑换会员、**功能解锁**、经验、余额、抽奖次数与人工发放的权益。功能解锁是与会员段并列的第三条线：只往 `features` 里加东西、不让人成为会员。可兑换判定是一个纯函数，列表上「为什么灰着」与兑换失败的错误码同一套判据；兑换单事务（锁用户 → 锁商品）、`requestId` 幂等 | [docs](docs/points-store.md) |
+| **抽奖** | 九宫格 / 转盘活动，次数三种来源：每日免费、抽奖次数余额（看激励视频的场景发次数，平台回调验过才算）、积分；连续 N 次未中必中的保底。抽中什么只在服务端一个事务里决定并到账（锁用户 → 判次数 → 扣次数 → 加权随机 / 保底 → 条件扣库存 → 发奖），`requestId` 幂等；奖品目录与积分商城同构、与发放分支双向钉死，用户端带公示概率 | [docs](docs/lottery.md) |
+| **物品发放** | 运营在画布上编排规则（触发器 → 目标人群 / 条件 / 时间窗口 / 随机分流 / 频次限额 → 发放物品 / 随机礼包 → 站内信），手动、Cron 定时或在注册 / 登录 / 签到 / 支付时实时执行；全站 14 种物品逐档走各账本的事务内入口（会员折算、抽奖次数批次、排行榜分类照常生效）。判定是一个纯函数，预演与执行同一份；单人发放一个事务、幂等键防重、失败整笔回滚留记录可重试；批量执行按游标分批、可取消、重启后接管 | [docs](docs/item-grant.md) |
 | **邀请** | 个人码（一人一个、格式可配、可自定义）与活动码（渠道 / 推广、覆盖奖励、限次数与有效期）；注册时或注册后限时（默认 72 小时）填写，被邀请人、邀请人与阶梯奖励各自可配，邀请人奖励可等被邀请人签满 N 天再发。能不能填写是一个纯函数，填写单事务按 ID 升序锁双方 | [docs](docs/invite.md) |
+| **推广活动** | 一期活动两项任务：活动期间邀请满 N 人自己领档位奖励（人数按时间段数邀请关系）；在允许的平台（默认公众号、小红书、酷安）发文提交链接，审核通过发奖。抖音系平台写死禁止。判定是纯函数，领取与提交锁用户行 | [docs](docs/promo.md) |
+| **积分排行榜** | 总榜 / 日榜 / ISO 周榜 / 月榜（另可开经验榜、等级榜）：`RANK()` 并列名次、只展示前 topLimit 名、`me` 实时算；周期榜只算「获得」的积分（退回、排行榜奖励不计，管理员调整可配），分类目录与全部写入方双向钉死。接口永不返回原始账号（昵称或脱敏）、可匿名上榜、管理员可移出；周期到期由 API 进程后台循环结算成快照（ON CONFLICT 抢占）并按名次档位发奖（复用邀请的权益目录，SKIP LOCKED 一人一事务、可重试） | [docs](docs/leaderboard.md) |
+| **用户消息中心** | 应用用户站内信：六个分类（type 推分类，单一事实源 + 源码扫描钉死写入点）、跳转动作（路由键白名单 / https 链接）、配图与过期时间；列表 / 详情 / summary / 标已读未读 / 批量删除 / 按分类已读与清空，写操作都带回分类未读；按分类的提醒偏好（账号安全不可关）。一切写入只走 `NotificationService.Deliver`，新消息、已读、删除经 `/api/ws` 实时推到用户全部设备 | [docs](docs/notification-center.md) |
+| **风控中心** | 名单（黑 / 白 / 观察，十种对象）→ 规则（按应用与场景生效、八个维度汇总得分、观察模式、强制处置）→ 分数策略分层（应用优先）→ 执行（账号封禁、设备与 IP 黑名单、防火墙）。十二个业务场景经 `Guard` 统一接入，验证码处置走 40015 加验；规则模板一键装；规则 / 策略 / 名单在内存快照里，评估不查库 | [docs](docs/risk-center.md) |
+| **登录设备数控制** | 总数 / 终端类别（手机·电脑·网页）/ 会员档位 / 单人例外 / 新设备频率 / 同设备顶替多维叠加；超限自动下线最早或最久未活动的、拒绝，或让用户选择（登录结果带 `deviceLimit`、凭证完成登录）。按刷新令牌族聚合再按设备 Key 合并，被挤下线的令牌报 40130；唯一执行点 `issueSession`，判定是 `devicelimit.Plan` 纯函数 | [docs](docs/device-limit.md) |
+| **注册准入（IP 与设备）** | 地址与设备两条互补的线：同一设备、同一地址下的不同设备（群控）、同一设备换的不同地址（代理池）与地址（IPv6 按 /64 聚合）/ 网段 / 属地 / 整个应用分别配滑动窗口或累计配额，超限拒绝、加验（40015）或观察；地址与设备名单合并判定、设备标识质量检查、两侧各自的屡犯指数递增惩罚期、EWMA 注册突增检测（突增时收紧全部配额）、运营商与属地限制、观察模式。一个 Lua 脚本原子地数完全部规则、都没超才占位（并发不超额），建号成功确认、失败归还；四条建号路径共用 `RegisterIPService.Admit`，判定是 `regip.Decide` 纯函数；名单是内存 IPSet 快照，台账与记录多协程批量写 | [docs](docs/register-ip.md) |
+| **对外用户 ID** | 每个用户一个随机 16 位数字（`users.public_id`）：建号由列默认值发放、触发器禁止改号、删号退役永不复用。用户端与第三方看到的 `id` / `userId` / `sub` / 头像与广告令牌都是它，主键只在服务端与管理端；调用者自己的 ID 由响应层统一改写，别人的 ID 在各接口显式换算 | [docs](docs/user-public-id.md) |
+| **账号注销** | 立即注销 / 冷静期注销（1–180 天）/ 可选人工审核；验证为密码、邮箱码、短信码任选其一（开了两步验证再加动态码），换绑 72 小时内的联系方式不算；前置条件（封禁、待支付订单、退款、余额、会员、积分）逐项 off / warn / block；到期由 API 进程后台循环 SKIP LOCKED 认领执行，硬删除并按配置写墓碑限制重新注册；冷静期内登录可配置为自动撤销 | [docs](docs/account-deletion.md) |
+| **AI 中转网关** | 应用的终端用户凭自己的 `sk-ag-` 密钥（或访问令牌）调 `/api/ai/v1` 的 OpenAI / Anthropic 兼容面（对话、嵌入、图像、语音、重排），按模型价格 × 会员与等级倍率，从免费额度、会员额度、赠送额度、积分、余额里按顺序扣。调用前**暂扣不写流水**、成功后各来源只写一条消费流水、**失败整笔放回不扣费**；积分与余额零头累计凑整，结算永不超过暂扣，超出部分从实时余额补、补不上记 shortfall | [docs](docs/ai-gateway.md) |
+| **MCP 密钥与 MCP 服务** | 管理员给 AI 助手签发长期凭证（`aegis_mcp_` 前缀，只存摘要）：能做的是**签发人此刻的权限 ∩ 密钥范围**（权限点含 `组:*`、应用、只读、来源 IP、每分钟次数），范围判定落在 `Authorize` 第一道、超管密钥同样受约束；密钥管理只接受控制台会话。`mcp/` 是 Python MCP 服务（FastMCP 4，stdio / HTTP，HTTP 模式按请求头分密钥）：26 个领域模块 448 个带类型工具（用户、流水、会员、抽奖、商城、卡密、风控、注册准入、工单……），通用层经 `/api/admin/mcp/endpoints` + `/openapi.json` 覆盖其余全部管理端接口；`--read-only`、`--modules`、`--tool-search` 按需裁剪 | [docs](docs/mcp.md) |
 | **远程函数** | 接入方把自定义 API 逻辑放进服务端 JS 沙箱；**试跑读真写假**、版本正文取得回、能力/闸门/配置随时可改；**发布前静态门禁**说出「第几行缺哪项能力」；**入参契约**一份 JSON Schema 同时驱动调用校验、试跑补全与 `ctx.input` 的类型 | [docs](docs/app-functions.md) |
 | **服务端会员校验** | 接入方后端用应用密钥直接问「这个用户是不是会员」，可细到**功能标识**（`export` / `ai.chat`）；套餐改名不影响判定 | [service](internal/service/CLAUDE.md#服务端会员校验与功能标识) |
 | `pkg/i18n/` | **通用国际化**：语言协商 + CLDR 复数 + 定点金额/日期格式化 | [docs](docs/payment-receipt.md#语言协商) |
@@ -401,7 +419,7 @@ docker build -f deploy/docker/console.Dockerfile \
 | 权限控制 | Casbin v2 (RBAC) |
 | 密码强度 | zxcvbn（trustelem 端口，猜测次数估算）+ PRECIS RFC 8265 OpaqueString（x/text，归一化与合法性）+ 自带中文语境弱口令补充表，详见 [internal/service](internal/service/CLAUDE.md#密码强度评估--zxcvbn不是字符类规则) |
 | 富文本净化 | bluemonday（公告正文写入时净化，白名单放行 tiptap 的排版标签与 class，拒绝 style 与事件属性）+ html2text（提取纯文本摘要），详见 [internal/service](internal/service/CLAUDE.md#应用级内容中心app_contentgo) |
-| 多云存储 | Azure Blob / Aliyun OSS / AWS S3 / Tencent COS / Qiniu / WebDAV |
+| 多云存储 | Cloudflare R2 / AWS S3（aws-sdk-go-v2）/ MinIO / Azure Blob / Aliyun OSS / Tencent COS / Qiniu / WebDAV / OneDrive / Dropbox / Google Drive / 本地磁盘，经存储池统一调度，详见 [docs/storage.md](docs/storage.md) |
 | OAuth2 | QQ / 微信 / GitHub / Google / Microsoft / 微博 |
 | 支付渠道 | 17 个内置渠道，均由 `Provider.Describe()` 自描述（详见 [internal/service/CLAUDE.md](internal/service/CLAUDE.md#支付网关)）：<br>内部钱包 / 支付宝 (smartwalle) / 微信支付 (官方 wechatpay-go) / 易支付系聚合（易支付·彩虹·虎皮椒·PAYJS·码支付·V免签）/ 爱发电 / Stripe (stripe-go) / PayPal (plutov) / Paddle / Lemon Squeezy / Square / Razorpay / Coinbase Commerce |
 | 邮件出口 | 九档可插拔 provider，一律优先官方 SDK：`smtp` 直连（go-mail）/ `zeabur` REST / `ses`（aws-sdk-go-v2 sesv2，Raw MIME 带附件）/ `resend`（resend-go）/ `sendgrid`（sendgrid-go）/ `mailgun`（mailgun-go v5）/ `postmark`（REST，无官方 Go SDK）/ `aliyun`（dm-20151123）/ `tencent`（tencentcloud-sdk-go ses）。配置全部落库、控制台动态表单由服务商自述驱动，详见 [docs/email.md](docs/email.md)<br>**Zeabur 平台封禁出站 SMTP 端口**，部署在其上时不能用 `smtp` 档 |
@@ -410,7 +428,7 @@ docker build -f deploy/docker/console.Dockerfile \
 | 支付凭证 | `pkg/receipt`：gopdf（PDF 引擎，支持 TTF 子集嵌入）+ `pkg/fontkit`（TTC → 独立 sfnt，gopdf 读不了 TTC/OTF）+ `pkg/i18n`（x/text 的语言协商与 CLDR 复数）+ x/image/gofont（内嵌拉丁字形，保证英文凭证零依赖）+ go-colorful（Lab 空间配色派生与 WCAG 对比度）+ boombuler/barcode（矢量二维码）。10 语言、默认 en、Claude 暖调配色，详见 [docs](docs/payment-receipt.md) |
 | 客户端 IP | realclientip-go（XFF 与 RFC 7239 Forwarded 解析 + 五种取值策略 + 随库发布的 Cloudflare 网段）+ go4.org/netipx（受信网段集合运算），详见 [docs](docs/client-ip.md) |
 | 验证码 | 静态图形 / 算术 / 数字走 base64Captcha；音频 WAV 走 dchest/captcha；**动态 GIF 是自研的 `pkg/gifcaptcha`**：image/gif（逐帧编码 + 全局色表）+ fogleman/gg（噪点与干扰曲线）+ x/image 的 opentype/gofont（内嵌字体）与 draw（仿射变换）+ go-colorful（HCL 取色）。外观按应用/平台分别动态配置，详见 [internal/service](internal/service/CLAUDE.md#动态图片验证码gifcaptcha) |
-| 地理位置 | GeoIP2 MaxMind mmdb (自动更新) |
+| 地理位置 | 远程归属地接口：美团、宝塔面板、UAPIs 按优先级合并 + 每来源熔断 + Redis 缓存，详见 [internal/service](internal/service/CLAUDE.md#locationservice) |
 | 风控引擎 | expr-lang/expr（表达式规则，**类型化 Env + 编译缓存**，写错变量名在保存时即报错）+ mileusna/useragent（客户端解析：设备型号 / 桌面·移动·平板·Bot 分类 / 浏览器与系统版本）+ redis_rate GCRA 限流 + Redis HyperLogLog 基数统计（账号扩散速度），详见 [internal/service](internal/service/CLAUDE.md#riskservice--风控中心) |
 | 可观测性 | OpenTelemetry + Zap |
 | 前端 | Next.js 16 + React 19 + Tailwind CSS 4 + shadcn/ui |

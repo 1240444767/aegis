@@ -11,7 +11,7 @@ import (
 
 func (r *Repository) ListStorageConfigs(ctx context.Context, query storagedomain.ListQuery) ([]storagedomain.Config, error) {
 	args := make([]any, 0, 3)
-	sql := `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at FROM storage_configs WHERE 1=1`
+	sql := `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at FROM storage_configs WHERE 1=1`
 	if scope := strings.TrimSpace(query.Scope); scope != "" {
 		sql += fmt.Sprintf(" AND scope = $%d", len(args)+1)
 		args = append(args, scope)
@@ -46,17 +46,17 @@ func (r *Repository) ListStorageConfigs(ctx context.Context, query storagedomain
 }
 
 func (r *Repository) GetStorageConfigByID(ctx context.Context, id int64) (*storagedomain.Config, error) {
-	return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at FROM storage_configs WHERE id = $1 LIMIT 1`, id))
+	return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at FROM storage_configs WHERE id = $1 LIMIT 1`, id))
 }
 
 func (r *Repository) GetStorageConfigByScopeID(ctx context.Context, scope string, appID *int64, id int64) (*storagedomain.Config, error) {
 	if strings.TrimSpace(scope) == storagedomain.ScopeGlobal {
-		return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at FROM storage_configs WHERE id = $1 AND scope = 'global' AND appid IS NULL LIMIT 1`, id))
+		return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at FROM storage_configs WHERE id = $1 AND scope = 'global' AND appid IS NULL LIMIT 1`, id))
 	}
 	if appID == nil || *appID <= 0 {
 		return nil, nil
 	}
-	return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at FROM storage_configs WHERE id = $1 AND scope = 'app' AND appid = $2 LIMIT 1`, id, *appID))
+	return scanStorageConfig(r.pool.QueryRow(ctx, `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at FROM storage_configs WHERE id = $1 AND scope = 'app' AND appid = $2 LIMIT 1`, id, *appID))
 }
 
 func (r *Repository) ResolveStorageConfig(ctx context.Context, appID int64, configName string, provider string) (*storagedomain.Config, error) {
@@ -72,7 +72,7 @@ func (r *Repository) ResolveStorageConfig(ctx context.Context, appID int64, conf
 
 func (r *Repository) resolveStorageConfigByScope(ctx context.Context, scope string, appID *int64, configName string, provider string) (*storagedomain.Config, error) {
 	args := make([]any, 0, 4)
-	sql := `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at FROM storage_configs WHERE enabled = TRUE`
+	sql := `SELECT id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at FROM storage_configs WHERE enabled = TRUE`
 	if scope == storagedomain.ScopeGlobal {
 		sql += " AND scope = 'global' AND appid IS NULL"
 	} else {
@@ -112,7 +112,7 @@ func (r *Repository) UpsertStorageConfig(ctx context.Context, item storagedomain
 
 	raw, _ := json.Marshal(item.ConfigData)
 
-	const returningCols = `id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), created_at, updated_at`
+	const returningCols = `id, scope, appid, provider, config_name, access_mode, enabled, is_default, proxy_download, COALESCE(base_url, ''), COALESCE(root_path, ''), COALESCE(description, ''), COALESCE(config_data, '{}'::jsonb), redirect_config_id, created_at, updated_at`
 
 	var saved *storagedomain.Config
 	if item.ID > 0 {
@@ -184,6 +184,7 @@ func scanStorageConfig(row interface{ Scan(dest ...any) error }) (*storagedomain
 		&item.RootPath,
 		&item.Description,
 		&raw,
+		&item.RedirectConfigID,
 		&item.CreatedAt,
 		&item.UpdatedAt,
 	); err != nil {
@@ -195,4 +196,15 @@ func scanStorageConfig(row interface{ Scan(dest ...any) error }) (*storagedomain
 		item.ConfigData = map[string]any{}
 	}
 	return &item, nil
+}
+
+// ResolveScopedStorageConfig 只在一个作用域里解析（应用级或平台级），不做跨作用域回落。
+func (r *Repository) ResolveScopedStorageConfig(ctx context.Context, scope string, appID int64, configName string) (*storagedomain.Config, error) {
+	if scope == storagedomain.ScopeApp {
+		if appID <= 0 {
+			return nil, nil
+		}
+		return r.resolveStorageConfigByScope(ctx, storagedomain.ScopeApp, &appID, configName, "")
+	}
+	return r.resolveStorageConfigByScope(ctx, storagedomain.ScopeGlobal, nil, configName, "")
 }

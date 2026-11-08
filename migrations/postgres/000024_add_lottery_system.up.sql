@@ -1,4 +1,7 @@
--- 抽奖系统：活动、奖品、参与、抽奖记录、种子承诺
+-- 抽奖系统：活动、奖品、抽奖记录。
+--
+-- 2026-10 重构（000110_lottery_rework）改了这三张表的形状，并删掉了「报名」与「种子承诺」两张表。
+-- 迁移器每次启动都会重跑全部 *.up.sql，所以这里不再建那两张表，否则它们会在每次启动时被建出来再删掉。
 
 CREATE TABLE IF NOT EXISTS lottery_activities (
     id BIGSERIAL PRIMARY KEY,
@@ -45,15 +48,6 @@ CREATE TABLE IF NOT EXISTS lottery_prizes (
 
 CREATE INDEX IF NOT EXISTS idx_lottery_prizes_activity ON lottery_prizes(activity_id, position);
 
-CREATE TABLE IF NOT EXISTS lottery_participants (
-    id BIGSERIAL PRIMARY KEY,
-    activity_id BIGINT NOT NULL REFERENCES lottery_activities(id) ON DELETE CASCADE,
-    user_id BIGINT NOT NULL,
-    join_type VARCHAR(16) NOT NULL DEFAULT 'manual',
-    joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT uq_lottery_participant UNIQUE (activity_id, user_id)
-);
-
 CREATE TABLE IF NOT EXISTS lottery_draws (
     id BIGSERIAL PRIMARY KEY,
     activity_id BIGINT NOT NULL REFERENCES lottery_activities(id) ON DELETE CASCADE,
@@ -67,17 +61,5 @@ CREATE TABLE IF NOT EXISTS lottery_draws (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_lottery_draws_activity_user ON lottery_draws(activity_id, user_id);
+-- (activity_id, user_id) 已被 000110 的 (activity_id, user_id, created_at) 覆盖，000149 删掉了它
 CREATE INDEX IF NOT EXISTS idx_lottery_draws_user ON lottery_draws(user_id, created_at DESC);
-
-CREATE TABLE IF NOT EXISTS lottery_seed_commitments (
-    id BIGSERIAL PRIMARY KEY,
-    activity_id BIGINT NOT NULL REFERENCES lottery_activities(id) ON DELETE CASCADE,
-    round INT NOT NULL DEFAULT 1,
-    seed_hash VARCHAR(128) NOT NULL,
-    seed_value VARCHAR(128),
-    committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    revealed_at TIMESTAMPTZ,
-    chain_tx_hash VARCHAR(128),
-    CONSTRAINT uq_lottery_seed_round UNIQUE (activity_id, round)
-);

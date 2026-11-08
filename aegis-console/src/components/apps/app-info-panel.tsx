@@ -1,259 +1,71 @@
 "use client";
 
-import { useState } from "react";
-import { Fingerprint, Info, LogIn, Power, RotateCcw, Save, UserPlus } from "lucide-react";
-import { toast } from "sonner";
-import { ApiError } from "@/lib/api-client";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+import { Info } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { FieldGroup, NoAppSelected, SectionCard, SwitchRow } from "@/components/apps/app-config-primitives";
-import { AppKeyText, formatAppDate, formatCount } from "@/components/apps/app-shared";
-import { useAdminAppQuery, useAdminAppStatsQuery, useUpdateAdminAppMutation } from "@/lib/admin-hooks";
-import type { AppDetail } from "@/lib/api/types";
+import { NoAppSelected } from "@/components/apps/app-config-primitives";
+import { InfoAccess } from "@/components/apps/info/info-access";
+import { InfoAuthSources, InfoRecentLogins } from "@/components/apps/info/info-insights";
+import { InfoOverview } from "@/components/apps/info/info-overview";
+import { InfoAssets, InfoDangerZone, InfoIdentity, InfoShortcuts } from "@/components/apps/info/info-side";
+import { useAdminAppQuery } from "@/lib/admin-hooks";
 
 /**
- * 应用概览：标识 + 三个开关 + 当前规模。
+ * 应用「基本信息」：进入一个应用后的首页。
  *
- * 三个开关做成开关行而不是下拉框，是因为它们本质上是「开 / 关」：
- * 下拉框把二元状态包装成一次「展开 → 找选项 → 点击」的三步操作，
- * 而且关闭态与开启态在视觉上一模一样，扫一眼看不出这个应用现在能不能登录。
+ * 从上到下回答四件事，分区各自成卡：
  *
- * 关闭说明只在对应开关关闭时出现 —— 它是要发给终端用户看的文案，
- * 开关开着时留着那个输入框只会让人以为它还在生效。
+ * 1. 运行概况 —— 多大、今天活不活、最近在不在涨（通栏）；
+ * 2. 名称与访问 —— 唯一能在这里改的东西：名称与三项开关，带客户端提示预览；
+ * 3. 登录方式 / 最近登录 —— 用户靠什么进来、刚才谁进来了（排查登录问题的第一站）；
+ * 4. 右栏 —— 接入标识、内容与绑定、常用配置、危险操作。
+ *
+ * 分栏跟随面板自身宽度（@container）而不是视口：控制台侧栏展开与收起时，
+ * 同一视口下面板宽度能差三百多像素，按视口断点排会在窄的那种情况下挤坏。
  */
-
-type Form = {
-  name: string;
-  status: boolean;
-  registerStatus: boolean;
-  loginStatus: boolean;
-  disabledReason: string;
-  disabledRegisterReason: string;
-  disabledLoginReason: string;
-};
-
-function seed(app?: AppDetail | null): Form {
-  return {
-    name: app?.name ?? "",
-    status: app?.status ?? true,
-    registerStatus: app?.registerStatus ?? true,
-    loginStatus: app?.loginStatus ?? true,
-    disabledReason: app?.disabledReason ?? "",
-    disabledRegisterReason: app?.disabledRegisterReason ?? "",
-    disabledLoginReason: app?.disabledLoginReason ?? ""
-  };
-}
-
-export function AppInfoPanel({ appKey }: { appKey?: string | null }) {
+export function AppInfoPanel({ appKey, onDelete }: { appKey?: string | null; onDelete?: () => void }) {
   const query = useAdminAppQuery(appKey);
-  const statsQuery = useAdminAppStatsQuery(appKey);
-  const mutation = useUpdateAdminAppMutation(appKey);
   const app = query.data;
-  const stats = statsQuery.data;
-
-  // 草稿按 appKey 绑定作用域：切换应用时上一个应用的未保存改动不会串过来（不用 effect 同步）
-  const [draft, setDraft] = useState<{ scope: string; value: Form } | null>(null);
-  const scope = appKey ?? "";
-  const server = seed(app);
-  const form = draft?.scope === scope ? draft.value : server;
-  const patch = <K extends keyof Form>(key: K, value: Form[K]) =>
-    setDraft({ scope, value: { ...form, [key]: value } });
-
-  const dirty = (Object.keys(server) as (keyof Form)[]).some((key) => form[key] !== server[key]);
-
-  async function handleSave() {
-    if (!form.name.trim()) {
-      toast.error("应用名称不能为空");
-      return;
-    }
-    try {
-      await mutation.mutateAsync({
-        name: form.name.trim(),
-        status: form.status,
-        registerStatus: form.registerStatus,
-        loginStatus: form.loginStatus,
-        disabledReason: form.disabledReason,
-        disabledRegisterReason: form.disabledRegisterReason,
-        disabledLoginReason: form.disabledLoginReason
-      });
-      setDraft(null); // 清掉草稿，重新从服务端值派生
-      toast.success("已保存");
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "保存失败");
-    }
-  }
 
   if (!appKey) return <NoAppSelected icon={<Info className="size-8" />} />;
   if (query.isLoading) {
     return (
       <div className="space-y-4">
-        <Skeleton className="h-28 w-full rounded-2xl" />
-        <Skeleton className="h-64 w-full rounded-2xl" />
+        <Skeleton className="h-56 w-full rounded-2xl" />
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
+          <Skeleton className="h-80 w-full rounded-2xl" />
+          <Skeleton className="h-80 w-full rounded-2xl" />
+        </div>
       </div>
     );
   }
   if (!app) return <div className="py-12 text-center text-sm text-muted-foreground">应用不存在</div>;
 
   return (
-    <div className="space-y-4">
-      {/* 当前规模：概览页要先回答「这个应用现在多大、今天活不活」，再谈配置 */}
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
-        <Metric label="总用户" value={stats?.totalUsers} loading={statsQuery.isLoading} />
-        <Metric label="启用" value={stats?.enabledUsers} loading={statsQuery.isLoading} />
-        <Metric label="停用" value={stats?.disabledUsers} loading={statsQuery.isLoading} />
-        <Metric label="今日新增" value={stats?.newUsersToday} loading={statsQuery.isLoading} />
-        <Metric label="今日登录" value={stats?.loginSuccessToday} loading={statsQuery.isLoading} />
-        <Metric label="今日失败" value={stats?.loginFailureToday} loading={statsQuery.isLoading} />
-      </div>
+    <div className="@container/info min-w-0 space-y-4">
+      <InfoOverview appKey={app.appKey} />
 
-      <SectionCard
-        icon={<Fingerprint className="size-4" />}
-        title="应用标识"
-      >
-        <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-4">
-          <InfoCell label="应用 ID" value={String(app.id)} mono />
-          <div className="min-w-0">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">应用 KEY</div>
-            <div className="mt-0.5">
-              <AppKeyText appKey={app.appKey} />
-            </div>
+      <div className="grid min-w-0 items-start gap-4 @5xl/info:grid-cols-[minmax(0,1fr)_20rem] @7xl/info:grid-cols-[minmax(0,1fr)_23rem]">
+        <div className="min-w-0 space-y-4">
+          <InfoAccess app={app} />
+          <div className="grid min-w-0 items-start gap-4 @3xl/info:grid-cols-2">
+            <InfoAuthSources appKey={app.appKey} />
+            <InfoRecentLogins appKey={app.appKey} />
           </div>
-          <InfoCell label="创建时间" value={formatAppDate(app.createdAt)} />
-          <InfoCell label="更新时间" value={formatAppDate(app.updatedAt)} />
         </div>
-      </SectionCard>
 
-      <SectionCard
-        icon={<Power className="size-4" />}
-        title="基本信息与开关"
-        footer={
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              {dirty ? "有未保存的修改" : "配置与服务端一致"}
-            </span>
-            <div className="flex items-center gap-2">
-              {dirty && (
-                <Button size="sm" variant="ghost" className="h-8 gap-1 text-xs" onClick={() => setDraft(null)}>
-                  <RotateCcw className="size-3" />
-                  重置
-                </Button>
-              )}
-              <Button
-                size="sm"
-                className="h-8 gap-1 text-xs"
-                disabled={mutation.isPending || !dirty}
-                onClick={handleSave}
-              >
-                <Save className="size-3" />
-                {mutation.isPending ? "保存中..." : "保存配置"}
-              </Button>
-            </div>
+        <aside className="grid min-w-0 content-start gap-4 @3xl/info:grid-cols-2 @5xl/info:grid-cols-1">
+          <InfoIdentity app={app} />
+          <div className="grid min-w-0 content-start gap-4">
+            <InfoAssets appKey={app.appKey} />
+            <InfoShortcuts appKey={app.appKey} />
           </div>
-        }
-      >
-        <div className="space-y-4">
-          <FieldGroup label="应用名称">
-            <Input
-              className="h-9 text-sm"
-              value={form.name}
-              placeholder="我的应用"
-              onChange={(event) => patch("name", event.target.value)}
-            />
-          </FieldGroup>
-
-          <FieldGroup label="运行开关">
-            <div className="grid gap-2 lg:grid-cols-3">
-              <SwitchRow
-                label="应用启用"
-                icon={<Power className="size-3.5" />}
-                checked={form.status}
-                onChange={(value) => patch("status", value)}
-              />
-              <SwitchRow
-                label="开放注册"
-                icon={<UserPlus className="size-3.5" />}
-                checked={form.registerStatus}
-                onChange={(value) => patch("registerStatus", value)}
-              />
-              <SwitchRow
-                label="开放登录"
-                icon={<LogIn className="size-3.5" />}
-                checked={form.loginStatus}
-                onChange={(value) => patch("loginStatus", value)}
-              />
+          {onDelete && (
+            <div className="@3xl/info:col-span-2 @5xl/info:col-span-1">
+              <InfoDangerZone appName={app.name} onDelete={onDelete} />
             </div>
-          </FieldGroup>
-
-          {(!form.status || !form.registerStatus || !form.loginStatus) && (
-            <FieldGroup label="关闭说明">
-              <div className="grid gap-2 lg:grid-cols-3">
-                {!form.status && (
-                  <ReasonField
-                    label="应用停用说明"
-                    value={form.disabledReason}
-                    onChange={(value) => patch("disabledReason", value)}
-                  />
-                )}
-                {!form.registerStatus && (
-                  <ReasonField
-                    label="注册关闭说明"
-                    value={form.disabledRegisterReason}
-                    onChange={(value) => patch("disabledRegisterReason", value)}
-                  />
-                )}
-                {!form.loginStatus && (
-                  <ReasonField
-                    label="登录关闭说明"
-                    value={form.disabledLoginReason}
-                    onChange={(value) => patch("disabledLoginReason", value)}
-                  />
-                )}
-              </div>
-            </FieldGroup>
           )}
-        </div>
-      </SectionCard>
-    </div>
-  );
-}
-
-function Metric({ label, value, loading }: { label: string; value?: number | null; loading?: boolean }) {
-  return (
-    <div className="rounded-xl border border-border bg-card px-3 py-2.5">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      {loading ? (
-        <Skeleton className="mt-1 h-5 w-12 rounded" />
-      ) : (
-        <div className="mt-0.5 text-lg font-semibold tabular-nums">{formatCount(value)}</div>
-      )}
-    </div>
-  );
-}
-
-function InfoCell({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="min-w-0">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className={`mt-0.5 truncate text-sm font-medium ${mono ? "font-mono" : ""}`}>{value}</div>
-    </div>
-  );
-}
-
-function ReasonField({
-  label,
-  value,
-  onChange
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <Label className="text-[11px] font-medium">{label}</Label>
-      <Input className="h-9 text-sm" placeholder="例如：系统升级中，预计 12:00 恢复" value={value} onChange={(event) => onChange(event.target.value)} />
+        </aside>
+      </div>
     </div>
   );
 }

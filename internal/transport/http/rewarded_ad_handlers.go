@@ -31,6 +31,21 @@ type RewardedAdSceneRequest struct {
 	CooldownSeconds int                       `json:"cooldownSeconds"`
 	// Membership 这个场景送出的会员带什么权益，跟随当前配置（对已领到的会员同样生效）。
 	Membership RewardedAdMembershipRequest `json:"membership"`
+	// Lifetime 永久会员（或已永久拥有某功能的人）看这个场景时，已拥有的权益怎么办。不传按「按价值折算」默认值。
+	Lifetime RewardedAdLifetimeRequest `json:"lifetime"`
+}
+
+// RewardedAdLifetimeRequest 已拥有权益的处理方式。
+//
+// policy：convert（按价值折算，默认）/ replace（改发 rewards）/ hide（不展示，仍有观看到达时按价值折算）/ grant（照常发放）。
+// convert / hide 用 target（integral / ai_credit / experience / lottery_draws）、perVipDay（会员每天折多少）、
+// perFeatureHour（功能时长每 60 分钟折多少）；两项折算都不填时用默认值 10 / 10。
+type RewardedAdLifetimeRequest struct {
+	Policy         string                    `json:"policy"`
+	Target         string                    `json:"target"`
+	PerVipDay      int64                     `json:"perVipDay"`
+	PerFeatureHour int64                     `json:"perFeatureHour"`
+	Rewards        []RewardedAdRewardRequest `json:"rewards"`
 }
 
 // RewardedAdRewardRequest 场景的一项权益：卡密的权益形态，加上「功能时长」要的功能标识。
@@ -47,6 +62,16 @@ func (req RewardedAdRewardRequest) toDomain() rewardedad.Reward {
 	reward := CardKeyRewardRequest{Type: req.Type, Amount: req.Amount, Money: req.Money, RefID: req.RefID}.toDomain()
 	reward.Feature = req.Feature
 	return reward
+}
+
+func (req RewardedAdLifetimeRequest) toDomain() rewardedad.SceneLifetime {
+	rule := rewardedad.SceneLifetime{
+		Policy: req.Policy, Target: req.Target, PerVipDay: req.PerVipDay, PerFeatureHour: req.PerFeatureHour,
+	}
+	for _, reward := range req.Rewards {
+		rule.Rewards = append(rule.Rewards, reward.toDomain())
+	}
+	return rule
 }
 
 // RewardedAdMembershipRequest 看广告赠送的会员的权益。
@@ -106,6 +131,7 @@ func (req SaveRewardedAdConfigRequest) toInput(appID int64, operator string) rew
 				Features: item.Membership.Features,
 				AdFree:   item.Membership.AdFree,
 			},
+			Lifetime: item.Lifetime.toDomain(),
 		})
 	}
 	return rewardedad.SaveConfigInput{
@@ -294,23 +320,23 @@ func (h *Handler) AppRewardedAdRecords(c *gin.Context) {
 
 // ── 广告平台回调 ──
 
-// RewardedAdHuijingCallback 灰鲸激励视频的服务端回调（GET）。
+// RewardedAdCallback Apex 激励视频的服务端回调（GET）。
 //
-// 由灰鲸服务器发起，没有用户令牌也没有应用密钥可带，凭 sha256(securityKey:transId) 验签。
+// 由 Apex 服务器发起，没有用户令牌也没有应用密钥可带，凭 sha256(securityKey:transId) 验签。
 // 响应体是平台规定的 {"isValid": bool}，不套本项目的信封 —— 与支付回调回 "success" 同理，
 // 对方只认它自己的格式。参数名大小写两种写法都认（后台模板是 camelCase，宏名是 SNAKE）。
 //
 // 响应的 isValid 是「这次回调我收到了」：应用对不上才回 false，其余一律 true，
 // 因为平台只等 200ms 上下，而验签要读配置、落库要合并客户端上报，本机数据库一慢就必超时。
 // 真正的判定（验签、限额、合并发奖）在响应的同时交给后台 context 跑完，结论写进记录表。
-func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
+func (h *Handler) RewardedAdCallback(c *gin.Context) {
 	app, err := h.app.GetAppByKey(c.Request.Context(), strings.TrimSpace(c.Param("appkey")))
 	if err != nil || app == nil {
 		c.JSON(http.StatusOK, gin.H{"isValid": false})
 		return
 	}
 	amount, _ := strconv.Atoi(firstQuery(c, "rewardAmount", "reward_amount", "REWARD_AMOUNT"))
-	input := service.HuijingCallbackInput{
+	input := service.AdCallbackInput{
 		AppID:        app.ID,
 		UserID:       firstQuery(c, "userId", "user_id", "USER_ID"),
 		TransID:      firstQuery(c, "transId", "trans_id", "TRANS_ID"),
@@ -329,7 +355,7 @@ func (h *Handler) RewardedAdHuijingCallback(c *gin.Context) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if valid, reason := h.rewardedAd.HuijingCallback(ctx, input); !valid {
+		if valid, reason := h.rewardedAd.AdCallback(ctx, input); !valid {
 			// 失败原因由 service 的日志记录（bad_sign / trans_invalid / 限额等），这里不重复打。
 			_ = reason
 		}

@@ -96,7 +96,15 @@ export function RewardedAdOverviewPanel({ appKey, onOpenConfig }: { appKey: stri
           icon={Clock3}
           tone={stats?.summary.pending ? "default" : "muted"}
           value={stats?.summary.pending ?? "—"}
-          hint={stats ? `累计发放 ${stats.summary.totalGranted}` : undefined}
+          hint={
+            stats
+              ? `累计发放 ${stats.summary.totalGranted}${
+                  stats.summary.totalConverted
+                    ? `，永久会员折算 ${stats.summary.totalConverted} 次（${stats.summary.convertedIntegral ?? 0} 积分）`
+                    : ""
+                }`
+              : undefined
+          }
         />
       </div>
 

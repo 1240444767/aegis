@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Crown, Gift, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Crown, Gift, Layers, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "@/lib/api-client";
 import {
@@ -24,6 +24,7 @@ import { FeatureTagList, formatVipPrice, vipPlanTerm } from "@/components/apps/v
 import {
   useAdminVipFeaturesQuery,
   useAdminVipPlansQuery,
+  useAdminVipTiersQuery,
   useDeleteAdminVipPlanMutation,
   useSaveAdminVipPlanMutation
 } from "@/lib/vip-hooks";
@@ -40,6 +41,7 @@ import { cn } from "@/lib/utils";
 export function VipPlansPanel({ appKey }: { appKey: string }) {
   const plansQuery = useAdminVipPlansQuery(appKey);
   const featuresQuery = useAdminVipFeaturesQuery(appKey);
+  const tiersQuery = useAdminVipTiersQuery(appKey);
   const saveMutation = useSaveAdminVipPlanMutation(appKey);
   const deleteMutation = useDeleteAdminVipPlanMutation(appKey);
 
@@ -48,6 +50,7 @@ export function VipPlansPanel({ appKey }: { appKey: string }) {
 
   const plans = useMemo(() => plansQuery.data ?? [], [plansQuery.data]);
   const features = useMemo(() => featuresQuery.data ?? [], [featuresQuery.data]);
+  const tiers = useMemo(() => tiersQuery.data ?? [], [tiersQuery.data]);
   const paidPlans = plans.filter((plan) => plan.kind !== "trial");
   const trialPlans = plans.filter((plan) => plan.kind === "trial");
   const activeTrial = trialPlans.find((plan) => plan.isActive) ?? null;
@@ -119,7 +122,15 @@ export function VipPlansPanel({ appKey }: { appKey: string }) {
           <p className="text-[11px] leading-snug text-muted-foreground">{plan.description}</p>
         ) : null}
 
-        <FeatureTagList tags={plan.features} catalog={features} emptyHint="无细分权益" />
+        <div className="flex flex-wrap items-center gap-1.5">
+          {plan.tierName ? (
+            <Badge variant="outline" size="sm">
+              <Layers className="size-3" />
+              {plan.tierName}
+            </Badge>
+          ) : null}
+          <FeatureTagList tags={plan.features} catalog={features} emptyHint="无细分权益" />
+        </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
@@ -204,6 +215,7 @@ export function VipPlansPanel({ appKey }: { appKey: string }) {
         onOpenChange={(open) => setEditing((prev) => ({ ...prev, open }))}
         plan={editing.plan}
         features={features}
+        tiers={tiers}
         hasOtherActiveTrial={Boolean(activeTrial && activeTrial.id !== editing.plan?.id)}
       />
 
@@ -212,7 +224,9 @@ export function VipPlansPanel({ appKey }: { appKey: string }) {
           <AlertDialogHeader>
             <AlertDialogTitle>删除套餐「{pendingDelete?.name}」？</AlertDialogTitle>
             <AlertDialogDescription>
-              已开通的会员不受影响。
+              {pendingDelete?.tierName
+                ? `已开通的会员仍在档位「${pendingDelete.tierName}」，权益不受影响；重新上架时选同一档位即可。`
+                : "已开通的会员不受影响。"}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

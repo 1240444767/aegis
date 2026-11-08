@@ -38,11 +38,14 @@ type PasskeyLoginBeginRequest struct {
 }
 
 type PasskeyLoginVerifyRequest struct {
-	AppID       int64           `json:"appid" form:"appid" binding:"required"`
-	ChallengeID string          `json:"challengeId" form:"challengeId" binding:"required"`
-	Credential  json.RawMessage `json:"credential"`
-	Payload     json.RawMessage `json:"payload"`
-	DeviceID    string          `json:"deviceId" form:"deviceId"`
-	Device      string          `json:"device" form:"device"`
-	MarkCode    string          `json:"markcode" form:"markcode"` // Deprecated
+	AppID       int64  `json:"appid" form:"appid" binding:"required"`
+	ChallengeID string `json:"challengeId" form:"challengeId"`
+	// SessionID 与 ChallengeID 同义：options 返回的是 session.challengeId，
+	// 网关文档与 SDK 一直叫它 sessionId。两个都收，免得一边改名另一边全挂。
+	SessionID  string          `json:"sessionId" form:"sessionId"`
+	Credential json.RawMessage `json:"credential"`
+	Payload    json.RawMessage `json:"payload"`
+	DeviceID   string          `json:"deviceId" form:"deviceId"`
+	Device     string          `json:"device" form:"device"`
+	MarkCode   string          `json:"markcode" form:"markcode"` // Deprecated
 }

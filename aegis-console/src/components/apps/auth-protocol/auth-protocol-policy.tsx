@@ -128,6 +128,9 @@ export function AuthProtocolPolicy({
                 />
               ))}
             </div>
+            <InlineNotice icon={Info}>
+              密码登录时，账号框可输入用户名、邮箱、手机号或用户 ID，按勾选的标识识别用户；账号名始终可用
+            </InlineNotice>
             {phoneMissing ? (
               <InlineNotice tone="warning" icon={TriangleAlert}>
                 已开启短信，登录标识需包含手机号

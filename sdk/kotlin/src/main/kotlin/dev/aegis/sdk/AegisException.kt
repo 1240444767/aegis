@@ -27,6 +27,10 @@ class AegisException private constructor(
     /** 服务端给出的修复提示，接入期直接照做即可。 */
     val hint: String = "",
     cause: Throwable? = null,
+    /** NETWORK 类的细分，见 [AegisNetworkReason]；其他类为空串。 */
+    val networkReason: String = AegisNetworkReason.NONE,
+    /** 收到了 HTTP 响应但不是平台信封时的状态码（如 CDN 的 502）；其余为 0。 */
+    val httpStatus: Int = 0,
 ) : IOException(message, cause) {
 
     enum class Kind { TRANSPORT, AUTH, BUSINESS, NETWORK }
@@ -37,8 +41,20 @@ class AegisException private constructor(
     /** 重新拉 /config 后重试一次即可（典型场景：传输密钥刚轮换过）。 */
     val isRetryableAfterConfigRefresh: Boolean get() = recovery == AegisRecovery.REFRESH_CONFIG
 
+    /**
+     * 本机的登录已被服务端收回：账号在别的设备登录、超出登录设备数被挤下线（40130），
+     * 或在设备管理里被移除（40131）。访问令牌与刷新令牌都已失效，SDK 已清掉本地令牌，
+     * 应当把 [message] 告诉用户并回到登录页，不要再尝试刷新。
+     */
+    val isSignedOut: Boolean get() = code in SIGNED_OUT_CODES
+
+    /** 调用方自己取消的（见 [AegisAICancellation]），不是失败。 */
+    val isCanceled: Boolean get() = networkReason == AegisNetworkReason.CANCELED
+
     override fun toString(): String =
         "AegisException(kind=$kind, code=$code, message=$message" +
+            (if (networkReason.isNotEmpty()) ", networkReason=$networkReason" else "") +
+            (if (httpStatus != 0) ", httpStatus=$httpStatus" else "") +
             (if (hint.isNotEmpty()) ", hint=$hint" else "") + ")"
 
     companion object {
@@ -49,13 +65,22 @@ class AegisException private constructor(
         )
         private val AUTH_CODES = setOf(40100, 40110, 40372)
 
+        /** 本机登录被收回，见 [isSignedOut]。 */
+        internal val SIGNED_OUT_CODES = setOf(40130, 40131)
+
         @JvmStatic
         fun transport(message: String, cause: Throwable? = null): AegisException =
             AegisException(Kind.TRANSPORT, 0, message, cause = cause)
 
         @JvmStatic
-        fun network(message: String, cause: Throwable? = null): AegisException =
-            AegisException(Kind.NETWORK, 0, message, cause = cause)
+        @JvmOverloads
+        fun network(
+            message: String,
+            cause: Throwable? = null,
+            reason: String = (cause as? IOException)?.networkReason() ?: AegisNetworkReason.IO,
+            httpStatus: Int = 0,
+        ): AegisException =
+            AegisException(Kind.NETWORK, 0, message, cause = cause, networkReason = reason, httpStatus = httpStatus)
 
         /**
          * 按业务码归类。[descriptor] 来自 /config 的 errors 目录 ——
@@ -64,7 +89,7 @@ class AegisException private constructor(
         @JvmStatic
         fun fromCode(code: Int, message: String, descriptor: ErrorDescriptor? = null): AegisException {
             val kind = when (code) {
-                in AUTH_CODES -> Kind.AUTH
+                in AUTH_CODES, in SIGNED_OUT_CODES -> Kind.AUTH
                 in TRANSPORT_CODES -> Kind.TRANSPORT
                 else -> Kind.BUSINESS
             }
@@ -72,10 +97,36 @@ class AegisException private constructor(
                 kind = kind,
                 code = code,
                 message = message.ifEmpty { descriptor?.message ?: "请求失败" },
-                recovery = descriptor?.recovery ?: defaultRecovery(kind),
+                recovery = descriptor?.recovery
+                    ?: if (code in SIGNED_OUT_CODES) AegisRecovery.REAUTH else defaultRecovery(kind),
                 hint = descriptor?.hint.orEmpty(),
             )
         }
+
+        /**
+         * AI 中转（`/api/ai/v1`）的错误：那一组接口回 OpenAI / Anthropic 形状的错误信封而不是平台信封。
+         * [code] 是信封里的 `aegis_code`（上游自己的错误没有，为 0），[httpStatus] 是同步调用会回的状态码。
+         */
+        internal fun relay(code: Int, message: String, httpStatus: Int): AegisException {
+            val kind = when (code) {
+                in AUTH_CODES, in SIGNED_OUT_CODES -> Kind.AUTH
+                else -> Kind.BUSINESS
+            }
+            return AegisException(
+                kind = kind,
+                code = code,
+                message = message.ifEmpty { "AI 调用失败（HTTP $httpStatus）" },
+                recovery = if (code in SIGNED_OUT_CODES) AegisRecovery.REAUTH else defaultRecovery(kind),
+                httpStatus = httpStatus,
+            )
+        }
+
+        /** 调用方取消。 */
+        internal fun canceled(): AegisException = AegisException(
+            Kind.NETWORK, 0, "调用已取消",
+            cause = java.io.InterruptedIOException("canceled"),
+            networkReason = AegisNetworkReason.CANCELED,
+        )
 
         private fun defaultRecovery(kind: Kind): String = when (kind) {
             Kind.AUTH -> AegisRecovery.REFRESH_TOKEN

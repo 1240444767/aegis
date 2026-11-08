@@ -12,8 +12,6 @@ import type {
   SettingsIntegrityResult,
   SettingsInitializeResult,
   UserSettingsStats,
-  VipEntitlement,
-  VipFeature,
   VipPlan,
   VipTransaction
 } from "./types";
@@ -85,73 +83,7 @@ export function deleteAdminVipPlan(token: string, appId: number | string, planId
   });
 }
 
-/**
- * 发放会员。planId > 0 按套餐发放（时长/权益取自套餐 × quantity，days/features 忽略，
- * 永久套餐只能 1 份）；否则自定义发放，可附带已登记的权益标识：
- * lifetime 为 true 即发永久会员（days 忽略），否则按 days 发。
- */
-export function grantAdminVip(
-  token: string,
-  appId: number | string,
-  payload: {
-    userId: number;
-    planId?: number;
-    quantity?: number;
-    days?: number;
-    lifetime?: boolean;
-    features?: string[];
-    reason?: string;
-    bonusIntegral?: number;
-  }
-) {
-  return apiRequest<VipTransaction>(`/api/admin/apps/${appId}/vip/grant`, {
-    method: "POST",
-    token,
-    body: JSON.stringify(payload)
-  });
-}
-
-/**
- * 收回会员。lifetime 为 true 即取消永久会员（限时会员不受影响）；
- * 否则从限时会员的到期时间往回扣 days 天。只收权益不退钱，返回那条留痕记录。
- */
-export function revokeAdminVip(
-  token: string,
-  appId: number | string,
-  payload: { userId: number; lifetime?: boolean; days?: number; reason?: string }
-) {
-  return apiRequest<VipTransaction>(`/api/admin/apps/${appId}/vip/revoke`, {
-    method: "POST",
-    token,
-    body: JSON.stringify(payload)
-  });
-}
-
-export function getAdminVipEntitlement(token: string, appId: number | string, userId: number) {
-  return apiRequest<VipEntitlement>(
-    `/api/admin/apps/${appId}/vip/entitlement?userId=${userId}`,
-    { token }
-  );
-}
-
-export function getAdminVipFeatures(token: string, appId: number | string) {
-  return apiRequest<VipFeature[]>(`/api/admin/apps/${appId}/vip/features`, { token });
-}
-
-export function claimAdminVipTrial(token: string, appId: number | string, userId: number) {
-  return apiRequest<unknown>(`/api/admin/apps/${appId}/vip/trial/claims`, {
-    method: "POST",
-    token,
-    body: JSON.stringify({ userId })
-  });
-}
-
-export function resetAdminVipTrial(token: string, appId: number | string, userId: number) {
-  return apiRequest<{ reset: boolean }>(`/api/admin/apps/${appId}/vip/trial/claims/${userId}`, {
-    method: "DELETE",
-    token
-  });
-}
+// 发放 / 收回 / 权益判定 / 试用 / 功能目录 / 折算的接口只在 ./vip 一处（会员域的唯一来源）。
 
 export function getAdminVipTransactions(
   token: string,

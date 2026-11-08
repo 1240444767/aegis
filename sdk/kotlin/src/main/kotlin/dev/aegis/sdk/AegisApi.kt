@@ -157,6 +157,17 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
         path = "/auth/2fa/verify",
     )
 
+    /**
+     * 登录设备数已满时完成登录：[ticket] 取自 [AegisSession.deviceLimit]，[deviceKeys] 是用户勾选要下线的
+     * [LoginDevice.key]，至少 `mustRemove` 台。成功返回与登录相同的会话并写进 tokenStore；
+     * 勾得不够时报 40997，凭证过期或已用过报 40496（回登录页重新登录）。
+     */
+    @Throws(IOException::class)
+    fun resolveDeviceLimit(ticket: String, deviceKeys: List<String>): AegisSession = login(
+        mapOf("ticket" to ticket, "deviceKeys" to deviceKeys),
+        path = "/auth/device-limit/resolve",
+    )
+
     @Throws(IOException::class)
     fun logout() {
         client.call("POST", "/auth/logout", requireAuth = true)
@@ -350,12 +361,42 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     @JvmOverloads
-    fun passkeyOptions(account: String? = null): JsonElement =
-        client.call("POST", "/auth/passkey/options", buildBody("account" to account))
+    fun passkeyOptions(account: String? = null, deviceId: String? = null): JsonElement =
+        client.call("POST", "/auth/passkey/options", buildBody("account" to account, "deviceId" to deviceId))
 
+    /**
+     * Passkey 登录。[sessionId] 是 [passkeyOptions] 返回的 `session.challengeId`；
+     * 服务端两个字段名都收，这里一并带上。
+     */
     @Throws(IOException::class)
     fun passkeyLogin(credential: Map<String, Any?>, sessionId: String? = null): AegisSession =
-        login(buildBody("credential" to credential, "sessionId" to sessionId), path = "/auth/passkey/login")
+        login(
+            buildBody("credential" to credential, "challengeId" to sessionId, "sessionId" to sessionId),
+            path = "/auth/passkey/login",
+        )
+
+    /**
+     * Passkey 登录：[credential] 是平台 API 原样给出的断言 JSON
+     * （安卓 Credential Manager 的 `authenticationResponseJson`、浏览器 `PublicKeyCredential.toJSON()`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun passkeyLogin(
+        credential: JsonElement,
+        challengeId: String,
+        deviceId: String? = null,
+        device: String? = null,
+    ): AegisSession =
+        login(
+            buildBody(
+                "credential" to credential,
+                "challengeId" to challengeId,
+                "sessionId" to challengeId,
+                "deviceId" to deviceId,
+                "device" to device,
+            ),
+            path = "/auth/passkey/login",
+        )
 
     // ── 网页扫码登录 ──
 
@@ -399,7 +440,11 @@ class AegisAuthApi internal constructor(private val client: AegisClient) {
 
     /** 登录类接口的公共收口：解析会话并写进 tokenStore。 */
     private fun login(body: Map<String, Any?>, path: String = "/auth/login"): AegisSession {
-        val session = client.decodeAs(client.call("POST", path, body), AegisSession.serializer())
+        // 账号密码 / 短信 / 卡密登录重复执行只会多出一个会话，网络断在半路时可以自动重发。
+        // 其余几条都消耗一次性凭据（刷新令牌、二次认证挑战、OAuth 票据、Passkey 断言），
+        // 重发会被拒；刷新令牌更会被判为复用，整条会话链被吊销。它们只在确定没发出去时重发。
+        val retrySafe = path == "/auth/login"
+        val session = client.decodeAs(client.send("POST", path, body, retrySafe = retrySafe), AegisSession.serializer())
         if (session.accessToken.isNotEmpty()) {
             client.tokens.save(session.accessToken, session.refreshToken)
         }
@@ -537,6 +582,107 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun security(): JsonElement = client.call("GET", "/me/security", requireAuth = true)
 
+    // ── 账号初始化 ──
+    //
+    // 第三方 / 短信 / 卡密快速登录建的号：账号名由系统生成、也没有密码。登录后读 [accountSetupStatus]，
+    // prompt = dialog 时弹窗一次并调 [markAccountSetupPrompted]，之后只出横幅（prompt = banner）；
+    // 用户关掉横幅调 [dismissAccountSetup]，按应用策略隔一段时间再出现。
+
+    /** 账号初始化状态：还缺用户名 / 密码、现在该怎么提醒、可直接选用的用户名与用户名规则。 */
+    @Throws(IOException::class)
+    fun accountSetupStatus(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("GET", "/me/account-setup", requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
+    /**
+     * 设置用户名与（或）密码，两项可以分开提交，传 null 表示这次不设。
+     *
+     * 用户名只能自助设一次（之后 40964），被占用 40963；已有密码时设密码 40967，改走 [AegisAuthApi.changePassword]。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun completeAccountSetup(account: String? = null, password: String? = null): AegisAccountSetupResult =
+        client.decodeAs(
+            client.call(
+                "POST", "/me/account-setup",
+                buildBody("account" to account, "password" to password), requireAuth = true,
+            ),
+            AegisAccountSetupResult.serializer(),
+        )
+
+    /** 检查用户名能不能用：规则、占用、注销后的保留期。 */
+    @Throws(IOException::class)
+    fun checkAccountSetupUsername(account: String): AegisUsernameCheck = client.decodeAs(
+        client.call("POST", "/me/account-setup/check", mapOf("account" to account), requireAuth = true),
+        AegisUsernameCheck.serializer(),
+    )
+
+    /** 首次弹窗已展示：之后只出横幅。返回新的状态。 */
+    @Throws(IOException::class)
+    fun markAccountSetupPrompted(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("POST", "/me/account-setup/prompted", emptyMap<String, Any?>(), requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
+    /** 关掉横幅：按应用策略隔一段时间再出现（策略不许关时状态不变）。返回新的状态。 */
+    @Throws(IOException::class)
+    fun dismissAccountSetup(): AegisAccountSetupStatus = client.decodeAs(
+        client.call("POST", "/me/account-setup/dismiss", emptyMap<String, Any?>(), requireAuth = true),
+        AegisAccountSetupStatus.serializer(),
+    )
+
+    // ── 账号注销 ──
+
+    /**
+     * 注销页：可选方式（modes）、须知（notice）、原因（reasons）、要过的验证（verification）、
+     * 前置条件（checks / blocked）与进行中的申请（request）。enabled 为 false 且没有 request 时入口应当隐藏。
+     */
+    @Throws(IOException::class)
+    fun accountDeletion(): JsonElement = client.call("GET", "/me/deletion", requireAuth = true)
+
+    /**
+     * 向绑定的邮箱或手机号发注销验证码，[channel] 为 email 或 phone（须在 verification.methods 里）。
+     * 同一渠道 60 秒一次（42911），验证码 10 分钟内有效。
+     */
+    @Throws(IOException::class)
+    fun sendAccountDeletionCode(channel: String): JsonElement =
+        client.call("POST", "/me/deletion/code", mapOf("channel" to channel), requireAuth = true)
+
+    /**
+     * 提交注销。[mode] 为 cooling（冷静期）或 immediate（立即），不传按应用默认；[agree] 必须为 true。
+     * 身份验证：[password]，或 [channel] + [code]；verification.totp 为真时再带 [totpCode] 或 [recoveryCode]。
+     * 返回 `{ request, deleted, signedOut }`，deleted 为 true 时账号已删除，应当清掉本地登录。
+     * 失败码：40371 未开放 / 40915 已有申请 / 40917 不满足条件 / 40127 验证未通过 / 40128 验证码失效 /
+     * 40129 缺少验证 / 42912 失败过多。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitAccountDeletion(
+        agree: Boolean,
+        mode: String? = null,
+        reasonCode: String? = null,
+        reasonText: String? = null,
+        password: String? = null,
+        channel: String? = null,
+        code: String? = null,
+        totpCode: String? = null,
+        recoveryCode: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/me/deletion",
+        buildBody(
+            "agree" to agree, "mode" to mode, "reasonCode" to reasonCode, "reasonText" to reasonText,
+            "password" to password, "channel" to channel, "code" to code, "totpCode" to totpCode,
+            "recoveryCode" to recoveryCode, "deviceId" to deviceId,
+        ),
+        requireAuth = true,
+    )
+
+    /** 撤销进行中的注销申请（待审核、冷静期中、执行失败），返回撤销后的申请。 */
+    @Throws(IOException::class)
+    fun cancelAccountDeletion(): JsonElement = client.call("POST", "/me/deletion/cancel", requireAuth = true)
+
     // ── 二次认证 ──
 
     @Throws(IOException::class)
@@ -594,9 +740,29 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
         requireAuth = true,
     )
 
+    /**
+     * 完成 Passkey 注册：[credential] 是平台 API 原样给出的注册响应 JSON
+     * （安卓 Credential Manager 的 `registrationResponseJson`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun registerPasskey(
+        challengeId: String,
+        credential: JsonElement,
+        credentialName: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/me/passkeys",
+        buildBody(
+            "challengeId" to challengeId,
+            "credential" to credential,
+            "credentialName" to credentialName,
+        ),
+        requireAuth = true,
+    )
+
     @Throws(IOException::class)
     fun deletePasskey(credentialId: String): JsonElement =
-        client.call("DELETE", "/me/passkeys/$credentialId", requireAuth = true)
+        client.call("DELETE", "/me/passkeys/${encodePathSegment(credentialId)}", requireAuth = true)
 
     // ── 会话与审计 ──
 
@@ -609,6 +775,23 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     fun revokeAllSessions(): JsonElement = client.call("POST", "/me/sessions/revoke-all", requireAuth = true)
+
+    // ── 登录设备 ──
+
+    /**
+     * 我的登录设备：同一台设备上的多次登录合成一台，本机排在最前（[LoginDevice.current]），
+     * 外加此刻生效的设备数上限与各终端类别的占用。
+     */
+    @Throws(IOException::class)
+    fun devices(): LoginDeviceStatus =
+        client.decodeAs(client.call("GET", "/me/devices", requireAuth = true), LoginDeviceStatus.serializer())
+
+    /** 下线我的其他设备（[LoginDevice.key]），返回下线后的状况。本机不能在这里下线，请用 [AegisAuthApi.logout]。 */
+    @Throws(IOException::class)
+    fun removeDevices(deviceKeys: List<String>): LoginDeviceStatus = client.decodeAs(
+        client.call("POST", "/me/devices/remove", mapOf("deviceKeys" to deviceKeys), requireAuth = true),
+        LoginDeviceStatus.serializer(),
+    )
 
     @Throws(IOException::class)
     @JvmOverloads
@@ -657,6 +840,26 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun levels(): JsonElement = client.call("GET", "/points/levels", requireAuth = true)
 
+    /**
+     * 我的等级达成奖励（升级经过的每一级各一份）。[status] 可选 `claimable` 待领取 / `granted` 已到账 /
+     * `queued` 发放中 / `pending` 人工处理中 / `failed`；为空时全部（待领取在前）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun levelRewards(status: String? = null): JsonElement =
+        client.call("GET", "/points/level/rewards", query = status?.let { mapOf("status" to it) } ?: emptyMap(), requireAuth = true)
+
+    /** 领取一份待领取（`claimable`）的达成奖励。已领取过为 40900。 */
+    @Throws(IOException::class)
+    fun claimLevelReward(rewardId: Long): JsonElement =
+        client.call("POST", "/points/level/rewards/$rewardId/claim", requireAuth = true)
+
+    /** 我的升级记录。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun levelHistory(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/points/level/history", query = pageQuery(page, limit), requireAuth = true)
+
     @Throws(IOException::class)
     @JvmOverloads
     fun integralTransactions(page: Int = 1, limit: Int = 20): JsonElement =
@@ -698,6 +901,86 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun pointsStoreRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
         client.call("GET", "/points/store/redemptions", query = pageQuery(page, limit), requireAuth = true)
 
+    // ── 抽奖（docs/lottery.md）──
+
+    /** 进行中的抽奖活动。没有活动时 `activities` 为空（不报错），入口应当整个隐藏。 */
+    @Throws(IOException::class)
+    fun lotteryActivities(): JsonElement = client.call("GET", "/lottery", requireAuth = true)
+
+    /**
+     * 抽奖活动页：活动与奖品（`probability` 为公示概率）、我的各种次数（`chances`）与保底进度（`pity`）。
+     *
+     * `chances.next` 是「点一下抽奖」会用的次数来源，为空表示没有可用次数。
+     * 视频抽奖看 `chances.video`：用其中的 `scene` / `placementId` / `userId` 按激励广告的流程看完并上报
+     * （[AegisEngagementApi.claimRewardedAd]），到账的是抽奖次数，再用 `bonus` 抽。
+     */
+    @Throws(IOException::class)
+    fun lotteryState(activityId: Long): JsonElement =
+        client.call("GET", "/lottery/activities/$activityId", requireAuth = true)
+
+    /**
+     * 抽一次。抽中什么由服务端决定并在同一个事务里到账，返回 `draw`（含 `position`，奖盘上的格子）、
+     * 抽完后的 `chances` 与 `pity`。
+     *
+     * [source] 为 `free` / `bonus` / `points`，是「最多用到这一档」：为空时不设上限，两种情况都按
+     * 今日免费 → 赠送的次数 → 兑换的次数 → 积分 取第一个可用的，免费次数永远先扣。实际用的在 `draw.source` / `draw.ticket`。
+     * [requestId] 由调用方生成（建议 UUID），网络重试时带同一个值：服务端原样返回第一次的结果
+     * （`replayed = true`），不会多抽一次。失败码：40402 活动不存在 / 40923 未开始 / 40924 已结束 /
+     * 42913 免费次数用完 / 42914 积分抽奖今日已满 / 42915 没有可用次数 / 40307 积分不足 /
+     * 40928 该方式未开放 / 40929 奖品已失效（已回滚） / 40348 风控拦截。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun drawLottery(
+        activityId: Long,
+        source: String? = null,
+        requestId: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/lottery/activities/$activityId/draw",
+        mapOf("source" to source, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
+    )
+
+    /**
+     * 连抽（十连抽）：[count] 为 1–10。逐次抽、逐次到账（保底、每日运气在十次之间照常推进），返回 `draws`、
+     * 抽完后的 `chances` 与 `pity`。中途次数用完时停下，已抽到的照常返回，`stopped`（`code` / `message`）写明原因；
+     * 第一次就抽不了时与 [drawLottery] 报同一个错误码。
+     *
+     * [requestId] 不超过 61 位：第 i 次用 `requestId#i`。网络重试带同一个值时已抽过的原样返回，没抽到的接着抽。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun drawLotteryBatch(
+        activityId: Long,
+        count: Int,
+        source: String? = null,
+        requestId: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/lottery/activities/$activityId/draw/batch",
+        mapOf("count" to count, "source" to source, "requestId" to requestId, "deviceId" to deviceId), requireAuth = true,
+    )
+
+    /** 我的抽奖记录，新的在前；[activityId] 为空时不限活动。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun lotteryDraws(activityId: Long? = null, page: Int = 1, limit: Int = 20): JsonElement {
+        val query = pageQuery(page, limit).toMutableMap()
+        if (activityId != null) query["activityId"] = activityId.toString()
+        return client.call("GET", "/lottery/draws", query = query, requireAuth = true)
+    }
+
+    /**
+     * 我的抽奖次数：`account`（余额 `balance`、`tickets.gift` 赠送的 / `tickets.purchased` 兑换的、累计、
+     * 还有剩余的批次 `lots`，排在前面的先用）与次数流水 `ledger`（分页，新的在前）。
+     *
+     * 扣除顺序只有一条：今日免费 → 赠送的次数 → 兑换的次数 → 积分（`account.order`）。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun lotteryTickets(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/lottery/tickets", query = pageQuery(page, limit), requireAuth = true)
+
     /**
      * 邀请页：我的邀请码（`code`，不满足邀请条件时为空、原因在 `inviteMessage`）、分享文案与链接、
      * 双方奖励与阶梯（`milestones`）、统计（`stats`），以及我还能不能填写邀请码（`bind`）。
@@ -732,6 +1015,52 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     fun updateInviteCode(code: String? = null): JsonElement =
         client.call("PUT", "/invite/code", mapOf("code" to code), requireAuth = true)
 
+    /**
+     * 推广活动列表：进行中与刚结束（还在领取期内）的活动，`phase` 为 `upcoming` / `active` / `ended`，
+     * `claimable` 表示有可领取的邀请档位。没有活动时为空列表。
+     */
+    @Throws(IOException::class)
+    fun promoCampaigns(): JsonElement = client.call("GET", "/promo", requireAuth = true)
+
+    /**
+     * 推广活动详情：邀请任务（`invite`：活动期间的有效邀请人数、各档位与状态、我的邀请码与分享文案）
+     * 与分享任务（`share`：允许的平台、禁止的平台、奖励、次数与能否提交）。没有某项任务时对应字段为 null。
+     * 不存在或未上线 40415。
+     */
+    @Throws(IOException::class)
+    fun promoCampaign(id: Long): JsonElement = client.call("GET", "/promo/$id", requireAuth = true)
+
+    /** 推广活动的邀请排行：`items`（名次、打码昵称、头像、人数）与我自己的名次 `me`。 */
+    @Throws(IOException::class)
+    fun promoLeaderboard(id: Long): JsonElement = client.call("GET", "/promo/$id/leaderboard", requireAuth = true)
+
+    /**
+     * 领取一档邀请奖励（[count] 为档位人数）。失败码：42240 活动未开始或已过领取期 / 42241 没有邀请任务 /
+     * 42242 人数不够 / 40955 已领取 / 42248 奖励配置已失效。
+     */
+    @Throws(IOException::class)
+    fun claimPromoTier(id: Long, count: Int): JsonElement =
+        client.call("POST", "/promo/$id/tiers/claim", mapOf("count" to count), requireAuth = true)
+
+    /** 我在这期活动里提交的文章：状态 `pending` / `approved` / `rejected`、驳回原因与发放结果。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun promoSubmissions(id: Long, page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/promo/$id/submissions", query = pageQuery(page, limit), requireAuth = true)
+
+    /**
+     * 提交一篇推广文章的链接，审核通过后发奖励。失败码：42243 没有分享任务 / 42244 平台未启用 /
+     * 42245 链接无效或不属于所选平台 / 42246 抖音等禁止的平台 / 40956 已提交过 / 42247 次数已满。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitPromo(id: Long, platform: String, url: String, note: String? = null, deviceId: String? = null): JsonElement =
+        client.call(
+            "POST", "/promo/$id/submissions",
+            mapOf("platform" to platform, "url" to url, "note" to note, "deviceId" to deviceId),
+            requireAuth = true,
+        )
+
     @Throws(IOException::class)
     fun leaderboardSummary(): JsonElement = client.call("GET", "/leaderboard/summary", requireAuth = true)
 
@@ -747,6 +1076,51 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun leaderboardSignIn(type: String): JsonElement =
         client.call("GET", "/leaderboard/signin/$type", requireAuth = true)
+
+    // ── 积分排行榜（docs/leaderboard.md）──
+
+    /** 排行榜首页：开启的榜单（周期、奖励档位）与我的偏好（匿名、是否被移出）。 */
+    @Throws(IOException::class)
+    fun leaderboardBoards(): JsonElement = client.call("GET", "/leaderboard/boards", requireAuth = true)
+
+    /** 一个榜单的实时名次。key: `points_total` | `points_daily` | `points_weekly` | `points_monthly` | `experience` | `level` */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardBoard(key: String, page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/leaderboard/boards/${encodePathSegment(key)}", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 周期榜的往期列表（已结算的快照），新的在前。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardPeriods(key: String, limit: Int = 12): JsonElement =
+        client.call(
+            "GET", "/leaderboard/boards/${encodePathSegment(key)}/periods",
+            query = mapOf("limit" to limit.toString()), requireAuth = true,
+        )
+
+    /** 往期榜单：某一期结算时冻结的名次、我在这一期的名次与奖励。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardPeriod(key: String, periodKey: String, page: Int = 1, limit: Int = 20): JsonElement =
+        client.call(
+            "GET", "/leaderboard/boards/${encodePathSegment(key)}/periods/${encodePathSegment(periodKey)}",
+            query = pageQuery(page, limit), requireAuth = true,
+        )
+
+    /** 我的榜单奖励记录。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun leaderboardRewards(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/leaderboard/rewards", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 我的排行榜偏好：`anonymous` 匿名上榜。 */
+    @Throws(IOException::class)
+    fun leaderboardPreference(): JsonElement = client.call("GET", "/leaderboard/preference", requireAuth = true)
+
+    /** 开关匿名上榜：名次与奖励照旧，别人看到的是「匿名用户」。 */
+    @Throws(IOException::class)
+    fun updateLeaderboardPreference(anonymous: Boolean): JsonElement =
+        client.call("PUT", "/leaderboard/preference", mapOf("anonymous" to anonymous), requireAuth = true)
 
     // ── 激励广告 ──
 
@@ -768,7 +1142,7 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
      * `pending` 还在等广告平台的服务端回调 —— 隔一两秒用同一个 [transId] 再调一次即可，
      * 重复上报是安全的，奖励只会发一次。
      *
-     * [verified] / [errorCode] 是 SDK 自己的奖励校验结论（`HJRewardVerify`），
+     * [verified] / [errorCode] 是 SDK 自己的奖励校验结论（Apex `AdRewardVerify`），
      * 只在服务端配置为客户端校验模式时作数。
      */
     @Throws(IOException::class)
@@ -913,12 +1287,78 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
             optionalAuth = true,
         )
 
+    // ── 崩溃报告 ──
+
+    /**
+     * 上报一份崩溃报告。免登录；带令牌时挂到账号上。只在用户明确同意发送这一份报告后调用
+     * （例如在崩溃屏上点了「发送此报告」）。
+     *
+     * [reportId] 是客户端自己的记录编号（8–64 位字母数字 `_` `-`），同一应用内重复上报返回
+     * 原来那一条，`duplicate = true`。[kind] 取 `java` / `native` / `anr` / `exit`。[report] 是
+     * 完整的纯文本报告，上限 256 KB；[occurredAt] 是崩溃发生的时间（RFC 3339）。
+     *
+     * 返回 `{ id, duplicate }`。按设备与 IP 限频，超出时报 429。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitCrashReport(
+        reportId: String,
+        kind: String,
+        title: String,
+        report: String,
+        occurredAt: String,
+        detail: String? = null,
+        appVersion: String? = null,
+        versionCode: Long? = null,
+        osVersion: String? = null,
+        model: String? = null,
+        abi: String? = null,
+        processName: String? = null,
+        source: String? = null,
+        deviceId: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/crash-reports",
+        buildBody(
+            "reportId" to reportId,
+            "kind" to kind,
+            "title" to title,
+            "report" to report,
+            "occurredAt" to occurredAt,
+            "detail" to detail,
+            "appVersion" to appVersion,
+            "versionCode" to versionCode,
+            "osVersion" to osVersion,
+            "model" to model,
+            "abi" to abi,
+            "processName" to processName,
+            "source" to source,
+            "deviceId" to deviceId,
+        ),
+        optionalAuth = true,
+    )
+
     // ── 站内信 ──
 
     @Throws(IOException::class)
     @JvmOverloads
-    fun notifications(page: Int = 1, limit: Int = 20): JsonElement =
-        client.call("GET", "/notifications", query = pageQuery(page, limit), requireAuth = true)
+    fun notifications(page: Int = 1, limit: Int = 20, status: String? = null, category: String? = null): JsonElement =
+        client.call(
+            "GET", "/notifications",
+            query = pageQuery(page, limit) + listOfNotNull(
+                status?.let { "status" to it },
+                category?.let { "category" to it },
+            ),
+            requireAuth = true,
+        )
+
+    /** 消息中心首页：总未读与每个分类的未读、总数、最新一条（docs/notification-center.md）。 */
+    @Throws(IOException::class)
+    fun notificationSummary(): JsonElement = client.call("GET", "/notifications/summary", requireAuth = true)
+
+    /** 单条消息详情。 */
+    @Throws(IOException::class)
+    fun notification(notificationId: Long): JsonElement =
+        client.call("GET", "/notifications/$notificationId", requireAuth = true)
 
     @Throws(IOException::class)
     fun unreadCount(): JsonElement = client.call("GET", "/notifications/unread-count", requireAuth = true)
@@ -932,15 +1372,41 @@ class AegisEngagementApi internal constructor(private val client: AegisClient) {
         // 服务端字段是 ids（NotificationReadBatchRequest）。
         client.call("POST", "/notifications/read-batch", mapOf("ids" to ids), requireAuth = true)
 
+    /** 全部标为已读；给了 [category] 只处理这一类。 */
     @Throws(IOException::class)
-    fun readAllNotifications(): JsonElement = client.call("POST", "/notifications/read-all", requireAuth = true)
+    @JvmOverloads
+    fun readAllNotifications(category: String? = null): JsonElement =
+        client.call("POST", "/notifications/read-all", buildBody("category" to category), requireAuth = true)
+
+    /** 标为未读。 */
+    @Throws(IOException::class)
+    fun unreadNotification(notificationId: Long): JsonElement =
+        client.call("POST", "/notifications/unread", mapOf("notificationId" to notificationId), requireAuth = true)
 
     @Throws(IOException::class)
     fun deleteNotification(notificationId: Long): JsonElement =
         client.call("DELETE", "/notifications/$notificationId", requireAuth = true)
 
+    /** 批量删除（≤ 200 条）。 */
     @Throws(IOException::class)
-    fun clearNotifications(): JsonElement = client.call("POST", "/notifications/clear", requireAuth = true)
+    fun deleteNotifications(ids: List<Long>): JsonElement =
+        client.call("POST", "/notifications/delete-batch", mapOf("ids" to ids), requireAuth = true)
+
+    /** 清空。status：`all` | `read`；给了 [category] 只清这一类。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun clearNotifications(status: String? = null, category: String? = null): JsonElement =
+        client.call("POST", "/notifications/clear", buildBody("status" to status, "category" to category), requireAuth = true)
+
+    /** 各分类的提醒开关。 */
+    @Throws(IOException::class)
+    fun notificationPreferences(): JsonElement =
+        client.call("GET", "/notifications/preferences", requireAuth = true)
+
+    /** 改提醒开关：分类 key → 是否提醒。账号安全类不能关闭。 */
+    @Throws(IOException::class)
+    fun updateNotificationPreferences(categories: Map<String, Boolean>): JsonElement =
+        client.call("PUT", "/notifications/preferences", mapOf("categories" to categories), requireAuth = true)
 
     // ── 工单 ──
 
@@ -1128,7 +1594,20 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
     fun vipStatus(): JsonElement = client.call("GET", "/vip/status", requireAuth = true)
 
     @Throws(IOException::class)
-    fun vipTransactions(): JsonElement = client.call("GET", "/vip/transactions", requireAuth = true)
+    fun vipTransactions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/vip/transactions", query = pageQuery(page, limit), requireAuth = true)
+
+    /**
+     * 会员折算记录：已拥有的权益被发放时折成的积分，开通永久会员时折掉的限时会员、功能解锁、功能时长与免广告时长。
+     * `status = restored` 表示永久会员被取消后已还回。
+     */
+    @Throws(IOException::class)
+    fun vipConversions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/vip/conversions", query = pageQuery(page, limit), requireAuth = true)
+
+    /** 启用中的会员权益目录：标识、名称与说明。[vipStatus] 与套餐里只有标识，名称从这里取。 */
+    @Throws(IOException::class)
+    fun vipFeatures(): JsonElement = client.call("GET", "/vip/features", requireAuth = true)
 
     @Throws(IOException::class)
     /** 购买会员。[idempotencyKey] 同 [consumeWallet]：重复提交只购买一次。 */
@@ -1155,16 +1634,30 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     /**
+     * 兑换前预览：这张卡会发什么、现在能不能用。
+     *
+     * 不能用时仍然返回成功，`usable = false` 并带上 `reasonCode` / `reason`（与兑换时的错误码一致），
+     * 让界面在用户按下「兑换」之前就能说清楚为什么不行。卡密不存在照常以 40441 报错，
+     * 并和兑换一样计入输错次数（连续输错会被 42916 锁定 15 分钟）。
+     */
+    fun previewCardKey(code: String): JsonElement = client.call(
+        "POST", "/card-keys/preview", mapOf("code" to code), requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /**
      * 兑换卡密。
      *
      * 卡面大小写与分隔符由服务端归一化（抄卡密的人会用小写、把 `-` 打成空格），
      * 客户端原样上送即可，不要自己"清洗"一遍 —— 两边各洗一次反而会洗出分歧。
      *
-     * 失败一律是 4xx 且业务码区分得很细：40340 已作废 / 40341 已使用 /
-     * 40342 已过期 / 40343 设备数已满 / 40344 已绑定他人 / 40345 类型不符 /
-     * 40441 卡密不存在。把它们合并成一句"兑换失败"会让用户无从判断下一步该做什么。
+     * 失败一律是 4xx 且业务码区分得很细：40340 已作废 / 40341 已使用 / 40342 已过期 /
+     * 40343 设备数已满 / 40344 已绑定他人 / 40345 类型不符 / 40346 名下没有授权卡 /
+     * 40441 卡密不存在 / 40975 未到生效时间 / 40976 已兑换过（活动码每人一次）/
+     * 40977 每人限兑已满 / 40978 不在领取对象里 / 40981 授权卡已是永久 / 40983 已永久拥有该功能 /
+     * 40984 权益已下架 / 42916 输错次数过多。把它们合并成一句"兑换失败"会让用户无从判断下一步该做什么。
      *
-     * [deviceId] 只在兑换「设备位」类权益时有意义，其余情况可以不传。
+     * 成功时返回 `results`：每一项权益实际发成了什么（如「30 天」「1000 分（余额 2300）」）。
      */
     @JvmOverloads
     fun redeemCardKey(code: String, deviceId: String? = null): JsonElement = client.call(
@@ -1174,12 +1667,34 @@ class AegisCommerceApi internal constructor(private val client: AegisClient) {
 
     @Throws(IOException::class)
     /**
-     * 我名下的授权卡：授权到期时间与已绑定设备数。
+     * 我名下的授权卡：授权到期时间、已绑定的设备（`current` 标出本机）与剩余的自助解绑次数。
      *
-     * 用卡密登录（`login(method = "cardkey")`）时，这两项已经随登录结果一起下发了；
-     * 这个接口是给「登录之后过了一段时间再看一眼」用的。
+     * 用卡密登录（`login(method = "cardkey")`）时，到期时间与设备数已经随登录结果一起下发了；
+     * 这个接口是给「登录之后过了一段时间再看一眼」与设备管理用的。
      */
-    fun myCardKeys(): JsonElement = client.call("GET", "/card-keys/mine", requireAuth = true)
+    @JvmOverloads
+    fun myCardKeys(deviceId: String? = null): JsonElement = client.call(
+        "GET", "/card-keys/mine",
+        query = if (deviceId.isNullOrBlank()) emptyMap() else mapOf("deviceId" to deviceId),
+        requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /**
+     * 自助解绑授权卡上的一台设备，把名额还回来（换手机、重装系统之后用）。
+     *
+     * 每 30 天能解绑几次由批次决定（`selfUnbindLimit`）：次数用完返回 40979，
+     * 不允许自助解绑返回 40995，设备不在这张卡上返回 40458。
+     */
+    fun unbindMyCardKeyDevice(cardId: Long, deviceId: String): JsonElement = client.call(
+        "DELETE", "/card-keys/mine/$cardId/devices/${encodePathSegment(deviceId)}", requireAuth = true,
+    )
+
+    @Throws(IOException::class)
+    /** 我的卡密兑换记录（新的在前）。 */
+    @JvmOverloads
+    fun cardKeyRedemptions(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/card-keys/redemptions", query = pageQuery(page, limit), requireAuth = true)
 
     @Throws(IOException::class)
     /**
@@ -1598,6 +2113,164 @@ class AegisReleaseApi internal constructor(private val client: AegisClient) {
         client.call("POST", "/releases/channels/$code/leave", requireAuth = true)
 }
 
+/**
+ * AI 中转网关的账户侧（docs/ai-gateway.md）。
+ *
+ * 调用面在 [relay]（会话令牌）与 `relay(apiKey)`（密钥）上；也可以把任意 OpenAI / Anthropic SDK 的
+ * baseURL 指到 `{站点}/api/ai/v1`（[overview] 返回的 `baseUrl`），api key 填 [createKey] 返回的 `secret`；
+ * 应用允许时（`allowSessionToken = true`）也可以直接填当前登录会话的访问令牌。
+ *
+ * 费用按模型单价 × 本人倍率计算，按 `sources` 的顺序从免费额度、会员额度、赠送额度、积分、余额里扣。
+ * 调用失败不扣费；每次调用的响应头 `X-Aegis-Request-No` 对得上 [request] 的明细。
+ *
+ * 金额（点、元）一律是十进制字符串，与钱包同一惯例：用 Double 会丢精度。
+ */
+class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
+
+    /**
+     * 调用面（对话、流式、嵌入、重排、生图、改图、语音、转写），用当前登录会话的访问令牌。
+     * 应用需开启 `allowSessionToken`。见 [AegisAIRelay]。
+     */
+    val relay: AegisAIRelay = AegisAIRelay(client, null)
+
+    /** 调用面，用 [createKey] 领到的 `sk-ag-` 密钥（服务端、脚本、不想绑定登录态的场景）。 */
+    fun relay(apiKey: String): AegisAIRelay = AegisAIRelay(client, apiKey)
+
+    /** 中转调用面的地址（`{站点}/api/ai/v1`，不带结尾斜杠），给 OpenAI 兼容客户端当 baseURL。 */
+    val relayBaseUrl: String get() = client.relayUrl("").toString().trimEnd('/')
+
+    /**
+     * 给第三方 OpenAI / Anthropic 兼容客户端（Koog、openai-java、LangChain4j 等）用的 HTTP 客户端。
+     *
+     * 连接（多路解析、引擎、设备头）与平台接口共用，读超时放宽到 10 分钟、不设总超时（流式对话可能很长）。
+     * 每个请求的 `Authorization` 换成 [apiKey]，为空时换成当前登录会话的访问令牌（调用方自己带的会被覆盖）；
+     * 会话令牌被拒（401）时单飞刷新一次再重发。只换凭据、不解析响应：网关的错误信封原样交给调用方。
+     */
+    @JvmOverloads
+    fun relayHttpClient(apiKey: String? = null): okhttp3.OkHttpClient =
+        client.relayHttp(AegisAIRelay.SYNC_READ_TIMEOUT_SECONDS).newBuilder()
+            // 必须排在最前：链尾可能挂着自己发请求、不再往后传的发送层（如 Cronet），追加在它后面的拦截器不会执行。
+            .apply { interceptors().add(0, AegisRelayAuthInterceptor(client, apiKey)) }
+            .build()
+
+    /** 总览：是否开放、能不能用、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址。 */
+    @Throws(IOException::class)
+    fun overview(): JsonElement = client.call("GET", "/ai/overview", requireAuth = true)
+
+    /** 可调用的模型与有效单价（已乘上本人的倍率）。会员专享而本人不是会员的，`available = false`。 */
+    @Throws(IOException::class)
+    fun models(): JsonElement = client.call("GET", "/ai/models", requireAuth = true)
+
+    /**
+     * 公开模型目录（models.dev、OpenRouter、LiteLLM 合并）按名字批量查能力：识图、工具、思考与可选强度、
+     * 上下文与输出上限。免登录，一次最多 200 个；[providers] 是目录里的供应商名（openai、anthropic、google…），
+     * 作为匹配提示。查不到的项 `found = false`，只有「包含」把握的匹配不算查到。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun catalogLookup(models: List<String>, providers: List<String> = emptyList()): JsonElement = client.call(
+        "GET", "/ai/catalog/lookup",
+        query = buildQuery(
+            "models" to models.joinToString(",").takeIf { it.isNotEmpty() },
+            "providers" to providers.joinToString(",").takeIf { it.isNotEmpty() },
+        ),
+        optionalAuth = true,
+    )
+
+    /** 我的 API 密钥（只有 `hint`，没有明文）。 */
+    @Throws(IOException::class)
+    fun keys(): JsonElement = client.call("GET", "/ai/keys", requireAuth = true)
+
+    /**
+     * 新建 API 密钥。响应里的 `secret` **只出现这一次**，丢了只能删掉重建。
+     *
+     * [models] 为空表示不限模型；[spendLimit] 是这把密钥累计最多花多少点（"0" 或 null 不限）；
+     * [expiresAt] 为 RFC 3339 时间。数量超过应用上限时返回 40215。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun createKey(
+        name: String? = null,
+        models: List<String>? = null,
+        spendLimit: String? = null,
+        expiresAt: String? = null,
+    ): JsonElement = client.call(
+        "POST", "/ai/keys",
+        buildBody("name" to name, "models" to models, "spendLimit" to spendLimit, "expiresAt" to expiresAt),
+        requireAuth = true,
+    )
+
+    /**
+     * 修改 API 密钥：只改传了的字段（null 表示不改）。[status] 取 `active` / `disabled`；
+     * [clearExpiry] 为 true 时清掉到期时间。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun updateKey(
+        keyId: Long,
+        name: String? = null,
+        status: String? = null,
+        models: List<String>? = null,
+        spendLimit: String? = null,
+        expiresAt: String? = null,
+        clearExpiry: Boolean = false,
+    ): JsonElement = client.call(
+        "PUT", "/ai/keys/$keyId",
+        buildBody(
+            "name" to name,
+            "status" to status,
+            "models" to models,
+            "spendLimit" to spendLimit,
+            "expiresAt" to expiresAt,
+            "clearExpiry" to if (clearExpiry) true else null,
+        ),
+        requireAuth = true,
+    )
+
+    /** 删除 API 密钥，立即失效；正在进行的调用照常结算。 */
+    @Throws(IOException::class)
+    fun deleteKey(keyId: Long): JsonElement = client.call("DELETE", "/ai/keys/$keyId", requireAuth = true)
+
+    /**
+     * 我的调用记录（新的在前）。[status]：`succeeded` / `aborted`（流式中途断开，按已生成的内容计费）/
+     * `failed` / `expired`（这两种不扣费）/ `refunded` / `reserved`（进行中）。[start] / [end] 为 RFC 3339。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun requests(
+        model: String? = null,
+        status: String? = null,
+        keyId: Long? = null,
+        start: String? = null,
+        end: String? = null,
+        page: Int = 1,
+        limit: Int = 20,
+    ): JsonElement = client.call(
+        "GET", "/ai/requests",
+        query = buildQuery(
+            "model" to model,
+            "status" to status,
+            "keyId" to keyId?.toString(),
+            "start" to start,
+            "end" to end,
+            "page" to page.toString(),
+            "limit" to limit.toString(),
+        ),
+        requireAuth = true,
+    )
+
+    /** 一次调用的明细：用量、价格、从哪些来源各扣了多少。[requestNo] 即响应头 `X-Aegis-Request-No`。 */
+    @Throws(IOException::class)
+    fun request(requestNo: String): JsonElement =
+        client.call("GET", "/ai/requests/${encodePathSegment(requestNo)}", requireAuth = true)
+
+    /** 赠送额度流水：看广告与管理员发放、调用消费、退款。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun credits(page: Int = 1, limit: Int = 20): JsonElement =
+        client.call("GET", "/ai/credits", query = pageQuery(page, limit), requireAuth = true)
+}
+
 @kotlinx.serialization.Serializable
 internal data class OAuthUrl(val url: String = "")
 
@@ -1608,6 +2281,50 @@ private fun encodePathSegment(value: String): String =
 /** 丢掉 null 值：服务端对「字段缺失」和「字段为 null」的处理不总是一致，不传最稳。 */
 private fun buildBody(vararg pairs: Pair<String, Any?>): Map<String, Any?> =
     pairs.filter { it.second != null }.toMap()
+
+/**
+ * 一起听（服务端 docs/listen-together.md）。
+ *
+ * 房间与长连接在独立的一起听微服务里，这里只换票据：拥有 `listen_together` 权益时，
+ * 服务端签一张短期 EdDSA 票据并给出一起听服务的 wss 地址。客户端连上后第一帧发 `hello` 带票据；
+ * 过了 [AegisListenTogetherTicket.refreshAfter] 再调一次 [ticket]，在连接上发 `auth` 续期。
+ */
+class AegisListenTogetherApi internal constructor(private val client: AegisClient) {
+
+    /** 签一张票据。没有权益抛 [AegisException]（code [CODE_NOT_GRANTED]），服务未开通 code 为 [CODE_NOT_ENABLED]。 */
+    @Throws(IOException::class)
+    fun ticket(): AegisListenTogetherTicket = client.decodeAs(
+        client.call("POST", "/listen-together/ticket", body = emptyMap<String, String>(), requireAuth = true),
+        AegisListenTogetherTicket.serializer(),
+    )
+
+    companion object {
+        /** 会员功能目录里的权益标识。 */
+        const val FEATURE = "listen_together"
+        const val CODE_NOT_GRANTED = 40230
+        const val CODE_NOT_ENABLED = 50360
+        const val CODE_UNAVAILABLE = 50361
+    }
+}
+
+/** 一起听票据（时间均为毫秒时间戳，[serverTime] 可用来粗校时钟）。 */
+@kotlinx.serialization.Serializable
+data class AegisListenTogetherTicket(
+    val ticket: String,
+    val expiresAt: Long,
+    val refreshAfter: Long,
+    val endpoints: List<String> = emptyList(),
+    val serverTime: Long = 0,
+    val user: AegisListenTogetherUser = AegisListenTogetherUser(),
+)
+
+/** 票据里给房间其他人看的资料（[id] 为对外用户 ID）。 */
+@kotlinx.serialization.Serializable
+data class AegisListenTogetherUser(
+    val id: Long = 0,
+    val nickname: String = "",
+    val avatar: String = "",
+)
 
 private fun buildQuery(vararg pairs: Pair<String, String?>): Map<String, String> =
     pairs.mapNotNull { (key, value) -> value?.let { key to it } }.toMap()

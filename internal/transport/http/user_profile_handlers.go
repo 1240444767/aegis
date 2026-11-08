@@ -29,7 +29,27 @@ func (h *Handler) Profile(c *gin.Context) {
 		return
 	}
 	h.attachUserProfileAvatar(c, session, profile)
-	response.Success(c, 200, "获取成功", profile)
+	response.Success(c, 200, "获取成功", h.publicUserProfile(c, profile))
+}
+
+// publicUserProfile 用户端返回的资料：userId 换成对外 ID（docs/user-public-id.md）。
+// 返回副本，不动服务层可能还握着的那一份。
+func (h *Handler) publicUserProfile(c *gin.Context, profile *userdomain.Profile) *userdomain.Profile {
+	if profile == nil {
+		return nil
+	}
+	out := *profile
+	out.UserID = h.user.PublicIDs().Of(c.Request.Context(), profile.UserID)
+	return &out
+}
+
+func (h *Handler) publicProfileUpdateResult(c *gin.Context, result *userdomain.ProfileUpdateResult) *userdomain.ProfileUpdateResult {
+	if result == nil {
+		return nil
+	}
+	out := *result
+	out.Profile = h.publicUserProfile(c, result.Profile)
+	return &out
 }
 
 func (h *Handler) UpdateProfile(c *gin.Context) {
@@ -51,7 +71,7 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	if result != nil && result.Profile != nil {
 		h.attachUserProfileAvatar(c, session, result.Profile)
 	}
-	response.Success(c, 200, "更新成功", result)
+	response.Success(c, 200, "更新成功", h.publicProfileUpdateResult(c, result))
 }
 
 func (h *Handler) ConfirmProfileChange(c *gin.Context) {
@@ -73,7 +93,7 @@ func (h *Handler) ConfirmProfileChange(c *gin.Context) {
 	if result != nil && result.Profile != nil {
 		h.attachUserProfileAvatar(c, session, result.Profile)
 	}
-	response.Success(c, 200, "资料变更已生效", result)
+	response.Success(c, 200, "资料变更已生效", h.publicProfileUpdateResult(c, result))
 }
 
 func (h *Handler) Settings(c *gin.Context) {
@@ -183,7 +203,7 @@ func (h *Handler) LegacyAutoSignTestNotification(c *gin.Context) {
 		response.Error(c, http.StatusUnauthorized, 40100, "未认证")
 		return
 	}
-	if err := h.notifications.SendUserNotification(c.Request.Context(), session, "system", "自动签到测试通知", "自动签到通知链路正常，当前配置已可用。", "info", map[string]any{
+	if err := h.notifications.SendUserNotification(c.Request.Context(), session, "auto_sign", "自动签到测试通知", "自动签到通知链路正常，当前配置已可用。", "info", map[string]any{
 		"scene": "auto_sign_test",
 	}); err != nil {
 		h.writeError(c, err)

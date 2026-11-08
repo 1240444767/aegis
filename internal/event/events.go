@@ -26,11 +26,9 @@ const (
 	SubjectSystemAnnouncement = "system.announcement"
 
 	// 抽奖系统事件
-	SubjectLotteryDrawCompleted    = "lottery.draw.completed"
-	SubjectLotterySeedCommitted    = "lottery.seed.committed"
-	SubjectLotterySeedRevealed     = "lottery.seed.revealed"
-	SubjectLotteryActivityCreated  = "lottery.activity.created"
-	SubjectLotteryActivityUpdated  = "lottery.activity.updated"
+	SubjectLotteryDrawCompleted   = "lottery.draw.completed"
+	SubjectLotteryActivityCreated = "lottery.activity.created"
+	SubjectLotteryActivityUpdated = "lottery.activity.updated"
 )
 
 func SubjectRealtimeUser(appID int64, userID int64) string {

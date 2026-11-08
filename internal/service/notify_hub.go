@@ -74,8 +74,7 @@ type notifyCachedToken struct {
 
 // userInboxWriter 应用用户站内信写入口（由 *NotificationService 实现）。
 type userInboxWriter interface {
-	NotifyUser(ctx context.Context, appID int64, userID int64,
-		notificationType string, title string, content string, level string, metadata map[string]any) error
+	Deliver(ctx context.Context, in notificationdomain.DeliverInput) (*notificationdomain.Item, error)
 }
 
 // adminInboxWriter 管理员收件箱写入口（由 *AdminInboxService 实现）。

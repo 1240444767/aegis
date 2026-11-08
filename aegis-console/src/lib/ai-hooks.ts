@@ -9,6 +9,7 @@ import {
   deleteAIConversation,
   deleteAIMCPServer,
   deleteAISkill,
+  fetchAIDraftModels,
   getAIChannel,
   getAIConfigs,
   getAIConversationDetail,
@@ -17,6 +18,7 @@ import {
   getAIProviderCatalog,
   getAISkills,
   testAIConfig,
+  testAIDraft,
   testAIMCPServer,
   updateAIConfig,
   updateAIMCPServer,
@@ -30,7 +32,8 @@ import {
   type AIResolution,
   type AIScope,
   type AISkill,
-  type AISkillPayload
+  type AISkillPayload,
+  type AIConfigDraftPayload
 } from "@/lib/api/ai";
 import { useAdminToken } from "@/lib/admin-hooks";
 
@@ -118,6 +121,20 @@ export function useDeleteAIConfigMutation(scope: AIScope) {
   return useMutation({
     mutationFn: (configId: number) => deleteAIConfig(token as string, scope, configId),
     onSuccess: invalidate
+  });
+}
+
+export function useFetchAIDraftModelsMutation(scope: AIScope) {
+  const token = useAdminToken();
+  return useMutation({
+    mutationFn: (draft: AIConfigDraftPayload) => fetchAIDraftModels(token as string, scope, draft)
+  });
+}
+
+export function useTestAIDraftMutation(scope: AIScope) {
+  const token = useAdminToken();
+  return useMutation({
+    mutationFn: (draft: AIConfigDraftPayload) => testAIDraft(token as string, scope, draft)
   });
 }
 

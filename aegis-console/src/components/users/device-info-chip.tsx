@@ -120,9 +120,9 @@ export function DeviceInfoChip({
   const chip = (
     <span className={cn("inline-flex min-w-0 items-center gap-1.5", className)}>
       {icon}
-      <span className="min-w-0">
-        <span className="block truncate text-xs">{name}</span>
-        {subtitle ? <span className="block truncate text-[10px] text-muted-foreground">{subtitle}</span> : null}
+      <span className="min-w-0 leading-tight">
+        <span className="block truncate text-xs font-medium">{name}</span>
+        {subtitle ? <span className="block truncate text-xs text-muted-foreground">{subtitle}</span> : null}
       </span>
     </span>
   );
@@ -171,7 +171,7 @@ export function DeviceInfoCard({ info }: { info: DeviceInfo }) {
             <PlatformIcon info={info} className="size-6 text-muted-foreground" />
           )}
         </div>
-        <div className="min-w-0 space-y-1">
+        <div className="flex min-w-0 flex-col gap-1">
           <div className="truncate text-sm font-medium">{info.name || "未知设备"}</div>
           <Badge variant={info.matched ? "success" : "outline"} size="sm">
             {SOURCE_LABEL[info.source] ?? info.source}
@@ -184,7 +184,7 @@ export function DeviceInfoCard({ info }: { info: DeviceInfo }) {
           .map(([label, value]) => (
             <div key={label} className="contents">
               <dt className="text-muted-foreground">{label}</dt>
-              <dd className="truncate font-mono text-[11px]" title={value}>
+              <dd className="truncate font-mono text-xs" title={value}>
                 {value}
               </dd>
             </div>

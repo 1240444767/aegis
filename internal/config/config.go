@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -52,11 +53,13 @@ type Config struct {
 	// ClientIP 真实客户端 IP 的判定方式（含受信代理网段）。
 	// 限流、封禁、地理风控、审计全部建立在它算出来的那个地址上，
 	// 判错不会报错，只会让这几样一起静默失效。详见 pkg/clientip 与 docs/client-ip.md。
-	ClientIP         clientip.Config
+	ClientIP clientip.Config
+	// TLSServer 本进程直接终止 TLS 时的 HTTPS + HTTP/3 监听，见 tls_server.go 与 docs/http3.md。
+	// 关闭时（默认）只有明文 HTTP_PORT，TLS 交给前面的 CDN / 反代。
+	TLSServer        TLSServerConfig
 	CORS             CORSConfig
 	JWT              JWTConfig
 	Firewall         FirewallConfig
-	TrafficRamp      TrafficRampConfig
 	LoginGuard       LoginGuardConfig
 	Postgres         PostgresConfig
 	Database         DatabaseConfig
@@ -78,16 +81,23 @@ type Config struct {
 	Banner           BannerConfig
 	CrashLog         CrashLogConfig
 	ReplayProtection ReplayProtectionConfig
-	Lottery          LotteryConfig
 	Memory           MemoryConfig
 	Tracing          TracingConfig
 	// Egress 出海代理网关：按目标域名后缀把出站流量路由到境外线路。
 	// 详见 pkg/egress 与 docs/egress-gateway.md。
 	Egress egress.Config
-	OAuth  map[string]OAuthProviderConfig
+	// EgressMihomo 出海网关托管的 mihomo 核心（画布里的节点、策略组、订阅都跑在它上面）。
+	EgressMihomo MihomoConfig
+	OAuth        map[string]OAuthProviderConfig
 	// OAuth2Server 对外的 OAuth2 / OIDC 授权服务器（Ory Hydra + Aegis 作为登录与同意页）。
 	// 与上面的 OAuth（Aegis 作为客户端去接第三方登录）方向相反。详见 docs/oauth2-provider.md。
 	OAuth2Server OAuth2ServerConfig
+
+	// ListenTogether 一起听微服务的对接配置（票据、JWKS、内部 RPC），见 listen_together.go
+	ListenTogether ListenTogetherConfig
+
+	// AIRelay 用户 AI 中转的请求体上限、读请求体期限、上游空闲看门狗，见 ai_relay.go
+	AIRelay AIRelayConfig
 }
 
 // TracingConfig OpenTelemetry 追踪配置（环境变量驱动）。
@@ -566,6 +576,8 @@ type AdminUserSearchConfig struct {
 	MaxPinyinPaths    int
 	WarmupEnabled     bool
 	WarmupConcurrency int
+	// Shards 索引分片数（检索时并行），0 = 按 CPU 核数（2–16）
+	Shards int
 }
 
 type AccountBanConfig struct {
@@ -604,21 +616,19 @@ type RiskRateLimitConfig struct {
 	AccountDevicePerMinute int
 }
 
+// GeoIPConfig IP 归属地。数据来自远程接口（美团、宝塔面板、UAPIs，见 service/location_provider.go），
+// 不下载本地库。
 type GeoIPConfig struct {
-	Enabled             bool
-	DatabaseDir         string
-	CityDBURL           string
-	ASNDBURL            string
-	UpdateInterval      time.Duration
-	DownloadTimeout     time.Duration
-	GitHubMirror        string
-	ChinaOptimized      bool
-	AllowRemoteFallback bool
-	// 国内补充数据层：纯真 IP 库（每周更新）给省市区与运营商，
-	// china-operator-ip（每日更新）判定大陆归属与运营商。全球库仍是兜底。
-	ChinaEnabled         bool
-	QQWryURL             string
-	ChinaOperatorBaseURL string
+	Enabled bool
+	// Providers 查询来源与优先级，越靠前越优先（GEOIP_PROVIDERS，默认 meituan,btcn,uapis）
+	Providers []string
+	// UAPIsKey UAPIs 密钥（GEOIP_UAPIS_KEY）。不配按出口 IP 计免费额度：每秒 4 次、30 天 1500 积分
+	UAPIsKey string
+	// UAPIsSource 查询档位（GEOIP_UAPIS_SOURCE）：commercial 带区县与区划代码、每次 2 积分；
+	// standard 只到城市、每次 1 积分。不配时有密钥用 commercial、没密钥用 standard
+	UAPIsSource string
+	// UAPIsQPS 每秒请求上限（GEOIP_UAPIS_QPS，默认 4，与免费档一致）
+	UAPIsQPS float64
 }
 
 // GeoRiskConfig 地理风控 / 地理分析配置。
@@ -664,12 +674,6 @@ type AdminBootstrapConfig struct {
 	Password    string
 	DisplayName string
 	Email       string
-}
-
-type LotteryConfig struct {
-	ChainRPCURL     string // 以太坊 RPC 地址（为空则跳过链上提交）
-	ChainPrivateKey string // 链上提交私钥（hex）
-	ChainID         int64  // 链 ID（0 = 自动检测）
 }
 
 type MemoryConfig struct {
@@ -843,20 +847,6 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			BanRedirectURL:         v.GetString("FIREWALL_BAN_REDIRECT_URL"),
 			AutoBanRules:           v.GetString("FIREWALL_AUTO_BAN_RULES"),
 		},
-		TrafficRamp: TrafficRampConfig{
-			Enabled:            getBool(v, "TRAFFIC_RAMP_ENABLED", false),
-			BaselineRPS:        v.GetInt("TRAFFIC_RAMP_BASELINE_RPS"),
-			MaxRPS:             v.GetInt("TRAFFIC_RAMP_MAX_RPS"),
-			RampStepPct:        v.GetInt("TRAFFIC_RAMP_STEP_PCT"),
-			RampIntervalMs:     v.GetInt("TRAFFIC_RAMP_INTERVAL_MS"),
-			CooldownSeconds:    v.GetInt("TRAFFIC_RAMP_COOLDOWN_SECONDS"),
-			QueueSize:          v.GetInt("TRAFFIC_RAMP_QUEUE_SIZE"),
-			QueueTimeoutMs:     v.GetInt("TRAFFIC_RAMP_QUEUE_TIMEOUT_MS"),
-			MaxConcurrent:      v.GetInt("TRAFFIC_RAMP_MAX_CONCURRENT"),
-			ExemptPathPrefixes: csvList(v.GetString("TRAFFIC_RAMP_EXEMPT_PATH_PREFIXES")),
-			ExemptAdmin:        getBool(v, "TRAFFIC_RAMP_EXEMPT_ADMIN", true),
-			RetryAfterSeconds:  v.GetInt("TRAFFIC_RAMP_RETRY_AFTER_SECONDS"),
-		},
 		LoginGuard: LoginGuardConfig{
 			Enabled:          getBool(v, "LOGIN_GUARD_ENABLED", true),
 			Window:           v.GetDuration("LOGIN_GUARD_WINDOW"),
@@ -939,6 +929,7 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			MaxPinyinPaths:    v.GetInt("ADMIN_USER_SEARCH_MAX_PINYIN_PATHS"),
 			WarmupEnabled:     getBool(v, "ADMIN_USER_SEARCH_WARMUP_ENABLED", true),
 			WarmupConcurrency: v.GetInt("ADMIN_USER_SEARCH_WARMUP_CONCURRENCY"),
+			Shards:            v.GetInt("ADMIN_USER_SEARCH_SHARDS"),
 		},
 		AccountBan: AccountBanConfig{
 			CleanupEnabled:   getBool(v, "ACCOUNT_BAN_CLEANUP_ENABLED", true),
@@ -969,18 +960,11 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			},
 		},
 		GeoIP: GeoIPConfig{
-			Enabled:              getBool(v, "GEOIP_ENABLED", true),
-			DatabaseDir:          v.GetString("GEOIP_DATABASE_DIR"),
-			CityDBURL:            v.GetString("GEOIP_CITY_DB_URL"),
-			ASNDBURL:             v.GetString("GEOIP_ASN_DB_URL"),
-			UpdateInterval:       v.GetDuration("GEOIP_UPDATE_INTERVAL"),
-			DownloadTimeout:      v.GetDuration("GEOIP_DOWNLOAD_TIMEOUT"),
-			GitHubMirror:         v.GetString("GEOIP_GITHUB_MIRROR"),
-			ChinaOptimized:       getBool(v, "GEOIP_CHINA_OPTIMIZED", true),
-			AllowRemoteFallback:  getBool(v, "GEOIP_ALLOW_REMOTE_FALLBACK", true),
-			ChinaEnabled:         getBool(v, "GEOIP_CN_ENABLED", true),
-			QQWryURL:             v.GetString("GEOIP_QQWRY_URL"),
-			ChinaOperatorBaseURL: v.GetString("GEOIP_CN_OPERATOR_BASE_URL"),
+			Enabled:     getBool(v, "GEOIP_ENABLED", true),
+			Providers:   csvList(v.GetString("GEOIP_PROVIDERS")),
+			UAPIsKey:    strings.TrimSpace(v.GetString("GEOIP_UAPIS_KEY")),
+			UAPIsSource: strings.ToLower(strings.TrimSpace(v.GetString("GEOIP_UAPIS_SOURCE"))),
+			UAPIsQPS:    v.GetFloat64("GEOIP_UAPIS_QPS"),
 		},
 		GeoRisk: GeoRiskConfig{
 			Enabled:              getBool(v, "GEORISK_ENABLED", true),
@@ -1096,11 +1080,6 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 			}
 			return s
 		}(),
-		Lottery: LotteryConfig{
-			ChainRPCURL:     v.GetString("LOTTERY_CHAIN_RPC_URL"),
-			ChainPrivateKey: v.GetString("LOTTERY_CHAIN_PRIVATE_KEY"),
-			ChainID:         v.GetInt64("LOTTERY_CHAIN_ID"),
-		},
 		Memory: MemoryConfig{
 			GCAutoTune:      getBool(v, "MEMORY_GC_AUTO_TUNE", true),
 			MemoryLimitMB:   v.GetInt64("MEMORY_LIMIT_MB"),
@@ -1156,6 +1135,7 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 
 	setDefaults(&cfg)
 	cfg.OAuth2Server = loadOAuth2ServerConfig(v, cfg.APIBaseURL, cfg.Security.MasterKey, cfg.JWT.Secret)
+	cfg.ListenTogether = loadListenTogetherConfig(v, cfg.JWT.Secret)
 	for name, defaults := range oauthDefaults {
 		prefix := strings.ToUpper(name)
 		cfg.OAuth[name] = OAuthProviderConfig{
@@ -1200,10 +1180,20 @@ func loadWithViper(v *viper.Viper) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	tlsServer, err := loadTLSServerConfig(v)
+	if err != nil {
+		return Config{}, err
+	}
+	if tlsServer.Enabled && tlsServer.Port == cfg.HTTPPort {
+		return Config{}, fmt.Errorf("HTTPS_PORT 与 HTTP_PORT 不能相同（都是 %d）", cfg.HTTPPort)
+	}
+	cfg.TLSServer = tlsServer
+	cfg.AIRelay = loadAIRelayConfig(v)
 	cfg.Egress = egressCfg.Normalize()
 	if err := cfg.Egress.Validate(); err != nil {
 		return Config{}, fmt.Errorf("出海网关配置无效: %w", err)
 	}
+	cfg.EgressMihomo = loadMihomoConfig(v)
 
 	return cfg, nil
 }
@@ -1388,6 +1378,7 @@ func setDefaults(cfg *Config) {
 			// 设备上报（见 docs/app-integration.md「设备信息」）。浏览器客户端跨域时少了它们，
 			// 预检直接失败，登录请求根本发不出去
 			"X-Device-Id",
+			"X-Device-Id-Previous",
 			"X-Device-Name",
 			"X-Device-Platform",
 			"X-Device-Manufacturer",
@@ -1396,6 +1387,12 @@ func setDefaults(cfg *Config) {
 			"X-Device-OS",
 			"X-Device-OS-Version",
 			"X-App-Version",
+			// 登录设备数已满时客户端能让用户选择下线哪台（docs/device-limit.md）
+			"X-Device-Limit-Challenge",
+			// 版本管控的身份上报（docs/client-control.md）
+			"X-App-Version-Code",
+			"X-App-Package",
+			"X-App-Cert",
 		}
 	}
 	if len(cfg.CORS.ExposeHeaders) == 0 {
@@ -1430,10 +1427,10 @@ func setDefaults(cfg *Config) {
 	cfg.Firewall = NormalizeFirewallConfig(cfg.Firewall)
 	cfg.LoginGuard = NormalizeLoginGuardConfig(cfg.LoginGuard)
 	if cfg.Postgres.MaxConns == 0 {
-		cfg.Postgres.MaxConns = 10
+		cfg.Postgres.MaxConns = DefaultPostgresMaxConns(runtime.GOMAXPROCS(0))
 	}
 	if cfg.Postgres.MinConns == 0 {
-		cfg.Postgres.MinConns = 2
+		cfg.Postgres.MinConns = 4
 	}
 	if cfg.Postgres.MaxConnLifetime == 0 {
 		cfg.Postgres.MaxConnLifetime = 30 * time.Minute
@@ -1527,30 +1524,6 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Risk.RateLimit.IPPerMinute <= 0 {
 		cfg.Risk.RateLimit.IPPerMinute = 120
-	}
-	if strings.TrimSpace(cfg.GeoIP.DatabaseDir) == "" {
-		cfg.GeoIP.DatabaseDir = ".runtime/geoip"
-	}
-	if strings.TrimSpace(cfg.GeoIP.CityDBURL) == "" {
-		cfg.GeoIP.CityDBURL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-City.mmdb"
-	}
-	if strings.TrimSpace(cfg.GeoIP.ASNDBURL) == "" {
-		cfg.GeoIP.ASNDBURL = "https://github.com/P3TERX/GeoLite.mmdb/raw/download/GeoLite2-ASN.mmdb"
-	}
-	if cfg.GeoIP.UpdateInterval == 0 {
-		cfg.GeoIP.UpdateInterval = 24 * time.Hour
-	}
-	if cfg.GeoIP.DownloadTimeout == 0 {
-		cfg.GeoIP.DownloadTimeout = 2 * time.Minute
-	}
-	if strings.TrimSpace(cfg.GeoIP.GitHubMirror) == "" {
-		cfg.GeoIP.GitHubMirror = "https://ghfast.top/"
-	}
-	if strings.TrimSpace(cfg.GeoIP.QQWryURL) == "" {
-		cfg.GeoIP.QQWryURL = "https://github.com/metowolf/qqwry.dat/releases/latest/download/qqwry.dat"
-	}
-	if strings.TrimSpace(cfg.GeoIP.ChinaOperatorBaseURL) == "" {
-		cfg.GeoIP.ChinaOperatorBaseURL = "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/"
 	}
 	if cfg.NATS.StreamName == "" {
 		cfg.NATS.StreamName = "AEGIS_EVENTS"
@@ -1750,4 +1723,13 @@ func parseFloatEnv(raw string, fallback float64) float64 {
 		return f
 	}
 	return fallback
+}
+
+// DefaultPostgresMaxConns 没配 POSTGRES_MAX_CONNS 时的连接池上限：每核 4 条，16–40 之间。
+//
+// 以前固定 10 条，整站所有功能共用：一个人并发抽奖、每个请求都在库里等锁时，10 条一下就被占满，
+// 别的请求全在池外排队超时（2026-11-08）。上限 40 是给滚动发布留的：新旧两个实例同时在线时是 80 条，
+// 仍在 Postgres 默认 max_connections=100 之内。库侧调大 max_connections 之后可以用环境变量再往上调。
+func DefaultPostgresMaxConns(procs int) int32 {
+	return int32(min(max(4*procs, 16), 40))
 }

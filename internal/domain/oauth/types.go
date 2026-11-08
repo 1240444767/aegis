@@ -16,6 +16,7 @@ const (
 	KindWeibo     = "weibo"     // 微博（uid 随 token 返回）
 	KindGitHub    = "github"    // GitHub（邮箱需二次拉取）
 	KindMicrosoft = "microsoft" // Microsoft Graph / Entra ID
+	KindGoogle    = "google"    // Google（原生登录核验 ID Token，网页登录同标准 OIDC）
 )
 
 // token 端点凭据传递方式
@@ -124,9 +125,13 @@ type SaveInput struct {
 }
 
 // PublicProvider 登录页渲染用的最小信息集，不含任何凭据。
+//
+// ClientID 只有 Google 渠道下发：安卓 Credential Manager 要拿 Web 客户端 ID 当 serverClientId
+// 才签得出 ID Token。Client ID 本就出现在每个授权链接里，不是秘密。
 type PublicProvider struct {
 	Provider    string `json:"provider"`
 	DisplayName string `json:"displayName"`
+	ClientID    string `json:"clientId,omitempty"`
 	Icon        string `json:"icon,omitempty"`
 	Color       string `json:"color,omitempty"`
 	AllowLogin  bool   `json:"allowLogin"`

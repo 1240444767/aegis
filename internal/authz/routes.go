@@ -144,6 +144,12 @@ func splitPath(path string) []string {
 // 加一条新的管理端路由时往这里补一行即可；忘了补的表现是 40315
 // 「该管理端接口尚未登记权限规则」，而不是静默放行。
 var adminRouteRules = []RouteRule{
+	// ── MCP 服务端自述（docs/mcp.md）──
+	//
+	// 实际挂的是 AdminAuth：「我是谁、我能调哪些接口」对任何凭证都该答得上来，
+	// 判定结果本身就是按调用者的权限与密钥范围算出来的。登记在这里是为了不让它落进默认拒绝。
+	{Methods: readMethods, Pattern: "/api/admin/mcp/*", Note: "自述接口，内容按调用者的权限与密钥范围裁剪"},
+
 	// ── 工作台 ──
 	{Pattern: "/api/admin/dashboard", Note: "任意已登录管理员可见，内容按身份裁剪"},
 
@@ -156,6 +162,10 @@ var adminRouteRules = []RouteRule{
 	{Pattern: "/api/admin/platform/storage-config/list", Permission: PermPlatformStorageRead},
 	{Pattern: "/api/admin/platform/storage-config/detail", Permission: PermPlatformStorageRead},
 	{Pattern: "/api/admin/platform/storage-config/*", Permission: PermPlatformStorageWrite},
+	// 存储中心：读（总览、池、事件、迁移进度、CORS 现状）与写（池、检测、CORS、迁移、转向）。
+	// 深度检测会真的往桶里写一个探测对象，所以算写。
+	{Methods: readMethods, Pattern: "/api/admin/platform/storage/*", Permission: PermPlatformStorageRead},
+	{Pattern: "/api/admin/platform/storage/*", Permission: PermPlatformStorageWrite},
 	{Pattern: "/api/admin/platform/apps/:appkey/revoke-sessions", Permission: PermPlatformAppDanger},
 	{Pattern: "/api/admin/platform/governance/appeals/:appealId/review", Permission: PermPlatformAppealReview},
 	{Methods: readMethods, Pattern: "/api/admin/platform/*", Permission: PermPlatformAppRead},
@@ -212,6 +222,9 @@ var adminRouteRules = []RouteRule{
 	// 按应用作用域判定的话，任何一个应用管理员都能改到全站的发信出口 ——
 	// 与 /api/admin/platform/* 那条「恒全局」是同一个理由。
 	{Pattern: "/api/admin/system/email/providers", Note: "邮件服务商静态目录，不含租户数据与凭据"},
+	{Pattern: "/api/admin/system/email/scenes", Note: "邮件场景静态目录（默认文案与可用变量）"},
+	// 预览用 POST 只是因为要带一份草稿策略，不落库也不发信
+	{Methods: []string{"POST"}, Pattern: "/api/admin/system/email/preview", Permission: PermEmailRead},
 	{Methods: readMethods, Pattern: "/api/admin/system/email/*", Permission: PermEmailRead},
 	{Pattern: "/api/admin/system/email/*", Permission: PermEmailWrite},
 
@@ -300,8 +313,15 @@ var adminRouteRules = []RouteRule{
 	{Pattern: "/api/admin/app/email-config/deliveries", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/stats", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/channel", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/scenes", Note: "邮件场景静态目录（默认文案与可用变量）"},
+	{Pattern: "/api/admin/app/email-config/policy", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/preview", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/overview", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/deliveries/detail", Permission: PermEmailRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/app/email-config/suppressions", Permission: PermEmailRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/email-config/*", Permission: PermEmailWrite, Scope: ScopeApp},
 
+	{Pattern: "/api/admin/app/storage-config/providers", Note: "存储提供商静态目录（字段声明与能力），不含任何配置值"},
 	{Pattern: "/api/admin/app/storage-config/list", Permission: PermStorageRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/storage-config/detail", Permission: PermStorageRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/app/storage-config/*", Permission: PermStorageWrite, Scope: ScopeApp},
@@ -341,6 +361,9 @@ var adminRouteRules = []RouteRule{
 
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/users/*", Permission: PermAppUserRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/users/*", Permission: PermAppUserWrite, Scope: ScopeApp},
+	// 账号注销的申请、审核与重新注册限制都是用户数据，配置也决定「用户能不能删掉自己」，同归用户权限点
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/account-deletion/*", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/account-deletion/*", Permission: PermAppUserWrite, Scope: ScopeApp},
 	// 渠道下的用户名单同样是用户数据（旧实现里靠 Contains "/users" 覆盖到）
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/channels/:cid/users/*", Permission: PermAppUserRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/channels/:cid/users/*", Permission: PermAppUserWrite, Scope: ScopeApp},
@@ -352,7 +375,34 @@ var adminRouteRules = []RouteRule{
 	// 发布中心。模拟检测只读不写，按查看权限放行
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/releases/*", Permission: PermVersionRead, Scope: ScopeApp},
 	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/releases/simulate", Permission: PermVersionRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/releases/notes/preview", Permission: PermVersionRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/releases/*", Permission: PermVersionWrite, Scope: ScopeApp},
+	// 版本管控：读、模拟判定只要读权限；设置、规则、密钥轮换、删除设备记录、通知复查要写权限
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/client-control", Permission: PermVersionRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/client-control/simulate", Permission: PermVersionRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/client-control/*", Permission: PermVersionWrite, Scope: ScopeApp},
+	// 登录设备数控制：查看（含模拟）是用户数据的读；改策略是应用配置的写；例外、下线、整理、清台账是用户数据的写
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/device-limit", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/device-limit/*", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/device-limit/simulate", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"PUT"}, Pattern: "/api/admin/apps/:appkey/device-limit/policy", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/device-limit/*", Permission: PermAppUserWrite, Scope: ScopeApp},
+	// 注册 IP 控制：查看（含模拟、IP 查询）是用户数据的读；策略与名单是应用配置的写；解除限制是用户数据的写
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/register-ip", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/register-ip/*", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"POST"}, Pattern: "/api/admin/apps/:appkey/register-ip/simulate", Permission: PermAppUserRead, Scope: ScopeApp},
+	{Methods: []string{"PUT"}, Pattern: "/api/admin/apps/:appkey/register-ip/policy", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/register-ip/lists", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/register-ip/lists/*", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/register-ip/device-lists", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/register-ip/device-lists/*", Permission: PermAppWrite, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/register-ip/*", Permission: PermAppUserWrite, Scope: ScopeApp},
+	// 崩溃报告：查看（列表、筛选项、含正文的详情）要应用读权限，标记已处理与删除要应用写权限。
+	// 显式写出来而不是落进下面的兜底：报告里带设备标识与 IP，权限改动应当在这里一眼看见。
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/crash-reports", Permission: PermAppRead, Scope: ScopeApp},
+	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/crash-reports/*", Permission: PermAppRead, Scope: ScopeApp},
+	{Pattern: "/api/admin/apps/:appkey/crash-reports/*", Permission: PermAppWrite, Scope: ScopeApp},
 	{Methods: readMethods, Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeRead, Scope: ScopeApp},
 	{Pattern: "/api/admin/apps/:appkey/notices/*", Permission: PermContentNoticeWrite, Scope: ScopeApp},
 

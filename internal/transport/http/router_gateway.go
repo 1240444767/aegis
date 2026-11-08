@@ -22,12 +22,16 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 	appGateway := router.Group("/api/v1/apps/:appkey")
 	{
 		appGateway.GET("/config", h.AppConfig)
+		// 公开模型目录按名字批量查能力（免登录：用户接自己的 AI 供应商时不一定登录了）
+		appGateway.GET("/ai/catalog/lookup", h.AppAICatalogLookup)
 		appGateway.POST("/captcha", h.AppCaptcha)
 		appGateway.POST("/auth/sms/code", h.AppSMSCode)
 		appGateway.POST("/auth/register", h.AppRegister)
 		appGateway.POST("/auth/login", h.AppLogin)
 		appGateway.POST("/auth/refresh", h.AppRefresh)
 		appGateway.POST("/auth/2fa/verify", h.AppSecondFactor)
+		// 登录设备数已满时，用户选好要下线的设备后凭凭证完成登录（docs/device-limit.md）
+		appGateway.POST("/auth/device-limit/resolve", h.AppDeviceLimitResolve)
 		// 网页扫码登录：网页发码与轮询（网站服务端代为调用），扫码与确认在 Bearer 组
 		appGateway.POST("/auth/qr/create", h.AppQRLoginCreate)
 		appGateway.POST("/auth/qr/poll", h.AppQRLoginPoll)
@@ -71,10 +75,15 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayOptional.GET("/releases/check", h.AppReleaseCheck)
 		appGatewayOptional.GET("/releases/latest", h.AppReleaseLatest)
 		appGatewayOptional.POST("/releases/events", h.AppReleaseEvent)
+		// 版本管控：加密上报身份、取签名裁决，以及免登录的长轮询变更通知（见 docs/client-control.md）
+		appGatewayOptional.POST("/client-control/check", h.AppClientControlCheck)
+		appGatewayOptional.GET("/client-control/watch", h.AppClientControlWatch)
 		// 广告服务策略与开屏上报：未登录也要知道基础服务有哪些、开屏能不能放；
 		// 带令牌时按账号回答，开屏记录也挂到账号上。
 		appGatewayOptional.GET("/ads/policy", h.AppAdPolicy)
 		appGatewayOptional.POST("/ads/splash/events", h.AppReportSplashAd)
+		// 崩溃报告：用户在崩溃屏上逐份同意后上报，未登录也能发；带令牌时挂到账号上（docs/crash-reports.md）
+		appGatewayOptional.POST("/crash-reports", h.AppSubmitCrashReport)
 	}
 
 	// 网关内需要 Bearer 令牌的部分。
@@ -105,8 +114,11 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 
 		// 卡密：兑换与「我的授权」。授权卡登录本身不在这里 ——
 		// 它是 /auth/login 的一档 method，加登录方式不加路由。
+		appGatewayAuthed.POST("/card-keys/preview", h.AppPreviewCardKey)
 		appGatewayAuthed.POST("/card-keys/redeem", h.AppRedeemCardKey)
 		appGatewayAuthed.GET("/card-keys/mine", h.AppMyCardKeys)
+		appGatewayAuthed.DELETE("/card-keys/mine/:cardId/devices/:deviceId", h.AppUnbindMyCardKeyDevice)
+		appGatewayAuthed.GET("/card-keys/redemptions", h.AppMyCardKeyRedemptions)
 
 		// 激励广告：状态（含传给 SDK 的用户标识）、看完上报、我的记录。
 		// 平台的服务端回调不在这里 —— 它没有用户令牌可带，走 /api/apps/:appkey/ads/*。
@@ -136,6 +148,17 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/me/auto-sign", h.AppAutoSignStatus)
 		appGatewayAuthed.PUT("/me/auto-sign", h.AppUpdateAutoSign)
 		appGatewayAuthed.GET("/me/security", h.Security)
+		// 账号初始化：快速登录建的号补设用户名与密码；首次弹窗、之后横幅（docs/account-setup.md）
+		appGatewayAuthed.GET("/me/account-setup", h.AppAccountSetupStatus)
+		appGatewayAuthed.POST("/me/account-setup", h.AppCompleteAccountSetup)
+		appGatewayAuthed.POST("/me/account-setup/check", h.AppAccountSetupCheck)
+		appGatewayAuthed.POST("/me/account-setup/prompted", h.AppAccountSetupPrompted)
+		appGatewayAuthed.POST("/me/account-setup/dismiss", h.AppAccountSetupDismiss)
+		// 账号注销：注销页（enabled=false 时入口隐藏）/ 发验证码 / 提交 / 撤销
+		appGatewayAuthed.GET("/me/deletion", h.AppAccountDeletion)
+		appGatewayAuthed.POST("/me/deletion/code", h.AppAccountDeletionCode)
+		appGatewayAuthed.POST("/me/deletion", h.AppSubmitAccountDeletion)
+		appGatewayAuthed.POST("/me/deletion/cancel", h.AppCancelAccountDeletion)
 
 		// 二次认证
 		appGatewayAuthed.POST("/me/2fa/totp/enroll", h.BeginTOTPEnrollment)
@@ -155,6 +178,9 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/me/sessions", h.UserSessions)
 		appGatewayAuthed.DELETE("/me/sessions/:tokenHash", h.RevokeUserSession)
 		appGatewayAuthed.POST("/me/sessions/revoke-all", h.RevokeAllUserSessions)
+		// 登录设备：按设备合并的在线登录、生效上限与占用，下线其他设备
+		appGatewayAuthed.GET("/me/devices", h.AppMyDevices)
+		appGatewayAuthed.POST("/me/devices/remove", h.AppRemoveMyDevices)
 		appGatewayAuthed.GET("/me/oauth2/grants", h.AppMyOAuth2Grants)
 		appGatewayAuthed.DELETE("/me/oauth2/grants/:clientId", h.AppRevokeMyOAuth2Grant)
 
@@ -172,28 +198,63 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/points/overview", h.PointsOverview)
 		appGatewayAuthed.GET("/points/level", h.MyLevel)
 		appGatewayAuthed.GET("/points/levels", h.PointsLevels)
+		appGatewayAuthed.GET("/points/level/rewards", h.MyLevelRewards)
+		appGatewayAuthed.POST("/points/level/rewards/:rewardId/claim", h.ClaimLevelReward)
+		appGatewayAuthed.GET("/points/level/history", h.MyLevelHistory)
 		appGatewayAuthed.GET("/points/integral-transactions", h.IntegralTransactions)
 		appGatewayAuthed.GET("/points/experience-transactions", h.ExperienceTransactions)
 		// 积分商城：首页（含每件商品的可兑换判定）/ 兑换 / 我的兑换记录
 		appGatewayAuthed.GET("/points/store", h.AppPointsStore)
 		appGatewayAuthed.POST("/points/store/redeem", h.AppRedeemPointsStoreItem)
 		appGatewayAuthed.GET("/points/store/redemptions", h.AppPointsStoreRedemptions)
+		// 抽奖：活动列表、活动页（奖品与公示概率、我的次数、保底进度）、抽一次、我的记录。
+		// 抽中什么由服务端在一个事务里决定并到账；视频抽奖走激励广告场景，看完发的是抽奖次数。
+		appGatewayAuthed.GET("/lottery", h.AppLotteryActivities)
+		appGatewayAuthed.GET("/lottery/activities/:activityId", h.AppLotteryState)
+		appGatewayAuthed.POST("/lottery/activities/:activityId/draw", h.AppLotteryDraw)
+		appGatewayAuthed.POST("/lottery/activities/:activityId/draw/batch", h.AppLotteryDrawBatch)
+		appGatewayAuthed.GET("/lottery/draws", h.AppLotteryDraws)
+		appGatewayAuthed.GET("/lottery/tickets", h.AppLotteryTickets)
 		// 邀请：邀请页 / 我邀请的人 / 注册后限时补填 / 换我的邀请码
 		appGatewayAuthed.GET("/invite", h.AppInviteCenter)
 		appGatewayAuthed.GET("/invite/invitees", h.AppInvitees)
 		appGatewayAuthed.POST("/invite/bind", h.AppBindInvite)
 		appGatewayAuthed.PUT("/invite/code", h.AppUpdateInviteCode)
+		// 推广活动：列表 / 详情 / 排行 / 领取邀请档位 / 我的提交 / 提交文章
+		appGatewayAuthed.GET("/promo", h.AppPromoCampaigns)
+		appGatewayAuthed.GET("/promo/:campaignId", h.AppPromoCampaign)
+		appGatewayAuthed.GET("/promo/:campaignId/leaderboard", h.AppPromoLeaderboard)
+		appGatewayAuthed.POST("/promo/:campaignId/tiers/claim", h.AppClaimPromoTier)
+		appGatewayAuthed.GET("/promo/:campaignId/submissions", h.AppPromoSubmissions)
+		appGatewayAuthed.POST("/promo/:campaignId/submissions", h.AppSubmitPromo)
 		appGatewayAuthed.GET("/leaderboard/summary", h.LeaderboardSummary)
 		appGatewayAuthed.GET("/leaderboard/me", h.LeaderboardMe)
 		appGatewayAuthed.GET("/leaderboard/points/:type", h.LeaderboardPoints)
 		appGatewayAuthed.GET("/leaderboard/signin/:type", h.LeaderboardSignIn)
+		// 积分排行榜（新版，docs/leaderboard.md）：榜单 / 往期 / 我的奖励记录 / 匿名偏好。
+		// 叠一层排行榜专用限流（每用户每分钟 60 次），与 /api/leaderboard 同一档。
+		leaderboardLimit := middleware.LeaderboardRateLimit(60)
+		appGatewayAuthed.GET("/leaderboard/boards", leaderboardLimit, h.AppLeaderboardBoards)
+		appGatewayAuthed.GET("/leaderboard/boards/:key", leaderboardLimit, h.AppLeaderboardBoard)
+		appGatewayAuthed.GET("/leaderboard/boards/:key/periods", leaderboardLimit, h.AppLeaderboardPeriods)
+		appGatewayAuthed.GET("/leaderboard/boards/:key/periods/:periodKey", leaderboardLimit, h.AppLeaderboardPeriod)
+		appGatewayAuthed.GET("/leaderboard/rewards", leaderboardLimit, h.AppLeaderboardRewards)
+		appGatewayAuthed.GET("/leaderboard/preference", leaderboardLimit, h.AppLeaderboardPreference)
+		appGatewayAuthed.PUT("/leaderboard/preference", leaderboardLimit, h.AppUpdateLeaderboardPreference)
 
 		// 站内信
+		// 消息中心（docs/notification-center.md）；与 /api/notifications 同一组 handler
 		appGatewayAuthed.GET("/notifications", h.Notifications)
+		appGatewayAuthed.GET("/notifications/summary", h.NotificationSummary)
 		appGatewayAuthed.GET("/notifications/unread-count", h.NotificationUnreadCount)
+		appGatewayAuthed.GET("/notifications/preferences", h.NotificationPreferences)
+		appGatewayAuthed.PUT("/notifications/preferences", h.UpdateNotificationPreferences)
+		appGatewayAuthed.GET("/notifications/:notificationId", h.NotificationDetail)
 		appGatewayAuthed.POST("/notifications/read", h.ReadNotification)
+		appGatewayAuthed.POST("/notifications/unread", h.UnreadNotification)
 		appGatewayAuthed.POST("/notifications/read-batch", h.ReadNotificationsBatch)
 		appGatewayAuthed.POST("/notifications/read-all", h.ReadAllNotifications)
+		appGatewayAuthed.POST("/notifications/delete-batch", h.DeleteNotificationsBatch)
 		appGatewayAuthed.POST("/notifications/clear", h.ClearNotifications)
 		appGatewayAuthed.DELETE("/notifications/:notificationId", h.DeleteNotification)
 
@@ -203,13 +264,30 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/wallet/consume", h.WalletConsume)
 		appGatewayAuthed.GET("/vip/plans", h.VipPlans)
 		appGatewayAuthed.GET("/vip/status", h.MyVipStatus)
+		appGatewayAuthed.GET("/vip/features", h.VipFeatures)
+		appGatewayAuthed.POST("/vip/feature-ticket", h.VipFeatureTicket)
+		// 一起听：签短期票据并给出一起听微服务的连接地址（docs/listen-together.md）
+		appGatewayAuthed.POST("/listen-together/ticket", h.AppListenTogetherTicket)
 		appGatewayAuthed.GET("/vip/transactions", h.MyVipTransactions)
+		appGatewayAuthed.GET("/vip/conversions", h.MyVipConversions)
 		appGatewayAuthed.POST("/vip/purchase", h.PurchaseVip)
 		appGatewayAuthed.POST("/vip/trial", h.ClaimVipTrial)
 		appGatewayAuthed.GET("/pay/methods", h.UserPaymentMethods)
 		appGatewayAuthed.GET("/pay/orders", h.PaymentOrders)
 		appGatewayAuthed.POST("/pay/orders", h.CreatePaymentOrder)
 		appGatewayAuthed.GET("/pay/orders/:orderNo", h.PaymentOrderDetail)
+
+		// AI 中转网关（docs/ai-gateway.md）：总览、可用模型与单价、API 密钥、调用记录、赠送额度流水。
+		// 调用面本身在 /api/ai/v1（OpenAI SDK 直连，不经网关包装）。
+		appGatewayAuthed.GET("/ai/overview", h.AppAIOverview)
+		appGatewayAuthed.GET("/ai/models", h.AppAIModels)
+		appGatewayAuthed.GET("/ai/keys", h.AppAIKeys)
+		appGatewayAuthed.POST("/ai/keys", h.AppCreateAIKey)
+		appGatewayAuthed.PUT("/ai/keys/:keyId", h.AppUpdateAIKey)
+		appGatewayAuthed.DELETE("/ai/keys/:keyId", h.AppDeleteAIKey)
+		appGatewayAuthed.GET("/ai/requests", h.AppAIRequests)
+		appGatewayAuthed.GET("/ai/requests/:requestNo", h.AppAIRequest)
+		appGatewayAuthed.GET("/ai/credits", h.AppAICredits)
 
 		// 存储
 		appGatewayAuthed.POST("/storage/upload", h.StorageUpload)

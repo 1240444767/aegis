@@ -12,6 +12,7 @@ import (
 	"aegis/internal/config"
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
+	notificationdomain "aegis/internal/domain/notification"
 	"aegis/internal/domain/pointstore"
 	userdomain "aegis/internal/domain/user"
 	vipdomain "aegis/internal/domain/vip"
@@ -28,10 +29,10 @@ type recordedNotice struct {
 
 type fakeAutoSignNotifier struct{ notices []recordedNotice }
 
-func (n *fakeAutoSignNotifier) NotifyUser(_ context.Context, _ int64, userID int64, _ string, title string, _ string, _ string, metadata map[string]any) error {
-	status, _ := metadata["status"].(string)
-	n.notices = append(n.notices, recordedNotice{userID: userID, title: title, status: status})
-	return nil
+func (n *fakeAutoSignNotifier) Deliver(_ context.Context, in notificationdomain.DeliverInput) (*notificationdomain.Item, error) {
+	status, _ := in.Metadata["status"].(string)
+	n.notices = append(n.notices, recordedNotice{userID: in.UserID, title: in.Title, status: status})
+	return &notificationdomain.Item{AppID: in.AppID, Type: in.Type, Title: in.Title}, nil
 }
 
 // 自动签到的端到端集成测试：真实 Postgres（全部迁移）+ miniredis。

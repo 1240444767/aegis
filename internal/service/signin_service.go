@@ -1,6 +1,7 @@
 package service
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"context"
 	"fmt"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 )
 
 type SignInService struct {
+	riskHook
 	log       *zap.Logger
 	pg        *pgrepo.Repository
 	sessions  *redisrepo.SessionRepository
@@ -28,6 +30,8 @@ type SignInService struct {
 	// afterSignIn 新签到落库之后的回调（邀请：被邀请人累计签到满 N 天后发邀请人奖励）。
 	// 回调自己负责不阻塞：签到链路不等它。
 	afterSignIn func(appID, userID int64)
+	// signInObserver 同上，带本次的连续签到天数（物品发放的「每日签到」事件）。
+	signInObserver func(appID, userID int64, consecutiveDays int)
 }
 
 const (
@@ -48,6 +52,11 @@ func NewSignInService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrep
 
 // SetAfterSignIn 注册新签到之后的回调，见 afterSignIn。
 func (s *SignInService) SetAfterSignIn(fn func(appID, userID int64)) { s.afterSignIn = fn }
+
+// SetSignInObserver 注册新签到之后的观察者（带连续签到天数），见 signInObserver。
+func (s *SignInService) SetSignInObserver(fn func(appID, userID int64, consecutiveDays int)) {
+	s.signInObserver = fn
+}
 
 func (s *SignInService) GetStatus(ctx context.Context, session *authdomain.Session) (*userdomain.SignInStatus, error) {
 	user, err := s.requireActiveUser(ctx, session)
@@ -110,6 +119,14 @@ func (s *SignInService) GetStatus(ctx context.Context, session *authdomain.Sessi
 }
 
 func (s *SignInService) SignIn(ctx context.Context, session *authdomain.Session, source, deviceInfo, ipAddress, location string) (*userdomain.SignInResult, error) {
+	// 用户主动签到才过风控；自动签到（SignInForUser）是服务端代签，没有请求环境可评
+	if err := s.riskGuard(ctx, securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneSignIn, AppID: &session.AppID, UserID: &session.UserID, Account: session.Account,
+		IP: ipAddress, DeviceID: session.DeviceID, UserAgent: session.UserAgent,
+		Extra: map[string]any{"source": source},
+	}, RiskGuardOption{Message: "当前环境存在风险，暂时无法签到"}); err != nil {
+		return nil, err
+	}
 	return s.signInInternal(ctx, session.UserID, session.AppID, source, deviceInfo, ipAddress, location)
 }
 
@@ -249,6 +266,9 @@ func (s *SignInService) signInOnce(ctx context.Context, session *authdomain.Sess
 	if s.afterSignIn != nil {
 		s.afterSignIn(session.AppID, session.UserID)
 	}
+	if s.signInObserver != nil {
+		s.signInObserver(session.AppID, session.UserID, result.Record.ConsecutiveDays)
+	}
 	_ = s.publisher.PublishJSON(ctx, event.SubjectUserSignedIn, map[string]any{
 		"user_id":           session.UserID,
 		"appid":             session.AppID,
@@ -364,7 +384,11 @@ func (s *SignInService) calculateReward(ctx context.Context, now time.Time, user
 			Settings: app.Settings,
 		})
 	}
-	resolved, _, _, err := calculateSignInRewardWithPolicy(ctx, s.pg, policy, now, user.Experience, consecutiveDays, totalSignIns)
+	appID, userID := user.AppID, user.ID
+	multipliers := func(ctx context.Context, experience int64) (float64, float64, error) {
+		return s.pg.LevelMultipliers(ctx, appID, userID, experience)
+	}
+	resolved, _, _, err := calculateSignInRewardWithPolicy(ctx, multipliers, policy, now, user.Experience, consecutiveDays, totalSignIns)
 	if err != nil {
 		return userdomain.SignInReward{}, err
 	}

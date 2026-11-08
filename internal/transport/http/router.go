@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"aegis/internal/middleware"
+	"aegis/internal/nativeplugin"
+	trafficplugin "aegis/internal/plugins/traffic"
 	redisrepo "aegis/internal/repository/redis"
 	"aegis/internal/service"
 	"aegis/pkg/response"
@@ -26,6 +28,10 @@ type Handler struct {
 	site            *service.SiteService
 	version         *service.VersionService
 	release         *service.ReleaseService
+	clientControl   ClientControlAPI
+	listenTogether  *service.ListenTogetherService
+	deviceLimit     *service.DeviceLimitService
+	registerIP      *service.RegisterIPService
 	roleApp         *service.RoleApplicationService
 	email           *service.EmailService
 	payment         *service.PaymentService
@@ -47,6 +53,9 @@ type Handler struct {
 	geoAnalytics    *service.GeoAnalyticsService
 	location        *service.LocationService
 	lottery         *service.LotteryService
+	itemGrant       *service.ItemGrantService
+	level           *service.LevelService
+	growth          *service.GrowthService
 	announcement    *service.AnnouncementService
 	ldapSvc         *service.LDAPService
 	oidcSvc         *service.OIDCService
@@ -56,13 +65,19 @@ type Handler struct {
 	tmpl            *service.TemplateService
 	audit           *service.AuditService
 	plugin          *service.PluginService
+	traffic         *trafficplugin.Plugin
+	nativePlugins   *nativeplugin.Host
 	appFunction     *service.AppFunctionService
 	cardKey         *service.CardKeyService
 	rewardedAd      *service.RewardedAdService
 	featureTime     *service.FeatureTimeService
 	adPolicy        *service.AdPolicyService
+	crashReport     *service.CrashReportService
 	pointsStore     *service.PointsStoreService
 	invite          *service.InviteService
+	promo           *service.PromoService
+	leaderboard     *service.LeaderboardService
+	accountDeletion *service.AccountDeletionService
 	cloudStorage    *service.CloudStorageService
 	authProtocol    *service.AuthProtocolService
 	dashboard       *service.DashboardService
@@ -94,7 +109,10 @@ type Handler struct {
 	// aiProvider AI 供应商通道（系统级 + 应用级）；aiAgent Agent 会话与 SSE 流。
 	aiProvider *service.AIProviderService
 	aiAgent    *service.AIAgentService
-	oauth2     *service.OAuth2ServerService
+	aiGateway  *service.AIGatewayService
+	// aiRelayMaxBody /api/ai/v1 的 JSON 请求体上限；0 用缺省（ai_relay_handlers.go）。
+	aiRelayMaxBody int64
+	oauth2         *service.OAuth2ServerService
 	// aiAgentWSOrigin Agent WebSocket 通道的 Origin 闸门（复用 CORS 白名单，
 	// 与 /api/ws 同一套判定；见 service.WebSocketOriginChecker）。
 	aiAgentWSOrigin func(r *http.Request) bool
@@ -116,7 +134,7 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 		locationService     = deps.Location
 		authProtocolService = deps.AuthProtocol
 		firewall            = deps.Firewall
-		trafficRamp         = deps.TrafficRamp
+		trafficPlugin       = deps.Traffic
 		replayGuard         = deps.ReplayGuard
 		cl                  = deps.CrashLog
 		log                 = deps.Logger
@@ -153,6 +171,8 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 		middleware.ClientIP(clientIPResolver, log),
 		// 文件上传放宽读超时：要排在防火墙与 WAF 读请求体之前，见 upload_deadline.go
 		middleware.UploadReadDeadline(30*time.Minute),
+		// AI 中转同理：Agent 的多轮对话请求体可达几十 MB，手机上行读不完 5 秒的全局期限
+		middleware.PathReadDeadline(service.RelayBasePath+"/", deps.AIRelay.ReadTimeout),
 		middleware.RequestID(),
 		middleware.RequestOrigin(),
 		middleware.CrashRecovery(log, cl),
@@ -162,11 +182,13 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 		// 与平台其余部分的结构化输出混在一起，采集端每条都解析失败。见 access_log.go。
 		middleware.AccessLog(log, middleware.AccessLogSkipPaths()...),
 		firewall.Handler(),
-		// 突发流量爬坡：必须在 Firewall 之后（先拒恶意，再整形合法洪峰）、
-		// ReplayGuard 之前（被整形掉的请求不该消耗 Nonce / 幂等键占位）。
-		trafficRamp.Handler(),
+		// 流量管理（内置插件 traffic）：必须在 Firewall 之后（先拒恶意，再整形合法流量）、
+		// ReplayGuard 之前（被拒掉的请求不该消耗 Nonce / 幂等键占位）。插件停用时直通。
+		trafficPlugin.Handler(),
 		replayGuard.Handler(),
 		middleware.AppGateway(authProtocolService),
+		// 版本管控的服务端执行点：读 AppGateway 写入的 aegis.app_id，必须排在它之后
+		middleware.ClientControlGate(deps.ClientControlGate),
 		middleware.AppEncryption(appService),
 		middleware.Location(locationService),
 	)
@@ -204,6 +226,7 @@ func NewRouter(deps RouterDeps) (*gin.Engine, error) {
 	registerAdminSystemRoutes(router, h, deps)
 	registerPlatformBannerActiveRoute(router, h, deps)
 	registerOAuth2Routes(router, h, deps)
+	registerMCPRoutes(router, h, deps)
 
 	docsOptions := DefaultDocsOptions()
 	docsOptions.PortalURL = h.docsURL

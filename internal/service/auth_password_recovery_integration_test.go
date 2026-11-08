@@ -297,6 +297,8 @@ func newRecoveryTestEnv(t *testing.T, ctx context.Context, pool *pgxpool.Pool) *
 	security := NewSecurityService(cfg, log, pg, sessions, app)
 	publisher := event.NewPublisher(&captureJetStream{published: map[string][][]byte{}})
 	auth := NewAuthService(cfg, log, pg, sessions, publisher, app, security)
+	// 「密码已重置」站内信经统一投递
+	auth.SetNotificationService(NewNotificationService(log, pg, sessions, nil))
 	captcha := NewCaptchaService(cfg, log, redisrepo.NewCaptchaRepository(rdb, "t"))
 	sms := &fakeSMSProvider{codes: map[string][]string{}}
 	captcha.RegisterSMSProvider("aliyun", sms)

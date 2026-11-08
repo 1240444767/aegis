@@ -4,8 +4,6 @@ import (
 	"aegis/pkg/egress"
 	"context"
 	"encoding/json"
-	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -18,6 +16,7 @@ import (
 	redislib "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
+	"golang.org/x/time/rate"
 )
 
 type IPLocation struct {
@@ -53,59 +52,103 @@ type cachedLocation struct {
 	expiresAt time.Time
 }
 
+// LocationService 的定位数据来自远程归属地接口：美团、宝塔面板、UAPIs，按 GEOIP_PROVIDERS
+// 排优先级合并（见 location_provider.go），进程内与 Redis 两级缓存挡住重复查询。
 type LocationService struct {
-	log                 *zap.Logger
-	redis               *redislib.Client
-	keyPrefix           string
-	http                *http.Client
-	group               singleflight.Group
-	mu                  sync.RWMutex
-	local               map[string]cachedLocation
-	localTTL            time.Duration
-	redisTTL            time.Duration
-	failureTTL          time.Duration
-	cacheLookupTimeout  time.Duration
-	cacheWriteTimeout   time.Duration
-	refreshTimeout      time.Duration
-	providerTimeout     time.Duration
-	geo                 *geoDatabaseResolver
-	allowRemoteFallback bool
+	log                *zap.Logger
+	redis              *redislib.Client
+	keyPrefix          string
+	http               *http.Client
+	enabled            bool
+	group              singleflight.Group
+	mu                 sync.RWMutex
+	local              map[string]cachedLocation
+	localTTL           time.Duration
+	redisTTL           time.Duration
+	failureTTL         time.Duration
+	errorTTL           time.Duration
+	cacheLookupTimeout time.Duration
+	cacheWriteTimeout  time.Duration
+	refreshTimeout     time.Duration
+	providerTimeout    time.Duration
+	sources            []*locationSource
+	uapisKey           string
+	uapisSource        string
 }
+
+// defaultLocationProviders 美团优先：国内地址到区县且有区划代码；宝塔补运营商并兜底 IPv4；
+// UAPIs 有额度，只补前两个没查出来的（IPv6 主要靠它）。
+var defaultLocationProviders = []string{"meituan", "btcn", "uapis"}
 
 func NewLocationService(log *zap.Logger, redisClient *redislib.Client, keyPrefix string, geoCfg config.GeoIPConfig) *LocationService {
 	if log == nil {
 		log = zap.NewNop()
 	}
-	service := &LocationService{
-		log:                 log,
-		redis:               redisClient,
-		keyPrefix:           strings.TrimSpace(keyPrefix),
-		http:                egress.NewClient(egress.Profile{Name: "location.lookup", Timeout: 1500 * time.Millisecond}),
-		local:               make(map[string]cachedLocation),
-		localTTL:            10 * time.Minute,
-		redisTTL:            6 * time.Hour,
-		failureTTL:          15 * time.Minute,
-		cacheLookupTimeout:  40 * time.Millisecond,
-		cacheWriteTimeout:   250 * time.Millisecond,
-		refreshTimeout:      4 * time.Second,
-		providerTimeout:     1200 * time.Millisecond,
-		allowRemoteFallback: geoCfg.AllowRemoteFallback,
+	s := &LocationService{
+		log:       log,
+		redis:     redisClient,
+		keyPrefix: strings.TrimSpace(keyPrefix),
+		http:      egress.NewClient(egress.Profile{Name: "location.lookup", Timeout: 3 * time.Second}),
+		enabled:   geoCfg.Enabled,
+		local:     make(map[string]cachedLocation),
+		localTTL:  10 * time.Minute,
+		// 归属地很少变动，远程查询比本地库贵，Redis 留久一些
+		redisTTL:           72 * time.Hour,
+		failureTTL:         6 * time.Hour,
+		errorTTL:           time.Minute,
+		cacheLookupTimeout: 40 * time.Millisecond,
+		cacheWriteTimeout:  250 * time.Millisecond,
+		refreshTimeout:     4 * time.Second,
+		providerTimeout:    2500 * time.Millisecond,
 	}
-	resolver, err := newGeoDatabaseResolver(log, geoCfg)
-	if err != nil {
-		log.Warn("init geoip database resolver failed", zap.Error(err))
-	} else {
-		service.geo = resolver
+	s.uapisKey = strings.TrimSpace(geoCfg.UAPIsKey)
+	s.uapisSource = geoCfg.UAPIsSource
+	switch s.uapisSource {
+	case "":
+		if s.uapisKey != "" {
+			s.uapisSource = uapisSourceCommercial
+		}
+	case "standard", "default":
+		s.uapisSource = ""
 	}
-	return service
+	s.sources = s.buildSources(geoCfg)
+	return s
 }
 
-func (s *LocationService) Close() {
-	if s == nil || s.geo == nil {
-		return
+func (s *LocationService) buildSources(geoCfg config.GeoIPConfig) []*locationSource {
+	names := geoCfg.Providers
+	if len(names) == 0 {
+		names = defaultLocationProviders
 	}
-	s.geo.Close()
+	qps := geoCfg.UAPIsQPS
+	if qps <= 0 {
+		qps = 4
+	}
+	ipv4 := func(addr netip.Addr) bool { return addr.Unmap().Is4() }
+	sources := make([]*locationSource, 0, len(names))
+	seen := make(map[string]bool, len(names))
+	for _, raw := range names {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		switch name {
+		case "meituan":
+			sources = append(sources, &locationSource{name: name, strictCN: true, supports: ipv4, single: s.lookupMeituan, concurrency: 8})
+		case "btcn", "bt":
+			sources = append(sources, &locationSource{name: "btcn", supports: ipv4, batch: s.lookupBtCN, batchSize: btcnBatchSize})
+		case "uapis":
+			sources = append(sources, &locationSource{name: name, metered: true, single: s.lookupUAPIs, concurrency: 4,
+				limiter: rate.NewLimiter(rate.Limit(qps), 1)})
+		default:
+			s.log.Warn("unknown location provider ignored", zap.String("provider", raw))
+		}
+	}
+	return sources
 }
+
+func (s *LocationService) Close() {}
 
 func (s *LocationService) CacheLookupTimeout() time.Duration {
 	return s.cacheLookupTimeout
@@ -142,6 +185,7 @@ func (s *LocationService) DefaultLocation(ip string) IPLocation {
 	}
 }
 
+// GetCached 只读缓存，不发远程请求。
 func (s *LocationService) GetCached(ctx context.Context, ip string) (IPLocation, bool) {
 	ip = sanitizeIP(ip)
 	if ip == "" {
@@ -170,10 +214,6 @@ func (s *LocationService) GetCached(ctx context.Context, ip string) (IPLocation,
 			s.log.Debug("location redis lookup failed", zap.String("ip", ip), zap.Error(err))
 		}
 	}
-	if loc, ok := s.lookupGeoDatabase(ip); ok {
-		s.persistAsync(ip, loc, s.redisTTL)
-		return loc, true
-	}
 	return IPLocation{}, false
 }
 
@@ -182,21 +222,15 @@ func (s *LocationService) Resolve(ctx context.Context, ip string) IPLocation {
 	if ip == "" {
 		return s.DefaultLocation(ip)
 	}
-	if loc, ok := s.GetCached(ctx, ip); ok && !requiresAdministrativeEnrichment(loc, s.allowRemoteFallback) {
+	if loc, ok := s.GetCached(ctx, ip); ok {
 		return loc
 	}
 
 	value, _, _ := s.group.Do(ip, func() (any, error) {
-		if loc, ok := s.GetCached(ctx, ip); ok && !requiresAdministrativeEnrichment(loc, s.allowRemoteFallback) {
+		if loc, ok := s.GetCached(ctx, ip); ok {
 			return loc, nil
 		}
-		loc := s.lookup(ctx, ip)
-		ttl := s.redisTTL
-		if !loc.isResolved() {
-			ttl = s.failureTTL
-		}
-		s.persist(ip, loc, ttl)
-		return loc, nil
+		return s.lookupAndStore(ctx, []string{ip})[ip], nil
 	})
 
 	loc, _ := value.(IPLocation)
@@ -204,6 +238,39 @@ func (s *LocationService) Resolve(ctx context.Context, ip string) IPLocation {
 		return s.DefaultLocation(ip)
 	}
 	return loc
+}
+
+// ResolveMany 批量解析：缓存未命中的 IP 合并成一次远程请求。
+func (s *LocationService) ResolveMany(ctx context.Context, ips []string) map[string]IPLocation {
+	out := make(map[string]IPLocation, len(ips))
+	misses := make([]string, 0, len(ips))
+	for _, raw := range ips {
+		ip := sanitizeIP(raw)
+		if ip == "" {
+			continue
+		}
+		if _, ok := out[ip]; ok {
+			continue
+		}
+		if loc, ok := s.GetCached(ctx, ip); ok {
+			out[ip] = loc
+			continue
+		}
+		out[ip] = s.DefaultLocation(ip)
+		misses = append(misses, ip)
+	}
+	for ip, loc := range s.lookupAndStore(ctx, misses) {
+		out[ip] = loc
+	}
+	// 调用方按原始写法取值，带端口等写法也要能命中
+	for _, raw := range ips {
+		if _, ok := out[raw]; !ok {
+			if loc, ok := out[sanitizeIP(raw)]; ok {
+				out[raw] = loc
+			}
+		}
+	}
+	return out
 }
 
 func (s *LocationService) RefreshAsync(ip string) {
@@ -218,199 +285,54 @@ func (s *LocationService) RefreshAsync(ip string) {
 	}()
 }
 
-func (s *LocationService) lookup(ctx context.Context, ip string) IPLocation {
-	addr, err := netip.ParseAddr(ip)
-	if err != nil {
-		return s.DefaultLocation(ip)
-	}
-	if isPrivateAddr(addr) {
-		return s.DefaultLocation(ip)
-	}
-	if local, ok := s.lookupGeoDatabase(ip); ok {
-		if !requiresAdministrativeEnrichment(local, s.allowRemoteFallback) {
-			return local
+// lookupAndStore 远程查询并写缓存。内网、非法地址不发请求；
+// 网络失败只在进程内短暂记住，避免接口故障时每个请求都去撞超时。
+func (s *LocationService) lookupAndStore(ctx context.Context, ips []string) map[string]IPLocation {
+	out := make(map[string]IPLocation, len(ips))
+	queries := make(map[string]string, len(ips))
+	for _, ip := range ips {
+		addr, err := netip.ParseAddr(ip)
+		if err != nil || isPrivateAddr(addr) || !s.enabled {
+			out[ip] = s.DefaultLocation(ip)
+			continue
 		}
-		if remote, ok := s.lookupRemoteProviders(ctx, ip); ok {
-			return mergeIPLocation(local, remote)
-		}
-		return local
+		queries[ip] = addr.Unmap().String()
 	}
-	if remote, ok := s.lookupRemoteProviders(ctx, ip); ok {
-		return remote
-	}
-	return s.DefaultLocation(ip)
-}
-
-func (s *LocationService) lookupRemoteProviders(ctx context.Context, ip string) (IPLocation, bool) {
-	if !s.allowRemoteFallback {
-		return IPLocation{}, false
+	if len(queries) == 0 {
+		return out
 	}
 
-	providers := []struct {
-		name string
-		fn   func(context.Context, string) (IPLocation, error)
-	}{
-		{name: "mir6", fn: s.lookupMir6},
-		{name: "ipinfo", fn: s.lookupIPInfo},
-		{name: "ipapi", fn: s.lookupIPAPI},
-		{name: "geojs", fn: s.lookupGeoJS},
-	}
-
-	for _, provider := range providers {
-		providerCtx, cancel := context.WithTimeout(ctx, s.providerTimeout)
-		loc, err := provider.fn(providerCtx, ip)
-		cancel()
-		if err == nil && loc.isResolved() {
-			return loc, true
-		}
-		if err != nil && ctx.Err() == nil {
-			s.log.Debug("location provider failed", zap.String("provider", provider.name), zap.String("ip", ip), zap.Error(err))
+	unique := make([]string, 0, len(queries))
+	seen := make(map[string]struct{}, len(queries))
+	for _, query := range queries {
+		if _, ok := seen[query]; !ok {
+			seen[query] = struct{}{}
+			unique = append(unique, query)
 		}
 	}
-	return IPLocation{}, false
-}
 
-func (s *LocationService) lookupGeoDatabase(ip string) (IPLocation, bool) {
-	if s == nil || s.geo == nil {
-		return IPLocation{}, false
-	}
-	loc, err := s.geo.Lookup(ip)
-	if err != nil {
-		s.log.Debug("geoip database lookup failed", zap.String("ip", ip), zap.Error(err))
-		return IPLocation{}, false
-	}
-	if !loc.isResolved() {
-		return IPLocation{}, false
-	}
-	return loc, true
-}
+	results, incomplete := s.lookupSources(ctx, unique)
 
-func (s *LocationService) lookupMir6(ctx context.Context, ip string) (IPLocation, error) {
-	var payload struct {
-		Code int `json:"code"`
-		Data struct {
-			Country     string `json:"country"`
-			CountryCode string `json:"countryCode"`
-			Province    string `json:"province"`
-			City        string `json:"city"`
-			Districts   string `json:"districts"`
-			Timezone    string `json:"timezone"`
-			ISP         string `json:"isp"`
-		} `json:"data"`
+	for ip, query := range queries {
+		loc, ok := results[query]
+		if !ok {
+			out[ip] = s.DefaultLocation(ip)
+			if incomplete[query] {
+				s.setLocal(ip, out[ip], s.errorTTL)
+			} else {
+				s.persist(ip, out[ip], s.failureTTL)
+			}
+			continue
+		}
+		loc.IP = ip
+		ttl := s.redisTTL
+		if !loc.isResolved() {
+			ttl = s.failureTTL
+		}
+		s.persist(ip, loc, ttl)
+		out[ip] = loc
 	}
-	if err := s.fetchJSON(ctx, fmt.Sprintf("https://api.mir6.com/api/ip?ip=%s&type=json", ip), &payload); err != nil {
-		return IPLocation{}, err
-	}
-	if payload.Code != 200 {
-		return IPLocation{}, fmt.Errorf("mir6 status %d", payload.Code)
-	}
-	return s.buildLocation(ip, payload.Data.Country, payload.Data.CountryCode, payload.Data.Province, payload.Data.City, payload.Data.Districts, payload.Data.Timezone, payload.Data.ISP, payload.Data.ISP, "", "mir6"), nil
-}
-
-func (s *LocationService) lookupIPInfo(ctx context.Context, ip string) (IPLocation, error) {
-	var payload struct {
-		IP       string `json:"ip"`
-		Country  string `json:"country"`
-		Region   string `json:"region"`
-		City     string `json:"city"`
-		Timezone string `json:"timezone"`
-		Org      string `json:"org"`
-		Loc      string `json:"loc"`
-	}
-	if err := s.fetchJSON(ctx, fmt.Sprintf("https://ipinfo.io/%s/json", ip), &payload); err != nil {
-		return IPLocation{}, err
-	}
-	loc := s.buildLocation(ip, payload.Country, payload.Country, payload.Region, payload.City, "", payload.Timezone, payload.Org, payload.Org, extractASN(payload.Org), "ipinfo")
-	loc.Coordinates = parseCoordinatePair(payload.Loc)
-	return loc, nil
-}
-
-func (s *LocationService) lookupIPAPI(ctx context.Context, ip string) (IPLocation, error) {
-	var payload struct {
-		IP          string      `json:"ip"`
-		CountryName string      `json:"country_name"`
-		CountryCode string      `json:"country_code"`
-		Region      string      `json:"region"`
-		City        string      `json:"city"`
-		Timezone    string      `json:"timezone"`
-		Org         string      `json:"org"`
-		ASN         string      `json:"asn"`
-		Latitude    interface{} `json:"latitude"`
-		Longitude   interface{} `json:"longitude"`
-	}
-	if err := s.fetchJSON(ctx, fmt.Sprintf("https://ipapi.co/%s/json/", ip), &payload); err != nil {
-		return IPLocation{}, err
-	}
-	loc := s.buildLocation(ip, payload.CountryName, payload.CountryCode, payload.Region, payload.City, "", payload.Timezone, payload.Org, payload.Org, payload.ASN, "ipapi")
-	loc.Coordinates = buildCoordinates(parseFloat(payload.Latitude), parseFloat(payload.Longitude))
-	return loc, nil
-}
-
-func (s *LocationService) lookupGeoJS(ctx context.Context, ip string) (IPLocation, error) {
-	var payload struct {
-		IP           string `json:"ip"`
-		Country      string `json:"country"`
-		CountryCode  string `json:"country_code"`
-		Region       string `json:"region"`
-		City         string `json:"city"`
-		Timezone     string `json:"timezone"`
-		Organization string `json:"organization_name"`
-		Latitude     string `json:"latitude"`
-		Longitude    string `json:"longitude"`
-	}
-	if err := s.fetchJSON(ctx, fmt.Sprintf("https://get.geojs.io/v1/ip/geo/%s.json", ip), &payload); err != nil {
-		return IPLocation{}, err
-	}
-	loc := s.buildLocation(ip, payload.Country, payload.CountryCode, payload.Region, payload.City, "", payload.Timezone, payload.Organization, payload.Organization, "", "geojs")
-	loc.Coordinates = buildCoordinates(parseFloat(payload.Latitude), parseFloat(payload.Longitude))
-	return loc, nil
-}
-
-func (s *LocationService) fetchJSON(ctx context.Context, url string, target any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "aegis-location/1.0")
-
-	resp, err := s.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
-	}
-	return json.NewDecoder(resp.Body).Decode(target)
-}
-
-func (s *LocationService) buildLocation(ip, country, countryCode, region, city, district, timezone, isp, organization, asn, source string) IPLocation {
-	displayCountry, normalizedCountryCode := normalizeCountry(country, countryCode)
-	loc := IPLocation{
-		IP:          ip,
-		Country:     displayCountry,
-		CountryCode: normalizedCountryCode,
-		Region:      normalizeString(region),
-		City:        normalizeString(city),
-		District:    normalizeString(district),
-		Location:    composeLocation(displayCountry, region, city, district),
-		Timezone:    normalizeTimezone(displayCountry, timezone),
-		ISP:         normalizeISP(isp),
-		Network: NetworkInfo{
-			Type:         detectNetworkType(isp),
-			Organization: normalizeString(organization),
-			ASN:          normalizeString(asn),
-		},
-		Source:     source,
-		ResolvedAt: time.Now().UTC(),
-	}
-	if loc.Country == "" && loc.Region == "" && loc.City == "" && loc.ISP == "" {
-		return s.DefaultLocation(ip)
-	}
-	return loc
+	return out
 }
 
 func (s *LocationService) persist(ip string, loc IPLocation, ttl time.Duration) {
@@ -430,15 +352,11 @@ func (s *LocationService) persist(ip string, loc IPLocation, ttl time.Duration) 
 	}
 }
 
-func (s *LocationService) persistAsync(ip string, loc IPLocation, ttl time.Duration) {
-	go s.persist(ip, loc, ttl)
-}
-
 func (s *LocationService) redisKey(ip string) string {
 	if s.keyPrefix == "" {
-		return "location:v2:ip:" + ip
+		return "location:v4:ip:" + ip
 	}
-	return s.keyPrefix + ":location:v2:ip:" + ip
+	return s.keyPrefix + ":location:v4:ip:" + ip
 }
 
 func (s *LocationService) getLocal(ip string) (IPLocation, bool) {
@@ -472,92 +390,6 @@ func (l IPLocation) isResolved() bool {
 		strings.TrimSpace(l.Region) != "" ||
 		strings.TrimSpace(l.City) != "" ||
 		strings.TrimSpace(l.ISP) != ""
-}
-
-const minAdministrativeLocationQuality = 3
-
-func (l IPLocation) administrativeQuality() int {
-	quality := 0
-	if strings.TrimSpace(l.ISP) != "" {
-		quality++
-	}
-	if strings.TrimSpace(l.Region) != "" {
-		quality += 2
-	}
-	if strings.TrimSpace(l.City) != "" {
-		quality++
-	}
-	return quality
-}
-
-func requiresAdministrativeEnrichment(loc IPLocation, allowRemoteFallback bool) bool {
-	if !allowRemoteFallback || loc.IsPrivate || !loc.isResolved() {
-		return false
-	}
-	return loc.administrativeQuality() < minAdministrativeLocationQuality
-}
-
-func mergeIPLocation(primary, secondary IPLocation) IPLocation {
-	if !primary.isResolved() {
-		return secondary
-	}
-	if !secondary.isResolved() {
-		return primary
-	}
-	merged := IPLocation{
-		IP:          locationFirstNonEmpty(primary.IP, secondary.IP),
-		Country:     locationFirstNonEmpty(primary.Country, secondary.Country),
-		CountryCode: locationFirstNonEmpty(primary.CountryCode, secondary.CountryCode),
-		Region:      locationFirstNonEmpty(primary.Region, secondary.Region),
-		City:        locationFirstNonEmpty(primary.City, secondary.City),
-		District:    locationFirstNonEmpty(primary.District, secondary.District),
-		Timezone:    locationFirstNonEmpty(primary.Timezone, secondary.Timezone),
-		ISP:         locationFirstNonEmpty(primary.ISP, secondary.ISP),
-		Coordinates: primary.Coordinates,
-		Network: NetworkInfo{
-			Type:         locationFirstNonEmpty(primary.Network.Type, secondary.Network.Type),
-			Organization: locationFirstNonEmpty(primary.Network.Organization, secondary.Network.Organization),
-			ASN:          locationFirstNonEmpty(primary.Network.ASN, secondary.Network.ASN),
-		},
-		Source:     mergeLocationSource(primary.Source, secondary.Source),
-		ResolvedAt: primary.ResolvedAt,
-		IsPrivate:  primary.IsPrivate || secondary.IsPrivate,
-	}
-	if merged.Coordinates == nil {
-		merged.Coordinates = secondary.Coordinates
-	}
-	if merged.ResolvedAt.IsZero() || (!secondary.ResolvedAt.IsZero() && secondary.ResolvedAt.After(merged.ResolvedAt)) {
-		merged.ResolvedAt = secondary.ResolvedAt
-	}
-	merged.Location = composeLocation(merged.Country, merged.Region, merged.City, merged.District)
-	if strings.TrimSpace(merged.Timezone) == "" {
-		merged.Timezone = normalizeTimezone(merged.Country, "")
-	}
-	if strings.TrimSpace(merged.Network.Type) == "" {
-		merged.Network.Type = detectNetworkType(locationFirstNonEmpty(merged.Network.Organization, merged.ISP))
-	}
-	return merged
-}
-
-func mergeLocationSource(primary, secondary string) string {
-	primary = strings.TrimSpace(primary)
-	secondary = strings.TrimSpace(secondary)
-	if primary == "" {
-		return secondary
-	}
-	if secondary == "" || strings.EqualFold(primary, secondary) {
-		return primary
-	}
-	return primary + "+" + secondary
-}
-
-func locationFirstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value = strings.TrimSpace(value); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func sanitizeIP(raw string) string {
@@ -650,7 +482,8 @@ func detectNetworkType(value string) string {
 	switch {
 	case lower == "":
 		return ""
-	case strings.Contains(lower, "idc"), strings.Contains(lower, "datacenter"), strings.Contains(lower, "hosting"), strings.Contains(lower, "cloud"), strings.Contains(lower, "server"):
+	case strings.Contains(lower, "idc"), strings.Contains(lower, "datacenter"), strings.Contains(lower, "hosting"), strings.Contains(lower, "cloud"), strings.Contains(lower, "server"),
+		strings.Contains(lower, "云"), strings.Contains(lower, "机房"), strings.Contains(lower, "数据中心"), strings.Contains(lower, "azure"), strings.Contains(lower, "amazon"):
 		return "IDC"
 	case strings.Contains(lower, "mobile"), strings.Contains(lower, "移动"):
 		return "MOBILE"
@@ -684,47 +517,14 @@ func composeLocation(parts ...string) string {
 	return strings.Join(values, " ")
 }
 
-func extractASN(value string) string {
-	fields := strings.Fields(strings.TrimSpace(value))
-	if len(fields) > 0 && strings.HasPrefix(strings.ToUpper(fields[0]), "AS") {
-		return fields[0]
-	}
-	return ""
-}
-
-func parseCoordinatePair(value string) *GeoCoordinate {
-	if strings.TrimSpace(value) == "" {
+func parseCoordinate(value string) *float64 {
+	value = strings.TrimSpace(value)
+	if value == "" {
 		return nil
 	}
-	parts := strings.Split(value, ",")
-	if len(parts) != 2 {
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil {
 		return nil
 	}
-	return buildCoordinates(parseFloat(parts[0]), parseFloat(parts[1]))
-}
-
-func parseFloat(value interface{}) *float64 {
-	switch v := value.(type) {
-	case float64:
-		return &v
-	case float32:
-		f := float64(v)
-		return &f
-	case string:
-		v = strings.TrimSpace(v)
-		if v == "" {
-			return nil
-		}
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return &f
-		}
-	}
-	return nil
-}
-
-func buildCoordinates(latitude, longitude *float64) *GeoCoordinate {
-	if latitude == nil && longitude == nil {
-		return nil
-	}
-	return &GeoCoordinate{Latitude: latitude, Longitude: longitude}
+	return &f
 }

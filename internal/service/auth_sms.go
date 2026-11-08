@@ -1,6 +1,7 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"context"
 	"net/http"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
 	plugindomain "aegis/internal/domain/plugin"
+	"aegis/internal/domain/regip"
 	userdomain "aegis/internal/domain/user"
 	pgrepo "aegis/internal/repository/postgres"
 	apperrors "aegis/pkg/errors"
@@ -75,14 +77,17 @@ func (s *AuthService) SMSLogin(ctx context.Context, input SMSLoginInput) (*authd
 			if _, err := s.app.EnsureRegisterAllowed(ctx, input.AppID); err != nil {
 				return nil, err
 			}
-			if err := s.validateRegisterPolicy(ctx, app, input.IP); err != nil {
-				return nil, err
-			}
 		}
-		user, err = s.createPhoneUser(ctx, input, phone)
+		ticket, err := s.admitRegister(ctx, app, regip.MethodSMS, input.IP, phone, input.DeviceID, input.UserAgent)
 		if err != nil {
 			return nil, err
 		}
+		user, err = s.createPhoneUser(ctx, input, phone)
+		if err != nil {
+			ticket.Release()
+			return nil, err
+		}
+		ticket.Commit(user.ID, user.Account)
 		registered = true
 	} else {
 		// 既有账号：把手机号补进档案，兼容"先用密码注册、后绑手机"的历史数据
@@ -99,7 +104,7 @@ func (s *AuthService) SMSLogin(ctx context.Context, input SMSLoginInput) (*authd
 	s.syncAdminUserSearch(input.AppID, user.ID)
 
 	if registered && input.SuppressSession {
-		return &authdomain.LoginResult{UserID: user.ID, Account: user.Account}, nil
+		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account}, nil
 	}
 	return s.completeLogin(ctx, app, user, "sms", "sms",
 		input.DeviceID, input.Device, input.IP, input.UserAgent)
@@ -128,6 +133,12 @@ func (s *AuthService) findUserByPhone(ctx context.Context, appID int64, phone st
 // createPhoneUser 以手机号为账号建号。没有密码：这类账号只能靠短信或后续绑定的方式登录，
 // 想用密码登录需要走「设置密码」流程。
 func (s *AuthService) createPhoneUser(ctx context.Context, input SMSLoginInput, phone string) (*userdomain.User, error) {
+	if err := s.checkReregister(ctx, input.AppID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: phone},
+		RegisterIdentifier{Kind: accountdeletion.TombstonePhone, Value: phone},
+	); err != nil {
+		return nil, err
+	}
 	now := timeutil.NowUTC()
 	profile := userdomain.Profile{
 		Nickname: strings.TrimSpace(input.Nickname),
@@ -174,6 +185,7 @@ func (s *AuthService) createPhoneUser(ctx context.Context, input SMSLoginInput, 
 
 	userID := user.ID
 	appID := input.AppID
+	s.trackAccountSetup(ctx, appID, userID, appdomain.AccountSetupSourceSMS, "")
 	s.runDetached("register.sms.audit", 3*time.Second, func(actx context.Context) {
 		_ = s.pg.InsertLoginAudit(actx, appID, userID, "register", "sms", "",
 			input.IP, input.DeviceID, input.UserAgent, "success", map[string]any{

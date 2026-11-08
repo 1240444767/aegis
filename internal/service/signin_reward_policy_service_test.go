@@ -7,6 +7,8 @@ import (
 	"time"
 
 	appdomain "aegis/internal/domain/app"
+
+	gojson "github.com/goccy/go-json"
 )
 
 func TestCalculateSignInRewardWithPolicy_DefaultPolicy(t *testing.T) {
@@ -127,5 +129,24 @@ func TestNormalizeAndValidateSignInRewardPolicy_CamelCaseVariableRejected(t *tes
 	_, errs := normalizeAndValidateSignInRewardPolicy(policy)
 	if len(errs) == 0 {
 		t.Fatal("expected camelCase variable to be rejected")
+	}
+}
+
+// 没有规则、没有里程碑的策略，读出来也要是空数组而不是 null：控制台直接取 .length。
+func TestSignInRewardPolicyEmptyListsSerializeAsArrays(t *testing.T) {
+	policy := defaultSignInRewardPolicy()
+	policy.Rules = nil
+	policy.Milestones = nil
+	normalized, errs := normalizeAndValidateSignInRewardPolicy(policy)
+	if len(errs) > 0 {
+		t.Fatalf("unexpected validation errors: %v", errs)
+	}
+	payload, err := gojson.Marshal(normalized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	if !strings.Contains(text, `"rules":[]`) || !strings.Contains(text, `"milestones":[]`) {
+		t.Fatalf("empty lists should serialize as [], got %s", text)
 	}
 }

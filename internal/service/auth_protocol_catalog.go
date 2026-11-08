@@ -28,6 +28,8 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "login", Method: "POST", Path: "/auth/login", Summary: "登录（method: password | sms | cardkey）"},
 	{Key: "refresh", Method: "POST", Path: "/auth/refresh", Summary: "刷新访问令牌"},
 	{Key: "secondFactor", Method: "POST", Path: "/auth/2fa/verify", Summary: "完成登录返回的二次认证挑战"},
+	{Key: "deviceLimitResolve", Method: "POST", Path: "/auth/device-limit/resolve",
+		Summary: "登录设备数已满时，凭登录结果里 deviceLimit.ticket 与勾选要下线的设备完成登录"},
 	{Key: "logout", Method: "POST", Path: "/auth/logout", Auth: true, Summary: "注销当前会话"},
 
 	// ── 网页扫码登录 ──
@@ -77,10 +79,16 @@ var gatewayOperations = []authprotocol.Operation{
 	//
 	// 授权卡登录不在这里：它是 /auth/login 的一档 method（cardkey），
 	// 加登录方式不加路由，客户端也就不需要认识第二条登录入口。
+	{Key: "cardKeyPreview", Method: "POST", Path: "/card-keys/preview", Auth: true,
+		Summary: "兑换前预览：这张卡会发什么、现在能不能用（不能用时 usable=false 并给出 reasonCode）"},
 	{Key: "cardKeyRedeem", Method: "POST", Path: "/card-keys/redeem", Auth: true,
-		Summary: "兑换卡密（会员 / 积分 / 经验 / 余额 / 抽奖次数 / 设备位）"},
+		Summary: "兑换卡密（会员 / 功能解锁 / 积分 / 经验 / 余额 / 抽奖次数 / 授权时长 / 设备位）"},
 	{Key: "cardKeyMine", Method: "GET", Path: "/card-keys/mine", Auth: true,
-		Summary: "我名下的授权卡：授权到期时间与已绑定设备数"},
+		Summary: "我名下的授权卡：授权到期时间、已绑定的设备与剩余的自助解绑次数"},
+	{Key: "cardKeyUnbindDevice", Method: "DELETE", Path: "/card-keys/mine/{cardId}/devices/{deviceId}", Auth: true,
+		Summary: "自助解绑授权卡上的一台设备（每 30 天次数由批次决定）"},
+	{Key: "cardKeyRedemptions", Method: "GET", Path: "/card-keys/redemptions", Auth: true,
+		Summary: "我的卡密兑换记录（分页）"},
 
 	// ── 激励广告 ──
 	//
@@ -117,6 +125,12 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "splashAdEvents", Method: "POST", Path: "/ads/splash/events",
 		Summary: "上报开屏广告记录（shown / clicked / failed / timeout），带令牌时记到账号上"},
 
+	// ── 崩溃报告 ──
+	//
+	// 只在用户明确同意发送这一份报告后调用（如崩溃屏上的「发送此报告」），免登录可用。
+	{Key: "crashReport", Method: "POST", Path: "/crash-reports",
+		Summary: "上报一份崩溃报告（kind: java | native | anr | exit，report 上限 256 KB）；reportId 重复时返回原来那一条，按设备与 IP 限频"},
+
 	// ── 当前用户 ──
 	{Key: "me", Method: "GET", Path: "/me", Auth: true, Summary: "当前登录用户资料"},
 	{Key: "profile", Method: "GET", Path: "/me/profile", Auth: true, Summary: "个人资料详情"},
@@ -134,6 +148,27 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "autoSignUpdate", Method: "PUT", Path: "/me/auto-sign", Auth: true,
 		Summary: "修改自动签到设置（只改传了的字段）；从关到开时校验开放策略，返回修改后的状态"},
 	{Key: "security", Method: "GET", Path: "/me/security", Auth: true, Summary: "账户安全概览"},
+	// 账号初始化：第三方 / 短信 / 卡密快速登录建的号补设用户名与密码（docs/account-setup.md）。
+	// prompt 为 dialog 时弹窗一次并上报 prompted，之后为 banner；用户关掉横幅上报 dismiss
+	{Key: "accountSetupStatus", Method: "GET", Path: "/me/account-setup", Auth: true,
+		Summary: "账号初始化状态：还缺用户名 / 密码、现在该弹窗还是出横幅、可选用户名与规则"},
+	{Key: "accountSetupComplete", Method: "POST", Path: "/me/account-setup", Auth: true,
+		Summary: "设置用户名（只能自助设一次）与密码（没有密码时），两项可分开提交，返回新的状态"},
+	{Key: "accountSetupCheck", Method: "POST", Path: "/me/account-setup/check", Auth: true,
+		Summary: "检查用户名是否可用（规则、占用、注销保留期）"},
+	{Key: "accountSetupPrompted", Method: "POST", Path: "/me/account-setup/prompted", Auth: true,
+		Summary: "首次弹窗已展示：之后只出横幅"},
+	{Key: "accountSetupDismiss", Method: "POST", Path: "/me/account-setup/dismiss", Auth: true,
+		Summary: "关掉横幅：按应用策略隔一段时间再出现（策略不许关时状态不变）"},
+	// 账号注销：enabled=false（且没有进行中的申请）时入口应当整个隐藏；verification 说明提交时要带哪些凭据
+	{Key: "deletion", Method: "GET", Path: "/me/deletion", Auth: true,
+		Summary: "注销页：可选方式、须知、原因、要过的验证、前置条件与进行中的申请"},
+	{Key: "deletionCode", Method: "POST", Path: "/me/deletion/code", Auth: true,
+		Summary: "向绑定的邮箱或手机号发注销验证码（channel: email | phone）"},
+	{Key: "deletionSubmit", Method: "POST", Path: "/me/deletion", Auth: true,
+		Summary: "提交注销（mode: cooling | immediate）；deleted 为真时账号已删除，清掉本地登录"},
+	{Key: "deletionCancel", Method: "POST", Path: "/me/deletion/cancel", Auth: true,
+		Summary: "撤销进行中的注销申请（待审核、冷静期中、执行失败）"},
 
 	// ── 二次认证 ──
 	{Key: "totpEnroll", Method: "POST", Path: "/me/2fa/totp/enroll", Auth: true, Summary: "发起 TOTP 绑定"},
@@ -153,6 +188,10 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "sessions", Method: "GET", Path: "/me/sessions", Auth: true, Summary: "当前在线会话列表"},
 	{Key: "sessionRevoke", Method: "DELETE", Path: "/me/sessions/{tokenHash}", Auth: true, Summary: "踢出单个会话"},
 	{Key: "sessionRevokeAll", Method: "POST", Path: "/me/sessions/revoke-all", Auth: true, Summary: "踢出全部会话"},
+	{Key: "devices", Method: "GET", Path: "/me/devices", Auth: true,
+		Summary: "我的登录设备：按设备合并的在线登录、生效的设备数上限与各终端类别的占用"},
+	{Key: "devicesRemove", Method: "POST", Path: "/me/devices/remove", Auth: true,
+		Summary: "下线我的其他设备（deviceKeys），不能下线当前设备"},
 	{Key: "loginAudits", Method: "GET", Path: "/me/audits/login", Auth: true, Summary: "我的登录记录"},
 	{Key: "sessionAudits", Method: "GET", Path: "/me/audits/sessions", Auth: true, Summary: "我的会话记录"},
 
@@ -167,6 +206,10 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsOverview", Method: "GET", Path: "/points/overview", Auth: true, Summary: "积分与经验概览"},
 	{Key: "pointsLevel", Method: "GET", Path: "/points/level", Auth: true, Summary: "我的等级"},
 	{Key: "pointsLevels", Method: "GET", Path: "/points/levels", Auth: true, Summary: "等级配置"},
+	// 达成奖励（docs/levels.md）：升级经过的每一级各一份，claimable 的由用户在这里领取
+	{Key: "pointsLevelRewards", Method: "GET", Path: "/points/level/rewards", Auth: true, Summary: "我的等级达成奖励"},
+	{Key: "pointsLevelRewardClaim", Method: "POST", Path: "/points/level/rewards/{rewardId}/claim", Auth: true, Summary: "领取等级达成奖励"},
+	{Key: "pointsLevelHistory", Method: "GET", Path: "/points/level/history", Auth: true, Summary: "我的升级记录"},
 	{Key: "integralTransactions", Method: "GET", Path: "/points/integral-transactions", Auth: true, Summary: "积分流水"},
 	{Key: "experienceTransactions", Method: "GET", Path: "/points/experience-transactions", Auth: true, Summary: "经验流水"},
 	// 积分商城：每件商品随附 availability（能不能兑、为什么不能），与兑换失败的错误码同一套判据。
@@ -176,6 +219,21 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "pointsStoreRedeem", Method: "POST", Path: "/points/store/redeem", Auth: true,
 		Summary: "用积分兑换一件商品（requestId 幂等）；含人工发放的商品兑换后为 pending"},
 	{Key: "pointsStoreRedemptions", Method: "GET", Path: "/points/store/redemptions", Auth: true, Summary: "我的兑换记录"},
+	// 抽奖：抽中什么只由服务端决定并在同一个事务里到账，客户端只说用哪一种次数抽一次。
+	// 次数三种来源：每日免费（free）、抽奖次数余额（bonus，看激励广告 / 卡密 / 积分商城等发放）、积分（points）。
+	// 扣除顺序只有一条：今日免费 → 赠送的次数 → 兑换的次数 → 积分；source 只是「最多用到这一档」，免费永远先扣。
+	// 视频抽奖 = 活动页 chances.video 给出的激励广告场景：按激励广告流程看完并上报，到账的是抽奖次数，再用 bonus 抽。
+	{Key: "lotteryActivities", Method: "GET", Path: "/lottery", Auth: true,
+		Summary: "进行中的抽奖活动（没有时为空列表，入口应当隐藏）"},
+	{Key: "lotteryState", Method: "GET", Path: "/lottery/activities/{activityId}", Auth: true,
+		Summary: "抽奖活动页：奖品与公示概率、我的各种次数（含视频抽奖的广告场景）、保底进度"},
+	{Key: "lotteryDraw", Method: "POST", Path: "/lottery/activities/{activityId}/draw", Auth: true,
+		Summary: "抽一次（source: free / bonus / points 为最多用到哪一档，留空不设上限，都先扣免费；requestId 幂等）；返回结果与抽完后的次数"},
+	{Key: "lotteryDrawBatch", Method: "POST", Path: "/lottery/activities/{activityId}/draw/batch", Auth: true,
+		Summary: "连抽（十连抽，count 1–10）：逐次抽、逐次到账；中途次数用完时停下并返回已抽到的（stopped 写明原因）"},
+	{Key: "lotteryDraws", Method: "GET", Path: "/lottery/draws", Auth: true, Summary: "我的抽奖记录（activityId 可选）"},
+	{Key: "lotteryTickets", Method: "GET", Path: "/lottery/tickets", Auth: true,
+		Summary: "我的抽奖次数：余额、赠送与兑换两档、还有剩余的批次（按使用顺序）与次数流水（page / limit）"},
 	// 邀请：未开启时 /invite 回 enabled=false（不报错），入口整个隐藏。注册表单上的邀请码字段由
 	// /config 的 auth.invite 决定，填了的码随 /auth/register 的 inviteCode 一起提交。
 	{Key: "invite", Method: "GET", Path: "/invite", Auth: true,
@@ -187,19 +245,77 @@ var gatewayOperations = []authprotocol.Operation{
 		Summary: "换我的邀请码：code 非空为自定义（应用允许时），为空则重新生成"},
 	{Key: "invitePreview", Method: "POST", Path: "/invite/preview",
 		Summary: "注册页预览邀请码：能不能用、邀请人、填了能拿什么（不需要登录）"},
+	// 推广活动（docs/promo.md）：邀请人数沿用邀请关系；分享只认活动启用的平台，抖音系永远不认。
+	{Key: "promoCampaigns", Method: "GET", Path: "/promo", Auth: true, Summary: "推广活动列表：进行中与领取期内的活动"},
+	{Key: "promoCampaign", Method: "GET", Path: "/promo/{campaignId}", Auth: true,
+		Summary: "推广活动详情：邀请任务的人数与档位、分享任务的平台、禁止平台、奖励与次数"},
+	{Key: "promoLeaderboard", Method: "GET", Path: "/promo/{campaignId}/leaderboard", Auth: true, Summary: "推广活动的邀请排行与我的名次"},
+	{Key: "promoClaimTier", Method: "POST", Path: "/promo/{campaignId}/tiers/claim", Auth: true, Summary: "领取一档邀请奖励（count 为档位人数）"},
+	{Key: "promoSubmissions", Method: "GET", Path: "/promo/{campaignId}/submissions", Auth: true, Summary: "我提交的推广文章"},
+	{Key: "promoSubmit", Method: "POST", Path: "/promo/{campaignId}/submissions", Auth: true,
+		Summary: "提交一篇推广文章的链接，审核通过后发奖励"},
 	{Key: "leaderboardSummary", Method: "GET", Path: "/leaderboard/summary", Auth: true, Summary: "排行榜综合概览"},
 	{Key: "leaderboardMe", Method: "GET", Path: "/leaderboard/me", Auth: true, Summary: "我在各榜单的排名"},
 	{Key: "leaderboardPoints", Method: "GET", Path: "/leaderboard/points/{type}", Auth: true, Summary: "积分榜（type: integral | experience | level）"},
 	{Key: "leaderboardSignIn", Method: "GET", Path: "/leaderboard/signin/{type}", Auth: true, Summary: "签到榜（type: today | consecutive | monthly）"},
+	// 积分排行榜（新版，docs/leaderboard.md）：未开启时 /leaderboard/boards 回 enabled=false（不报错），入口整个隐藏。
+	// 接口永远不返回原始账号；匿名上榜的人对别人显示「匿名用户」。
+	{Key: "leaderboardBoards", Method: "GET", Path: "/leaderboard/boards", Auth: true,
+		Summary: "排行榜首页：开启的榜单（当前周期、奖励档位）与我的偏好（匿名、是否被移出）"},
+	{Key: "leaderboardBoard", Method: "GET", Path: "/leaderboard/boards/{key}", Auth: true,
+		Summary: "一个榜单的实时名次（并列同名次，只在前 topLimit 名内分页）与我的名次（含距上一名的差距）"},
+	{Key: "leaderboardPeriods", Method: "GET", Path: "/leaderboard/boards/{key}/periods", Auth: true,
+		Summary: "周期榜的往期列表（已结算的快照），新的在前"},
+	{Key: "leaderboardPeriod", Method: "GET", Path: "/leaderboard/boards/{key}/periods/{periodKey}", Auth: true,
+		Summary: "往期榜单：结算时冻结的名次、我在这一期的名次与奖励"},
+	{Key: "leaderboardRewards", Method: "GET", Path: "/leaderboard/rewards", Auth: true, Summary: "我的榜单奖励记录"},
+	{Key: "leaderboardPreference", Method: "GET", Path: "/leaderboard/preference", Auth: true, Summary: "我的排行榜偏好（匿名上榜）"},
+	{Key: "leaderboardPreferenceUpdate", Method: "PUT", Path: "/leaderboard/preference", Auth: true,
+		Summary: "开关匿名上榜：名次与奖励照旧，别人看到的是「匿名用户」"},
 
-	// ── 站内信 ──
-	{Key: "notifications", Method: "GET", Path: "/notifications", Auth: true, Summary: "站内信列表"},
-	{Key: "notificationsUnread", Method: "GET", Path: "/notifications/unread-count", Auth: true, Summary: "未读数"},
+	// ── 站内信（消息中心，docs/notification-center.md）──
+	// 写操作都带回 unread 与 categoryUnread；新消息、已读、删除另经 /api/ws 实时推送
+	// （notification.created / notification.read / notification.deleted）。
+	{Key: "notifications", Method: "GET", Path: "/notifications", Auth: true,
+		Summary: "站内信列表（status=all|unread|read、category 筛选，已过期的不出现）"},
+	{Key: "notificationSummary", Method: "GET", Path: "/notifications/summary", Auth: true,
+		Summary: "消息中心首页：总未读与每个分类的未读、总数、最新一条"},
+	{Key: "notificationsUnread", Method: "GET", Path: "/notifications/unread-count", Auth: true, Summary: "未读数（含按分类的 categories）"},
+	{Key: "notificationDetail", Method: "GET", Path: "/notifications/{notificationId}", Auth: true, Summary: "单条消息详情"},
 	{Key: "notificationRead", Method: "POST", Path: "/notifications/read", Auth: true, Summary: "标记已读"},
-	{Key: "notificationReadBatch", Method: "POST", Path: "/notifications/read-batch", Auth: true, Summary: "批量标记已读"},
-	{Key: "notificationReadAll", Method: "POST", Path: "/notifications/read-all", Auth: true, Summary: "全部标记已读"},
-	{Key: "notificationClear", Method: "POST", Path: "/notifications/clear", Auth: true, Summary: "清空站内信"},
+	{Key: "notificationUnread", Method: "POST", Path: "/notifications/unread", Auth: true, Summary: "标为未读"},
+	{Key: "notificationReadBatch", Method: "POST", Path: "/notifications/read-batch", Auth: true, Summary: "批量标记已读（≤ 200 条）"},
+	{Key: "notificationReadAll", Method: "POST", Path: "/notifications/read-all", Auth: true, Summary: "全部标记已读（可按分类）"},
+	{Key: "notificationDeleteBatch", Method: "POST", Path: "/notifications/delete-batch", Auth: true, Summary: "批量删除（≤ 200 条）"},
+	{Key: "notificationClear", Method: "POST", Path: "/notifications/clear", Auth: true, Summary: "清空站内信（可按状态与分类）"},
 	{Key: "notificationDelete", Method: "DELETE", Path: "/notifications/{notificationId}", Auth: true, Summary: "删除一条站内信"},
+	{Key: "notificationPreferences", Method: "GET", Path: "/notifications/preferences", Auth: true, Summary: "各分类的提醒开关"},
+	{Key: "notificationPreferencesUpdate", Method: "PUT", Path: "/notifications/preferences", Auth: true,
+		Summary: "改提醒开关：关闭只影响提醒（实时事件 silent=true），消息照常入库、计未读；账号安全类不能关"},
+
+	// ── AI 中转网关 ──
+	//
+	// 调用面在 /api/ai/v1（OpenAI / Anthropic SDK 直连，baseURL 见 aiOverview.baseUrl），这里是它的账户侧：
+	// 能用多少、扣费顺序、可用模型与单价、API 密钥、调用记录。规格见 docs/ai-gateway.md。
+	{Key: "aiOverview", Method: "GET", Path: "/ai/overview", Auth: true,
+		Summary: "AI 中转总览：是否开放、扣费顺序、各额度余量、积分与余额、价格倍率、今日已用、调用地址"},
+	{Key: "aiModels", Method: "GET", Path: "/ai/models", Auth: true,
+		Summary: "可调用的模型与有效单价（已乘上本人的会员与等级倍率），会员专享模型标 available=false"},
+	{Key: "aiCatalogLookup", Method: "GET", Path: "/ai/catalog/lookup", Auth: false,
+		Summary: "公开模型目录按名字批量查能力：识图、工具、思考与可选强度、上下文与输出上限（models、providers 逗号分隔）"},
+	{Key: "aiKeys", Method: "GET", Path: "/ai/keys", Auth: true, Summary: "我的 API 密钥（只含提示，不含明文）"},
+	{Key: "aiKeyCreate", Method: "POST", Path: "/ai/keys", Auth: true,
+		Summary: "新建 API 密钥（名称、可用模型、消费上限、到期时间）；明文 secret 只在这次返回"},
+	{Key: "aiKeyUpdate", Method: "PUT", Path: "/ai/keys/{keyId}", Auth: true,
+		Summary: "修改 API 密钥：名称、启用 / 停用、可用模型、消费上限、到期时间（clearExpiry 清除）"},
+	{Key: "aiKeyDelete", Method: "DELETE", Path: "/ai/keys/{keyId}", Auth: true,
+		Summary: "删除 API 密钥，立即失效；进行中的调用照常结算"},
+	{Key: "aiRequests", Method: "GET", Path: "/ai/requests", Auth: true,
+		Summary: "我的调用记录：用量、价格、从哪些来源扣了多少；失败的调用不扣费也会列出"},
+	{Key: "aiRequest", Method: "GET", Path: "/ai/requests/{requestNo}", Auth: true,
+		Summary: "一次调用的明细（requestNo 即调用响应头 X-Aegis-Request-No）"},
+	{Key: "aiCredits", Method: "GET", Path: "/ai/credits", Auth: true,
+		Summary: "赠送额度流水：看广告与管理员发放、调用消费、退款"},
 
 	// ── 钱包 / 会员 / 支付 ──
 	{Key: "wallet", Method: "GET", Path: "/wallet", Auth: true, Summary: "我的余额"},
@@ -207,7 +323,12 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "walletConsume", Method: "POST", Path: "/wallet/consume", Auth: true, Summary: "余额消费"},
 	{Key: "vipPlans", Method: "GET", Path: "/vip/plans", Auth: true, Summary: "会员套餐"},
 	{Key: "vipStatus", Method: "GET", Path: "/vip/status", Auth: true, Summary: "我的会员状态"},
+	{Key: "vipFeatures", Method: "GET", Path: "/vip/features", Auth: true, Summary: "会员权益目录（启用中的标识、名称与说明）"},
+	{Key: "vipFeatureTicket", Method: "POST", Path: "/vip/feature-ticket", Auth: true, Summary: "权益凭证：拥有某项权益时签发绑定账号与设备的 Ed25519 凭证，客户端离线验签"},
+	{Key: "listenTogetherTicket", Method: "POST", Path: "/listen-together/ticket", Auth: true,
+		Summary: "一起听票据：拥有 listen_together 权益时签发短期 EdDSA 票据并给出一起听服务的 wss 地址（docs/listen-together.md）"},
 	{Key: "vipTransactions", Method: "GET", Path: "/vip/transactions", Auth: true, Summary: "会员流水"},
+	{Key: "vipConversions", Method: "GET", Path: "/vip/conversions", Auth: true, Summary: "会员折算记录（已拥有的发放、开通永久时折掉的存量）"},
 	{Key: "vipPurchase", Method: "POST", Path: "/vip/purchase", Auth: true, Summary: "购买会员"},
 	{Key: "vipTrial", Method: "POST", Path: "/vip/trial", Auth: true, Summary: "领取试用会员（一人一次，资格见 /vip/status 的 trialOffer）"},
 	{Key: "payMethods", Method: "GET", Path: "/pay/methods", Auth: true,
@@ -283,6 +404,10 @@ var gatewayOperations = []authprotocol.Operation{
 	{Key: "releaseChannels", Method: "GET", Path: "/releases/channels", Auth: true, Summary: "可自助加入的发布渠道"},
 	{Key: "releaseChannelJoin", Method: "POST", Path: "/releases/channels/{code}/join", Auth: true, Summary: "加入发布渠道"},
 	{Key: "releaseChannelLeave", Method: "POST", Path: "/releases/channels/{code}/leave", Auth: true, Summary: "退出发布渠道"},
+
+	// ── 版本管控（免登录；上报与裁决走独立加密通道，见 docs/client-control.md）──
+	{Key: "clientControlCheck", Method: "POST", Path: "/client-control/check", Summary: "加密上报包名、版本与签名，取回签名裁决：放行 / 提醒 / 强制更新 / 停用"},
+	{Key: "clientControlWatch", Method: "GET", Path: "/client-control/watch", Summary: "长轮询：策略版本变化时立即返回，客户端随即重新校验"},
 }
 
 // gatewayErrors 机器可读的错误码目录。
@@ -314,6 +439,37 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "去掉头/字段，或改成与路径一致"},
 	{Code: 40100, Name: "UNAUTHENTICATED", Message: "缺少或无效的访问令牌",
 		Recovery: authprotocol.RecoveryRefreshToken},
+	// ── 登录设备数（docs/device-limit.md）──
+	{Code: 40130, Name: "DEVICE_LIMIT_SIGNED_OUT", Message: "账号已在其他设备登录，当前设备已退出登录",
+		Recovery: authprotocol.RecoveryReauth,
+		Hint:     "登录设备数超出上限，本机被自动下线；访问令牌与刷新令牌都已失效，不要再刷新，清掉本地登录态并提示用户"},
+	{Code: 40131, Name: "DEVICE_REMOVED", Message: "当前设备已在设备管理中被移除",
+		Recovery: authprotocol.RecoveryReauth, Hint: "用户在别的设备上或管理员把本机下线了，清掉本地登录态回到登录页"},
+	{Code: 40997, Name: "DEVICE_LIMIT_REACHED", Message: "同时登录的设备已达上限",
+		Recovery: authprotocol.RecoveryNone,
+		Hint:     "应用设置为拒绝超出的登录；提示用户先在已登录的设备上退出，或到设备管理里下线其他设备"},
+	{Code: 40998, Name: "NEW_DEVICE_LIMITED", Message: "近期在新设备上登录的次数已达上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "引导用户在常用设备上登录，或等统计窗口过去"},
+	{Code: 40496, Name: "DEVICE_LIMIT_TICKET_INVALID", Message: "设备选择已失效",
+		Recovery: authprotocol.RecoveryReauth, Hint: "选择页凭证 5 分钟有效、用过即作废，回到登录页重新登录"},
+	// ── 注册 IP 控制（docs/register-ip.md）──
+	// 四条建号路径（密码、短信、第三方、卡密）共用；需要验证码时报 40015，带上图形验证码重试即可
+	{Code: errCodeRegisterIPMissing, Name: "REGISTER_IP_REQUIRED", Message: "当前应用要求提供注册 IP",
+		Recovery: authprotocol.RecoveryNone, Hint: "服务端拿不到客户端地址：检查反向代理是否透传了真实 IP"},
+	{Code: errCodeRegisterIPLimited, Name: "REGISTER_IP_LIMITED", Message: "当前网络注册的账号数已达上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一地址或网段在统计窗口内注册过多；message 说明窗口与上限，可提示用户换网络或稍后再试"},
+	{Code: errCodeRegisterIPForbidden, Name: "REGISTER_IP_FORBIDDEN", Message: "当前网络环境暂不允许注册",
+		Recovery: authprotocol.RecoveryNone, Hint: "命中拒绝名单、属地限制或机房 / 云厂商出口"},
+	{Code: errCodeRegisterIPPenalty, Name: "REGISTER_IP_PENALIZED", Message: "当前网络或设备注册过于频繁，已被临时限制",
+		Recovery: authprotocol.RecoveryNone, Hint: "地址或设备屡次触发上限进入惩罚期，时长按次数翻倍；message 带剩余时长，期间不要重试"},
+	{Code: errCodeRegisterIPSurge, Name: "REGISTER_SURGE", Message: "注册人数过多，请稍后再试",
+		Recovery: authprotocol.RecoveryNone, Hint: "应用注册量异常突增，突增期间暂停注册（策略也可能改为要求验证码）"},
+	{Code: errCodeRegisterIPBusy, Name: "REGISTER_IP_UNAVAILABLE", Message: "注册服务繁忙，请稍后再试",
+		Recovery: authprotocol.RecoveryNone, Hint: "计数存储暂不可用且应用选择了故障时拒绝；稍后重试"},
+	{Code: errCodeRegisterDeviceMissing, Name: "REGISTER_DEVICE_REQUIRED", Message: "当前应用要求提供设备标识",
+		Recovery: authprotocol.RecoveryNone, Hint: "注册请求带上 X-Device-Id（或请求体 deviceId）；Kotlin SDK 默认会带"},
+	{Code: errCodeRegisterDeviceInvalid, Name: "REGISTER_DEVICE_INVALID", Message: "当前设备标识无效",
+		Recovery: authprotocol.RecoveryNone, Hint: "设备标识过短、字符过于单一或含不可见字符；改用稳定的随机标识（UUID 等）"},
 	{Code: 40174, Name: "SIGNATURE_MALFORMED", Message: "请求签名格式无效",
 		Recovery: authprotocol.RecoveryNone, Hint: "必须是 v2= 加 64 位十六进制"},
 	{Code: 40175, Name: "SIGNATURE_MISMATCH", Message: "请求签名校验失败",
@@ -360,6 +516,9 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40378, Name: "VIP_LIFETIME_INCLUDED", Message: "永久会员已包含该套餐的全部权益，无需购买",
 		Recovery: authprotocol.RecoveryNone,
 		Hint:     "/vip/plans 里 included=true 的套餐不要给购买按钮；/vip/purchase 与会员直购下单都会拒绝它"},
+	// ── 权益凭证 ──
+	{Code: errCodeFeatureNotGranted, Name: "FEATURE_NOT_GRANTED", Message: "当前账号未拥有该会员权益",
+		Recovery: authprotocol.RecoveryNone, Hint: "/vip/feature-ticket 拒绝签发；客户端应删掉本地保存的旧凭证并关闭该功能"},
 	// ── 卡密 ──
 	// 每个判据一个码，客户端据此分支。文案区分得比较细是有原因的：
 	// 「已作废」「已用过」「已过期」对用户是三件完全不同的事，
@@ -377,8 +536,37 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: 40345, Name: "CARD_KEY_KIND_MISMATCH", Message: "卡密类型不符",
 		Recovery: authprotocol.RecoveryNone, Hint: "授权卡走 /auth/login 的 cardkey 方式，兑换卡走 /card-keys/redeem"},
-	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可加设备位的授权卡",
+	{Code: 40346, Name: "CARD_KEY_NO_LOGIN_CARD", Message: "名下没有可用的授权卡",
+		Recovery: authprotocol.RecoveryNone, Hint: "「设备位」「授权时长」两档权益要加在授权卡上；先用授权卡登录或绑定一张"},
+	{Code: errCodeCardKeyNotStarted, Name: "CARD_KEY_NOT_STARTED", Message: "该卡密还没到生效时间",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次设置了生效时间，message 里带具体时刻"},
+	{Code: errCodeCardKeyAlreadyRedeemed, Name: "CARD_KEY_ALREADY_REDEEMED", Message: "你已经兑换过这个卡密",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动码每人只能用一次"},
+	{Code: errCodeCardKeyUserLimit, Name: "CARD_KEY_USER_LIMIT", Message: "这一批卡的兑换张数已达上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次设置了每人限兑张数"},
+	{Code: errCodeCardKeyAudience, Name: "CARD_KEY_AUDIENCE", Message: "不在这张卡的领取对象里",
+		Recovery: authprotocol.RecoveryNone, Hint: "批次限定了仅会员或仅非会员，message 里说明是哪一种"},
+	{Code: errCodeCardKeyUnbindLimit, Name: "CARD_KEY_UNBIND_LIMIT", Message: "自助解绑次数已用完",
+		Recovery: authprotocol.RecoveryNone, Hint: "按 30 天滚动窗口计；/card-keys/mine 的 selfUnbindRemaining 是剩余次数"},
+	{Code: errCodeCardKeyUnbindDisabled, Name: "CARD_KEY_UNBIND_DISABLED", Message: "这张卡不支持自助解绑",
+		Recovery: authprotocol.RecoveryNone, Hint: "selfUnbindLimit 为 0；引导联系客服在控制台解绑"},
+	{Code: errCodeCardKeyLicensePermanent, Name: "CARD_KEY_LICENSE_PERMANENT", Message: "授权卡已是永久授权",
+		Recovery: authprotocol.RecoveryNone, Hint: "续费卡（授权时长）不必兑换，可以留给别人"},
+	{Code: errCodeCardKeyRewardOwned, Name: "CARD_KEY_REWARD_OWNED", Message: "已永久拥有这张卡要解锁的功能",
 		Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeCardKeyRewardUnavailable, Name: "CARD_KEY_REWARD_UNAVAILABLE", Message: "这张卡的权益已下架",
+		Recovery: authprotocol.RecoveryNone, Hint: "引用的会员套餐被删除或功能被停用，引导联系客服"},
+	{Code: errCodeCardKeyDeviceMissing, Name: "CARD_KEY_DEVICE_NOT_BOUND", Message: "这台设备没有绑定在该卡上",
+		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /card-keys/mine"},
+	{Code: errCodeCardKeyTooManyAttempts, Name: "CARD_KEY_TOO_MANY_ATTEMPTS", Message: "输错卡密的次数过多",
+		Recovery: authprotocol.RecoveryNone, Hint: "只数「卡密不存在」；按账号与 IP 计，锁定 15 分钟，message 里带剩余分钟数"},
+	// ── 账号初始化 ──
+	{Code: errCodeUsernameTaken, Name: "USERNAME_TAKEN", Message: "该用户名已被使用",
+		Recovery: authprotocol.RecoveryNone, Hint: "也用于注销后仍在保留期内的用户名；换一个或选用状态里的 suggestions"},
+	{Code: errCodeAccountSetupDone, Name: "ACCOUNT_SETUP_DONE", Message: "用户名已设置",
+		Recovery: authprotocol.RecoveryNone, Hint: "自助只能设一次，之后由管理员在控制台修改"},
+	{Code: errCodePasswordAlreadySet, Name: "PASSWORD_ALREADY_SET", Message: "已设置过密码",
+		Recovery: authprotocol.RecoveryNone, Hint: "改走 /auth/password/change"},
 	// ── 自动签到 ──
 	// 与 /me/auto-sign 的 reason 一一对应：状态里说「为什么不能开」，开启时报同一句话。
 	{Code: errCodeAutoSignDisabled, Name: "AUTO_SIGN_DISABLED", Message: "自动签到暂未开放",
@@ -396,13 +584,54 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone, Hint: "按商品的 limitPeriod 计：total 为累计，day / week / month 按应用时区的自然日、周、月"},
 	{Code: errCodePointsInsufficient, Name: "POINTS_INSUFFICIENT", Message: "积分不足", Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRequirement, Name: "POINTS_STORE_REQUIREMENT_UNMET", Message: "不满足兑换条件",
-		Recovery: authprotocol.RecoveryNone, Hint: "等级门槛（minLevel）或兑换对象（audience: vip / non_vip）不符，message 说明具体是哪一条"},
+		Recovery: authprotocol.RecoveryNone, Hint: "等级门槛（minLevel）或兑换对象（audience: vip / non_vip / lifetime）不符，message 说明具体是哪一条"},
 	{Code: errCodePointsStoreOwned, Name: "POINTS_STORE_OWNED", Message: "已拥有该权益，无需兑换",
 		Recovery: authprotocol.RecoveryNone, Hint: "永久会员已包含所兑的会员，或所兑功能已永久解锁"},
 	{Code: errCodePointsStoreItemNotFound, Name: "POINTS_STORE_ITEM_NOT_FOUND", Message: "商品不存在或已删除",
 		Recovery: authprotocol.RecoveryNone},
 	{Code: errCodePointsStoreRedeeming, Name: "POINTS_STORE_REDEEMING", Message: "兑换正在处理",
 		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	// ── 抽奖 ──
+	// 与活动页 chances 的判定一一对应：显示「还剩 0 次」与点了之后的报错是同一件事。
+	{Code: errCodeLotteryNotFound, Name: "LOTTERY_NOT_FOUND", Message: "活动不存在或已下线",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动被删除、暂停或还是草稿，重新拉一次 /lottery"},
+	{Code: errCodeLotteryNotStarted, Name: "LOTTERY_NOT_STARTED", Message: "活动尚未开始", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryEnded, Name: "LOTTERY_ENDED", Message: "活动已结束", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryFreeExhausted, Name: "LOTTERY_FREE_EXHAUSTED", Message: "今日免费次数已用完",
+		Recovery: authprotocol.RecoveryNone, Hint: "可改用 bonus / points，或引导看视频（chances.video）"},
+	{Code: errCodeLotteryPointsLimit, Name: "LOTTERY_POINTS_DAILY_LIMIT", Message: "今日积分抽奖次数已用完",
+		Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeLotteryNoChance, Name: "LOTTERY_NO_CHANCE", Message: "没有可用的抽奖次数",
+		Recovery: authprotocol.RecoveryNone, Hint: "指定 bonus 但余额为 0，或不指定来源且三种次数都没有（chances.next 为空）"},
+	{Code: errCodeLotterySourceUnavailable, Name: "LOTTERY_SOURCE_UNAVAILABLE", Message: "该抽奖方式未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "活动未开放积分抽奖，或 source 不是 free / bonus / points"},
+	{Code: errCodeLotteryPrizeUnavailable, Name: "LOTTERY_PRIZE_UNAVAILABLE", Message: "奖品配置已失效",
+		Recovery: authprotocol.RecoveryNone, Hint: "抽中的奖品引用的套餐或功能已失效，整次抽奖已回滚，次数与积分未扣"},
+	{Code: errCodeLotteryDrawing, Name: "LOTTERY_DRAWING", Message: "抽奖正在处理",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一个 requestId 的并发提交；稍后用同一个 requestId 重试会原样拿到结果"},
+	{Code: errCodeLotteryRiskBlocked, Name: "LOTTERY_RISK_BLOCKED", Message: "当前环境存在风险，暂时无法抽奖",
+		Recovery: authprotocol.RecoveryNone},
+	// ── 账号注销 ──
+	{Code: errCodeDeletionDisabled, Name: "ACCOUNT_DELETION_DISABLED", Message: "账号注销暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/me/deletion 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodeDeletionVerifyFailed, Name: "ACCOUNT_DELETION_VERIFY_FAILED", Message: "身份验证未通过",
+		Recovery: authprotocol.RecoveryNone, Hint: "密码、验证码或动态码不对；连续失败 8 次锁定 1 小时（42912）"},
+	{Code: errCodeDeletionCodeMissing, Name: "ACCOUNT_DELETION_CODE_MISSING", Message: "验证码已失效，请重新获取",
+		Recovery: authprotocol.RecoveryNone, Hint: "先调 /me/deletion/code，验证码 10 分钟内有效"},
+	{Code: errCodeDeletionVerifyRequired, Name: "ACCOUNT_DELETION_VERIFY_REQUIRED", Message: "请完成身份验证",
+		Recovery: authprotocol.RecoveryNone, Hint: "按 /me/deletion 的 verification 带上 password 或 channel+code；totp 为真时再带 totpCode 或 recoveryCode；available 为假时 message 说明要先绑定什么"},
+	{Code: errCodeDeletionNotFound, Name: "ACCOUNT_DELETION_NOT_FOUND", Message: "没有进行中的注销申请", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodeDeletionOpenExists, Name: "ACCOUNT_DELETION_OPEN_EXISTS", Message: "已有进行中的注销申请",
+		Recovery: authprotocol.RecoveryNone, Hint: "重新拉一次 /me/deletion，按 request 展示冷静期或审核状态"},
+	{Code: errCodeDeletionStateChanged, Name: "ACCOUNT_DELETION_STATE_CHANGED", Message: "申请状态已变化",
+		Recovery: authprotocol.RecoveryNone, Hint: "例如正在执行时撤销；重新拉一次 /me/deletion"},
+	{Code: errCodeDeletionBlocked, Name: "ACCOUNT_DELETION_BLOCKED", Message: "暂不满足注销条件",
+		Recovery: authprotocol.RecoveryNone, Hint: "/me/deletion 的 checks 里 level=block 且 passed=false 的一项，message 说明具体原因"},
+	{Code: errCodeDeletionReregister, Name: "ACCOUNT_DELETION_REREGISTER_LIMITED", Message: "该账号注销未满限制期，暂不能重新注册",
+		Recovery: authprotocol.RecoveryNone, Hint: "注册接口返回；message 带可以重新注册的日期"},
+	{Code: errCodeDeletionResendTooSoon, Name: "ACCOUNT_DELETION_CODE_TOO_FREQUENT", Message: "验证码发送过于频繁",
+		Recovery: authprotocol.RecoveryNone, Hint: "同一渠道 60 秒一次，每天 10 次"},
+	{Code: errCodeDeletionTooManyFailure, Name: "ACCOUNT_DELETION_LOCKED", Message: "验证失败次数过多", Recovery: authprotocol.RecoveryNone},
 	// ── 邀请 ──
 	// 与 /invite 的 bind.reason、/invite/preview 的 reason 同一套判据。
 	{Code: errCodeInviteDisabled, Name: "INVITE_DISABLED", Message: "邀请活动暂未开放",
@@ -421,6 +650,42 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: errCodeInviteNotEligible, Name: "INVITE_NOT_ELIGIBLE", Message: "暂不满足邀请条件",
 		Recovery: authprotocol.RecoveryNone, Hint: "/invite 的 canInvite 为 false，inviteMessage 说明还差什么"},
 	{Code: errCodeInviteCodeTaken, Name: "INVITE_CODE_TAKEN", Message: "邀请码已被占用", Recovery: authprotocol.RecoveryNone},
+	// ── 推广活动 ──
+	// 与 /promo/{id} 的 share.reason 同一套判据，message 可以直接展示。
+	{Code: errCodePromoNotFound, Name: "PROMO_NOT_FOUND", Message: "活动不存在或已下线", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoNotActive, Name: "PROMO_NOT_ACTIVE", Message: "活动未开始或已结束",
+		Recovery: authprotocol.RecoveryNone, Hint: "领取邀请档位看 claimUntil，提交文章看 endsAt"},
+	{Code: errCodePromoInviteDisabled, Name: "PROMO_INVITE_DISABLED", Message: "本期活动没有邀请任务", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoTierLocked, Name: "PROMO_TIER_LOCKED", Message: "邀请人数还不够", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoTierClaimed, Name: "PROMO_TIER_CLAIMED", Message: "这一档奖励已经领取过", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoShareDisabled, Name: "PROMO_SHARE_DISABLED", Message: "本期活动没有分享任务", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoPlatformUnavail, Name: "PROMO_PLATFORM_UNAVAILABLE", Message: "本期活动不接受这个平台的文章",
+		Recovery: authprotocol.RecoveryNone, Hint: "只能选 share.platforms 里的平台"},
+	{Code: errCodePromoLinkInvalid, Name: "PROMO_LINK_INVALID", Message: "文章链接无效或不属于所选平台", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoLinkForbidden, Name: "PROMO_LINK_FORBIDDEN", Message: "禁止在抖音等平台发布推广内容",
+		Recovery: authprotocol.RecoveryNone, Hint: "share.forbidden 列出的平台与运营禁用的域名"},
+	{Code: errCodePromoLinkDuplicate, Name: "PROMO_LINK_DUPLICATE", Message: "这篇文章已经提交过", Recovery: authprotocol.RecoveryNone},
+	{Code: errCodePromoLimited, Name: "PROMO_LIMITED", Message: "提交次数或获奖篇数已达上限",
+		Recovery: authprotocol.RecoveryNone, Hint: "每天提交次数、每人篇数、每个平台篇数，message 说明是哪一种"},
+	{Code: errCodePromoRewardUnavailable, Name: "PROMO_REWARD_UNAVAILABLE", Message: "活动奖励配置已失效", Recovery: authprotocol.RecoveryNone},
+	// ── 消息中心 ──
+	{Code: errCodeNotificationNotFound, Name: "NOTIFICATION_NOT_FOUND", Message: "消息不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "不存在、不属于当前用户或已过期；客户端从本地列表移除这一条"},
+	{Code: errCodeNotificationPushLocked, Name: "NOTIFICATION_PUSH_LOCKED", Message: "该类消息不能关闭提醒",
+		Recovery: authprotocol.RecoveryNone, Hint: "/notifications/preferences 里 mutable=false 的分类不要展示关闭开关"},
+	{Code: errCodeNotificationActionInvalid, Name: "NOTIFICATION_ACTION_INVALID", Message: "动作不合法",
+		Recovery: authprotocol.RecoveryNone, Hint: "action.type 只能是 route（target 取路由键）或 url（https 地址）"},
+	{Code: errCodeNotificationCategoryInvalid, Name: "NOTIFICATION_CATEGORY_INVALID", Message: "分类不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "分类以 /notifications/summary 返回的 key 为准"},
+	// ── 积分排行榜 ──
+	{Code: errCodeLeaderboardDisabled, Name: "LEADERBOARD_DISABLED", Message: "排行榜暂未开放",
+		Recovery: authprotocol.RecoveryNone, Hint: "/leaderboard/boards 的 enabled 为 false 时入口应当整个隐藏"},
+	{Code: errCodeLeaderboardNotFound, Name: "LEADERBOARD_NOT_FOUND", Message: "排行榜不存在",
+		Recovery: authprotocol.RecoveryNone, Hint: "榜单 key 不存在或该榜未开启；以 /leaderboard/boards 返回的榜单为准"},
+	{Code: errCodeLeaderboardSnapshotNotFound, Name: "LEADERBOARD_PERIOD_NOT_FOUND", Message: "该期榜单不存在或尚未结算",
+		Recovery: authprotocol.RecoveryNone, Hint: "往期以 /leaderboard/boards/{key}/periods 返回的期号为准"},
+	{Code: errCodeLeaderboardAnonymousForbidden, Name: "LEADERBOARD_ANONYMOUS_FORBIDDEN", Message: "当前应用不允许匿名上榜",
+		Recovery: authprotocol.RecoveryNone, Hint: "/leaderboard/boards 的 me.allowAnonymous 为 false 时不要展示匿名开关"},
 	// ── 激励广告 ──
 	// 只有「这次上报本身不成立」才是错误；限额、冷却等「看了但不发」的结论
 	// 在 /ads/rewarded/claim 的返回体里（status=rejected + reason），不走错误码。
@@ -448,6 +713,8 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40965, Name: "CLOUD_REVISION_CONFLICT", Message: "条目已被其它设备修改",
 		Recovery: authprotocol.RecoveryNone, Hint: "重新读取条目拿到最新 revision，与本地合并后再带新的 ifRevision 写入"},
 	{Code: 40966, Name: "CLOUD_NOT_IN_TRASH", Message: "条目不在回收站中", Recovery: authprotocol.RecoveryNone},
+	{Code: 41060, Name: "CLOUD_CONTENT_LOST", Message: "云端内容已丢失",
+		Recovery: authprotocol.RecoveryNone, Hint: "这个修订的内容在存储里已经不存在，重试也读不回来；用本机数据带当前 revision（从 revisions 取 current）重新写入即可覆盖"},
 	{Code: 41360, Name: "CLOUD_QUOTA_EXCEEDED", Message: "云存储空间不足",
 		Recovery: authprotocol.RecoveryNone, Hint: "配额计入全部留存修订与回收站；清空回收站或删除条目可以腾出空间"},
 	{Code: 41361, Name: "CLOUD_ITEM_TOO_LARGE", Message: "单个条目超过上限",
@@ -463,6 +730,10 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 		Recovery: authprotocol.RecoveryNone},
 	{Code: 50260, Name: "CLOUD_CONTENT_UNREADABLE", Message: "内容读取失败",
 		Recovery: authprotocol.RecoveryNone, Hint: "存储桶里的对象暂时读不出来，稍后重试；持续失败请联系管理员检查存储配置"},
+	// ── 通用限频 ──
+	// 防火墙全局限流与崩溃报告（同一设备 / 同一 IP 每小时 20 份）共用这一个码。
+	{Code: errCodeCrashReportRateLimited, Name: "RATE_LIMITED", Message: "请求过于频繁，请稍后再试",
+		Recovery: authprotocol.RecoveryNone, Hint: "不要立即重试；崩溃报告留在本机，过一段时间（如下次启动）再发"},
 	// ── 意见反馈与工单附件 ──
 	{Code: errCodeFeedbackRateLimited, Name: "FEEDBACK_RATE_LIMITED", Message: feedbackRateLimitedMessage,
 		Recovery: authprotocol.RecoveryNone, Hint: "同一用户每小时最多 5 条、每天最多 20 条反馈，稍后再提交"},
@@ -497,10 +768,25 @@ var gatewayErrors = []authprotocol.ErrorDescriptor{
 	{Code: 40484, Name: "TRIAL_NOT_AVAILABLE", Message: "当前应用未开放试用",
 		Recovery: authprotocol.RecoveryNone, Hint: "管理员没有配置启用中的试用套餐，入口应当整个隐藏"},
 	{Code: 40970, Name: "NONCE_REPLAYED", Message: "请求 nonce 已使用", Recovery: authprotocol.RecoveryNewNonce},
+	// 版本管控（docs/client-control.md）
+	{Code: 40329, Name: "CLIENT_BLOCKED", Message: "当前客户端已停用", Recovery: authprotocol.RecoveryNone,
+		Hint: "服务端已停用这个包名或版本；客户端应立即调 /client-control/check 取签名裁决并展示停用页"},
+	{Code: 40326, Name: "CLIENT_UPDATE_REQUIRED", Message: "当前版本需要更新", Recovery: authprotocol.RecoveryNone,
+		Hint: "客户端应立即调 /client-control/check 取签名裁决，引导用户更新；/releases/* 不受影响"},
+	{Code: 40457, Name: "CLIENT_CONTROL_KEY_UNKNOWN", Message: "管控加密密钥不存在或已失效",
+		Recovery: authprotocol.RecoveryRefreshConfig,
+		Hint:     "强制刷新 /config 取新的 clientControl.boxKey，用新密钥重新加密后重试一次"},
+	{Code: 50391, Name: "CLIENT_CONTROL_UNAVAILABLE", Message: "版本管控未启用", Recovery: authprotocol.RecoveryNone,
+		Hint: "服务端未部署版本管控；客户端沿用已保存的裁决"},
 	{Code: 42670, Name: "UPGRADE_REQUIRED", Message: "该应用要求使用加密载荷",
 		Recovery: authprotocol.RecoveryRefreshConfig, Hint: "应用已升到 sealed 档，不能再发明文"},
 	{Code: 50372, Name: "SIGNING_SECRET_MISSING", Message: "尚未签发应用密钥",
 		Recovery: authprotocol.RecoveryNone, Hint: "让管理员在控制台轮换一次应用密钥"},
+	// ── 一起听（docs/listen-together.md）──没有权益沿用 40230 FEATURE_NOT_GRANTED
+	{Code: errCodeListenNotEnabled, Name: "LISTEN_TOGETHER_NOT_ENABLED", Message: "一起听服务尚未开通",
+		Recovery: authprotocol.RecoveryNone, Hint: "服务端没有配置 LISTEN_TOGETHER_ENDPOINTS；客户端隐藏一起听入口"},
+	{Code: errCodeListenUnavailable, Name: "LISTEN_TOGETHER_UNAVAILABLE", Message: "一起听服务暂时不可用",
+		Recovery: authprotocol.RecoveryNone, Hint: "稍后重试"},
 }
 
 // GatewayOperations 供 transport 层做「目录与路由是否一致」的漂移检查。

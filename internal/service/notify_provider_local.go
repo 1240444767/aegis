@@ -166,7 +166,8 @@ func (p *emailNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 	if appID == 0 {
 		appID = msg.Event.AppID
 	}
-	html := notifyEmailHTML(msg)
+	// 通知同样套用作用域的品牌、主题与自定义版式
+	html := notifyEmailHTML(msg, hub.email.brandFor(ctx, appID))
 	var lastErr error
 	sent := 0
 	for _, to := range recipients {
@@ -192,7 +193,7 @@ func (p *emailNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 // 正文只出现一次：`msg.Body` 作为标题下的引导句，不再同时塞进正文区 ——
 // 旧实现两处都写，收到的人会看到同一段话连着重复两遍。
 // 字段表与按钮直接用模板积木，与验证码 / 凭证邮件同一套排版（含 Outlook 兼容）。
-func notifyEmailHTML(msg *notifydomain.Message) string {
+func notifyEmailHTML(msg *notifydomain.Message, brand mailBrand) string {
 	blocks := make([]mailBlock, 0, 2)
 	if len(msg.Event.Fields) > 0 {
 		details := make([]emailDetail, 0, len(msg.Event.Fields))
@@ -204,14 +205,16 @@ func notifyEmailHTML(msg *notifydomain.Message) string {
 	if link := strings.TrimSpace(msg.Event.Link); link != "" {
 		blocks = append(blocks, mailButton("查看详情", link))
 	}
-	return renderEmailLayoutWith(emailLayout{
+	layout := emailLayout{
 		AppName:    "Aegis",
 		Eyebrow:    "通知",
 		Title:      msg.Title,
 		Lead:       msg.Body,
 		Blocks:     blocks,
 		FooterNote: "这条通知按您在控制台配置的订阅规则发出。",
-	})
+	}
+	brand.apply(&layout)
+	return renderEmailLayoutWith(layout)
 }
 
 func htmlEscapeText(value string) string {
@@ -288,9 +291,12 @@ func (p *inAppNotifyProvider) Send(ctx context.Context, hub *NotifyHub, channel 
 			// 用户侧只带 UserLink，绝不下发控制台路径
 			metadata := inAppMetadata(event, strings.TrimSpace(event.UserLink))
 			title, body := userFacingText(msg)
+			action := inAppAction(event, notificationType)
 			for _, userID := range userIDs {
-				if err := hub.notifications.NotifyUser(ctx, appID, userID, notificationType,
-					title, body, notifyLevelToNotificationLevel(event.Level), metadata); err != nil {
+				if _, err := hub.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+					AppID: appID, UserID: userID, Type: notificationType, Title: title, Content: body,
+					Level: notifyLevelToNotificationLevel(event.Level), Metadata: metadata, Action: action,
+				}); err != nil {
 					lastErr = err
 					continue
 				}
@@ -359,6 +365,15 @@ func inAppMetadata(event *notifydomain.Event, link string) map[string]any {
 		metadata["link"] = link
 	}
 	return metadata
+}
+
+// inAppAction 用户站内信的跳转动作：工单与反馈类事件指向 App 的工单页，其它事件不带动作。
+func inAppAction(event *notifydomain.Event, notificationType string) *notificationdomain.Action {
+	if notificationdomain.CategoryOf(notificationType) == notificationdomain.CategoryTicket ||
+		event.Resource == "ticket" || event.Resource == "feedback" {
+		return notificationdomain.RouteAction(notificationdomain.RouteTickets, "查看工单")
+	}
+	return nil
 }
 
 // userFacingText 取面向提单人的文案；未单独提供时回落到通用文案。

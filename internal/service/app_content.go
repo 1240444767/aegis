@@ -55,6 +55,11 @@ func newContentSanitizer() *bluemonday.Policy {
 	// 对齐、高亮这类排版信息在 tiptap 里是 class，丢了排版就全塌了。
 	// 只放行 class，不放行 style —— 后者是 XSS 的老入口（expression / url(javascript:)）。
 	p.AllowAttrs("class").Matching(bluemonday.SpaceSeparatedTokens).Globally()
+	// 文字颜色是唯一放行的 style：只认 color / background-color 两个属性，取值只认十六进制与
+	// rgb()/rgba()，别的属性与取值（url()、expression()、var()…）在净化时整条丢掉。
+	// <font color> 一并放行，因为从别处粘贴来的正文常带它；客户端两种写法都认。
+	p.AllowStyles("color", "background-color").Matching(richTextColorPattern).OnElements("span", "mark", "font")
+	p.AllowAttrs("color").Matching(richTextColorPattern).OnElements("font")
 	p.AllowAttrs("start", "type").OnElements("ol")
 	// 公告正文里的外链是给用户点的，加 nofollow 与 target=_blank：
 	// 前者防 SEO 注入，后者避免点一下就把宿主 WebView 导航走、退不回来。

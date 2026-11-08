@@ -50,6 +50,8 @@ type AdminService struct {
 	risk        *RiskService     // 风控服务（通过 SetRiskService 注入）
 	// settings 平台设置（通过 SetPlatformSettings 注入）：自助注册开关与建应用配额存在这里
 	settings *PlatformSettingsService
+	// mcpUsage MCP 密钥使用记录的节流写入（见 admin_mcp_key_service.go）
+	mcpUsage mcpKeyUsage
 }
 
 // SetRiskService 注入风控服务
@@ -136,12 +138,11 @@ func (s *AdminService) Login(ctx context.Context, account, password, ip, userAge
 
 	// ── 风控评估：管理员登录 ──
 	if s.risk != nil {
-		riskResult, _ := s.risk.EvaluateRisk(ctx, securitydomain.RiskEvalRequest{
-			Scene: "login", IP: ip, UserAgent: userAgent,
-			Extra: map[string]any{"account": account},
-		})
-		if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-			return nil, apperrors.New(40398, http.StatusForbidden, "当前请求被风控拦截")
+		if _, err := s.risk.Guard(ctx, securitydomain.RiskEvalRequest{
+			Scene: securitydomain.SceneLogin, IP: ip, UserAgent: userAgent, Account: account,
+			Extra: map[string]any{"admin": true},
+		}, RiskGuardOption{Message: "当前请求被风控拦截"}); err != nil {
+			return nil, err
 		}
 	}
 

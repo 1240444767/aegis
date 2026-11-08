@@ -203,3 +203,23 @@ func TestAvatarVersionIsContentDerived(t *testing.T) {
 		t.Fatal("空输入应得到空版本")
 	}
 }
+
+// 对外 ID 形态：载荷里只有对外 ID，解出来标明需要换算；旧形态照样认得，DecodeOwner 不把新形态当主键用。
+func TestPublicUserTokenRoundTrips(t *testing.T) {
+	signer := newAvatarLinkSigner("test-master-key")
+	token := signer.EncodePublicUser(7, 4829173056482917)
+	owner, public, ok := signer.DecodeToken(token)
+	if !ok || !public || owner.AppID != 7 || owner.ID != 4829173056482917 || owner.Type != avatardomain.OwnerUser {
+		t.Fatalf("对外 ID 令牌解析不对：%+v public=%v ok=%v", owner, public, ok)
+	}
+	if _, ok := signer.DecodeOwner(token); ok {
+		t.Fatal("DecodeOwner 不应把对外 ID 当主键返回")
+	}
+	legacy := signer.EncodeOwner(avatardomain.Owner{Type: avatardomain.OwnerUser, AppID: 7, ID: 42})
+	if owner, public, ok := signer.DecodeToken(legacy); !ok || public || owner.ID != 42 {
+		t.Fatalf("旧令牌应照样解析：%+v public=%v ok=%v", owner, public, ok)
+	}
+	if _, _, ok := newAvatarLinkSigner("other").DecodeToken(token); ok {
+		t.Fatal("换了密钥不应解析")
+	}
+}

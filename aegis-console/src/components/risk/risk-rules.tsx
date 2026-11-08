@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Activity, ChevronRight, Loader2, Pencil, Plus, Shield, Trash2 } from "lucide-react";
+import { Activity, ChevronRight, Eye, Loader2, Pencil, Plus, Shield, ShieldCheck, Trash2 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 
@@ -27,16 +27,18 @@ import {
   useCreateRiskRuleMutation, useDeleteRiskRuleMutation, useRiskRuleQuery,
   useRiskRulesQuery, useUpdateRiskRuleMutation, useValidateExpressionMutation,
 } from "@/lib/risk-hooks";
-import type { RiskRule } from "@/lib/api/types";
+import type { RiskRule, RiskRuleInput } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import {
   ConditionFields, ConditionHint, ConditionTypeSelect, ExpressionReference, ExpressionVerdict,
   conditionDataToForm, defaultConditionData, normalizeConditionData, validateConditionData,
   type ConditionData,
 } from "./risk-condition-form";
+import { useRiskNav } from "./risk-nav";
+import { ScopeBadge, ScopeField, useRiskScope } from "./risk-scope";
 import {
-  DetailRow, InlineEmpty, LevelBadge, SceneBadge, fmtBucket, fmtDateTime, fmtNumber, fmtRelative,
-  useRiskCatalog,
+  DIMENSION_COLORS, DetailRow, DimensionBadge, InlineEmpty, LevelBadge, ModeBadge, RowsSkeleton, SCENE_ALL,
+  SceneBadge, SectionTitle, SegmentedControl, fmtBucket, fmtDateTime, fmtNumber, fmtRelative, useRiskCatalog,
 } from "./risk-shared";
 
 /**
@@ -50,6 +52,9 @@ import {
  */
 
 type RuleForm = {
+  appId: number | null;
+  mode: string;
+  decision: string;
   name: string;
   description: string;
   scene: string;
@@ -61,22 +66,35 @@ type RuleForm = {
 };
 
 const EMPTY_FORM: RuleForm = {
-  name: "", description: "", scene: "login", conditionType: "ip_frequency",
+  appId: null, mode: "enforce", decision: "",
+  name: "", description: "", scene: SCENE_ALL, conditionType: "ip_frequency",
   score: "20", priority: "100", isActive: true, conditionData: {},
 };
+
+type GroupBy = "dimension" | "scene" | "none";
+
+const GROUP_OPTIONS = [
+  { key: "dimension", label: "按维度" },
+  { key: "scene", label: "按场景" },
+  { key: "none", label: "平铺" },
+] as const;
 
 export function RiskRulesPanel({ focusRuleId, onFocusHandled }: {
   focusRuleId?: number | null;
   onFocusHandled?: () => void;
 }) {
-  const { scenes, conditionLabel } = useRiskCatalog();
+  const { scenes, dimensions, conditionLabel, sceneLabel, dimensionLabel } = useRiskCatalog();
+  const { appId } = useRiskScope();
+  const nav = useRiskNav();
   const [sceneFilter, setSceneFilter] = useState("");
+  const [modeFilter, setModeFilter] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [groupBy, setGroupBy] = useState<GroupBy>("dimension");
   const [editing, setEditing] = useState<RiskRule | "new" | null>(null);
   const [pendingDelete, setPendingDelete] = useState<RiskRule | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
 
-  const rulesQuery = useRiskRulesQuery(sceneFilter || undefined);
+  const rulesQuery = useRiskRulesQuery(sceneFilter || undefined, appId);
   const updateMut = useUpdateRiskRuleMutation();
   const deleteMut = useDeleteRiskRuleMutation();
 
@@ -84,19 +102,40 @@ export function RiskRulesPanel({ focusRuleId, onFocusHandled }: {
   const activeDetailId = focusRuleId ?? detailId;
 
   const rules = useMemo(() => {
-    const list = rulesQuery.data ?? [];
     const kw = keyword.trim().toLowerCase();
-    if (!kw) return list;
-    return list.filter((rule) =>
-      rule.name.toLowerCase().includes(kw) ||
-      rule.description.toLowerCase().includes(kw) ||
-      conditionLabel(rule.conditionType).toLowerCase().includes(kw));
-  }, [rulesQuery.data, keyword, conditionLabel]);
+    return (rulesQuery.data ?? []).filter((rule) => {
+      if (modeFilter === "observe" && rule.mode !== "observe") return false;
+      if (modeFilter === "enforce" && rule.mode === "observe") return false;
+      if (modeFilter === "inactive" && rule.isActive) return false;
+      if (!kw) return true;
+      return rule.name.toLowerCase().includes(kw) ||
+        rule.description.toLowerCase().includes(kw) ||
+        conditionLabel(rule.conditionType).toLowerCase().includes(kw);
+    });
+  }, [rulesQuery.data, keyword, modeFilter, conditionLabel]);
 
-  const toggleActive = async (rule: RiskRule, isActive: boolean) => {
+  const groups = useMemo(() => {
+    if (groupBy === "none") return [{ key: "all", label: "", rules }];
+    if (groupBy === "dimension") {
+      return dimensions
+        .map((dim) => ({ key: dim.value, label: dim.label, rules: rules.filter((r) => r.dimension === dim.value) }))
+        .concat([{ key: "_other", label: "其他", rules: rules.filter((r) => !dimensions.some((d) => d.value === r.dimension)) }])
+        .filter((g) => g.rules.length > 0);
+    }
+    const keys = [SCENE_ALL, ...scenes.map((sc) => sc.value)];
+    return keys
+      .map((key) => ({ key, label: sceneLabel(key), rules: rules.filter((r) => r.scene === key) }))
+      .filter((g) => g.rules.length > 0);
+  }, [groupBy, rules, dimensions, scenes, sceneLabel]);
+
+  const all = rulesQuery.data ?? [];
+  const activeCount = all.filter((r) => r.isActive && r.mode !== "observe").length;
+  const observeCount = all.filter((r) => r.isActive && r.mode === "observe").length;
+
+  const patchRule = async (rule: RiskRule, data: Partial<RiskRuleInput>, message: string) => {
     try {
-      await updateMut.mutateAsync({ id: rule.id, data: { isActive } });
-      toast.success(isActive ? "规则已启用" : "规则已停用");
+      await updateMut.mutateAsync({ id: rule.id, data });
+      toast.success(message);
     } catch (error) {
       toast.error(error instanceof ApiError ? error.message : "操作失败");
     }
@@ -109,33 +148,62 @@ export function RiskRulesPanel({ focusRuleId, onFocusHandled }: {
           <SelectTrigger className="h-8 w-32 text-xs"><SelectValue placeholder="全部场景" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="all">全部场景</SelectItem>
-            {scenes.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+            {scenes.map((sc) => <SelectItem key={sc.value} value={sc.value}>{sc.label}</SelectItem>)}
           </SelectContent>
         </Select>
+        <SegmentedControl value={modeFilter || "all"} onChange={(v) => setModeFilter(v === "all" ? "" : v)}
+          options={[
+            { key: "all", label: "全部", count: all.length },
+            { key: "enforce", label: "生效", count: activeCount },
+            { key: "observe", label: "观察", count: observeCount },
+            { key: "inactive", label: "停用", count: all.filter((r) => !r.isActive).length },
+          ]} />
         <Input value={keyword} onChange={(e) => setKeyword(e.target.value)}
-          placeholder="搜索规则名 / 说明 / 条件" className="h-8 w-56 text-xs" />
-        <span className="text-xs text-muted-foreground">
-          共 {rules.length} 条，启用 {rules.filter((r) => r.isActive).length} 条
-        </span>
-        <Button size="sm" className="ml-auto" onClick={() => setEditing("new")}>
-          <Plus className="size-3.5" />新建规则
-        </Button>
+          placeholder="搜索规则名 / 说明 / 条件" className="h-8 w-52 text-xs" />
+        <div className="ml-auto flex items-center gap-2">
+          <SegmentedControl value={groupBy} onChange={setGroupBy} options={GROUP_OPTIONS} />
+          <Button size="sm" onClick={() => setEditing("new")}>
+            <Plus className="size-3.5" />新建规则
+          </Button>
+        </div>
       </div>
 
       {rulesQuery.isLoading ? (
-        <div className="space-y-2">{Array.from({ length: 4 }, (_, i) => (
-          <div key={i} className="h-16 animate-pulse rounded-xl bg-muted/50" />
-        ))}</div>
+        <RowsSkeleton rows={5} height={64} />
+      ) : all.length === 0 ? (
+        <Card>
+          <CardContent className="flex min-h-48 flex-col items-start justify-center gap-3 p-8">
+            <h3 className="text-lg font-semibold">暂无规则</h3>
+            <Button size="sm" variant="outline" onClick={nav.openTemplates}>安装规则模板</Button>
+          </CardContent>
+        </Card>
       ) : rules.length === 0 ? (
-        <EmptyState title="暂无规则" />
+        <EmptyState title="没有匹配的规则" />
       ) : (
-        <div className="space-y-2">
-          {rules.map((rule) => (
-            <RuleRow key={rule.id} rule={rule}
-              onToggle={(next) => toggleActive(rule, next)}
-              onEdit={() => setEditing(rule)}
-              onDelete={() => setPendingDelete(rule)}
-              onInspect={() => setDetailId(rule.id)} />
+        <div className="space-y-4">
+          {groups.map((group) => (
+            <section key={group.key} className="space-y-2">
+              {group.label && (
+                <div className="flex items-center gap-2">
+                  {groupBy === "dimension" && (
+                    <span className="size-2 rounded-full" style={{ background: DIMENSION_COLORS[group.key]?.light ?? "#a1a1aa" }} />
+                  )}
+                  <SectionTitle>{groupBy === "dimension" ? dimensionLabel(group.key) : group.label}</SectionTitle>
+                  <span className="text-[10px] tabular-nums text-muted-foreground">{group.rules.length}</span>
+                </div>
+              )}
+              <div className="space-y-1.5">
+                {group.rules.map((rule) => (
+                  <RuleRow key={rule.id} rule={rule}
+                    onToggle={(next) => patchRule(rule, { isActive: next }, next ? "规则已启用" : "规则已停用")}
+                    onToggleMode={() => patchRule(rule, { mode: rule.mode === "observe" ? "enforce" : "observe" },
+                      rule.mode === "observe" ? "已转为生效" : "已转为观察")}
+                    onEdit={() => setEditing(rule)}
+                    onDelete={() => setPendingDelete(rule)}
+                    onInspect={() => setDetailId(rule.id)} />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
       )}
@@ -176,47 +244,62 @@ export function RiskRulesPanel({ focusRuleId, onFocusHandled }: {
   );
 }
 
-function RuleRow({ rule, onToggle, onEdit, onDelete, onInspect }: {
+function RuleRow({ rule, onToggle, onToggleMode, onEdit, onDelete, onInspect }: {
   rule: RiskRule;
   onToggle: (next: boolean) => void;
+  onToggleMode: () => void;
   onEdit: () => void;
   onDelete: () => void;
   onInspect: () => void;
 }) {
-  const { conditionLabel } = useRiskCatalog();
+  const { conditionLabel, actionLabel } = useRiskCatalog();
   // 从未命中过的启用规则值得被指出来：要么阈值配得过高，要么条件依赖的
   // 数据源没配 —— 两种都属于"以为防住了其实没有"。
   const neverHit = rule.isActive && rule.hitCount === 0;
+  const observe = rule.mode === "observe";
 
   return (
-    <div className={cn("group flex items-center gap-3 rounded-xl border bg-card px-4 py-3",
+    <div className={cn("group flex items-center gap-3 rounded-xl border bg-card px-4 py-2.5",
       !rule.isActive && "opacity-60")}>
-      <Shield className={cn("size-4 shrink-0", rule.isActive ? "text-primary" : "text-muted-foreground")} />
+      <span className="h-8 w-1 shrink-0 rounded-full"
+        style={{ background: DIMENSION_COLORS[rule.dimension]?.light ?? "#a1a1aa", opacity: rule.isActive ? 1 : 0.4 }} />
 
       <button type="button" onClick={onInspect} className="min-w-0 flex-1 text-left">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-sm font-medium">{rule.name}</span>
           <SceneBadge scene={rule.scene} />
           <Badge variant="outline" size="sm">{conditionLabel(rule.conditionType)}</Badge>
-          <Badge variant="outline" size="sm" className="font-mono">+{rule.score} 分</Badge>
+          <ModeBadge mode={rule.mode} />
+          {rule.decision && <Badge variant="danger" size="sm">命中即{actionLabel(rule.decision)}</Badge>}
+          {rule.appId != null && <ScopeBadge appId={rule.appId} />}
           {neverHit && <Badge variant="warning" size="sm">从未命中</Badge>}
         </div>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           {rule.description && <span className="truncate">{rule.description}</span>}
           <span className="tabular-nums">优先级 {rule.priority}</span>
-          <span className="tabular-nums">累计命中 {fmtNumber(rule.hitCount)} 次</span>
+          <span className="tabular-nums">命中 {fmtNumber(rule.hitCount)}</span>
           {rule.lastHitAt && <span>最近 {fmtRelative(rule.lastHitAt)}</span>}
+          {rule.templateKey && <span>模板 {rule.templateKey.split(":")[0]}</span>}
         </div>
       </button>
 
+      <span className={cn("w-14 shrink-0 text-right font-mono text-sm font-semibold tabular-nums",
+        observe ? "text-sky-600 dark:text-sky-400" : "text-amber-700 dark:text-amber-400")}>
+        {observe ? `(${rule.score})` : `+${rule.score}`}
+      </span>
+
       <div className="flex shrink-0 items-center gap-1">
-        <Switch checked={rule.isActive} onCheckedChange={onToggle} aria-label="启用规则" />
+        <Button variant="ghost" size="sm" className="h-7 px-2 opacity-0 group-hover:opacity-100"
+          title={observe ? "转为生效" : "转为观察"} onClick={onToggleMode}>
+          {observe ? <ShieldCheck className="size-3.5" /> : <Eye className="size-3.5" />}
+        </Button>
         <Button variant="ghost" size="sm" className="h-7 px-2 opacity-0 group-hover:opacity-100" onClick={onEdit}>
           <Pencil className="size-3.5" />
         </Button>
         <Button variant="ghost" size="sm" className="h-7 px-2 text-destructive opacity-0 group-hover:opacity-100" onClick={onDelete}>
           <Trash2 className="size-3.5" />
         </Button>
+        <Switch checked={rule.isActive} onCheckedChange={onToggle} aria-label="启用规则" />
         <ChevronRight className="size-4 text-muted-foreground" />
       </div>
     </div>
@@ -228,7 +311,8 @@ function RuleRow({ rule, onToggle, onEdit, onDelete, onInspect }: {
    ══════════════════════════════════════════════════════════ */
 
 function RuleEditorSheet({ rule, onClose }: { rule: RiskRule | null; onClose: () => void }) {
-  const { scenes, condition } = useRiskCatalog();
+  const { scenes, condition, ruleModes, actions } = useRiskCatalog();
+  const { appId } = useRiskScope();
   const createMut = useCreateRiskRuleMutation();
   const updateMut = useUpdateRiskRuleMutation();
   const validateMut = useValidateExpressionMutation();
@@ -236,8 +320,11 @@ function RuleEditorSheet({ rule, onClose }: { rule: RiskRule | null; onClose: ()
   // 草稿从服务端数据派生一次即可，不用 effect 同步（与配置面板同一约定：
   // effect 同步既触发级联渲染，也过不了 react-hooks/set-state-in-effect）。
   const [form, setForm] = useState<RuleForm>(() => {
-    if (!rule) return { ...EMPTY_FORM, conditionData: {} };
+    if (!rule) return { ...EMPTY_FORM, appId: appId ?? null, conditionData: {} };
     return {
+      appId: rule.appId ?? null,
+      mode: rule.mode || "enforce",
+      decision: rule.decision || "",
       name: rule.name,
       description: rule.description,
       scene: rule.scene,
@@ -284,7 +371,11 @@ function RuleEditorSheet({ rule, onClose }: { rule: RiskRule | null; onClose: ()
     if (invalid) { toast.error(invalid); return; }
     if (isExpr && exprState.status === "invalid") { toast.error("请先修正表达式"); return; }
 
-    const payload = {
+    const payload: RiskRuleInput = {
+      // 编辑时 0 = 改回全平台；新建时不传即全平台
+      appId: form.appId ?? (rule ? 0 : undefined),
+      mode: form.mode,
+      decision: form.decision,
       name: form.name.trim(),
       description: form.description.trim(),
       scene: form.scene,
@@ -338,15 +429,41 @@ function RuleEditorSheet({ rule, onClose }: { rule: RiskRule | null; onClose: ()
                     onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </div>
                 <div className="space-y-1">
+                  <Label className="text-xs">作用域</Label>
+                  <ScopeField value={form.appId} onChange={(v) => setForm({ ...form, appId: v })} />
+                </div>
+                <div className="space-y-1">
                   <Label className="text-xs">场景</Label>
                   <Select value={form.scene} onValueChange={(v) => setForm({ ...form, scene: v })}>
                     <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                     <SelectContent>
+                      <SelectItem value={SCENE_ALL}>全部场景</SelectItem>
                       {scenes.map((s) => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1">
+                  <Label className="text-xs">模式</Label>
+                  <Select value={form.mode} onValueChange={(v) => setForm({ ...form, mode: v })}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {ruleModes.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">命中即强制</Label>
+                  <Select value={form.decision || "none"} onValueChange={(v) => setForm({ ...form, decision: v === "none" ? "" : v })}>
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">只计分</SelectItem>
+                      {actions.filter((a) => a.value !== "pass").map((a) => (
+                        <SelectItem key={a.value} value={a.value}>{a.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 sm:col-span-2">
                   <Label className="text-xs">条件类型</Label>
                   <ConditionTypeSelect value={form.conditionType} onChange={changeConditionType} />
                 </div>
@@ -363,7 +480,7 @@ function RuleEditorSheet({ rule, onClose }: { rule: RiskRule | null; onClose: ()
                 </div>
                 <div className="flex items-center gap-2 sm:col-span-2">
                   <Switch checked={form.isActive} onCheckedChange={(v) => setForm({ ...form, isActive: v })} />
-                  <Label className="text-xs">创建后立即启用</Label>
+                  <Label className="text-xs">启用</Label>
                 </div>
               </div>
             </section>
@@ -418,7 +535,8 @@ const HIT_CHART_CONFIG: ChartConfig = {
 };
 
 function RuleDetailSheet({ ruleId, onClose }: { ruleId: number; onClose: () => void }) {
-  const { conditionLabel } = useRiskCatalog();
+  const { conditionLabel, actionLabel } = useRiskCatalog();
+  const nav = useRiskNav();
   const query = useRiskRuleQuery(ruleId);
   const detail = query.data;
 
@@ -441,7 +559,7 @@ function RuleDetailSheet({ ruleId, onClose }: { ruleId: number; onClose: () => v
         <ScrollArea className="min-h-0 flex-1">
           {query.isLoading || !detail ? (
             <div className="space-y-3 p-5">
-              {Array.from({ length: 5 }, (_, i) => <div key={i} className="h-12 animate-pulse rounded-lg bg-muted/50" />)}
+              <RowsSkeleton rows={5} height={48} />
             </div>
           ) : (
             <div className="space-y-5 px-5 py-4">
@@ -454,8 +572,14 @@ function RuleDetailSheet({ ruleId, onClose }: { ruleId: number; onClose: () => v
               <section className="space-y-2">
                 <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">定义</h4>
                 <Card><CardContent className="p-3">
+                  <DetailRow label="作用域"><ScopeBadge appId={detail.rule.appId} /></DetailRow>
                   <DetailRow label="场景"><SceneBadge scene={detail.rule.scene} /></DetailRow>
+                  <DetailRow label="维度"><DimensionBadge dimension={detail.rule.dimension} /></DetailRow>
                   <DetailRow label="条件类型">{conditionLabel(detail.rule.conditionType)}</DetailRow>
+                  <DetailRow label="模式">
+                    {detail.rule.mode === "observe" ? <ModeBadge mode="observe" /> : <Badge variant="success" size="sm">生效</Badge>}
+                  </DetailRow>
+                  <DetailRow label="命中即强制">{detail.rule.decision ? actionLabel(detail.rule.decision) : "只计分"}</DetailRow>
                   <DetailRow label="命中得分" mono>+{detail.rule.score}</DetailRow>
                   <DetailRow label="优先级" mono>{detail.rule.priority}</DetailRow>
                   <DetailRow label="状态">
@@ -491,9 +615,15 @@ function RuleDetailSheet({ ruleId, onClose }: { ruleId: number; onClose: () => v
               </section>
 
               <section className="space-y-2">
-                <h4 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
-                  <Activity className="size-3" />最近命中
-                </h4>
+                <div className="flex items-center justify-between">
+                  <h4 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                    <Activity className="size-3" />最近命中
+                  </h4>
+                  <Button variant="ghost" size="sm" className="h-6 text-[11px]"
+                    onClick={() => { onClose(); nav.inspectAssessments({ ruleId }); }}>
+                    全部记录<ChevronRight className="size-3" />
+                  </Button>
+                </div>
                 {(detail.recentHits ?? []).length === 0 ? (
                   <InlineEmpty text="暂无命中记录" height={80} />
                 ) : (

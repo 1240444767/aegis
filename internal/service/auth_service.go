@@ -1,12 +1,15 @@
 package service
 
 import (
+	"aegis/internal/domain/accountdeletion"
 	"aegis/pkg/egress"
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"net/mail"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,10 +18,12 @@ import (
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
 	devicedomain "aegis/internal/domain/device"
+	"aegis/internal/domain/devicelimit"
 	"aegis/internal/domain/invite"
 	oauthdomain "aegis/internal/domain/oauth"
 	platformdomain "aegis/internal/domain/platform"
 	plugindomain "aegis/internal/domain/plugin"
+	"aegis/internal/domain/regip"
 	securitydomain "aegis/internal/domain/security"
 	userdomain "aegis/internal/domain/user"
 	"aegis/internal/event"
@@ -42,6 +47,8 @@ const (
 )
 
 type AuthService struct {
+	// publicIDs 主键 ↔ 对外用户 ID（与 UserService 共用一份，见 SetPublicIDs）
+	publicIDs      *UserPublicIDs
 	cfg            config.Config
 	log            *zap.Logger
 	pg             *pgrepo.Repository
@@ -74,6 +81,43 @@ type AuthService struct {
 	// 也执行一次等价代价的 bcrypt 比较，使「账号不存在」与「密码错误」耗时不可区分，
 	// 防止通过响应时间差枚举有效账号
 	timingDummyHash []byte
+	deletion        *AccountDeletionService
+	// loginObserver 每次真正签发会话之后的回调（物品发放的「登录成功」事件）；回调自己负责不阻塞。
+	loginObserver func(appID, userID int64, provider string)
+	// notifications 站内信出口（密码已重置等），见 SetNotificationService
+	notifications notificationDeliverer
+	// deviceLimit 登录设备数控制，见 SetDeviceLimitService；未注入时不做限制
+	deviceLimit *DeviceLimitService
+	// registerIP 注册 IP 控制，见 SetRegisterIPService；未注入时不做限制
+	registerIP *RegisterIPService
+}
+
+// SetRegisterIPService 接上注册 IP 控制（docs/register-ip.md）。
+func (s *AuthService) SetRegisterIPService(registerIP *RegisterIPService) {
+	s.registerIP = registerIP
+}
+
+// SetDeviceLimitService 接上登录设备数控制（docs/device-limit.md）。
+func (s *AuthService) SetDeviceLimitService(deviceLimit *DeviceLimitService) {
+	s.deviceLimit = deviceLimit
+}
+
+// SetNotificationService 接上站内信：安全类提醒经 NotificationService.Deliver 投递并实时推送。
+// SetPublicIDs 接上全进程共用的对外 ID 换算（UserService.PublicIDs）。
+func (s *AuthService) SetPublicIDs(publicIDs *UserPublicIDs) {
+	s.publicIDs = publicIDs
+}
+
+// PublicIDs 主键 ↔ 对外用户 ID 的换算；未接上时为 nil（换算结果全为 0）。
+func (s *AuthService) PublicIDs() *UserPublicIDs {
+	if s == nil {
+		return nil
+	}
+	return s.publicIDs
+}
+
+func (s *AuthService) SetNotificationService(notifications notificationDeliverer) {
+	s.notifications = notifications
 }
 
 type PasswordRegisterInput struct {
@@ -87,6 +131,22 @@ type PasswordRegisterInput struct {
 	Device          string // 设备可读名称
 	IP              string
 	UserAgent       string
+}
+
+// SetAccountDeletion 接上账号注销：登录结果带上冷静期状态（按配置登录即撤销），注册前核对重新注册限制。
+// SetLoginObserver 注册登录观察者，见 loginObserver。
+func (s *AuthService) SetLoginObserver(fn func(appID, userID int64, provider string)) { s.loginObserver = fn }
+
+func (s *AuthService) SetAccountDeletion(deletion *AccountDeletionService) {
+	s.deletion = deletion
+}
+
+// checkReregister 注册前核对：刚注销、还在限制期内的标识不能再注册。
+func (s *AuthService) checkReregister(ctx context.Context, appID int64, identifiers ...RegisterIdentifier) error {
+	if s.deletion == nil {
+		return nil
+	}
+	return s.deletion.CheckReregister(ctx, appID, identifiers...)
 }
 
 // SetPluginService 注入插件服务
@@ -237,13 +297,11 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	g, gctx := errgroup.WithContext(ctx)
 	if s.risk != nil {
 		g.Go(func() error {
-			// 风控内部错误按原逻辑忽略，仅 block/ban 动作拦截
-			riskResult, _ := s.risk.EvaluateRisk(gctx, securitydomain.RiskEvalRequest{
-				Scene: "login", AppID: &appID, IP: ip, DeviceID: deviceID, UserAgent: userAgent,
-				Extra: map[string]any{"account": account},
-			})
-			if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-				riskErr = apperrors.New(40398, http.StatusForbidden, "当前请求被风控拦截，请稍后重试")
+			// 风控内部错误放行（Guard 内部处理）；拦截 / 封禁 → 40398，需要验证码 → 40015
+			if _, err := s.risk.Guard(gctx, securitydomain.RiskEvalRequest{
+				Scene: securitydomain.SceneLogin, AppID: &appID, IP: ip, DeviceID: deviceID, UserAgent: userAgent, Account: account,
+			}, RiskGuardOption{Message: "当前请求被风控拦截，请稍后重试"}); err != nil {
+				riskErr = err
 				return riskErr
 			}
 			return nil
@@ -279,13 +337,14 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 			return nil
 		})
 	}
+	var candidates []*userdomain.User
 	g.Go(func() error {
-		loaded, err := s.pg.GetUserByAppAndAccount(gctx, appID, account)
+		loaded, err := s.resolveLoginCandidates(gctx, appID, account)
 		if err != nil {
 			userErr = err
 			return err
 		}
-		user = loaded
+		candidates = loaded
 		return nil
 	})
 	_ = g.Wait()
@@ -298,6 +357,28 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	}
 
 	// 阶段 2 —— 凭据校验（bcrypt 为全链路最重 CPU 操作，置于所有快速检查之后）
+	if len(candidates) > 1 {
+		// 邮箱或手机号挂在多个账号上：密码对得上的那个就是要登录的人，对不上的都不透露存在与否
+		for _, candidate := range candidates {
+			if s.verifyCredential(candidate.PasswordHash, password) {
+				user = candidate
+				break
+			}
+		}
+		if user == nil {
+			if s.loginGuard != nil {
+				s.loginGuard.RegisterFailure(ctx, appID, account, ip)
+			}
+			return nil, nil, "", apperrors.New(40101, http.StatusUnauthorized, "账号或密码错误")
+		}
+		if err := s.ensureUserLoginState(ctx, user); err != nil {
+			return nil, nil, "", err
+		}
+		return app, user, account, nil
+	}
+	if len(candidates) == 1 {
+		user = candidates[0]
+	}
 	if user == nil {
 		// 时序均衡：账号不存在也执行一次等价 bcrypt 比较，并与密码错误统一计失败（防账号枚举）
 		_ = bcrypt.CompareHashAndPassword(s.timingDummyHash, []byte(password))
@@ -361,18 +442,18 @@ func (s *AuthService) RegisterWithPassword(ctx context.Context, input PasswordRe
 		return nil, err
 	}
 
-	// 阶段 1 —— 并行外部检查：风控评估与注册 IP 唯一性检查（PG 查询）互相独立，
-	// errgroup 并发执行；错误优先级固定为 风控 > 注册 IP 策略
+	// 阶段 1 —— 并行外部检查：风控评估与注册 IP 准入（一个 Redis 脚本数完全部规则并占位）互相独立，
+	// errgroup 并发执行；错误优先级固定为 风控 > 注册 IP 策略。风控拦了而 IP 准入已占位时撤销占位
 	var riskErr, policyErr error
+	var ticket *RegisterIPTicket
 	g, gctx := errgroup.WithContext(ctx)
 	if s.risk != nil {
 		g.Go(func() error {
-			riskResult, _ := s.risk.EvaluateRisk(gctx, securitydomain.RiskEvalRequest{
-				Scene: "register", AppID: &input.AppID, IP: input.IP, DeviceID: input.DeviceID, UserAgent: input.UserAgent,
-				Extra: map[string]any{"account": input.Account},
-			})
-			if riskResult != nil && (riskResult.Action == "block" || riskResult.Action == "ban") {
-				riskErr = apperrors.New(40398, http.StatusForbidden, "注册请求被风控拦截")
+			if _, err := s.risk.Guard(gctx, securitydomain.RiskEvalRequest{
+				Scene: securitydomain.SceneRegister, AppID: &input.AppID, IP: input.IP, DeviceID: input.DeviceID,
+				UserAgent: input.UserAgent, Account: input.Account,
+			}, RiskGuardOption{Message: "注册请求被风控拦截"}); err != nil {
+				riskErr = err
 				return riskErr
 			}
 			return nil
@@ -380,24 +461,29 @@ func (s *AuthService) RegisterWithPassword(ctx context.Context, input PasswordRe
 	}
 	if app != nil {
 		g.Go(func() error {
-			if err := s.validateRegisterPolicy(gctx, app, input.IP); err != nil {
+			admitted, err := s.admitRegister(gctx, app, regip.MethodPassword, input.IP, input.Account, input.DeviceID, input.UserAgent)
+			if err != nil {
 				policyErr = err
 				return err
 			}
+			ticket = admitted
 			return nil
 		})
 	}
 	_ = g.Wait()
 	for _, err := range []error{riskErr, policyErr} {
 		if err != nil {
+			ticket.Release()
 			return nil, err
 		}
 	}
 
-	// 阶段 2 —— singleflight 合并同一 app+account 的并发注册，仅执行一次真实写入
+	// 阶段 2 —— singleflight 合并同一 app+account 的并发注册，仅执行一次真实写入。
+	// 只有真正执行写入的那个请求的票会被确认；被合并的请求没有建号，各自的占位在下面撤销
 	result, err, _ := s.registerFlight.Do(registerFlightKey(input.AppID, input.Account), func() (any, error) {
-		return s.registerWithPasswordOnce(ctx, app, input)
+		return s.registerWithPasswordOnce(ctx, app, input, ticket)
 	})
+	ticket.Release()
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +494,7 @@ func (s *AuthService) RegisterWithPassword(ctx context.Context, input PasswordRe
 	return loginResult, nil
 }
 
-func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdomain.App, input PasswordRegisterInput) (*authdomain.LoginResult, error) {
+func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdomain.App, input PasswordRegisterInput, ticket *RegisterIPTicket) (*authdomain.LoginResult, error) {
 	// 重复账号快速失败：在执行重 CPU 的 bcrypt 之前先做一次点查，
 	// 重复注册（重试 / 撞库）场景下省去 ~100ms 哈希开销；
 	// 并发竞争仍由事务内唯一约束兜底，不存在 TOCTOU 风险
@@ -416,6 +502,13 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 		return nil, err
 	} else if existing != nil {
 		return nil, apperrors.New(40901, http.StatusConflict, "账号已存在")
+	}
+	registerEmail, _ := input.Profile["email"].(string)
+	if err := s.checkReregister(ctx, input.AppID,
+		RegisterIdentifier{Kind: accountdeletion.TombstoneAccount, Value: input.Account},
+		RegisterIdentifier{Kind: accountdeletion.TombstoneEmail, Value: registerEmail},
+	); err != nil {
+		return nil, err
 	}
 
 	// 与上面策略校验用同一份上下文，否则落库的强度分会高于实际判定所用的分
@@ -476,6 +569,7 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 	if user == nil {
 		return nil, fmt.Errorf("create user with invite code exceeded max retries")
 	}
+	ticket.Commit(user.ID, user.Account)
 
 	// 注册审计与注册插件钩子移出关键路径（与登录链路一致的 runDetached 语义）
 	userID := user.ID
@@ -503,11 +597,38 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 		})
 	}
 	s.syncAdminUserSearch(input.AppID, user.ID)
+	s.sendWelcomeMail(input.AppID, input.Account, registerEmail, input.Nickname)
 	if input.SuppressSession {
-		return &authdomain.LoginResult{UserID: user.ID, Account: user.Account}, nil
+		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account}, nil
 	}
 	// 新建用户必然未被封禁/禁用，无需 ensureUserLoginState；首次设备已以 register 场景同步写入
 	return s.completeLogin(ctx, app, user, "password", "password", input.DeviceID, input.Device, input.IP, input.UserAgent)
+}
+
+// sendWelcomeMail 注册成功后发欢迎信。是否发由应用邮件策略的「欢迎信」场景决定（默认关），
+// 收件地址取注册时填的邮箱，没填而账号名本身是邮箱时用账号名。移出关键路径：
+// 发信慢或失败都不该拖住注册。
+func (s *AuthService) sendWelcomeMail(appID int64, account string, email string, nickname string) {
+	// 找回密码的发信接口里没有欢迎信，按能力断言：测试里注入的替身不必实现它
+	mailer, ok := s.recoveryEmail.(interface {
+		SendWelcomeEmail(ctx context.Context, appID int64, email string, userName string, configName string) error
+	})
+	if !ok || mailer == nil {
+		return
+	}
+	address := strings.TrimSpace(email)
+	if address == "" && strings.Contains(account, "@") {
+		address = strings.TrimSpace(account)
+	}
+	if _, err := mail.ParseAddress(address); address == "" || err != nil {
+		return
+	}
+	nickname = strings.TrimSpace(nickname)
+	s.runDetached("register.welcome", 15*time.Second, func(actx context.Context) {
+		if err := mailer.SendWelcomeEmail(actx, appID, address, nickname, ""); err != nil {
+			s.log.Debug("send welcome email skipped", zap.Int64("appid", appID), zap.Error(err))
+		}
+	})
 }
 
 // recordFirstDevice 在 Redis 中写入首次设备（已存在则不覆盖）
@@ -757,11 +878,18 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 		}
 	}
 	if deviceID == "" {
-		deviceID = refreshSession.DeviceID
+		deviceID = devicedomain.NormalizeID(refreshSession.DeviceID)
 	}
-	if refreshSession.DeviceID != "" && deviceID != "" && refreshSession.DeviceID != deviceID {
+	// 设备绑定：会话里存的设备码要与这次上报的一致。两种情况不算换设备 ——
+	// 存的是占位值（全零 OAID 等，修复前的客户端会发），或者存的正是客户端声明的旧设备码
+	// （客户端换了设备码生成方式，见 devicedomain.HeaderPreviousID）。后者顺带迁移旧码下的绑定。
+	if !devicedomain.Continues(ctx, refreshSession.DeviceID, deviceID) {
 		s.handleRefreshReuse(ctx, refreshSession)
 		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌设备绑定校验失败")
+	}
+	migrateFrom := ""
+	if stored := devicedomain.NormalizeID(refreshSession.DeviceID); stored != "" && stored != deviceID {
+		migrateFrom = stored
 	}
 	if refreshSession.UsedAt != nil || strings.TrimSpace(refreshSession.ReplacedByToken) != "" {
 		s.handleRefreshReuse(ctx, refreshSession)
@@ -797,6 +925,16 @@ func (s *AuthService) Refresh(ctx context.Context, token, deviceID, ip, userAgen
 	bundle, err := s.issueSessionBundle(ctx, app, user, refreshSession.Provider, "refresh", deviceID, refreshSession.Device, ip, userAgent, refreshSession.FamilyID)
 	if err != nil {
 		return nil, err
+	}
+	if migrateFrom != "" {
+		s.migrateDeviceID(refreshSession.AppID, refreshSession.UserID, migrateFrom, deviceID)
+	}
+	if s.deviceLimit != nil {
+		appID, userID, familyID := refreshSession.AppID, refreshSession.UserID, refreshSession.FamilyID
+		client := devicedomain.ClientFrom(ctx)
+		s.runDetached("refresh.device_ledger", 3*time.Second, func(actx context.Context) {
+			s.deviceLimit.TouchRefresh(actx, appID, userID, deviceID, userAgent, familyID, ip, client)
+		})
 	}
 	now := timeutil.NowUTC()
 	refreshSession.UsedAt = &now
@@ -906,12 +1044,12 @@ func (s *AuthService) ValidateAccessToken(ctx context.Context, token string) (*a
 		return nil, err
 	}
 	tokenID, _ := claims["jti"].(string)
-	blacklisted, err := s.sessions.IsBlacklisted(ctx, tokenID)
+	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
 	}
 	if blacklisted {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "Token 已失效")
+		return nil, revokedTokenError(reason, "Token 已失效")
 	}
 	session, err := s.sessions.GetSession(ctx, token)
 	if err != nil {
@@ -936,12 +1074,12 @@ func (s *AuthService) validateRefreshToken(ctx context.Context, token string) (*
 		return nil, err
 	}
 	tokenID, _ := claims["jti"].(string)
-	blacklisted, err := s.sessions.IsBlacklisted(ctx, tokenID)
+	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
 	}
 	if blacklisted {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌已失效")
+		return nil, revokedTokenError(reason, "刷新令牌已失效")
 	}
 	session, err := s.sessions.GetRefreshSession(ctx, token)
 	if err != nil {
@@ -953,14 +1091,26 @@ func (s *AuthService) validateRefreshToken(ctx context.Context, token string) (*
 	if session.TokenID != tokenID {
 		return nil, apperrors.New(40102, http.StatusUnauthorized, "刷新令牌无效")
 	}
-	revoked, err := s.sessions.IsRefreshFamilyRevoked(ctx, session.AppID, session.UserID, session.FamilyID)
+	reason, revoked, err := s.sessions.RefreshFamilyRevokedReason(ctx, session.AppID, session.UserID, session.FamilyID)
 	if err != nil {
 		return nil, err
 	}
 	if revoked {
-		return nil, apperrors.New(40104, http.StatusUnauthorized, "刷新令牌族已失效")
+		return nil, revokedTokenError(reason, "刷新令牌族已失效")
 	}
 	return session, nil
+}
+
+// revokedTokenError 按失效原因给出错误：被设备数控制挤下线、被设备管理下线的各有专门的码，
+// 客户端据此提示「账号已在其他设备登录」而不是笼统的「登录已过期」。
+func revokedTokenError(reason, fallback string) error {
+	switch reason {
+	case redisrepo.RevokeReasonDeviceLimit:
+		return apperrors.New(errCodeDeviceLimitKicked, http.StatusUnauthorized, "账号已在其他设备登录，当前设备已退出登录")
+	case redisrepo.RevokeReasonRemoved:
+		return apperrors.New(errCodeDeviceRemoved, http.StatusUnauthorized, "当前设备已在设备管理中被移除，请重新登录")
+	}
+	return apperrors.New(40104, http.StatusUnauthorized, fallback)
 }
 
 func (s *AuthService) parseTokenClaims(token string, expectedType string) (jwt.MapClaims, error) {
@@ -1078,7 +1228,16 @@ func (s *AuthService) finalizeLogin(ctx context.Context, app *appdomain.App, use
 	s.runDetached("login.first_device", 3*time.Second, func(actx context.Context) {
 		s.recordFirstDevice(actx, record)
 	})
-	return s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
+	result, err := s.issueSession(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent)
+	if err == nil && result != nil && result.DeviceLimit == nil && s.deletion != nil {
+		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
+	}
+	// 全部登录方式（密码、短信、第三方、扫码、卡密、通行密钥、二次验证之后）都在这里收口；
+	// 设备数超限待选择时还没有登录成功，不算
+	if err == nil && result != nil && result.DeviceLimit == nil && s.loginObserver != nil {
+		s.loginObserver(user.AppID, user.ID, provider)
+	}
+	return result, err
 }
 
 func (s *AuthService) VerifySecondFactor(ctx context.Context, challengeID string, code string, recoveryCode string) (*authdomain.LoginResult, error) {
@@ -1160,18 +1319,106 @@ func (s *AuthService) ensureUserSessionState(ctx context.Context, user *userdoma
 	return enforceAccountBan(ctx, s.pg, s.log, user, userdomain.AccountBanCheckpointSession)
 }
 
+// issueSession 新登录的签发：先过设备数关卡，再签发，最后执行关卡给出的处置。
+// 全部登录方式都经 finalizeLogin 走到这里；刷新令牌延续已有设备，直接走 issueSessionBundle。
 func (s *AuthService) issueSession(ctx context.Context, app *appdomain.App, user *userdomain.User, provider, loginType, deviceID, device, ip, userAgent string) (*authdomain.LoginResult, error) {
+	return s.issueSessionChecked(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent, nil)
+}
+
+func (s *AuthService) issueSessionChecked(ctx context.Context, app *appdomain.App, user *userdomain.User, provider, loginType, deviceID, device, ip, userAgent string, chosen []string) (*authdomain.LoginResult, error) {
+	var admission *DeviceAdmission
+	if s.deviceLimit != nil {
+		if app == nil && s.app != nil {
+			loaded, err := s.app.GetApp(ctx, user.AppID)
+			if err != nil {
+				return nil, err
+			}
+			app = loaded
+		}
+		var challenge *devicelimit.Challenge
+		var err error
+		admission, challenge, err = s.deviceLimit.Admit(ctx, app, user, DeviceLoginInput{
+			Provider: provider, LoginType: loginType, DeviceID: deviceID, Device: device, IP: ip, UserAgent: userAgent,
+			Client: devicedomain.ClientFrom(ctx), Chosen: chosen, CanAsk: devicelimit.ChallengeSupported(ctx),
+		})
+		if err != nil {
+			return nil, err
+		}
+		if challenge != nil {
+			// 不签发令牌：客户端凭 ticket 让用户选好要下线的设备，再调 /auth/device-limit/resolve
+			return &authdomain.LoginResult{
+				UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account, Provider: provider,
+				AuthenticationState: AuthStateDeviceLimitRequired, DeviceLimit: challenge,
+			}, nil
+		}
+		defer admission.Release()
+	}
 	bundle, err := s.issueSessionBundle(ctx, app, user, provider, loginType, deviceID, device, ip, userAgent, "")
 	if err != nil {
 		return nil, err
 	}
+	if admission != nil {
+		s.deviceLimit.Commit(ctx, admission, IssuedLogin{FamilyID: bundle.RefreshSession.FamilyID})
+	}
+	if previous := devicedomain.PreviousIDFrom(ctx); previous != "" && deviceID != "" {
+		s.migrateDeviceID(user.AppID, user.ID, previous, deviceID)
+	}
 	return bundle.Result, nil
+}
+
+// AuthStateDeviceLimitRequired LoginResult.AuthenticationState：登录设备数已满，等用户选择下线哪台
+const AuthStateDeviceLimitRequired = "device_limit_required"
+
+// ResolveDeviceLimitChallenge 用户在选择页勾好了要下线的设备：下线它们并完成那次被挂起的登录。
+//
+// 登录现场（登录方式、设备、IP）取自暂存的凭证而不是这次请求 —— 选择页可能是在另一个网络环境下提交的，
+// 但被签发的仍是当初那台设备的登录。账号与应用状态在这里重新判定一次：选择期间账号可能被封禁。
+func (s *AuthService) ResolveDeviceLimitChallenge(ctx context.Context, appID int64, ticket string, chosen []string) (*authdomain.LoginResult, error) {
+	if s.deviceLimit == nil {
+		return nil, apperrors.New(errCodeDeviceLimitTicket, http.StatusNotFound, "设备选择已失效，请重新登录")
+	}
+	chosen = uniqueStrings(chosen)
+	if len(chosen) == 0 {
+		return nil, apperrors.New(40000, http.StatusBadRequest, "请选择要下线的设备")
+	}
+	pending, err := s.deviceLimit.LoadChallenge(ctx, appID, ticket)
+	if err != nil {
+		return nil, err
+	}
+	user, err := s.pg.GetUserByID(ctx, pending.UserID)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || user.AppID != appID {
+		return nil, apperrors.New(40103, http.StatusUnauthorized, "会话用户不存在")
+	}
+	if err := s.ensureUserLoginState(ctx, user); err != nil {
+		return nil, err
+	}
+	var app *appdomain.App
+	if s.app != nil {
+		if app, err = s.app.EnsureLoginAllowed(ctx, appID); err != nil {
+			return nil, err
+		}
+	}
+	ctx = devicedomain.WithClient(ctx, devicedomain.Client{Model: pending.Model, Platform: pending.Platform, Extra: pending.Extra.Value()})
+	result, err := s.issueSessionChecked(ctx, app, user, pending.Provider, pending.LoginType, pending.DeviceID, pending.Device,
+		pending.IP, pending.UserAgent, chosen)
+	if err != nil {
+		return nil, err
+	}
+	s.deviceLimit.FinishChallenge(ctx, ticket)
+	if result != nil && s.deletion != nil {
+		result.AccountDeletion = s.deletion.OnLogin(ctx, user)
+	}
+	return result, nil
 }
 
 // signSessionToken 统一构造并签名访问/刷新令牌（消除两段重复的 claims 组装）。
 func (s *AuthService) signSessionToken(tokenType string, user *userdomain.User, tokenID, familyID string, issuedAt, expiresAt time.Time) (string, error) {
 	claims := jwt.MapClaims{
-		"uid":     user.ID,
+		// 令牌是客户端能解开看的，uid 只放对外 ID。服务端校验只认 jti，从不读这一项
+		"uid":     user.PublicID,
 		"appid":   user.AppID,
 		"account": user.Account,
 		"sv":      1,
@@ -1285,9 +1532,6 @@ func (s *AuthService) issueSessionBundle(ctx context.Context, app *appdomain.App
 		_ = s.sessions.DeleteRefreshSession(ctx, signedRefresh)
 		return nil, err
 	}
-	if err := s.enforceSessionPolicy(ctx, app, user.AppID, user.ID, accessTokenID, refreshFamilyID); err != nil {
-		return nil, err
-	}
 	_ = s.publisher.PublishJSON(ctx, event.SubjectAuthLoginAuditRequested, map[string]any{
 		"user_id":    user.ID,
 		"appid":      user.AppID,
@@ -1335,6 +1579,7 @@ func (s *AuthService) issueSessionBundle(ctx context.Context, app *appdomain.App
 			RefreshExpiresAt:       refreshExpiresAt,
 			TokenType:              "Bearer",
 			UserID:                 user.ID,
+			PublicUserID:           user.PublicID,
 			Account:                user.Account,
 			Provider:               provider,
 			PasswordChangeRequired: passwordChangeRequired,
@@ -1415,81 +1660,15 @@ func (s *AuthService) enforceLoginConsistency(ctx context.Context, app *appdomai
 	return s.consistency.Enforce(ctx, s.app.ResolvePolicy(app), user.AppID, user.ID, deviceID, ip)
 }
 
-func (s *AuthService) validateRegisterPolicy(ctx context.Context, app *appdomain.App, ip string) error {
-	if s.app == nil {
-		return nil
+// admitRegister 注册 IP 准入（docs/register-ip.md）。放行时返回票：建号成功调 Commit、没建成调 Release；
+// 两者在 nil 票上都是空操作，未接入注册 IP 控制时返回 nil 票。
+func (s *AuthService) admitRegister(ctx context.Context, app *appdomain.App, method, ip, account, deviceID, userAgent string) (*RegisterIPTicket, error) {
+	if s.registerIP == nil || app == nil {
+		return nil, nil
 	}
-	policy := s.app.ResolvePolicy(app)
-	if policy.RegisterCheckIP {
-		if strings.TrimSpace(ip) == "" {
-			return apperrors.New(40025, http.StatusBadRequest, "当前应用要求提供注册 IP")
-		}
-		exists, err := s.pg.HasUserRegisteredFromIPForApp(ctx, app.ID, ip)
-		if err != nil {
-			return err
-		}
-		if exists {
-			return apperrors.New(40902, http.StatusConflict, "IP已注册过账号")
-		}
-	}
-	return nil
-}
-
-func (s *AuthService) enforceSessionPolicy(ctx context.Context, app *appdomain.App, appID int64, userID int64, currentTokenID string, currentFamilyID string) error {
-	if s.app == nil || s.sessions == nil {
-		return nil
-	}
-	if app == nil {
-		loaded, err := s.app.GetApp(ctx, appID)
-		if err != nil {
-			return err
-		}
-		app = loaded
-	}
-	policy := s.app.ResolvePolicy(app)
-	// 多设备无上限时直接跳过整个会话扫描
-	if policy.MultiDeviceLogin && policy.MultiDeviceLimit <= 0 {
-		return nil
-	}
-	limit := policy.MultiDeviceLimit
-	if limit <= 0 {
-		limit = 1
-	}
-	sessions, err := s.sessions.ListUserSessions(ctx, appID, userID)
-	if err != nil {
-		return err
-	}
-	if len(sessions) <= limit {
-		return nil
-	}
-	excess := len(sessions) - limit
-	for _, item := range sessions {
-		if excess <= 0 {
-			break
-		}
-		if item.Session.TokenID == currentTokenID {
-			continue
-		}
-		if err := s.sessions.DeleteSessionByHash(ctx, appID, userID, item.TokenHash); err != nil {
-			return err
-		}
-		ttl := time.Until(item.Session.ExpiresAt)
-		if ttl > 0 {
-			if err := s.sessions.BlacklistToken(ctx, item.Session.TokenID, ttl); err != nil {
-				return err
-			}
-		}
-		if item.Session.RefreshFamilyID != "" && item.Session.RefreshFamilyID != currentFamilyID {
-			if err := s.sessions.RevokeRefreshFamily(ctx, appID, userID, item.Session.RefreshFamilyID, s.cfg.JWT.RefreshTTL); err != nil {
-				return err
-			}
-			if err := s.revokeRefreshFamilySessions(ctx, appID, userID, item.Session.RefreshFamilyID); err != nil {
-				return err
-			}
-		}
-		excess--
-	}
-	return nil
+	return s.registerIP.Admit(ctx, RegisterIPRequest{
+		AppID: app.ID, App: app, IP: ip, Method: method, Account: account, DeviceID: deviceID, UserAgent: userAgent,
+	})
 }
 
 func (s *AuthService) handleRefreshReuse(ctx context.Context, session *authdomain.RefreshSession) {
@@ -1758,4 +1937,90 @@ func randomInviteCode(length int) (string, error) {
 		buffer[i] = inviteCodeCharset[int(randomBytes[i])%len(inviteCodeCharset)]
 	}
 	return string(buffer), nil
+}
+
+// loginCandidateLimit 一个邮箱 / 手机号最多认几个账号（逐个比对密码，bcrypt 次数的上限）。
+const loginCandidateLimit = 5
+
+// resolveLoginCandidates 按应用允许的登录标识（接入策略 identifiers）把输入认成账号。
+//
+// 顺序：账号名 → 用户 ID（16 位对外 ID）→ 邮箱 → 手机号。账号名永远优先且总是可用 ——
+// 老账号可能就叫一个邮箱或一串数字，不能因为新开了标识就登不上。自助设的用户名不许纯数字、
+// 不含 @（userdomain.ValidateUsername），所以新账号不会和另外几种标识撞在一起。
+// 邮箱、手机号可能挂在多个账号上，全部返回，由密码决定是哪一个。
+func (s *AuthService) resolveLoginCandidates(ctx context.Context, appID int64, identifier string) ([]*userdomain.User, error) {
+	if identifier == "" {
+		return nil, nil
+	}
+	user, err := s.pg.GetUserByAppAndAccount(ctx, appID, identifier)
+	if err != nil {
+		return nil, err
+	}
+	if user != nil {
+		return []*userdomain.User{user}, nil
+	}
+	identifiers, err := s.loginIdentifiers(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	var ids []int64
+	switch {
+	case strings.Contains(identifier, "@"):
+		if slices.Contains(identifiers, "email") {
+			ids, err = s.pg.ListUserIDsByProfileEmail(ctx, appID, identifier, loginCandidateLimit)
+		}
+	case isPublicUserIDText(identifier):
+		if slices.Contains(identifiers, "id") {
+			publicID, _ := strconv.ParseInt(identifier, 10, 64)
+			var id int64
+			id, err = s.pg.FindUserIDByPublicID(ctx, appID, publicID)
+			if id > 0 {
+				ids = []int64{id}
+			}
+		}
+	case looksLikePhone(identifier):
+		if slices.Contains(identifiers, "phone") {
+			ids, err = s.pg.ListUserIDsByProfilePhone(ctx, appID, normalizePhone(identifier), loginCandidateLimit)
+		}
+	}
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+	users := make([]*userdomain.User, 0, len(ids))
+	for _, id := range ids {
+		loaded, err := s.pg.GetUserByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		if loaded != nil && loaded.AppID == appID {
+			users = append(users, loaded)
+		}
+	}
+	return users, nil
+}
+
+// loginIdentifiers 应用接入策略里开放的登录标识；没配置过时用默认策略。
+func (s *AuthService) loginIdentifiers(ctx context.Context, appID int64) ([]string, error) {
+	policy, err := s.pg.GetAppAuthProtocolPolicy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	if policy == nil {
+		return defaultAuthProtocolPolicy(appID).Identifiers, nil
+	}
+	return policy.Identifiers, nil
+}
+
+// isPublicUserIDText 16 位对外用户 ID 的文本形式（[10^15, 2^53−1]，见 docs/user-public-id.md）。
+func isPublicUserIDText(value string) bool {
+	if len(value) != 16 {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	id, err := strconv.ParseInt(value, 10, 64)
+	return err == nil && id >= 1_000_000_000_000_000 && id <= 1<<53-1
 }

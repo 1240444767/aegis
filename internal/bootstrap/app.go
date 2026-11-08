@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis/internal/authz"
 	"aegis/internal/config"
 	"aegis/internal/db"
 	"aegis/internal/event"
+	"aegis/internal/mailtpl"
 	"aegis/internal/middleware"
+	"aegis/internal/nativeplugin"
+	trafficplugin "aegis/internal/plugins/traffic"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
 	"aegis/internal/service"
@@ -20,6 +24,7 @@ import (
 	"aegis/pkg/clientip"
 	"aegis/pkg/crashlog"
 	"aegis/pkg/egress"
+	"aegis/pkg/httpserve"
 	pkglogger "aegis/pkg/logger"
 	"aegis/pkg/tracing"
 	"github.com/gin-gonic/gin"
@@ -38,6 +43,7 @@ type APIApp struct {
 	CrashLog        *crashlog.Logger
 	Router          *gin.Engine
 	Server          *http.Server
+	Secure          *httpserve.Server // TLS_ENABLED 时的 HTTPS + HTTP/3 监听，由 Serve 建立；未开启时为 nil
 	Postgres        *pgxpool.Pool
 	Redis           *redislib.Client
 	NATSConn        *nats.Conn
@@ -65,6 +71,22 @@ type APIApp struct {
 	Governance *service.PlatformGovernanceService
 	// CloudStorage 用户云存储：后台循环清理过期回收站，退出时必须 Stop
 	CloudStorage *service.CloudStorageService
+	// Storage 存储中心：存储池探活、用量刷新、迁移任务的后台循环。
+	Storage *service.StorageService
+	// AccountDeletion 账号注销：后台循环执行到期的冷静期申请并发到期提醒，退出时必须 Stop
+	AccountDeletion *service.AccountDeletionService
+	// RegisterIP 注册 IP 控制：台账与拦截记录批量写入协程，退出时必须 Stop 把队列写完
+	RegisterIP *service.RegisterIPService
+	// Leaderboard 积分排行榜：后台循环结算到期的周期榜并发放奖励，退出时必须 Stop
+	Leaderboard *service.LeaderboardService
+	// Lottery 抽奖：启动时补齐计数（只做一次），后台定时清理过期的风控聚集键
+	Lottery *service.LotteryService
+	// ItemGrant 物品发放：后台循环执行到点的定时规则、接管中断的执行，退出时必须 Stop
+	ItemGrant *service.ItemGrantService
+	// Level 等级体系：后台循环发放达成奖励、发送升级通知、接管中断的重算任务，退出时必须 Stop
+	Level *service.LevelService
+	// AIGateway AI 中转网关：后台循环放回超时未结算的暂扣，退出时必须 Stop
+	AIGateway *service.AIGatewayService
 	// AuthProviderHealth 后台 30s 轮询 LDAP/OIDC/SAML 可用性；进程退出时必须 Close() 避免 goroutine 泄漏
 	AuthProviderHealth *service.AuthProviderHealthService
 	// Egress 出海代理网关管理面；EgressGateway 是进程级单例，
@@ -73,6 +95,11 @@ type APIApp struct {
 	EgressGateway   *egress.Gateway
 	OwnsEgress      bool
 	ShutdownTracing func(context.Context) error
+	// NativePlugins 内置插件宿主（流量管理等）：Start 里跑启停对账，退出时逆序停止
+	NativePlugins *nativeplugin.Host
+
+	// closeOnce 保证 Close 只执行一次（信号路径与 fx OnStop 都可能调用）。
+	closeOnce sync.Once
 }
 
 func NewAPIApp(ctx context.Context, cl *crashlog.Logger) (*APIApp, error) {
@@ -231,12 +258,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 管理员重置密码需按应用密码策略写过期时间与历史留存
 	userService.SetAppService(appService)
 	authService.SetAdminUserSearchService(adminUserSearch)
+	authService.SetPublicIDs(userService.PublicIDs())
 	adminUserSearch.StartWarmup(ctx)
 	signInService := service.NewSignInService(log, pg, sessions, publisher)
 	autoSignService := service.NewAutoSignService(cfg.AutoSign, log, pg, schedules, signInService)
 	// 开启自动签到前按应用的开放策略校验资格
 	userService.SetAutoSignGuard(autoSignService)
 	pointsService := service.NewPointsService(log, pg, sessions)
+	pointsService.SetPublicIDs(userService.PublicIDs())
 	realtimeService, err := service.NewRealtimeService(log, authService, realtimeRepo, natsConn, cfg.CORS.AllowOrigins)
 	if err != nil {
 		closeTemporal()
@@ -250,14 +279,22 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	realtimeService.SetIdentityRepository(pg)
 	appService.SetAppEventPublisher(realtimeService)
 	notificationService := service.NewNotificationService(log, pg, sessions, realtimeService)
+	// 安全类站内信（两步验证、Passkey、密码已重置）也走统一投递，才会实时推送
+	securityService.SetNotificationService(notificationService)
+	authService.SetNotificationService(notificationService)
 	// 自动签到的成功、失败与暂停走站内信
 	autoSignService.SetNotifier(notificationService)
 	siteService := service.NewSiteService(pg)
 	versionService := service.NewVersionService(pg)
 	releaseService := service.NewReleaseService(log, pg, redisClient, nil)
 	releaseService.SetAppEventPublisher(realtimeService)
+	// 版本管控：加密上报 + 签名裁决 + 网关闸门（docs/client-control.md）
+	clientControlService := service.NewClientControlService(log, pg, redisClient, cfg)
+	clientControlService.SetAppEventPublisher(realtimeService)
 	roleApplicationService := service.NewRoleApplicationService(pg)
 	emailService := service.NewEmailService(log, pg, redisClient, cfg.Redis.KeyPrefix, cfg.Security.MasterKey)
+	// 邮件模板服务（MJML 运行在 wasm 里）首次编译要实例化模块，启动后在后台预热，第一封信不必多等
+	go mailtpl.Default().Warmup(context.Background())
 	paymentService := service.NewPaymentService(log, pg, cfg.PaymentReceipt)
 	walletService := service.NewWalletService(log, pg)
 	vipService := service.NewVipService(log, pg)
@@ -325,9 +362,11 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		postgres.Close()
 		return nil, err
 	}
-	// 突发流量爬坡：单实例自适应准入，挂在 Firewall 之后整形合法洪峰。
-	// 持久化配置由 systemService.Initialize 热加载覆盖。
-	trafficRamp := middleware.NewTrafficRamp(cfg.TrafficRamp, log)
+	// 流量管理以内置插件运行：中间件常驻在 Firewall 之后，插件停用时直通。
+	// 插件宿主在下面 Boot：读启停记录、加载（首次则初始化）流量配置。
+	nativePlugins := nativeplugin.NewHost(pg, log)
+	trafficPlugin := trafficplugin.New(pg, redisClient, cfg.Redis.KeyPrefix, log)
+	nativePlugins.Register(trafficPlugin)
 	ldapService := service.NewLDAPService(log, cfg.JWT.Secret)
 	adminService.SetLDAPService(ldapService)
 	oidcService := service.NewOIDCService(log, cfg.JWT.Secret)
@@ -338,11 +377,11 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 供 /api/admin/system/admins 超管视图标注"账号可能无法登录"，N 账号共享一次探测
 	authProviderHealthService := service.NewAuthProviderHealthService(log, ldapService, oidcService, samlService)
 	systemService := service.NewPlatformSettingsService(cfg, log, pg, firewall, securityService, ldapService, oidcService, samlService)
-	systemService.SetTrafficRamp(trafficRamp)
 	// 自助注册开关与自助建应用配额存在平台设置里，权限层要读它们
 	adminService.SetPlatformSettings(systemService)
 	// 出海网关管理面：数据库里的配置覆盖 .env 基线
 	egressService := service.NewEgressService(log, pg, egressGateway, cfg.Security.MasterKey, cfg.Egress)
+	egressService.AttachMihomo(ensureMihomoCore(cfg.EgressMihomo, "api", log), ownsEgress, cfg.EgressMihomo.Mirror)
 	if err := adminService.LoadCustomRoles(ctx); err != nil {
 		log.Warn("加载自定义角色失败", zap.Error(err))
 	}
@@ -372,6 +411,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		postgres.Close()
 		return nil, err
 	}
+	// 内置插件：流量管理的配置在这里加载完，服务开始监听前请求链路就已按规则整形
+	nativePlugins.Boot(ctx)
 	// 平台设置 Initialize 完成后，LDAP/OIDC/SAML 的真实配置才通过 Reload 写入对应服务；
 	// 构造时 NewAuthProviderHealthService 的初始探测只看到空配置，此处立即重新探测一次，
 	// 确保首次 Snapshot() 命中即是真实健康数据（而不是等 30s 的下一轮 tick）。
@@ -385,8 +426,6 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	replayRepo := redisrepo.NewReplayRepository(redisClient, cfg.Redis.KeyPrefix)
 	replayGuard := middleware.NewReplayGuard(cfg.ReplayProtection, cfg.JWT.Secret, replayRepo, log)
 	authProtocolService := service.NewAuthProtocolService(log, pg, replayRepo, cfg.Security.MasterKey)
-	chainCommitter := service.NewChainCommitter(cfg.Lottery.ChainRPCURL, cfg.Lottery.ChainPrivateKey, cfg.Lottery.ChainID, log)
-	lotteryService := service.NewLotteryService(log, pg, pointsService, chainCommitter)
 	memoryManager := service.NewMemoryManager(cfg.Memory, log, redisClient, cfg.Redis.KeyPrefix)
 	// 数据库生命周期与泄漏监控：与 MemoryManager 同构（构造即可用，Start 拉起后台采集）
 	databaseManager := service.NewDatabaseManager(log, cfg.Database, cfg.Postgres, pgHandle, redisClient, cfg.Redis.KeyPrefix, service.DatabaseRolePrimary)
@@ -415,10 +454,20 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 卡密即登录凭证：注入后 loginMethods 里的 cardkey 一档才真正可用，
 	// 未注入时该方式直接报「未启用」而不是空指针。
 	authService.SetCardKeyService(cardKeyService)
+	// 输错卡密的计数与锁定和登录防爆破共用同一套 Redis 键空间（kind 前缀 ck-）
+	cardKeyService.SetGuard(loginGuardRepo)
+	cardKeyService.SetNotifier(notificationService)
 	rewardedAdService := service.NewRewardedAdService(log, pg, cfg)
+	rewardedAdService.SetPublicIDs(userService.PublicIDs())
+	// 抽奖：视频抽奖读激励广告场景的剩余次数，看完发的抽奖次数进应用级余额
+	lotteryService := service.NewLotteryService(log, pg, rewardedAdService)
+	lotteryService.SetNotifier(notificationService)
+	lotteryService.SetEventPublisher(realtimeService)
 	// 广告服务策略：开屏广告与激励视频传给 SDK 的是同一个带签名的用户标识。
 	adPolicyService := service.NewAdPolicyService(log, pg, rewardedAdService)
 	adPolicyService.SetEventPublishers(realtimeService, realtimeService)
+	// 崩溃报告：用户在崩溃屏上逐份同意后免登录上报（docs/crash-reports.md）
+	crashReportService := service.NewCrashReportService(log, pg, locationService)
 	// 功能时长：看激励广告领到的使用时长，先租后用、停用时结算（发放在激励广告的结算事务里）。
 	featureTimeService := service.NewFeatureTimeService(log, pg)
 	// 积分商城：人工发放的处理结果走站内信，兑换后通知用户的其它在线设备刷新积分与权益。
@@ -432,13 +481,47 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	inviteService.SetEventPublisher(realtimeService)
 	inviteService.SetAppNames(appService)
 	signInService.SetAfterSignIn(inviteService.OnSignIn)
+	// 推广活动：人数与邀请码来自邀请；审核结论走站内信，奖励到账推 promo.changed。
+	promoService := service.NewPromoService(log, pg, inviteService)
+	promoService.SetNotifier(notificationService)
+	promoService.SetEventPublisher(realtimeService)
+	// 积分排行榜：实时榜走 Redis 缓存；周期榜到期由 API 进程的后台循环结算、发奖，奖励到账走站内信。
+	leaderboardService := service.NewLeaderboardService(log, pg, sessions)
+	leaderboardService.SetPublicIDs(userService.PublicIDs())
+	leaderboardService.SetNotifier(notificationService)
+	// 物品发放：画布规则手动 / 定时 / 事件触发（docs/item-grant.md）；定时与接管中断的执行由 API 进程的后台循环负责。
+	// 事件来自插件钩子（注册、支付成功）、登录收口（finalizeLogin）与签到回调。
+	itemGrantService := service.NewItemGrantService(log, pg)
+	itemGrantService.SetNotifier(notificationService)
+	itemGrantService.SetEventPublisher(realtimeService)
+	levelService := service.NewLevelService(log, pg)
+	levelService.SetNotifier(notificationService)
+	levelService.SetEventPublisher(realtimeService)
+	growthService := service.NewGrowthService(log, pg)
+	growthService.SetEventPublisher(realtimeService)
+	signInService.SetSignInObserver(itemGrantService.OnSignIn)
+	authService.SetLoginObserver(itemGrantService.OnLogin)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
 	cloudStorageService := service.NewCloudStorageService(log, pg, storageService)
+	// 账号注销：验证走邮件与短信，执行时吊销登录、清空云存储、删用户；登录与注册经 AuthService 回调
+	accountDeletionService := service.NewAccountDeletionService(log, pg, sessions, cfg.Security.MasterKey)
+	accountDeletionService.SetAccountServices(authService, userService, securityService)
+	accountDeletionService.SetVerificationChannels(emailService, captchaService, appService)
+	accountDeletionService.SetCloudStorage(cloudStorageService)
+	accountDeletionService.SetNotifier(notificationService)
+	accountDeletionService.SetEventPublisher(realtimeService)
+	authService.SetAccountDeletion(accountDeletionService)
 	appFunctionService := service.NewAppFunctionService(log, pg, cfg.JWT.Secret)
 	// AI 供应商通道（系统级 + 应用级，密钥加密落库）与 Agent 编排。
 	aiProviderService := service.NewAIProviderService(log, pg, cfg.Security.MasterKey)
 	aiAgentService := service.NewAIAgentService(log, pg, aiProviderService, appFunctionService)
+	// 面向应用终端用户的计费中转：通道复用上面的链路，计费落积分 / 余额 / 额度（docs/ai-gateway.md）。
+	aiGatewayService := service.NewAIGatewayService(log, pg, authService, aiProviderService)
+	// 上游空闲看门狗（AI_UPSTREAM_IDLE_TIMEOUT）：上游卡死时主动断开，而不是挂到代理切断客户端。
+	aiProviderService.SetUpstreamIdleTimeout(cfg.AIRelay.UpstreamIdleTimeout)
+	// 调用记录的实时事件经 NATS 跨实例分发（控制台调用记录页的实时刷新）。
+	aiGatewayService.AttachLiveBus(natsConn)
 	// script 运行时的 SDK 依赖：脚本通过它们读写平台数据。
 	// 未装配的那一项对应的能力会在绑定时被拒绝并点名，
 	// 而不是绑上去等脚本调用时空指针（wasm/http 不受影响）。
@@ -460,6 +543,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		log.Warn("插件系统初始化失败（非致命）", zap.Error(err))
 	}
 	adminService.SetPluginService(pluginService)
+	pluginService.ObserveHooks(itemGrantService.ObserveHook)
 	authService.SetPluginService(pluginService)
 	userService.SetPluginService(pluginService)
 	accountBanService.SetPluginService(pluginService)
@@ -482,19 +566,46 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	vipService.SetPaymentService(paymentService)
 	sessionMgmtService := service.NewSessionMgmtService(log, pg, sessions, realtimeService)
 	storageResourceService := service.NewStorageResourceService(log, pg)
+	storageResourceService.SetObjectRemover(storageService)
 	userMasterService := service.NewUserMasterService(log, pg)
 	reportService := service.NewReportService(log, pg)
 	riskService := service.NewRiskService(cfg.Risk, log, pg, redisClient, cfg.Redis.KeyPrefix)
-	// 归属地走本地 mmdb：未采购外部 IP 情报源时，geo_* 系列变量若恒为空，
+	// 归属地走 LocationService：未采购外部 IP 情报源时，geo_* 系列变量若恒为空，
 	// 「归属地异常」这类规则配了也永不命中 —— 那是最典型的"看起来防住了"。
 	riskService.SetLocationService(locationService)
+	if err := riskService.AttachTrailStream(natsConn); err != nil {
+		log.Warn("风控留痕未接上 JetStream，改为直接写库", zap.Error(err))
+	}
 	authService.SetRiskService(riskService)
 	inviteService.SetRiskService(riskService)
+	lotteryService.SetRiskService(riskService)
 	adminService.SetRiskService(riskService)
+	// 新接入的业务场景：下单、签到、卡密兑换、积分兑换、广告领奖
+	paymentService.SetRiskService(riskService)
+	signInService.SetRiskService(riskService)
+	cardKeyService.SetRiskService(riskService)
+	pointsStoreService.SetRiskService(riskService)
+	rewardedAdService.SetRiskService(riskService)
+	// 处置执行器：ban 与复核驳回真的落到账号封禁与防火墙上
+	riskService.SetAccountBanService(accountBanService)
+	riskService.SetFirewall(ipBanService)
+	riskService.SetCaptchaProbe(func(ctx context.Context, appID int64) bool {
+		cfg, err := appService.GetCaptchaConfig(ctx, appID)
+		return err == nil && service.IsCaptchaRequired(cfg)
+	})
 	// 对外 OAuth2 / OIDC 授权服务器（Ory Hydra 承载协议，Aegis 负责登录与同意页）
 	oauth2ServerService := service.NewOAuth2ServerService(cfg, log, pg, authService, appService, avatarService)
 	accountBanService.SetOAuth2Server(oauth2ServerService)
 	userService.SetOAuth2Server(oauth2ServerService)
+
+	// 一起听（独立微服务 services/listentogether）：主服务只签票据、发布公钥、转发管理操作。
+	// 这里的配置错误只让一起听不可用，不拖垮主服务启动（docs/listen-together.md）。
+	listenTogetherService, err := service.NewListenTogetherService(log, cfg.ListenTogether, vipService, userService, appService, natsConn)
+	if err != nil {
+		log.Error("一起听配置无效，一起听不可用", zap.Error(err))
+		listenTogetherService = nil
+	}
+	accountBanService.SetListenTogether(listenTogetherService)
 
 	// 设备营销名称字典：启动时幂等种子（表空则解析嵌入的 kt 源并批量写入）
 	deviceMarketingService := service.NewDeviceMarketingService(log, pg)
@@ -502,6 +613,20 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	userService.SetDeviceDirectory(deviceMarketingService)
 	appService.SetDeviceDirectory(deviceMarketingService)
 	authService.SetDeviceDirectory(deviceMarketingService)
+	reportService.SetDeviceDirectory(deviceMarketingService)
+
+	// 登录设备数控制：新登录的签发收口过关卡，超限自动下线 / 拒绝 / 让用户选择（docs/device-limit.md）
+	deviceLimitService := service.NewDeviceLimitService(log, pg, sessions, appService, cfg.JWT.RefreshTTL)
+	deviceLimitService.SetVipService(vipService)
+	deviceLimitService.SetDeviceDirectory(deviceMarketingService)
+	deviceLimitService.SetNotificationService(notificationService)
+	deviceLimitService.SetRealtime(realtimeService)
+	authService.SetDeviceLimitService(deviceLimitService)
+
+	// 注册 IP 控制：四条建号路径写库前过准入，按地址 / 网段 / 属地 / 应用配额、名单、惩罚期与突增判定（docs/register-ip.md）
+	registerIPService := service.NewRegisterIPService(log, pg, redisrepo.NewRegisterIPRepository(redisClient, cfg.Redis.KeyPrefix),
+		appService, locationService)
+	authService.SetRegisterIPService(registerIPService)
 
 	// 平台级 Banner（超级管理员专属 CRUD；Overview 对所有管理员展示；上传经 StorageService）
 	platformBannerService := service.NewPlatformBannerService(log, pg, sessions, storageService)
@@ -525,13 +650,13 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	}
 	// 执行点注入：每一处都对应 platformdomain 里的一项限制，
 	// 少接一处就等于那一项开关只落库不生效。
-	appService.SetGovernanceService(governanceService)             // blockLogin / blockRegister
-	authService.SetGovernanceService(governanceService)            // blockApi
-	paymentService.SetGovernanceService(governanceService)         // blockPayment
-	storageService.SetGovernanceService(governanceService)         // blockStorage
-	notificationService.SetGovernanceService(governanceService)    // blockNotification（站内信）
-	emailService.SetGovernanceService(governanceService)           // blockNotification（邮件）
-	aiProviderService.SetGovernanceService(governanceService)      // blockApi（被限的应用不再消耗 AI 通道）
+	appService.SetGovernanceService(governanceService)          // blockLogin / blockRegister
+	authService.SetGovernanceService(governanceService)         // blockApi
+	paymentService.SetGovernanceService(governanceService)      // blockPayment
+	storageService.SetGovernanceService(governanceService)      // blockStorage
+	notificationService.SetGovernanceService(governanceService) // blockNotification（站内信）
+	emailService.SetGovernanceService(governanceService)        // blockNotification（邮件）
+	aiProviderService.SetGovernanceService(governanceService)   // blockApi（被限的应用不再消耗 AI 通道）
 	// 平台级邮件的落款主体取品牌名（应用级取应用名）。没有它的话，
 	// 一封平台通知的标题会渲染成「 账号已开通」——前面缺一个词。
 	emailService.SetPlatformSettings(systemService)
@@ -587,6 +712,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		return nil, fmt.Errorf("客户端 IP 判定配置无效: %w", err)
 	}
 	logClientIPResolution(log, clientIPResolver)
+	// 受信代理的地址不当注册地址计数：上游丢了客户端地址时别让所有人挤在入口那一个地址上
+	registerIPService.SetProxyFilter(clientIPResolver.TrustedProxy)
 
 	// 在线记录带上 IP 归属地（建连时只读本地库与缓存）
 	realtimeService.SetLocationService(locationService)
@@ -615,12 +742,20 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		RewardedAd:       rewardedAdService,
 		FeatureTime:      featureTimeService,
 		AdPolicy:         adPolicyService,
+		CrashReport:      crashReportService,
 		PointsStore:      pointsStoreService,
 		Invite:           inviteService,
+		Promo:            promoService,
+		Leaderboard:      leaderboardService,
+		AccountDeletion:  accountDeletionService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
 		Version:          versionService,
 		Release:          releaseService,
+		ClientControl:    clientControlService,
+		ListenTogether:   listenTogetherService,
+		DeviceLimit:      deviceLimitService,
+		RegisterIP:       registerIPService,
 		PlatformSettings: systemService,
 		PlatformBanner:   platformBannerService,
 		Governance:       governanceService,
@@ -629,6 +764,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Template:         templateService,
 		Egress:           egressService,
 		AIProvider:       aiProviderService,
+		AIGateway:        aiGatewayService,
+		AIRelay:          cfg.AIRelay,
 		AIAgent:          aiAgentService,
 
 		Organization:    orgService,
@@ -639,6 +776,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		AutoSign:     autoSignService,
 		Points:       pointsService,
 		Lottery:      lotteryService,
+		ItemGrant:    itemGrantService,
+		Level:        levelService,
+		Growth:       growthService,
 		Wallet:       walletService,
 		Vip:          vipService,
 		Payment:      paymentService,
@@ -673,7 +813,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		DatabaseManager: databaseManager,
 
 		Firewall:       firewall,
-		TrafficRamp:    trafficRamp,
+		Traffic:        trafficPlugin,
+		NativePlugins:  nativePlugins,
 		ReplayGuard:    replayGuard,
 		CrashLog:       cl,
 		Logger:         log,
@@ -681,6 +822,9 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		ClientIP:       clientIPResolver,
 		DocsPortalURL:  cfg.DocsPortalURL,
 		ConsoleBaseURL: cfg.ConsoleBaseURL,
+
+		// 闸门与上报共用同一个服务：同一份缓存、同一套判定
+		ClientControlGate: clientControlService,
 	})
 	if err != nil {
 		_ = accountBanService.Close(context.Background())
@@ -730,6 +874,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Risk:               riskService,
 		Governance:         governanceService,
 		CloudStorage:       cloudStorageService,
+		Storage:            storageService,
+		AccountDeletion:    accountDeletionService,
+		RegisterIP:         registerIPService,
+		Leaderboard:        leaderboardService,
+		Lottery:            lotteryService,
+		ItemGrant:          itemGrantService,
+		Level:              levelService,
+		AIGateway:          aiGatewayService,
 		AuthProviderHealth: authProviderHealthService,
 		Egress:             egressService,
 		EgressGateway:      egressGateway,
@@ -738,6 +890,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		PostgresHandle:     pgHandle,
 		ClientIP:           clientIPResolver,
 		ShutdownTracing:    shutdownTracing,
+		NativePlugins:      nativePlugins,
 	}
 	return app, nil
 }
@@ -761,8 +914,41 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.CloudStorage != nil {
 		a.CloudStorage.Start(ctx)
 	}
+	if a.Storage != nil {
+		a.Storage.Start(ctx)
+	}
+	if a.AccountDeletion != nil {
+		a.AccountDeletion.Start(ctx)
+	}
+	if a.RegisterIP != nil {
+		a.RegisterIP.Start(ctx)
+	}
+	if a.Leaderboard != nil {
+		a.Leaderboard.Start(ctx)
+	}
+	if a.Lottery != nil {
+		a.Lottery.Start(ctx)
+	}
+	if a.Risk != nil {
+		a.Risk.Start(ctx)
+	}
+	if a.ItemGrant != nil {
+		a.ItemGrant.Start(ctx)
+	}
+	if a.Level != nil {
+		a.Level.Start(ctx)
+	}
+	if a.AIGateway != nil {
+		a.AIGateway.Start(ctx)
+	}
 	if a.OwnsEgress && a.EgressGateway != nil {
 		a.EgressGateway.Start(ctx)
+		a.Egress.StartSync(ctx)
+	}
+	if a.NativePlugins != nil {
+		SafeGo(a.Logger, a.CrashLog, "api.native_plugins", true, func() {
+			a.NativePlugins.Run(ctx)
+		})
 	}
 	registerAPIConfigHotReload(a.ConfigManager, a.Logger, a.Firewall, a.Security, a.AutoSign, a.AccountBan, a.Risk, a.Egress)
 
@@ -784,11 +970,61 @@ func (a *APIApp) Start(ctx context.Context) error {
 }
 
 func (a *APIApp) Close(ctx context.Context) {
+	a.closeOnce.Do(func() { a.close(ctx) })
+}
+
+// close 先关监听：不再接新请求，在途请求在 ctx（ShutdownTimeout）内跑完；
+// 之后才停后台协程，最后断开 Redis / NATS / Temporal / Postgres。
+// 反过来的顺序会让还在处理的请求撞上已经关掉的连接池。
+func (a *APIApp) close(ctx context.Context) {
+	// 流式 AI 对话不会在 Shutdown 的期限内自己结束：先约好宽限后主动取消，让它们带着
+	// 可重试的错误事件收尾、放回暂扣，而不是被进程退出硬切、暂扣挂到过期（ai_gateway_inflight.go）。
+	if a.AIGateway != nil {
+		a.AIGateway.CancelInFlightAfter(aiRelayShutdownGrace(ctx))
+	}
+	if a.Secure != nil {
+		_ = a.Secure.Shutdown(ctx)
+	}
+	if a.Server != nil {
+		_ = a.Server.Shutdown(ctx)
+	}
+	// 在途请求都结束后再停插件：流量插件退出前要把缓冲的分钟样本写进库
+	if a.NativePlugins != nil {
+		a.NativePlugins.Shutdown(ctx)
+	}
 	if a.Governance != nil {
 		a.Governance.Stop()
 	}
 	if a.CloudStorage != nil {
 		a.CloudStorage.Stop()
+	}
+	if a.Storage != nil {
+		a.Storage.Stop()
+	}
+	if a.AccountDeletion != nil {
+		a.AccountDeletion.Stop()
+	}
+	if a.RegisterIP != nil {
+		a.RegisterIP.Stop(ctx)
+	}
+	// 风控留痕在队列里攒批写入：在途请求结束后把剩下的写完
+	if a.Risk != nil {
+		a.Risk.Close(ctx)
+	}
+	if a.Lottery != nil {
+		a.Lottery.Close(ctx)
+	}
+	if a.Leaderboard != nil {
+		a.Leaderboard.Stop()
+	}
+	if a.ItemGrant != nil {
+		a.ItemGrant.Stop()
+	}
+	if a.Level != nil {
+		a.Level.Stop()
+	}
+	if a.AIGateway != nil {
+		a.AIGateway.Stop()
 	}
 	if a.Database != nil {
 		a.Database.Stop()
@@ -798,9 +1034,6 @@ func (a *APIApp) Close(ctx context.Context) {
 	}
 	if a.Monitor != nil {
 		a.Monitor.StopCollector()
-	}
-	if a.Server != nil {
-		_ = a.Server.Shutdown(ctx)
 	}
 	if a.OnlineLive != nil {
 		a.OnlineLive.Close()
@@ -831,10 +1064,7 @@ func (a *APIApp) Close(ctx context.Context) {
 	if a.Redis != nil {
 		_ = a.Redis.Close()
 	}
-	if a.NATSConn != nil {
-		a.NATSConn.Drain()
-		a.NATSConn.Close()
-	}
+	drainNATS(ctx, a.NATSConn)
 	if a.Temporal != nil {
 		a.Temporal.Close()
 	}
@@ -942,4 +1172,14 @@ func initGinMode(appEnv string) {
 	case "test", "testing":
 		gin.SetMode(gin.TestMode)
 	}
+}
+
+// aiRelayShutdownGrace 退出时给在途 AI 对话的宽限：Shutdown 期限的一半（1–10 秒），
+// 另一半留给它们写错误事件、放回暂扣。
+func aiRelayShutdownGrace(ctx context.Context) time.Duration {
+	grace := 5 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		grace = time.Until(deadline) / 2
+	}
+	return min(max(grace, time.Second), 10*time.Second)
 }

@@ -4,6 +4,7 @@ import (
 	userdomain "aegis/internal/domain/user"
 	"aegis/pkg/response"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,15 +17,36 @@ import (
 // 分页总数也不是这个人的。用户详情页需要的是按 user_id 精确过滤的那一份。
 
 type AdminUserLoginAuditQuery struct {
-	Status string `form:"status"`
-	Page   int    `form:"page"`
-	Limit  int    `form:"limit"`
+	Status  string `form:"status"`
+	Keyword string `form:"keyword"`
+	From    string `form:"from"`
+	To      string `form:"to"`
+	Page    int    `form:"page"`
+	Limit   int    `form:"limit"`
 }
 
 type AdminUserSessionAuditQuery struct {
 	EventType string `form:"eventType"`
+	Keyword   string `form:"keyword"`
+	From      string `form:"from"`
+	To        string `form:"to"`
 	Page      int    `form:"page"`
 	Limit     int    `form:"limit"`
+}
+
+// parseAuditRange 解析 from / to（RFC 3339）；格式不对时已写好 400 响应，返回 ok=false。
+func parseAuditRange(c *gin.Context, from, to string) (*time.Time, *time.Time, bool) {
+	start, err := parseOptionalRFC3339(from)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, "from 格式无效，要求 RFC 3339")
+		return nil, nil, false
+	}
+	end, err := parseOptionalRFC3339(to)
+	if err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, "to 格式无效，要求 RFC 3339")
+		return nil, nil, false
+	}
+	return start, end, true
 }
 
 // AdminAppUserLoginAudits GET /api/admin/apps/:appkey/users/:userId/audits/login
@@ -40,10 +62,17 @@ func (h *Handler) AdminAppUserLoginAudits(c *gin.Context) {
 	}
 	var query AdminUserLoginAuditQuery
 	_ = c.ShouldBindQuery(&query)
+	from, to, ok := parseAuditRange(c, query.From, query.To)
+	if !ok {
+		return
+	}
 	item, err := h.user.AdminListUserLoginAudits(c.Request.Context(), appID, userID, userdomain.LoginAuditQuery{
-		Status: query.Status,
-		Page:   query.Page,
-		Limit:  query.Limit,
+		Status:  query.Status,
+		Keyword: query.Keyword,
+		From:    from,
+		To:      to,
+		Page:    query.Page,
+		Limit:   query.Limit,
 	})
 	if err != nil {
 		h.writeError(c, err)
@@ -87,8 +116,15 @@ func (h *Handler) AdminAppUserSessionAudits(c *gin.Context) {
 	}
 	var query AdminUserSessionAuditQuery
 	_ = c.ShouldBindQuery(&query)
+	from, to, ok := parseAuditRange(c, query.From, query.To)
+	if !ok {
+		return
+	}
 	item, err := h.user.AdminListUserSessionAudits(c.Request.Context(), appID, userID, userdomain.SessionAuditQuery{
 		EventType: query.EventType,
+		Keyword:   query.Keyword,
+		From:      from,
+		To:        to,
 		Page:      query.Page,
 		Limit:     query.Limit,
 	})

@@ -3,6 +3,7 @@ package service
 import (
 	"aegis/internal/config"
 	appdomain "aegis/internal/domain/app"
+	notificationdomain "aegis/internal/domain/notification"
 	userdomain "aegis/internal/domain/user"
 	vipdomain "aegis/internal/domain/vip"
 	"aegis/internal/repository/postgres"
@@ -42,13 +43,7 @@ type AutoSignService struct {
 	schedules *redisrepo.AutoSignRepository
 	signIn    *SignInService
 	location  *time.Location
-	notifier  autoSignNotifier
-}
-
-// autoSignNotifier 站内信出口（NotificationService.NotifyUser）。
-type autoSignNotifier interface {
-	NotifyUser(ctx context.Context, appID int64, userID int64,
-		notificationType string, title string, content string, level string, metadata map[string]any) error
+	notifier  notificationDeliverer
 }
 
 const (
@@ -76,7 +71,7 @@ func NewAutoSignService(cfg config.AutoSignConfig, log *zap.Logger, pg *postgres
 }
 
 // SetNotifier 接上站内信。未接时签到照常，只是不发通知。
-func (s *AutoSignService) SetNotifier(notifier autoSignNotifier) { s.notifier = notifier }
+func (s *AutoSignService) SetNotifier(notifier notificationDeliverer) { s.notifier = notifier }
 
 func (s *AutoSignService) Reload(cfg config.AutoSignConfig) {
 	location := timeutil.MustDefaultRuleLocation(cfg.Timezone)
@@ -474,9 +469,10 @@ func (s *AutoSignService) notify(ctx context.Context, entry redisrepo.AutoSignEn
 	if s.notifier == nil {
 		return
 	}
-	if err := s.notifier.NotifyUser(ctx, entry.AppID, entry.UserID, "system", title, content, level, map[string]any{
-		"scene":  "auto_sign",
-		"status": status,
+	if _, err := s.notifier.Deliver(ctx, notificationdomain.DeliverInput{
+		AppID: entry.AppID, UserID: entry.UserID, Type: "auto_sign", Title: title, Content: content, Level: level,
+		Metadata: map[string]any{"scene": "auto_sign", "status": status},
+		Action:   notificationdomain.RouteAction(notificationdomain.RouteSignIn, "查看签到"),
 	}); err != nil {
 		s.log.Debug("auto sign notification failed", zap.Int64("user_id", entry.UserID), zap.Error(err))
 	}

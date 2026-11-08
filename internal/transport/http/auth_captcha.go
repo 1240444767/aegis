@@ -1,6 +1,7 @@
 package httptransport
 
 import (
+	securitydomain "aegis/internal/domain/security"
 	"errors"
 	"net/http"
 	"strings"
@@ -54,7 +55,7 @@ func (h *Handler) verifyAppCaptcha(c *gin.Context, appID int64, captchaID, answe
 	// 分场景判定：登录 / 注册分别看 RequireForLogin / RequireForRegister
 	// 任一条件不满足（未启用任何类型 或 对应场景关闭）则放行
 	if !service.IsCaptchaRequiredForScene(cfg, purpose) {
-		return true
+		return h.verifyRiskStepUpCaptcha(c, appID, captchaID, answer, purpose)
 	}
 
 	return h.enforceCaptcha(c, appID, captchaID, answer, purpose)
@@ -105,6 +106,45 @@ func (h *Handler) enforceCaptcha(c *gin.Context, appID int64, captchaID, answer 
 		response.Error(c, http.StatusBadRequest, errCodeCaptchaInvalid, "验证码错误")
 		return false
 	}
-	_ = purpose // 预留给未来的审计钩子
+	// 风控据此把「需要验证码」的处置放行，否则用户会在同一个关卡上无限循环
+	c.Request = c.Request.WithContext(service.WithRiskCaptchaPassed(c.Request.Context()))
+	return true
+}
+
+// verifyRiskStepUpCaptcha 应用没要求验证码、客户端却带了一个：那是风控要求的加验（40015 之后重试）。
+// 带了就校验，没带就放行 —— 是否真的需要验证码由风控评估决定。
+func (h *Handler) verifyRiskStepUpCaptcha(c *gin.Context, appID int64, captchaID, answer string, purpose captchadomain.Purpose) bool {
+	if strings.TrimSpace(captchaID) == "" || h.captcha == nil {
+		return true
+	}
+	return h.enforceCaptcha(c, appID, captchaID, answer, purpose)
+}
+
+// guardVerifyCode 发送短信验证码前过风控（verify_code 场景）：短信轰炸是这个口子上最常见的滥用。
+// 带了图形验证码的请求算「已通过人机验证」—— 平台要求前置验证码时由发送链路校验，
+// 不要求时在这里校验，风控的验证码处置因此不会让用户无限循环。
+func (h *Handler) guardVerifyCode(c *gin.Context, appID int64, phone string, purpose captchadomain.Purpose, captchaID, answer string) bool {
+	if h.risk == nil {
+		return true
+	}
+	passed := false
+	if strings.TrimSpace(captchaID) != "" && h.captcha != nil {
+		if !h.captcha.RequiresPreCaptchaForSMS() {
+			if !h.enforceCaptcha(c, appID, captchaID, answer, purpose) {
+				return false
+			}
+		}
+		passed = true
+	}
+	deviceID, _ := resolveClientDevice(c, "", "", "")
+	_, err := h.risk.Guard(c.Request.Context(), securitydomain.RiskEvalRequest{
+		Scene: securitydomain.SceneVerifyCode, AppID: &appID, Account: strings.TrimSpace(phone), IP: c.ClientIP(),
+		DeviceID: deviceID, UserAgent: c.Request.UserAgent(), CaptchaPassed: passed,
+		Extra: map[string]any{"purpose": string(purpose)},
+	}, service.RiskGuardOption{Message: "当前环境存在风险，暂时无法发送验证码"})
+	if err != nil {
+		h.writeError(c, err)
+		return false
+	}
 	return true
 }

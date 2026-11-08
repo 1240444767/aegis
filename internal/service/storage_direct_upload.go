@@ -117,17 +117,16 @@ func (s *StorageService) PrepareDirectUpload(ctx context.Context, appID int64, i
 	if input.Size <= 0 {
 		return nil, apperrors.New(40000, http.StatusBadRequest, "文件大小无效")
 	}
-	cfg, err := s.resolveConfig(ctx, storagedomain.ResolveOptions{AppID: appID, ConfigName: input.ConfigName})
+	cfg, _, direct, err := s.directUploadTarget(ctx, appID, input.ConfigName, input.Size)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := s.buildProvider(cfg)
-	if err != nil {
-		return nil, err
-	}
-	direct, ok := asDirectUploader(provider)
-	if !ok {
-		return &DirectUploadTicket{Mode: "server", Provider: cfg.Provider, Reason: "当前存储不支持浏览器直传"}, nil
+	if direct == nil {
+		ticket := &DirectUploadTicket{Mode: "server", Reason: "当前存储不支持浏览器直传"}
+		if cfg != nil {
+			ticket.Provider = cfg.Provider
+		}
+		return ticket, nil
 	}
 	objectKey := strings.TrimSpace(input.ObjectKey)
 	if objectKey == "" {
@@ -176,6 +175,44 @@ func (s *StorageService) PrepareDirectUpload(ctx context.Context, appID int64, i
 		ExpiresAt: time.Now().Add(expires).UTC(),
 		Provider:  cfg.Provider,
 	}, nil
+}
+
+// directUploadTarget 直传落到哪个存储。写入目标是池时，按池的顺序挑第一个可写且支持直传的成员；
+// 都不支持就返回 direct = nil，调用方退回经服务器上传（那条路仍会按池的规则换成员）。
+func (s *StorageService) directUploadTarget(ctx context.Context, appID int64, name string, size int64) (*storagedomain.Config, storageProvider, directUploadProvider, error) {
+	target, err := s.resolveWriteTarget(ctx, appID, name)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if target.pool == nil {
+		provider, err := s.buildProvider(target.config)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		direct, ok := asDirectUploader(provider)
+		if !ok {
+			return target.config, provider, nil, nil
+		}
+		return target.config, provider, direct, nil
+	}
+	configs, err := s.poolConfigs(ctx, target.pool)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	s.ensureUsage(ctx)
+	for _, candidate := range s.pools.Plan(target.pool, configs, size) {
+		if !candidate.step.Eligible {
+			continue
+		}
+		provider, err := s.buildProvider(candidate.config)
+		if err != nil {
+			continue
+		}
+		if direct, ok := asDirectUploader(provider); ok {
+			return candidate.config, provider, direct, nil
+		}
+	}
+	return nil, nil, nil, nil
 }
 
 // CompleteDirectUpload 确认直传已落到存储并写入文件索引。令牌只能用一次。
@@ -249,8 +286,14 @@ func (s *StorageService) CompleteDirectUpload(ctx context.Context, appID int64, 
 			return nil, err
 		}
 		item.URL = StorageProxyPath(linkToken)
-	} else if url, err := provider.PublicURL(ctx, cfg, item.Key, 0); err == nil {
+	} else if url, err := s.publicObjectURL(ctx, cfg, provider, item.Key, 0, true); err == nil && url != "" {
 		item.URL = url
+	} else if err == nil {
+		linkToken, err := s.links.Encode(storageLinkClaims{ConfigID: cfg.ID, ObjectKey: item.Key, AppID: appID})
+		if err != nil {
+			return nil, err
+		}
+		item.URL = StorageProxyPath(linkToken)
 	}
 
 	meta := make(map[string]any, len(pending.Metadata)+1)

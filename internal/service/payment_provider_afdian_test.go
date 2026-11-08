@@ -58,7 +58,11 @@ func (f *fakeAfdian) handler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var params map[string]any
-	_ = json.Unmarshal([]byte(req.Params), &params)
+	// 真实接口把空对象也判为非法 params
+	if err := json.Unmarshal([]byte(req.Params), &params); err != nil || len(params) == 0 {
+		_ = json.NewEncoder(w).Encode(map[string]any{"ec": 400003, "em": "params was not valid json string"})
+		return
+	}
 	switch r.URL.Path {
 	case "/api/open/ping":
 		_ = json.NewEncoder(w).Encode(map[string]any{"ec": 200, "em": "pong", "data": map[string]any{"uid": f.userID}})

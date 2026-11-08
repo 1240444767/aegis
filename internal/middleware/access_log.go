@@ -52,6 +52,8 @@ func AccessLog(log *zap.Logger, skipPaths ...string) gin.HandlerFunc {
 		status := c.Writer.Status()
 		fields := []zap.Field{
 			zap.String("method", c.Request.Method),
+			// HTTP/1.1、HTTP/2.0、HTTP/3.0：确认客户端是否真的升级到了 QUIC，看这一列
+			zap.String("proto", c.Request.Proto),
 			zap.String("path", path),
 			zap.Int("status", status),
 			zap.Duration("latency", time.Since(started)),
@@ -119,6 +121,9 @@ func clientIPFields(c *gin.Context) []zap.Field {
 // 两者都值得在默认日志级别下被看到。5xx 一律 error——那是服务端自己的问题。
 func accessLogLevel(status int) zapcore.Level {
 	switch {
+	case status == 499:
+		// 客户端先断开：不是错误，也不是客户端的请求有问题
+		return zapcore.InfoLevel
 	case status >= 500:
 		return zapcore.ErrorLevel
 	case status >= 400:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Fingerprint, Globe2, RefreshCw, Search } from "lucide-react";
+import { Fingerprint, Flame, Gavel, Globe2, RefreshCw, Search, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { ApiError } from "@/lib/api/client";
@@ -13,7 +13,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -22,12 +21,17 @@ import {
   useRefreshIPReputationMutation, useRiskDeviceQuery, useRiskDevicesQuery,
   useRiskIPQuery, useRiskIPsQuery, useUpdateDeviceTagMutation, useUpdateIPTagMutation,
 } from "@/lib/risk-hooks";
-import type { RiskAssessment, RiskEntitySummary } from "@/lib/api/types";
+import type { RiskEntitySummary } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
-import { Pagination } from "./risk-assessments";
+import { EntityChips, RecentList, RiskAccountsPanel } from "./risk-accounts";
+import { AssessmentDetailSheet } from "./risk-assessments";
+import { DisposeDialog, type DisposeSubject } from "./risk-dispose-dialog";
+import { CurrentListEntries } from "./risk-lists";
+import { useRiskNav, type RiskEntityFocus, type RiskEntityKind } from "./risk-nav";
+import { useRiskScope } from "./risk-scope";
 import {
-  ActionBadge, DetailRow, LevelBadge, SceneBadge, TagBadge, ellipsisMiddle,
-  fmtDateTime, fmtNumber, fmtRelative, useRiskCatalog,
+  DetailRow, Pagination, RowsSkeleton, SectionTitle, SegmentedControl, TagBadge, ellipsisMiddle,
+  fmtDateTime, fmtExpiry, fmtNumber, fmtRelative, useRiskCatalog,
 } from "./risk-shared";
 
 /**
@@ -43,8 +47,48 @@ import {
 
 const PAGE_SIZE = 25;
 
-export function RiskDevicesPanel({ onQueryAssessments }: { onQueryAssessments?: (deviceId: string) => void }) {
+/**
+ * 实体画像：账号、设备、IP 三类对象分段切换。
+ * 从评估详情 / 大盘榜单带着一个对象过来时（focus），直接打开它的详情。
+ */
+const ENTITY_KINDS = [
+  { key: "account", label: "账号" },
+  { key: "device", label: "设备" },
+  { key: "ip", label: "IP" },
+] as const;
+
+export function RiskEntitiesPanel({ kind, onKindChange, focus, onFocusHandled }: {
+  kind: RiskEntityKind;
+  onKindChange: (next: RiskEntityKind) => void;
+  focus?: RiskEntityFocus | null;
+  onFocusHandled?: () => void;
+}) {
+  const nav = useRiskNav();
+  const focusFor = (k: RiskEntityKind) => (focus && focus.kind === k ? focus : null);
+  return (
+    <div className="space-y-3">
+      <SegmentedControl value={kind} onChange={onKindChange} options={ENTITY_KINDS} />
+      {kind === "account" && <RiskAccountsPanel focus={focusFor("account")} onFocusHandled={onFocusHandled} />}
+      {kind === "device" && (
+        <RiskDevicesPanel focus={focusFor("device")?.value} onFocusHandled={onFocusHandled}
+          onQueryAssessments={(deviceId) => nav.inspectAssessments({ deviceId })} />
+      )}
+      {kind === "ip" && (
+        <RiskIPsPanel focus={focusFor("ip")?.value} onFocusHandled={onFocusHandled}
+          onQueryAssessments={(ip) => nav.inspectAssessments({ ip })} />
+      )}
+    </div>
+  );
+}
+
+
+export function RiskDevicesPanel({ onQueryAssessments, focus, onFocusHandled }: {
+  onQueryAssessments?: (deviceId: string) => void;
+  focus?: string | null;
+  onFocusHandled?: () => void;
+}) {
   const { deviceTags } = useRiskCatalog();
+  const { appId } = useRiskScope();
   const [keyword, setKeyword] = useState("");
   const [tag, setTag] = useState("");
   const [onlyRisk, setOnlyRisk] = useState(false);
@@ -52,6 +96,7 @@ export function RiskDevicesPanel({ onQueryAssessments }: { onQueryAssessments?: 
   const [detailId, setDetailId] = useState<string | null>(null);
 
   const query = useRiskDevicesQuery({
+    appId,
     keyword: keyword.trim() || undefined,
     tag: tag || undefined,
     onlyRisk: onlyRisk ? "true" : undefined,
@@ -98,9 +143,7 @@ export function RiskDevicesPanel({ onQueryAssessments }: { onQueryAssessments?: 
       </CardContent></Card>
 
       {query.isLoading && items.length === 0 ? (
-        <div className="space-y-1.5">{Array.from({ length: 6 }, (_, i) => (
-          <div key={i} className="h-11 animate-pulse rounded-lg bg-muted/50" />
-        ))}</div>
+        <RowsSkeleton rows={6} />
       ) : items.length === 0 ? (
         <EmptyState title="暂无设备" />
       ) : (
@@ -161,12 +204,19 @@ export function RiskDevicesPanel({ onQueryAssessments }: { onQueryAssessments?: 
         </>
       )}
 
-      {detailId && <DeviceDetailSheet deviceId={detailId} onClose={() => setDetailId(null)} />}
+      {(focus ?? detailId) && (
+        <DeviceDetailSheet deviceId={(focus ?? detailId) as string}
+          onClose={() => { setDetailId(null); onFocusHandled?.(); }} />
+      )}
     </div>
   );
 }
 
-export function RiskIPsPanel({ onQueryAssessments }: { onQueryAssessments?: (ip: string) => void }) {
+export function RiskIPsPanel({ onQueryAssessments, focus, onFocusHandled }: {
+  onQueryAssessments?: (ip: string) => void;
+  focus?: string | null;
+  onFocusHandled?: () => void;
+}) {
   const { ipTags } = useRiskCatalog();
   const [keyword, setKeyword] = useState("");
   const [tag, setTag] = useState("");
@@ -221,9 +271,7 @@ export function RiskIPsPanel({ onQueryAssessments }: { onQueryAssessments?: (ip:
       </CardContent></Card>
 
       {query.isLoading && items.length === 0 ? (
-        <div className="space-y-1.5">{Array.from({ length: 6 }, (_, i) => (
-          <div key={i} className="h-11 animate-pulse rounded-lg bg-muted/50" />
-        ))}</div>
+        <RowsSkeleton rows={6} />
       ) : items.length === 0 ? (
         <EmptyState title="暂无 IP" />
       ) : (
@@ -303,7 +351,10 @@ export function RiskIPsPanel({ onQueryAssessments }: { onQueryAssessments?: (ip:
         </>
       )}
 
-      {detailIP && <IPDetailSheet ip={detailIP} onClose={() => setDetailIP(null)} />}
+      {(focus ?? detailIP) && (
+        <IPDetailSheet ip={(focus ?? detailIP) as string}
+          onClose={() => { setDetailIP(null); onFocusHandled?.(); }} />
+      )}
     </div>
   );
 }
@@ -315,6 +366,8 @@ export function RiskIPsPanel({ onQueryAssessments }: { onQueryAssessments?: (ip:
 function DeviceDetailSheet({ deviceId, onClose }: { deviceId: string; onClose: () => void }) {
   const query = useRiskDeviceQuery(deviceId);
   const detail = query.data;
+  const [dispose, setDispose] = useState<"block" | "allow" | null>(null);
+  const [assessmentId, setAssessmentId] = useState<number | null>(null);
 
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
@@ -322,12 +375,12 @@ function DeviceDetailSheet({ deviceId, onClose }: { deviceId: string; onClose: (
         <SheetHeader className="border-b px-5 py-4">
           <SheetTitle className="flex items-center gap-2"><Fingerprint className="size-4" />设备详情</SheetTitle>
           <SheetDescription className="break-all font-mono text-[11px]">{deviceId}</SheetDescription>
+          <EntityActions subject={{ deviceId, appId: detail?.device.appId ?? null }} onDispose={setDispose}
+            assessments={{ deviceId }} onClose={onClose} />
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
           {query.isLoading || !detail ? (
-            <div className="space-y-3 p-5">
-              {Array.from({ length: 5 }, (_, i) => <div key={i} className="h-14 animate-pulse rounded-lg bg-muted/50" />)}
-            </div>
+            <div className="p-5"><RowsSkeleton rows={5} height={56} /></div>
           ) : (
             <div className="space-y-5 px-5 py-4">
               <EntityStats summary={detail.summary} />
@@ -354,13 +407,22 @@ function DeviceDetailSheet({ deviceId, onClose }: { deviceId: string; onClose: (
                 </section>
               )}
 
-              <ChipList title="使用过的 IP" items={detail.ips} />
-              <ChipList title="关联过的账号" items={detail.accounts} />
-              <RecentAssessments items={detail.recent} />
+              <section className="space-y-2">
+                <SectionTitle>现行名单</SectionTitle>
+                <CurrentListEntries entries={detail.listEntries} removable />
+              </section>
+
+              <PeerChips ips={detail.ips} accounts={detail.accounts} appId={detail.device.appId} onClose={onClose} />
+              <RecentList items={detail.recent} onOpen={setAssessmentId} />
             </div>
           )}
         </ScrollArea>
       </SheetContent>
+      {dispose && (
+        <DisposeDialog subject={{ deviceId, appId: detail?.device.appId ?? null }} defaultKind={dispose}
+          onClose={() => setDispose(null)} />
+      )}
+      {assessmentId && <AssessmentDetailSheet id={assessmentId} onClose={() => setAssessmentId(null)} onOpen={setAssessmentId} />}
     </Sheet>
   );
 }
@@ -371,6 +433,8 @@ function IPDetailSheet({ ip, onClose }: { ip: string; onClose: () => void }) {
   const tagMut = useUpdateIPTagMutation();
   const { ipTags } = useRiskCatalog();
   const [note, setNote] = useState("");
+  const [dispose, setDispose] = useState<"block" | "allow" | null>(null);
+  const [assessmentId, setAssessmentId] = useState<number | null>(null);
   const detail = query.data;
 
   const refresh = async () => {
@@ -398,15 +462,32 @@ function IPDetailSheet({ ip, onClose }: { ip: string; onClose: () => void }) {
         <SheetHeader className="border-b px-5 py-4">
           <SheetTitle className="flex items-center gap-2"><Globe2 className="size-4" />IP 详情</SheetTitle>
           <SheetDescription className="font-mono text-[11px]">{ip}</SheetDescription>
+          <EntityActions subject={{ ip }} onDispose={setDispose} assessments={{ ip }} onClose={onClose} />
         </SheetHeader>
         <ScrollArea className="min-h-0 flex-1">
           {query.isLoading || !detail ? (
-            <div className="space-y-3 p-5">
-              {Array.from({ length: 5 }, (_, i) => <div key={i} className="h-14 animate-pulse rounded-lg bg-muted/50" />)}
-            </div>
+            <div className="p-5"><RowsSkeleton rows={5} height={56} /></div>
           ) : (
             <div className="space-y-5 px-5 py-4">
               <EntityStats summary={detail.summary} />
+
+              {detail.firewallBan && (
+                <section className="flex items-start gap-2 rounded-lg border border-rose-300 bg-rose-50/60 px-3 py-2 text-xs dark:border-rose-900/60 dark:bg-rose-950/30">
+                  <Flame className="mt-0.5 size-3.5 shrink-0 text-rose-500" />
+                  <div className="min-w-0 flex-1">
+                    <div className="font-medium">防火墙封禁中</div>
+                    <p className="mt-0.5 text-muted-foreground">
+                      {detail.firewallBan.reason || "--"}，至 {fmtExpiry(detail.firewallBan.expiresAt)}
+                    </p>
+                  </div>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">#{detail.firewallBan.id}</span>
+                </section>
+              )}
+
+              <section className="space-y-2">
+                <SectionTitle>现行名单</SectionTitle>
+                <CurrentListEntries entries={detail.listEntries} removable />
+              </section>
 
               <section className="space-y-2">
                 <div className="flex items-center justify-between">
@@ -452,7 +533,7 @@ function IPDetailSheet({ ip, onClose }: { ip: string; onClose: () => void }) {
               </section>
 
               <section className="space-y-2">
-                <SectionTitle>人工处置</SectionTitle>
+                <SectionTitle>风险标记</SectionTitle>
                 <Textarea rows={2} className="text-xs" value={note} placeholder="备注（选填）"
                   onChange={(e) => setNote(e.target.value)} />
                 <div className="flex flex-wrap gap-1.5">
@@ -466,19 +547,58 @@ function IPDetailSheet({ ip, onClose }: { ip: string; onClose: () => void }) {
                 </div>
               </section>
 
-              <ChipList title="关联设备" items={(detail.devices ?? []).map((d) => ellipsisMiddle(d.deviceId, 14, 8))} />
-              <ChipList title="关联过的账号" items={detail.accounts} />
-              <RecentAssessments items={detail.recent} />
+              <PeerChips devices={(detail.devices ?? []).map((d) => d.deviceId)} accounts={detail.accounts} onClose={onClose} />
+              <RecentList items={detail.recent} onOpen={setAssessmentId} />
             </div>
           )}
         </ScrollArea>
       </SheetContent>
+      {dispose && <DisposeDialog subject={{ ip }} defaultKind={dispose} onClose={() => setDispose(null)} />}
+      {assessmentId && <AssessmentDetailSheet id={assessmentId} onClose={() => setAssessmentId(null)} onOpen={setAssessmentId} />}
     </Sheet>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h4 className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">{children}</h4>;
+function EntityActions({ subject, onDispose, assessments, onClose }: {
+  subject: DisposeSubject;
+  onDispose: (kind: "block" | "allow") => void;
+  assessments: { ip?: string; deviceId?: string };
+  onClose: () => void;
+}) {
+  const nav = useRiskNav();
+  return (
+    <div className="flex flex-wrap gap-1.5 pt-1">
+      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onDispose("block")}>
+        <Gavel className="size-3.5" />处置
+      </Button>
+      <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => onDispose("allow")}>
+        <ShieldCheck className="size-3.5" />加白
+      </Button>
+      <Button size="sm" variant="ghost" className="h-7 text-xs"
+        onClick={() => { onClose(); nav.inspectAssessments(assessments); }}>
+        <Search className="size-3.5" />评估记录
+      </Button>
+    </div>
+  );
+}
+
+/** 关联对象：点一下切到它的画像 */
+function PeerChips({ ips, devices, accounts, appId, onClose }: {
+  ips?: string[] | null; devices?: string[] | null; accounts?: string[] | null;
+  appId?: number | null; onClose: () => void;
+}) {
+  const nav = useRiskNav();
+  const { appId: scopeAppId } = useRiskScope();
+  return (
+    <>
+      <EntityChips title="使用过的 IP" items={ips}
+        onPick={(ip) => { onClose(); nav.openEntity({ kind: "ip", value: ip }); }} />
+      <EntityChips title="关联设备" items={devices} format={(d) => ellipsisMiddle(d, 14, 8)}
+        onPick={(deviceId) => { onClose(); nav.openEntity({ kind: "device", value: deviceId }); }} />
+      <EntityChips title="关联账号" items={accounts}
+        onPick={(account) => { onClose(); nav.openEntity({ kind: "account", value: account, appId: appId ?? scopeAppId ?? null }); }} />
+    </>
+  );
 }
 
 function EntityStats({ summary }: { summary: RiskEntitySummary }) {
@@ -500,44 +620,5 @@ function Tile({ label, value, tone }: { label: string; value: string; tone?: "da
         {value}
       </div>
     </div>
-  );
-}
-
-function ChipList({ title, items }: { title: string; items: string[] | null | undefined }) {
-  const list = items ?? [];
-  if (list.length === 0) return null;
-  return (
-    <section className="space-y-1.5">
-      <SectionTitle>{title}（{list.length}）</SectionTitle>
-      <div className="flex flex-wrap gap-1">
-        {list.map((item) => (
-          <code key={item} className="rounded border bg-muted/40 px-1.5 py-0.5 font-mono text-[10px]">{item}</code>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function RecentAssessments({ items }: { items: RiskAssessment[] | null | undefined }) {
-  const list = items ?? [];
-  if (list.length === 0) return null;
-  return (
-    <section className="space-y-2">
-      <SectionTitle>最近评估</SectionTitle>
-      <Separator />
-      <div className="space-y-1">
-        {list.map((item) => (
-          <div key={item.id} className="flex items-center gap-2 rounded-lg border px-2.5 py-1.5 text-[11px]">
-            <SceneBadge scene={item.scene} />
-            <LevelBadge level={item.riskLevel} />
-            <ActionBadge action={item.action} />
-            <span className="truncate font-mono text-muted-foreground">{item.account || "--"}</span>
-            <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
-              {item.totalScore} 分，{fmtRelative(item.createdAt)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
   );
 }

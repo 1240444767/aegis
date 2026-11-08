@@ -5,6 +5,8 @@ import (
 
 	"aegis/internal/config"
 	"aegis/internal/middleware"
+	"aegis/internal/nativeplugin"
+	trafficplugin "aegis/internal/plugins/traffic"
 	redisrepo "aegis/internal/repository/redis"
 	"aegis/internal/service"
 	"aegis/pkg/clientip"
@@ -52,12 +54,20 @@ type RouterDeps struct {
 	RewardedAd       *service.RewardedAdService
 	FeatureTime      *service.FeatureTimeService
 	AdPolicy         *service.AdPolicyService
+	CrashReport      *service.CrashReportService
 	PointsStore      *service.PointsStoreService
 	Invite           *service.InviteService
+	Promo            *service.PromoService
+	Leaderboard      *service.LeaderboardService
+	AccountDeletion  *service.AccountDeletionService
 	CloudStorage     *service.CloudStorageService
 	Site             *service.SiteService
 	Version          *service.VersionService
 	Release          *service.ReleaseService
+	ClientControl    ClientControlAPI
+	ListenTogether   *service.ListenTogetherService
+	DeviceLimit      *service.DeviceLimitService
+	RegisterIP       *service.RegisterIPService
 	PlatformSettings *service.PlatformSettingsService
 	PlatformBanner   *service.PlatformBannerService
 	Governance       *service.PlatformGovernanceService
@@ -67,6 +77,10 @@ type RouterDeps struct {
 	Egress           *service.EgressService
 	AIProvider       *service.AIProviderService
 	AIAgent          *service.AIAgentService
+	// AIGateway 面向应用终端用户的计费中转（/api/ai/v1 与网关里的 /ai/*）
+	AIGateway *service.AIGatewayService
+	// AIRelay 中转的请求体上限与读请求体期限（AI_RELAY_*，见 config/ai_relay.go）
+	AIRelay config.AIRelayConfig
 
 	// ── 组织架构 ──────────────────────────────────────────────────────
 	Organization    *service.OrganizationService
@@ -78,6 +92,9 @@ type RouterDeps struct {
 	AutoSign     *service.AutoSignService
 	Points       *service.PointsService
 	Lottery      *service.LotteryService
+	ItemGrant    *service.ItemGrantService
+	Level        *service.LevelService
+	Growth       *service.GrowthService
 	Wallet       *service.WalletService
 	Vip          *service.VipService
 	Payment      *service.PaymentService
@@ -116,9 +133,11 @@ type RouterDeps struct {
 
 	// ── 基础设施 ──────────────────────────────────────────────────────
 	Firewall *middleware.Firewall
-	// TrafficRamp 突发流量爬坡（自适应准入），挂在 Firewall 之后：
-	// 先由防火墙拒掉恶意流量，剩下的合法洪峰再整形。nil 时中间件直通。
-	TrafficRamp *middleware.TrafficRamp
+	// Traffic 流量管理插件，中间件挂在 Firewall 之后：先由防火墙拒掉恶意流量，
+	// 剩下的合法流量再按规则整形。nil 或插件停用时中间件直通。
+	Traffic *trafficplugin.Plugin
+	// NativePlugins 内置插件宿主（启停、重启、状态）。
+	NativePlugins *nativeplugin.Host
 	ReplayGuard *middleware.ReplayGuard
 	CrashLog    *crashlog.Logger
 	Logger      *zap.Logger
@@ -126,6 +145,8 @@ type RouterDeps struct {
 	// ClientIP 真实客户端 IP 判定器，由 middleware.ClientIP 挂在中间件栈首位。
 	// 为 nil 时（openapi / routes 等零依赖装配）退化为直接使用直连地址。
 	ClientIP *clientip.Resolver
+	// ClientControlGate 版本管控的网关闸门判定来源，通常与 ClientControl 是同一个服务；nil 时不拦截。
+	ClientControlGate middleware.ClientControlGateService
 	// DocsPortalURL 是 /docs 的 302 目标；相对路径在配了 ConsoleBaseURL 时
 	// 会拼到控制台域名下（门户本就是控制台的一个页面），见 resolveDocsPortalURL。
 	DocsPortalURL string
@@ -151,6 +172,10 @@ func (d RouterDeps) newHandler() *Handler {
 		site:               d.Site,
 		version:            d.Version,
 		release:            d.Release,
+		clientControl:      d.ClientControl,
+		listenTogether:     d.ListenTogether,
+		deviceLimit:        d.DeviceLimit,
+		registerIP:         d.RegisterIP,
 		roleApp:            d.RoleApplication,
 		email:              d.Email,
 		payment:            d.Payment,
@@ -172,6 +197,9 @@ func (d RouterDeps) newHandler() *Handler {
 		geoAnalytics:       d.GeoAnalytics,
 		location:           d.Location,
 		lottery:            d.Lottery,
+		itemGrant:          d.ItemGrant,
+		level:              d.Level,
+		growth:             d.Growth,
 		announcement:       d.Announcement,
 		ldapSvc:            d.LDAP,
 		oidcSvc:            d.OIDC,
@@ -181,13 +209,19 @@ func (d RouterDeps) newHandler() *Handler {
 		tmpl:               d.Template,
 		audit:              d.Audit,
 		plugin:             d.Plugin,
+		traffic:            d.Traffic,
+		nativePlugins:      d.NativePlugins,
 		appFunction:        d.AppFunction,
 		cardKey:            d.CardKey,
 		rewardedAd:         d.RewardedAd,
 		featureTime:        d.FeatureTime,
 		adPolicy:           d.AdPolicy,
+		crashReport:        d.CrashReport,
 		pointsStore:        d.PointsStore,
 		invite:             d.Invite,
+		promo:              d.Promo,
+		leaderboard:        d.Leaderboard,
+		accountDeletion:    d.AccountDeletion,
 		cloudStorage:       d.CloudStorage,
 		authProtocol:       d.AuthProtocol,
 		dashboard:          d.Dashboard,
@@ -209,6 +243,8 @@ func (d RouterDeps) newHandler() *Handler {
 		legal:              d.Legal,
 		aiProvider:         d.AIProvider,
 		aiAgent:            d.AIAgent,
+		aiGateway:          d.AIGateway,
+		aiRelayMaxBody:     d.AIRelay.MaxBodyBytes,
 		oauth2:             d.OAuth2Server,
 		aiAgentWSOrigin:    service.WebSocketOriginChecker(d.CORS.AllowOrigins),
 		consoleURL:         strings.TrimRight(strings.TrimSpace(d.ConsoleBaseURL), "/"),

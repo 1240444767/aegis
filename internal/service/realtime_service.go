@@ -6,6 +6,7 @@ import (
 	stderrors "errors"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,7 @@ import (
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
 	apperrors "aegis/pkg/errors"
+	"aegis/pkg/response"
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
@@ -79,7 +81,16 @@ type realtimeClient struct {
 	// presence 建连时组装好的在线记录（含设备与地区），上下线事件也从它取字段
 	presence  realtimedomain.PresenceConnection
 	closeOnce sync.Once
+	// internalID / publicID 下发前把帧里的主键换成对外 ID（docs/user-public-id.md）；publicID 为空时原样发
+	internalID string
+	publicID   string
+	// accruedAt 在线时长已经记到哪一刻（只在读泵 goroutine 里读写）
+	accruedAt time.Time
 }
+
+// onlineAccrualInterval 在线时长多久落一次库：心跳时满这个间隔就把这段记进 user_online_daily，
+// 断开时再记最后一段。实例崩溃时最多丢一个间隔。
+const onlineAccrualInterval = 5 * time.Minute
 
 // 实时连接被服务端主动断开时的关闭码（4000-4999 为应用自定义区间）。
 const (
@@ -472,8 +483,13 @@ func (s *RealtimeService) Upgrade(w http.ResponseWriter, req *http.Request, sess
 		ip:           ip,
 		userAgent:    userAgent,
 		connectedAt:  now,
+		accruedAt:    now,
 		conn:         conn,
 		send:         make(chan []byte, s.sendBuffer),
+	}
+	if publicID := s.auth.PublicIDs().Of(req.Context(), session.UserID); publicID > 0 {
+		client.internalID = strconv.FormatInt(session.UserID, 10)
+		client.publicID = strconv.FormatInt(publicID, 10)
 	}
 	client.presence = s.buildPresence(client, now)
 	if err := s.touchPresence(req.Context(), client, now); err != nil {
@@ -601,6 +617,28 @@ func (s *RealtimeService) removePresence(ctx context.Context, client *realtimeCl
 	}
 }
 
+// accrueOnline 把 accruedAt 到 until 这段在线时间记进 user_online_daily（行为画像的在线时长）。
+// 管理员的控制台连接（AppID 0）不记。写库放到后台，不卡读泵。
+func (s *RealtimeService) accrueOnline(client *realtimeClient, until time.Time) {
+	session := client.session
+	if s.identities == nil || session == nil || session.AppID == 0 || session.UserID == 0 {
+		return
+	}
+	from := client.accruedAt
+	if !until.After(from) {
+		return
+	}
+	client.accruedAt = until
+	appID, userID := session.AppID, session.UserID
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := s.identities.AccrueOnlineSeconds(ctx, appID, userID, from, until); err != nil {
+			s.log.Debug("accrue online seconds failed", zap.Error(err), zap.Int64("userId", userID))
+		}
+	}()
+}
+
 func (s *RealtimeService) registerLocal(client *realtimeClient) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -713,6 +751,10 @@ func (c *realtimeClient) enqueue(event realtimedomain.Event) {
 	if err != nil {
 		return
 	}
+	if c.publicID != "" {
+		// 信封与 data 里所有「用户 ID 字段且值是自己主键」的地方，与 HTTP 响应同一套规则
+		payload = response.RewriteUserID(payload, c.internalID, c.publicID)
+	}
 	select {
 	case c.send <- payload:
 	default:
@@ -734,6 +776,7 @@ func (c *realtimeClient) readPump() {
 		c.service.removePresence(ctx, c)
 		cancel()
 		_ = c.conn.Close()
+		c.service.accrueOnline(c, time.Now().UTC())
 		c.service.publishPresence(presenceEvent("offline", c.presence, time.Now().UTC()))
 	}()
 	_ = c.conn.SetReadDeadline(time.Now().Add(c.service.pongWait))
@@ -742,6 +785,9 @@ func (c *realtimeClient) readPump() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		c.service.refreshPresence(ctx, c)
 		cancel()
+		if now := time.Now().UTC(); now.Sub(c.accruedAt) >= onlineAccrualInterval {
+			c.service.accrueOnline(c, now)
+		}
 		return nil
 	})
 	for {

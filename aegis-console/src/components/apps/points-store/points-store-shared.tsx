@@ -1,11 +1,16 @@
 "use client";
 
+import type { ComponentType } from "react";
+import { CalendarPlus, Crown, Gift, HandHelping, KeyRound, Sparkles, Ticket, Wallet } from "lucide-react";
+import type { Tone } from "@/components/users/detail/kit";
 import { Badge } from "@/components/ui/badge";
 import type {
   PointsStoreAudience,
   PointsStoreItem,
+  PointsStoreItemPayload,
   PointsStoreLimitPeriod,
   PointsStoreRedemptionStatus,
+  PointsStoreRestockPeriod,
   PointsStoreReward,
   PointsStoreRewardSpec
 } from "@/lib/api/points-store";
@@ -24,10 +29,27 @@ export const LIMIT_PERIOD_LABEL: Record<PointsStoreLimitPeriod, string> = {
   month: "每月"
 };
 
+/** 补货周期 */
+export const RESTOCK_PERIOD_LABEL: Record<PointsStoreRestockPeriod, string> = {
+  none: "不补货",
+  day: "每日",
+  week: "每周",
+  month: "每月"
+};
+
+/** 名额与限兑周期的「本期」说法：今日 / 本周 / 本月 / 累计 */
+export const CURRENT_PERIOD_LABEL: Record<PointsStoreLimitPeriod, string> = {
+  total: "累计",
+  day: "今日",
+  week: "本周",
+  month: "本月"
+};
+
 export const AUDIENCE_LABEL: Record<PointsStoreAudience, string> = {
   all: "所有用户",
   vip: "仅会员",
-  non_vip: "仅非会员"
+  non_vip: "仅非会员",
+  lifetime: "仅永久会员"
 };
 
 const REDEMPTION_STATUS_META: Record<
@@ -116,7 +138,7 @@ export function itemShelfState(item: PointsStoreItem, now = Date.now()) {
   if (item.status !== "active") return { label: "已下架", variant: "secondary" as const };
   if (item.endsAt && new Date(item.endsAt).getTime() <= now) return { label: "已结束", variant: "secondary" as const };
   if (item.startsAt && new Date(item.startsAt).getTime() > now) return { label: "未开始", variant: "info" as const };
-  if (item.stock !== undefined && item.stock !== null && item.stock <= 0) {
+  if (hasStock(item) && (liveStock(item) ?? 0) <= 0) {
     return { label: "已兑完", variant: "warning" as const };
   }
   return null;
@@ -146,4 +168,142 @@ export function toLocalInput(value?: string | null) {
   if (Number.isNaN(date.getTime())) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+/** 商品此刻在用户端的状态。和 itemShelfState 同一判据，多了「在售」，供筛选与统计。 */
+export type ShelfKey = "on_sale" | "scheduled" | "ended" | "sold_out" | "inactive";
+
+export const SHELF_META: Record<ShelfKey, { label: string; tone: Tone; color: string }> = {
+  on_sale: { label: "在售", tone: "success", color: "bg-emerald-500" },
+  scheduled: { label: "未开始", tone: "info", color: "bg-sky-500" },
+  sold_out: { label: "已兑完", tone: "warning", color: "bg-amber-500" },
+  ended: { label: "已结束", tone: "neutral", color: "bg-zinc-400 dark:bg-zinc-500" },
+  inactive: { label: "已下架", tone: "neutral", color: "bg-zinc-300 dark:bg-zinc-700" }
+};
+
+export const SHELF_ORDER: ShelfKey[] = ["on_sale", "scheduled", "sold_out", "ended", "inactive"];
+
+export function shelfKey(item: PointsStoreItem, now = Date.now()): ShelfKey {
+  if (item.status !== "active") return "inactive";
+  if (item.endsAt && new Date(item.endsAt).getTime() <= now) return "ended";
+  if (item.startsAt && new Date(item.startsAt).getTime() > now) return "scheduled";
+  if (hasStock(item) && (liveStock(item) ?? 0) <= 0) return "sold_out";
+  return "on_sale";
+}
+
+export function hasStock(item: Pick<PointsStoreItem, "stock">) {
+  return item.stock !== undefined && item.stock !== null;
+}
+
+/** 是否开了补货周期 */
+export function restocks(item: Pick<PointsStoreItem, "restockPeriod" | "restockQuantity">) {
+  return Boolean(item.restockPeriod && item.restockPeriod !== "none" && item.restockQuantity);
+}
+
+/**
+ * 此刻的剩余库存。开了补货周期时库里的 stock 可能还属于上个周期（补货是惰性的），
+ * 管理端列表另给了换算后的 currentStock，有就用它。
+ */
+export function liveStock(item: PointsStoreItem & { currentStock?: number }) {
+  if (!hasStock(item)) return undefined;
+  return item.currentStock ?? item.stock;
+}
+
+/** 分钟数 ↔「HH:MM」 */
+export function minuteToTime(minute?: number | null) {
+  if (minute === undefined || minute === null) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${pad(Math.floor(minute / 60))}:${pad(minute % 60)}`;
+}
+
+export function timeToMinute(value: string) {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const minute = Number(match[1]) * 60 + Number(match[2]);
+  return minute >= 0 && minute <= 1440 ? minute : null;
+}
+
+/** 每日开放时段「10:00–22:00」，跨零点写「22:00–次日 02:00」；全天开放为空 */
+export function openHoursLabel(item: Pick<PointsStoreItem, "dailyOpenMinute" | "dailyCloseMinute">) {
+  const open = item.dailyOpenMinute;
+  const close = item.dailyCloseMinute;
+  if (open === undefined || open === null || close === undefined || close === null) return "";
+  if (close === 0 || close === 1440) return `${minuteToTime(open)}–24:00`;
+  return `${minuteToTime(open)}–${close < open ? "次日 " : ""}${minuteToTime(close)}`;
+}
+
+/** 权益类型的图标与色调；未登记的类型落到礼物图标 */
+const REWARD_VISUAL: Record<string, { icon: ComponentType<{ className?: string }>; tone: Tone }> = {
+  vip_plan: { icon: Crown, tone: "violet" },
+  vip_days: { icon: CalendarPlus, tone: "violet" },
+  feature: { icon: KeyRound, tone: "info" },
+  experience: { icon: Sparkles, tone: "primary" },
+  balance: { icon: Wallet, tone: "success" },
+  lottery_draws: { icon: Ticket, tone: "warning" },
+  manual: { icon: HandHelping, tone: "danger" }
+};
+
+export function rewardVisual(type?: string) {
+  return (type && REWARD_VISUAL[type]) || { icon: Gift, tone: "neutral" as Tone };
+}
+
+/** 一件商品的限制条件，逐条短句 */
+export function itemRules(item: PointsStoreItem) {
+  const rules: string[] = [];
+  if (restocks(item)) rules.push(`${RESTOCK_PERIOD_LABEL[item.restockPeriod]}补货至 ${formatPoints(item.restockQuantity)} 件`);
+  if (item.globalLimitCount > 0) {
+    rules.push(
+      item.globalLimitPeriod === "total"
+        ? `全站限 ${formatPoints(item.globalLimitCount)} 份`
+        : `全站${LIMIT_PERIOD_LABEL[item.globalLimitPeriod]}限 ${formatPoints(item.globalLimitCount)} 份`
+    );
+  }
+  if (item.limitCount > 0) {
+    rules.push(item.limitPeriod === "total" ? `每人限兑 ${item.limitCount} 次` : `每人${LIMIT_PERIOD_LABEL[item.limitPeriod]}限兑 ${item.limitCount} 次`);
+  }
+  if (item.userTotalLimit > 0) rules.push(`每人累计 ${item.userTotalLimit} 次`);
+  const hours = openHoursLabel(item);
+  if (hours) rules.push(`每日 ${hours} 开放`);
+  if (item.audience !== "all") rules.push(AUDIENCE_LABEL[item.audience]);
+  if (item.minLevel > 0) rules.push(`Lv.${item.minLevel} 起`);
+  return rules;
+}
+
+/** 上下架时间：两头都有写「起 至 止」，只有一头写「起」或「截至」 */
+export function saleWindow(startsAt?: string, endsAt?: string) {
+  if (startsAt && endsAt) return `${formatStoreDate(startsAt)} 至 ${formatStoreDate(endsAt)}`;
+  if (startsAt) return `${formatStoreDate(startsAt)} 起`;
+  if (endsAt) return `截至 ${formatStoreDate(endsAt)}`;
+  return "";
+}
+
+/** 已有商品 → 保存载荷（复制商品用）。 */
+export function itemToPayload(item: PointsStoreItem, overrides: Partial<PointsStoreItemPayload> = {}): PointsStoreItemPayload {
+  return {
+    title: item.title,
+    subtitle: item.subtitle ?? "",
+    description: item.description ?? "",
+    category: item.category ?? "",
+    badge: item.badge ?? "",
+    cost: item.cost,
+    originalCost: item.originalCost ?? null,
+    rewards: item.rewards,
+    stock: hasStock(item) ? (liveStock(item) ?? 0) : null,
+    restockPeriod: item.restockPeriod ?? "none",
+    restockQuantity: item.restockQuantity ?? null,
+    globalLimitPeriod: item.globalLimitPeriod ?? "day",
+    globalLimitCount: item.globalLimitCount ?? 0,
+    limitPeriod: item.limitPeriod,
+    limitCount: item.limitCount,
+    userTotalLimit: item.userTotalLimit ?? 0,
+    dailyOpenMinute: item.dailyOpenMinute ?? null,
+    dailyCloseMinute: item.dailyCloseMinute ?? null,
+    audience: item.audience,
+    minLevel: item.minLevel,
+    startsAt: item.startsAt ?? null,
+    endsAt: item.endsAt ?? null,
+    status: item.status,
+    sortOrder: item.sortOrder,
+    ...overrides
+  };
 }

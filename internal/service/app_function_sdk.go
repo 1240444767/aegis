@@ -796,9 +796,18 @@ func (s *ScriptSDK) bindUserNamespace(vm *goja.Runtime, object *goja.Object) err
 }
 
 // resolveTargetUser 解析读操作的目标用户：省略参数即当前调用者。
+// 参数可以是主键（存量脚本），也可以是对外用户 ID（客户端能拿到的只有它，docs/user-public-id.md）。
 func (s *ScriptSDK) resolveTargetUser(call goja.FunctionCall) int64 {
 	if len(call.Arguments) > 0 && !goja.IsUndefined(call.Argument(0)) {
-		return call.Argument(0).ToInteger()
+		id := call.Argument(0).ToInteger()
+		if id >= userPublicIDMin && s.deps.PG != nil {
+			userID, err := s.deps.PG.FindUserIDByPublicID(s.ctx, s.appID, id)
+			if err != nil {
+				return 0
+			}
+			return userID
+		}
+		return id
 	}
 	return s.callerUserID()
 }
@@ -828,11 +837,13 @@ func (s *ScriptSDK) loadUserPayload(vm *goja.Runtime, userID int64) map[string]a
 	}
 
 	payload := map[string]any{
-		"id":      user.ID,
-		"account": user.Account,
-		"enabled": user.Enabled,
-		"banned":  banned,
-		"vip":     entitlement.IsVIP,
+		"id": user.ID,
+		// publicId 对外用户 ID：要回给客户端或交给外部服务的，一律用它而不是 id
+		"publicId": user.PublicID,
+		"account":  user.Account,
+		"enabled":  user.Enabled,
+		"banned":   banned,
+		"vip":      entitlement.IsVIP,
 		"vipTrial": entitlement.IsTrial,
 		// 永久会员：此时没有 vipExpireAt
 		"vipLifetime": entitlement.IsLifetime,
@@ -1012,9 +1023,12 @@ func (s *ScriptSDK) bindVipNamespace(vm *goja.Runtime, object *goja.Object) erro
 		}
 		// 收回走独立的扣减入口：发放入口只接受正数天数，
 		// 把负数塞给它的结果是 revoke 永远报「发放天数必须大于 0」。
-		var err error
+		var (
+			err error
+			txn *vipdomain.Transaction
+		)
 		if sign > 0 {
-			_, err = s.deps.Vip.AdminGrantVip(s.ctx, AdminVipGrantInput{
+			txn, err = s.deps.Vip.AdminGrantVip(s.ctx, AdminVipGrantInput{
 				UserID:   userID,
 				AppID:    s.appID,
 				Days:     days,
@@ -1034,6 +1048,10 @@ func (s *ScriptSDK) bindVipNamespace(vm *goja.Runtime, object *goja.Object) erro
 			throw(vm, err)
 		}
 		result := map[string]any{"days": sign * days, "userId": userID}
+		// 永久会员已包含：按应用折算策略折成了积分，没有记会员段
+		if txn != nil && txn.Conversion != nil {
+			result["conversion"] = map[string]any{"points": txn.Conversion.Points, "message": txn.Conversion.Message}
+		}
 		// 回读到期时间：脚本经常要把它直接回给客户端展示，
 		// 让作者再调一次 status() 是多打一次库。
 		if entitlement, err := s.deps.Vip.ResolveEntitlement(s.ctx, s.appID, userID, ""); err == nil &&
@@ -1058,9 +1076,12 @@ func (s *ScriptSDK) bindVipNamespace(vm *goja.Runtime, object *goja.Object) erro
 		if s.dryRun {
 			return vm.ToValue(map[string]any{"lifetime": grantIt, "userId": userID, "simulated": true})
 		}
-		var err error
+		var (
+			err error
+			txn *vipdomain.Transaction
+		)
 		if grantIt {
-			_, err = s.deps.Vip.AdminGrantVip(s.ctx, AdminVipGrantInput{
+			txn, err = s.deps.Vip.AdminGrantVip(s.ctx, AdminVipGrantInput{
 				UserID:   userID,
 				AppID:    s.appID,
 				Lifetime: true,
@@ -1079,6 +1100,10 @@ func (s *ScriptSDK) bindVipNamespace(vm *goja.Runtime, object *goja.Object) erro
 			throw(vm, err)
 		}
 		result := map[string]any{"lifetime": grantIt, "userId": userID}
+		// 已包含时折成积分；开通时折掉了存量时同样带回说明
+		if txn != nil && txn.Conversion != nil {
+			result["conversion"] = map[string]any{"points": txn.Conversion.Points, "message": txn.Conversion.Message}
+		}
 		// 取消永久之后可能还剩一段限时会员，把它的到期时间带回去，理由同 grant
 		if entitlement, err := s.deps.Vip.ResolveEntitlement(s.ctx, s.appID, userID, ""); err == nil &&
 			entitlement != nil && entitlement.ExpireAt != nil && entitlement.IsVIP {
@@ -1557,6 +1582,8 @@ func (s *ScriptSDK) bindNotifyNamespace(vm *goja.Runtime, object *goja.Object) e
 			Title:   title,
 			Content: content,
 			Level:   level,
+			// 远程函数发的是单人消息，分类跟随类型（不套用管理员群发的「公告活动」默认值）
+			Category: notificationdomain.CategoryOf(notificationType),
 			Metadata: map[string]any{
 				"source":   "app-function",
 				"function": s.functionName,

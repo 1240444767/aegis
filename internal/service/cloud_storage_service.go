@@ -24,21 +24,23 @@ import (
 
 // 用户云存储的业务错误码（见 docs/cloud-storage.md 与网关错误目录）。
 const (
-	errCodeCloudDisabled          = 40360 // 403 应用没有开启云存储
-	errCodeCloudFrozen            = 40361 // 403 该用户的云存储已被冻结
-	errCodeCloudNamespaceDenied   = 40362 // 403 命名空间不在允许范围内
-	errCodeCloudItemNotFound      = 40465 // 404
-	errCodeCloudRevisionNotFound  = 40466 // 404
-	errCodeCloudRevisionConflict  = 40965 // 409 ifRevision 与当前修订不一致
-	errCodeCloudNotInTrash        = 40966 // 409 条目不在回收站里
-	errCodeCloudQuotaExceeded     = 41360 // 413 配额不足
-	errCodeCloudItemTooLarge      = 41361 // 413 单条目超过上限
-	errCodeCloudItemLimit         = 41362 // 413 条目数已达上限
-	errCodeCloudInvalidNamespace  = 42260 // 422
-	errCodeCloudInvalidKey        = 42261 // 422
-	errCodeCloudInvalidContent    = 42262 // 422 内容与声明的编码对不上
-	errCodeCloudInvalidMetadata   = 42263 // 422 元数据过大或不是对象
-	errCodeCloudContentUnreadable = 50260 // 502 存储桶里读不出内容
+	errCodeCloudDisabled         = 40360 // 403 应用没有开启云存储
+	errCodeCloudFrozen           = 40361 // 403 该用户的云存储已被冻结
+	errCodeCloudNamespaceDenied  = 40362 // 403 命名空间不在允许范围内
+	errCodeCloudItemNotFound     = 40465 // 404
+	errCodeCloudRevisionNotFound = 40466 // 404
+	errCodeCloudRevisionConflict = 40965 // 409 ifRevision 与当前修订不一致
+	errCodeCloudNotInTrash       = 40966 // 409 条目不在回收站里
+	errCodeCloudQuotaExceeded    = 41360 // 413 配额不足
+	errCodeCloudItemTooLarge     = 41361 // 413 单条目超过上限
+	errCodeCloudItemLimit        = 41362 // 413 条目数已达上限
+	errCodeCloudContentLost      = 41060 // 410 存储桶里的对象已经不在了，也没有数据库副本
+	errCodeCloudInvalidNamespace = 42260 // 422
+	errCodeCloudInvalidKey       = 42261 // 422
+	errCodeCloudInvalidContent   = 42262 // 422 内容与声明的编码对不上
+	errCodeCloudInvalidMetadata  = 42263 // 422 元数据过大或不是对象
+	// 503 而不是 502：Cloudflare 会把源站的 502 换成它自己的 HTML 错误页，客户端拿不到错误码。
+	errCodeCloudContentUnreadable = 50260 // 503 存储桶暂时读不出内容
 )
 
 const (
@@ -122,6 +124,8 @@ type CloudStorageOption struct {
 	AccessMode string `json:"accessMode"`
 	Enabled    bool   `json:"enabled"`
 	IsDefault  bool   `json:"isDefault"`
+	// PoolID 选项是存储池时为池 ID（此时 ConfigID 为 0）。
+	PoolID int64 `json:"poolId,omitempty"`
 }
 
 // CloudStorageAdminConfig 管理端配置视图：配置本身 + 实际写往哪里 + 可选的存储配置。
@@ -180,10 +184,10 @@ func (s *CloudStorageService) SaveConfig(ctx context.Context, input cloudstorage
 	}
 	if input.Enabled {
 		// 开启时必须能解析出一个可用的存储配置，否则用户的第一次写入才报「未配置存储」。
-		if _, err := s.storage.ResolveTarget(ctx, input.AppID, input.StorageConfigName); err != nil {
+		if _, err := s.storage.DescribeWriteTarget(ctx, input.AppID, input.StorageConfigName); err != nil {
 			if input.StorageConfigName != "" {
 				return nil, apperrors.New(40000, http.StatusBadRequest,
-					fmt.Sprintf("存储配置 %q 不存在或未启用", input.StorageConfigName))
+					fmt.Sprintf("存储配置或存储池 %q 不存在或未启用", input.StorageConfigName))
 			}
 			return nil, apperrors.New(40000, http.StatusBadRequest, "当前应用没有可用的存储配置，请先在存储管理中添加")
 		}
@@ -226,12 +230,23 @@ func (s *CloudStorageService) adminConfigView(ctx context.Context, cfg cloudstor
 			})
 		}
 	}
+	// 存储池也能作为写入目标：按池名选择。
+	pools, err := s.pg.ListStoragePools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, pool := range pools {
+		view.StorageOptions = append(view.StorageOptions, CloudStorageOption{
+			ConfigName: pool.Name, Provider: "pool", Scope: storagedomain.ScopeGlobal,
+			AccessMode: storagedomain.AccessPrivate, Enabled: pool.Enabled, IsDefault: pool.IsDefault, PoolID: pool.ID,
+		})
+	}
 	return view, nil
 }
 
 // resolveTarget 内容实际会写往哪里；解析失败时把原因带回去给控制台展示。
 func (s *CloudStorageService) resolveTarget(ctx context.Context, cfg cloudstorage.Config) *cloudstorage.StorageTarget {
-	target, err := s.storage.ResolveTarget(ctx, cfg.AppID, cfg.StorageConfigName)
+	target, err := s.storage.DescribeWriteTarget(ctx, cfg.AppID, cfg.StorageConfigName)
 	if err != nil {
 		message := "未找到可用的存储配置"
 		if appErr, ok := errors.AsType[*apperrors.AppError](err); ok {
@@ -240,7 +255,7 @@ func (s *CloudStorageService) resolveTarget(ctx context.Context, cfg cloudstorag
 		return &cloudstorage.StorageTarget{ConfigName: cfg.StorageConfigName, Error: message}
 	}
 	return &cloudstorage.StorageTarget{
-		ConfigID: target.ID, ConfigName: target.ConfigName, Provider: target.Provider, Scope: target.Scope,
+		ConfigID: target.ConfigID, PoolID: target.PoolID, ConfigName: target.Name, Provider: target.Provider, Scope: target.Scope,
 	}
 }
 
@@ -810,6 +825,7 @@ func (s *CloudStorageService) write(ctx context.Context, cfg cloudstorage.Config
 		Operator:        opts.operator,
 		StorageConfigID: uploaded.ConfigID,
 		ObjectKey:       uploaded.Key,
+		Content:         databaseCopy(input.Data),
 		QuotaBytes:      cfg.QuotaBytes,
 		MaxItems:        cfg.MaxItems,
 		MaxRevisions:    cfg.MaxRevisions,
@@ -832,10 +848,9 @@ func (s *CloudStorageService) rollback(ctx context.Context, cfg cloudstorage.Con
 	if err != nil {
 		return nil, mapCloudError(err)
 	}
-	data, _, err := s.storage.ReadObjectBytes(ctx, rev.StorageConfigID, rev.ObjectKey, cloudstorage.MaxItemBytesCap)
+	data, err := s.revisionBytes(ctx, rev, cloudstorage.MaxItemBytesCap)
 	if err != nil {
-		s.log.Warn("云存储修订读取失败", zap.Int64("item_id", item.ID), zap.Int64("revision", revision), zap.Error(err))
-		return nil, apperrors.New(errCodeCloudContentUnreadable, http.StatusBadGateway, "历史修订的内容读取失败")
+		return nil, err
 	}
 	from := rev.Revision
 	opts.restoredFrom = &from
@@ -890,17 +905,64 @@ func (s *CloudStorageService) itemContent(ctx context.Context, item *cloudstorag
 		result.ContentOmitted = true
 		return result, nil
 	}
-	data, _, err := s.storage.ReadObjectBytes(ctx, rev.StorageConfigID, rev.ObjectKey, cloudstorage.InlineContentLimit)
+	data, err := s.revisionBytes(ctx, rev, cloudstorage.InlineContentLimit)
 	if err != nil {
-		s.log.Warn("云存储内容读取失败", zap.Int64("item_id", item.ID), zap.Int64("revision", rev.Revision), zap.Error(err))
-		return nil, apperrors.New(errCodeCloudContentUnreadable, http.StatusBadGateway, "内容读取失败，请稍后重试")
+		return nil, err
 	}
 	content, err := cloudstorage.EncodeContent(rev.Encoding, data)
 	if err != nil {
-		return nil, apperrors.New(errCodeCloudContentUnreadable, http.StatusBadGateway, "内容与记录的编码不符")
+		s.log.Warn("云存储内容与记录的编码不符", zap.Int64("item_id", item.ID), zap.Int64("revision", rev.Revision),
+			zap.String("encoding", rev.Encoding))
+		return nil, apperrors.New(errCodeCloudContentUnreadable, http.StatusServiceUnavailable, "内容与记录的编码不符")
 	}
 	result.Content = content
 	return result, nil
+}
+
+// revisionBytes 读一个修订的内容：数据库副本优先，没有副本才读存储桶。
+//
+// 从存储桶读到的小内容顺手补写副本 —— 迁移之前写入的修订就这样逐步有了副本，
+// 不必为存量数据单独跑一遍回填。
+func (s *CloudStorageService) revisionBytes(ctx context.Context, rev *cloudstorage.Revision, limit int64) ([]byte, error) {
+	copyable := rev.Size <= cloudstorage.DatabaseCopyLimit
+	if copyable {
+		data, err := s.pg.GetCloudRevisionContent(ctx, rev.ID)
+		if err != nil {
+			return nil, mapCloudError(err)
+		}
+		if data != nil {
+			return data, nil
+		}
+	}
+	data, _, err := s.storage.ReadObjectBytes(ctx, rev.StorageConfigID, rev.ObjectKey, limit)
+	if err != nil {
+		fields := []zap.Field{zap.Int64("item_id", rev.ItemID), zap.Int64("revision", rev.Revision),
+			zap.Int64("config_id", rev.StorageConfigID), zap.String("object_key", rev.ObjectKey), zap.Error(err)}
+		if errors.Is(err, ErrStorageObjectMissing) {
+			// 重试多少次都一样：明确告诉客户端，让它拿本机的数据重新写入。
+			s.log.Warn("云存储内容已丢失", fields...)
+			return nil, apperrors.New(errCodeCloudContentLost, http.StatusGone, "云端内容已丢失")
+		}
+		s.log.Warn("云存储内容读取失败", fields...)
+		return nil, apperrors.New(errCodeCloudContentUnreadable, http.StatusServiceUnavailable, "内容读取失败，请稍后重试")
+	}
+	if copyable {
+		digest := sha256.Sum256(data)
+		if hex.EncodeToString(digest[:]) == rev.SHA256 {
+			if err := s.pg.SaveCloudRevisionContent(ctx, rev.ID, rev.SHA256, data); err != nil {
+				s.log.Warn("云存储内容副本补写失败", zap.Int64("item_id", rev.ItemID), zap.Int64("revision", rev.Revision), zap.Error(err))
+			}
+		}
+	}
+	return data, nil
+}
+
+// databaseCopy 内容在数据库里的副本；超过 DatabaseCopyLimit 的只放存储桶。
+func databaseCopy(data []byte) []byte {
+	if int64(len(data)) > cloudstorage.DatabaseCopyLimit {
+		return nil
+	}
+	return data
 }
 
 func (s *CloudStorageService) itemLink(ctx context.Context, item *cloudstorage.Item, revision int64, download bool) (*storagedomain.LinkResult, string, error) {

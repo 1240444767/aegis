@@ -73,24 +73,33 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appServer.POST("/vip/verify", h.VerifyVipMembership)
 		// 广告平台的服务端回调：由平台服务器 GET 调用，凭 sha256(securityKey:transId) 验签，
 		// 既没有用户令牌也没有应用密钥 —— 所以它在这个命名空间而不在网关里。
-		appServer.GET("/ads/huijing/callback", h.RewardedAdHuijingCallback)
+		appServer.GET("/ads/apex/callback", h.RewardedAdCallback)
 		// OpenAI / Anthropic 兼容网关：把任意 SDK 的 baseURL 指到
 		// /api/apps/{appkey}/ai/v1，api key 填函数调用密钥即可。
 		appServer.POST("/ai/v1/chat/completions", h.AppAIChatCompletions)
 		appServer.POST("/ai/v1/messages", h.AppAIMessages)
 	}
 
-	// 用户抽奖路由
-	lotteryUser := router.Group("/api/lottery")
-	lotteryUser.Use(middleware.Auth(authService))
+	// 用户 AI 中转（docs/ai-gateway.md）：应用的**终端用户**调用的 OpenAI / Anthropic 兼容面。
+	// 凭据是用户自己的 sk-ag- 密钥或登录会话的访问令牌（由处理器自己认，不挂 Auth 中间件：
+	// SDK 只会把凭据放进 Authorization / x-api-key，而密钥不是会话令牌），按用量扣用户的额度。
+	// 不在 /api/v1/apps 下：那里按应用的安全等级包装请求，OpenAI SDK 做不到。
+	relay := router.Group("/api/ai/v1")
 	{
-		lotteryUser.GET("/activities", h.UserLotteryActivities)
-		lotteryUser.GET("/activities/:id", h.UserLotteryActivityDetail)
-		lotteryUser.GET("/activities/:id/prizes", h.UserLotteryActivityPrizes)
-		lotteryUser.GET("/activities/:id/verify", h.UserLotteryVerify)
-		lotteryUser.POST("/join", h.UserLotteryJoin)
-		lotteryUser.POST("/draw", h.UserLotteryDraw)
-		lotteryUser.GET("/draws", h.UserLotteryDrawHistory)
+		relay.GET("/models", h.AIRelayModels)
+		relay.POST("/chat/completions", h.AIRelayChatCompletions)
+		relay.POST("/messages", h.AIRelayMessages)
+		relay.POST("/embeddings", h.AIRelayEmbeddings)
+		relay.POST("/images/generations", h.AIRelayImageGenerations)
+		relay.POST("/images/edits", h.AIRelayImageEdits)
+		relay.POST("/audio/speech", h.AIRelaySpeech)
+		relay.POST("/audio/transcriptions", h.AIRelayTranscriptions)
+		relay.POST("/audio/translations", h.AIRelayTranslations)
+		relay.POST("/rerank", h.AIRelayRerank)
+		// 异步任务：长调用以 `Prefer: respond-async` 提交后在这里轮询、取结果、取消。
+		relay.GET("/jobs/:jobId", h.AIRelayJob)
+		relay.GET("/jobs/:jobId/content", h.AIRelayJobContent)
+		relay.DELETE("/jobs/:jobId", h.AIRelayCancelJob)
 	}
 
 	userPublic := router.Group("/api/user")
@@ -180,6 +189,9 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		points.GET("/overview", h.PointsOverview)
 		points.GET("/levels", h.PointsLevels)
 		points.GET("/level", h.MyLevel)
+		points.GET("/level/rewards", h.MyLevelRewards)
+		points.POST("/level/rewards/:rewardId/claim", h.ClaimLevelReward)
+		points.GET("/level/history", h.MyLevelHistory)
 		points.GET("/integral-transactions", h.IntegralTransactions)
 		points.GET("/experience-transactions", h.ExperienceTransactions)
 		points.GET("/rankings", h.PointsRankings)
@@ -201,10 +213,16 @@ func registerUserRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 	notifications.Use(middleware.Auth(authService))
 	{
 		notifications.GET("", h.Notifications)
+		notifications.GET("/summary", h.NotificationSummary)
 		notifications.GET("/unread-count", h.NotificationUnreadCount)
+		notifications.GET("/preferences", h.NotificationPreferences)
+		notifications.PUT("/preferences", h.UpdateNotificationPreferences)
+		notifications.GET("/:notificationId", h.NotificationDetail)
 		notifications.POST("/read", h.ReadNotification)
+		notifications.POST("/unread", h.UnreadNotification)
 		notifications.POST("/read-batch", h.ReadNotificationsBatch)
 		notifications.POST("/read-all", h.ReadAllNotifications)
+		notifications.POST("/delete-batch", h.DeleteNotificationsBatch)
 		notifications.DELETE("/:notificationId", h.DeleteNotification)
 		notifications.POST("/clear", h.ClearNotifications)
 	}
@@ -293,6 +311,7 @@ func registerCommerceRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		vip.GET("/plans", h.VipPlans)
 		vip.GET("/status", h.MyVipStatus)
 		vip.GET("/transactions", h.MyVipTransactions)
+		vip.GET("/conversions", h.MyVipConversions)
 		vip.POST("/purchase", h.PurchaseVip)
 		vip.POST("/trial", h.ClaimVipTrial)
 	}

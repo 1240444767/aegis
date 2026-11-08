@@ -6,16 +6,17 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
-	notificationdomain "aegis/internal/domain/notification"
+	"aegis/internal/domain/growth"
+	"aegis/internal/domain/levels"
 	pointdomain "aegis/internal/domain/points"
 	userdomain "aegis/internal/domain/user"
 	"github.com/jackc/pgx/v5"
@@ -24,17 +25,16 @@ import (
 )
 
 type Repository struct {
-	pool              *pgxpool.Pool
-	levelCacheMu      sync.RWMutex
-	levelCache        []pointdomain.LevelConfig
-	levelCacheExpires time.Time
+	pool *pgxpool.Pool
+	// levels 按应用缓存的等级体系（level_repository.go）
+	levels levelSchemeCache
+	// lotteryTotals 抽奖全站计数的读缓存（lottery_counters_repository.go；只缓存读，计数本身随抽奖事务落库）
+	lotteryTotals lotteryTotalsCache
 }
 
 func New(pool *pgxpool.Pool) *Repository {
 	return &Repository{pool: pool}
 }
-
-const levelCacheTTL = 5 * time.Minute
 
 // daily_signins 各列的 VARCHAR 上限，与迁移里的宽度一一对应。
 //
@@ -69,23 +69,10 @@ type levelRecordRow struct {
 	HighestLevel        int
 	LevelUpCount        int
 	LastLevelUpAt       *time.Time
-}
-
-type levelState struct {
-	Config             *pointdomain.LevelConfig
-	NextConfig         *pointdomain.LevelConfig
-	CurrentLevel       int
-	CurrentLevelName   string
-	NextLevelName      string
-	ExpMultiplier      float64
-	TotalExperience    int64
-	ExpInCurrentLevel  int64
-	ExpRangeForLevel   int64
-	ExpToNextLevel     int64
-	CurrentLevelMinExp int64
-	NextLevelMinExp    *int64
-	LevelProgress      float64
-	IsMaxLevel         bool
+	// LockedLevel 管理员锁定的保底等级（重算降级也不低于它），0 = 没有锁定
+	LockedLevel int
+	// CappedLevel 管理员设的等级封顶（成长调控），0 = 不封顶
+	CappedLevel int
 }
 
 func (r *Repository) GetUserByAppAndAccount(ctx context.Context, appID int64, account string) (*userdomain.User, error) {
@@ -750,6 +737,8 @@ func (r *Repository) ListLoginAuditsByUser(ctx context.Context, appID int64, use
 	}
 	offset := (page - 1) * limit
 	baseQuery, args := buildUserLoginAuditFilter(appID, userID, query.Status)
+	baseQuery, args = appendAuditRange(baseQuery, args, "l", query.Keyword, query.From, query.To,
+		"COALESCE(HOST(l.login_ip), '')", "COALESCE(l.device_id, '')", "COALESCE(l.user_agent, '')", "l.login_type", "COALESCE(l.provider, '')")
 
 	var total int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*)`+baseQuery, args...).Scan(&total); err != nil {
@@ -848,6 +837,8 @@ func (r *Repository) ListSessionAuditsByUser(ctx context.Context, appID int64, u
 	}
 	offset := (page - 1) * limit
 	baseQuery, args := buildUserSessionAuditFilter(appID, userID, query.EventType)
+	baseQuery, args = appendAuditRange(baseQuery, args, "s", query.Keyword, query.From, query.To,
+		"COALESCE(s.token_jti, '')", "COALESCE(s.metadata::text, '')")
 
 	var total int64
 	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*)`+baseQuery, args...).Scan(&total); err != nil {
@@ -1103,6 +1094,7 @@ func (r *Repository) ListAdminUsersByAppQuery(ctx context.Context, appID int64, 
 
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1164,7 +1156,7 @@ func (r *Repository) listAdminUsersByAppFast(ctx context.Context, appID int64, e
 	}
 
 	query := `WITH page_users AS (
-    SELECT id, appid, account, integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at
+    SELECT id, public_id, appid, account, integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at
     FROM users
     WHERE appid = $1`
 	args := []any{appID}
@@ -1183,6 +1175,7 @@ func (r *Repository) listAdminUsersByAppFast(ctx context.Context, appID int64, e
 	query += `
 SELECT
     u.id,
+    u.public_id,
     u.appid,
     u.account,
     u.integral,
@@ -1231,6 +1224,7 @@ ORDER BY ` + buildAdminUserOrderBy(sort, order, adminUserFastSortColumns, "u.", 
 func (r *Repository) GetAdminUserByApp(ctx context.Context, appID int64, userID int64) (*userdomain.AdminUserView, error) {
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1276,6 +1270,7 @@ func (r *Repository) ListAdminUsersForExportQuery(ctx context.Context, appID int
 	baseQuery, args := buildAdminUserListBaseQuery(appID, adminQuery)
 	query := `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1325,6 +1320,7 @@ func (r *Repository) ListAdminUsersByIDs(ctx context.Context, appID int64, userI
 	}
 	rows, err := r.pool.Query(ctx, `SELECT
 	u.id,
+	u.public_id,
 	u.appid,
 	u.account,
 	u.integral,
@@ -1465,6 +1461,7 @@ var adminUserFastSortColumns = map[string]string{
 //   - **末位 id 兜底**：按非唯一列（如 integral，绝大多数用户都是 0）排序时，
 //     没有确定性 tiebreaker 会让分页在页与页之间重复或漏掉行 ——
 //     这不是排序不好看，是数据错了。
+//
 // prefix 用于给未限定的列名补表别名（快路径外层查询按 `page_users u` 取列）；
 // 列名本就限定过的（普通路径）传空串。
 func buildAdminUserOrderBy(sort string, order string, columns map[string]string, prefix string, idColumn string) string {
@@ -1500,8 +1497,17 @@ func isAdminUserFastPath(adminQuery userdomain.AdminUserQuery) bool {
 }
 
 // parseAdminUserDirectID 识别 `#123` 形态的「按 ID 直达」关键字。
+// userPublicIDMin 对外用户 ID 号段的下界（迁移 000112）；主键不会长到这么大。
+const userPublicIDMin int64 = 1_000_000_000_000_000
+
 func parseAdminUserDirectID(keyword string) (int64, bool) {
 	if !strings.HasPrefix(keyword, "#") {
+		// 不带井号的 16 位纯数字只可能是用户报来的对外 ID
+		if len(keyword) == 16 {
+			if id, err := strconv.ParseInt(keyword, 10, 64); err == nil && id >= userPublicIDMin {
+				return id, true
+			}
+		}
 		return 0, false
 	}
 	id, err := strconv.ParseInt(strings.TrimSpace(keyword[1:]), 10, 64)
@@ -1530,7 +1536,12 @@ WHERE u.appid = $1`
 	// `#123` 是「按用户 ID 直达」的显式写法：搜索框里粘一个带井号的 ID，
 	// 意图只可能是找这一个人，不该再去模糊撞昵称里的数字。
 	if directID, ok := parseAdminUserDirectID(keyword); ok {
-		baseQuery += fmt.Sprintf(" AND u.id = $%d", len(args)+1)
+		// 对外 ID 是 16 位、主键远小于它：同一个井号写法两种都认，客服拿到用户报的 ID 直接粘进来即可
+		column := "u.id"
+		if directID >= userPublicIDMin {
+			column = "u.public_id"
+		}
+		baseQuery += fmt.Sprintf(" AND %s = $%d", column, len(args)+1)
 		args = append(args, directID)
 		keyword = ""
 	}
@@ -2445,264 +2456,6 @@ ON CONFLICT (id) DO UPDATE SET
 	return err
 }
 
-func (r *Repository) ListLevelConfigs(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	return r.getActiveLevels(ctx)
-}
-
-func (r *Repository) GetExperienceMultiplier(ctx context.Context, experience int64) (float64, error) {
-	levels, err := r.getActiveLevels(ctx)
-	if err != nil {
-		return 1, err
-	}
-	return r.resolveLevelState(levels, experience).ExpMultiplier, nil
-}
-
-func (r *Repository) GetUserLevelProfile(ctx context.Context, userID int64, appID int64) (*pointdomain.LevelProfile, error) {
-	user, err := r.GetUserByID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	if user == nil || user.AppID != appID {
-		return nil, nil
-	}
-
-	profile, err := r.GetUserProfileByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-
-	levelInfo, err := r.syncUserLevelRecord(ctx, r.pool, userID, appID, user.Experience, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-
-	result := &pointdomain.LevelProfile{
-		UserInfo: pointdomain.LevelUserInfo{
-			ID:         user.ID,
-			Account:    user.Account,
-			Integral:   user.Integral,
-			Experience: user.Experience,
-		},
-		LevelInfo: *levelInfo,
-	}
-	if profile != nil {
-		result.UserInfo.Nickname = profile.Nickname
-		result.UserInfo.Avatar = profile.Avatar
-	}
-	return result, nil
-}
-
-func (r *Repository) getActiveLevels(ctx context.Context) ([]pointdomain.LevelConfig, error) {
-	now := time.Now()
-	r.levelCacheMu.RLock()
-	if now.Before(r.levelCacheExpires) && len(r.levelCache) > 0 {
-		levels := append([]pointdomain.LevelConfig(nil), r.levelCache...)
-		r.levelCacheMu.RUnlock()
-		return levels, nil
-	}
-	r.levelCacheMu.RUnlock()
-
-	levels, err := r.loadActiveLevels(ctx, r.pool)
-	if err != nil {
-		return nil, err
-	}
-
-	r.levelCacheMu.Lock()
-	r.levelCache = append([]pointdomain.LevelConfig(nil), levels...)
-	r.levelCacheExpires = now.Add(levelCacheTTL)
-	r.levelCacheMu.Unlock()
-
-	return append([]pointdomain.LevelConfig(nil), levels...), nil
-}
-
-func (r *Repository) loadActiveLevels(ctx context.Context, q queryExecutor) ([]pointdomain.LevelConfig, error) {
-	rows, err := q.Query(ctx, `SELECT id, level, level_name, experience_required, experience_next, exp_multiplier, COALESCE(icon, ''), COALESCE(color, ''), COALESCE(privileges, '[]'::jsonb), COALESCE(rewards, '{}'::jsonb), COALESCE(description, ''), is_active, sort_order, created_at, updated_at FROM user_levels WHERE is_active = true ORDER BY level ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	levels := make([]pointdomain.LevelConfig, 0, 16)
-	for rows.Next() {
-		var item pointdomain.LevelConfig
-		var experienceNext *int64
-		var privilegesJSON []byte
-		var rewardsJSON []byte
-		if err := rows.Scan(
-			&item.ID,
-			&item.Level,
-			&item.LevelName,
-			&item.ExperienceRequired,
-			&experienceNext,
-			&item.ExpMultiplier,
-			&item.Icon,
-			&item.Color,
-			&privilegesJSON,
-			&rewardsJSON,
-			&item.Description,
-			&item.IsActive,
-			&item.SortOrder,
-			&item.CreatedAt,
-			&item.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		item.ExperienceNext = experienceNext
-		_ = json.Unmarshal(privilegesJSON, &item.Privileges)
-		_ = json.Unmarshal(rewardsJSON, &item.Rewards)
-		levels = append(levels, item)
-	}
-	return levels, rows.Err()
-}
-
-func (r *Repository) syncUserLevelRecord(ctx context.Context, q queryExecutor, userID int64, appID int64, totalExperience int64, updatedAt time.Time) (*pointdomain.LevelInfo, error) {
-	levels, err := r.getActiveLevels(ctx)
-	if err != nil {
-		return nil, err
-	}
-	state := r.resolveLevelState(levels, totalExperience)
-
-	query := `SELECT user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at FROM user_level_records WHERE user_id = $1 AND appid = $2`
-	if _, isTx := q.(pgx.Tx); isTx {
-		query += ` FOR UPDATE`
-	}
-	record, err := scanLevelRecord(q.QueryRow(ctx, query, userID, appID))
-	if err != nil {
-		return nil, err
-	}
-
-	levelDelta := 0
-	highestLevel := state.CurrentLevel
-	levelUpCount := 0
-	lastLevelUpAt := (*time.Time)(nil)
-
-	if record != nil {
-		levelDelta = state.CurrentLevel - record.CurrentLevel
-		if levelDelta < 0 {
-			levelDelta = 0
-		}
-		highestLevel = maxInt(record.HighestLevel, state.CurrentLevel)
-		levelUpCount = record.LevelUpCount + levelDelta
-		lastLevelUpAt = record.LastLevelUpAt
-		if levelDelta > 0 {
-			ts := updatedAt.UTC()
-			lastLevelUpAt = &ts
-		}
-	} else {
-		highestLevel = state.CurrentLevel
-	}
-
-	var nextLevelExperience any
-	if state.IsMaxLevel {
-		nextLevelExperience = nil
-	} else {
-		nextLevelExperience = state.ExpToNextLevel
-	}
-	nextLevel := 0
-	if state.NextConfig != nil {
-		nextLevel = state.NextConfig.Level
-	}
-
-	upsertQuery := `INSERT INTO user_level_records (user_id, appid, current_level, current_experience, total_experience, next_level_experience, level_progress, highest_level, level_up_count, last_level_up_at, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, COALESCE($11, NOW()), $11)
-ON CONFLICT (user_id, appid) DO UPDATE SET
-    current_level = EXCLUDED.current_level,
-    current_experience = EXCLUDED.current_experience,
-    total_experience = EXCLUDED.total_experience,
-    next_level_experience = EXCLUDED.next_level_experience,
-    level_progress = EXCLUDED.level_progress,
-    highest_level = EXCLUDED.highest_level,
-    level_up_count = EXCLUDED.level_up_count,
-    last_level_up_at = EXCLUDED.last_level_up_at,
-    updated_at = EXCLUDED.updated_at`
-	if _, err := q.Exec(ctx, upsertQuery, userID, appID, state.CurrentLevel, state.ExpInCurrentLevel, totalExperience, nextLevelExperience, state.LevelProgress, highestLevel, levelUpCount, lastLevelUpAt, updatedAt.UTC()); err != nil {
-		return nil, err
-	}
-
-	return &pointdomain.LevelInfo{
-		CurrentLevel:       state.CurrentLevel,
-		CurrentLevelName:   state.CurrentLevelName,
-		ExpMultiplier:      state.ExpMultiplier,
-		TotalExperience:    totalExperience,
-		ExpInCurrentLevel:  state.ExpInCurrentLevel,
-		ExpRangeForLevel:   state.ExpRangeForLevel,
-		ExpToNextLevel:     state.ExpToNextLevel,
-		LevelProgress:      state.LevelProgress,
-		CurrentLevelMinExp: state.CurrentLevelMinExp,
-		HighestLevel:       highestLevel,
-		LevelUpCount:       levelUpCount,
-		LastLevelUpAt:      lastLevelUpAt,
-		CurrentLevelConfig: state.Config,
-		NextLevelConfig:    state.NextConfig,
-		IsMaxLevel:         state.IsMaxLevel,
-		NextLevel:          nextLevel,
-		NextLevelMinExp:    state.NextLevelMinExp,
-		NextLevelName:      state.NextLevelName,
-	}, nil
-}
-
-func (r *Repository) resolveLevelState(levels []pointdomain.LevelConfig, experience int64) levelState {
-	if experience < 0 {
-		experience = 0
-	}
-	if len(levels) == 0 {
-		return levelState{
-			CurrentLevel:       1,
-			CurrentLevelName:   "新手",
-			ExpMultiplier:      1,
-			TotalExperience:    experience,
-			ExpInCurrentLevel:  experience,
-			CurrentLevelMinExp: 0,
-			LevelProgress:      0,
-			IsMaxLevel:         true,
-		}
-	}
-
-	current := levels[0]
-	currentIndex := 0
-	for index, level := range levels {
-		if experience >= level.ExperienceRequired {
-			current = level
-			currentIndex = index
-			continue
-		}
-		break
-	}
-
-	state := levelState{
-		Config:             &current,
-		CurrentLevel:       current.Level,
-		CurrentLevelName:   current.LevelName,
-		ExpMultiplier:      current.ExpMultiplier,
-		TotalExperience:    experience,
-		ExpInCurrentLevel:  maxInt64(experience-current.ExperienceRequired, 0),
-		CurrentLevelMinExp: current.ExperienceRequired,
-		IsMaxLevel:         currentIndex == len(levels)-1,
-	}
-
-	if !state.IsMaxLevel {
-		next := levels[currentIndex+1]
-		state.NextConfig = &next
-		state.NextLevelMinExp = &next.ExperienceRequired
-		state.NextLevelName = next.LevelName
-		state.ExpRangeForLevel = next.ExperienceRequired - current.ExperienceRequired
-		state.ExpToNextLevel = maxInt64(next.ExperienceRequired-experience, 0)
-		if state.ExpRangeForLevel > 0 {
-			state.LevelProgress = math.Round((float64(state.ExpInCurrentLevel)/float64(state.ExpRangeForLevel))*10000) / 100
-		}
-	} else {
-		state.LevelProgress = 100
-	}
-	if state.LevelProgress < 0 {
-		state.LevelProgress = 0
-	}
-	if state.LevelProgress > 100 {
-		state.LevelProgress = 100
-	}
-
-	return state
-}
-
 func (r *Repository) GetLatestDailySign(ctx context.Context, userID int64, appID int64) (*userdomain.DailySignIn, error) {
 	query := `SELECT id, user_id, appid, signed_at, sign_date, integral_reward, experience_reward, integral_before, integral_after, experience_before, experience_after, consecutive_days, reward_multiplier, COALESCE(bonus_type, ''), COALESCE(bonus_description, ''), sign_in_source, COALESCE(device_info, ''), COALESCE(ip_address, ''), COALESCE(location, ''), created_at FROM daily_signins WHERE user_id = $1 AND appid = $2 ORDER BY sign_date DESC, id DESC LIMIT 1`
 	return scanDailySign(r.pool.QueryRow(ctx, query, userID, appID))
@@ -2990,6 +2743,10 @@ LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1`
 	args := []any{appID}
 
+	if query.UserID > 0 {
+		baseQuery += fmt.Sprintf(" AND ds.user_id = $%d", len(args)+1)
+		args = append(args, query.UserID)
+	}
 	if keyword := strings.TrimSpace(query.Keyword); keyword != "" {
 		baseQuery += fmt.Sprintf(`
   AND (
@@ -3143,6 +2900,22 @@ func (r *Repository) CreateDailySign(ctx context.Context, userID int64, appID in
 		}
 	}
 
+	// 成长调控：签到奖励按规则换算（在等级签到加成之后）；结果写进两条签到流水的 extra_data.growth
+	growthOutcomes := map[growth.Kind]growth.Outcome{}
+	for _, item := range []struct {
+		kind   growth.Kind
+		amount *int64
+	}{{growth.KindIntegral, &reward.IntegralReward}, {growth.KindExperience, &reward.ExperienceReward}} {
+		outcome, touched, growthErr := applyGrowthTx(ctx, tx, appID, userID, item.kind, growth.SourceSignin, *item.amount)
+		if growthErr != nil {
+			return nil, growthErr
+		}
+		if touched {
+			*item.amount = outcome.Granted
+			growthOutcomes[item.kind] = outcome
+		}
+	}
+
 	integralBefore := user.Integral
 	experienceBefore := user.Experience
 	// 签到奖励同样走 ApplyDelta：余额接近上限时拒绝，而不是让 int64 回绕
@@ -3254,13 +3027,17 @@ ON CONFLICT (month_key, appid, user_id) DO UPDATE SET
 		return nil, err
 	}
 
-	integralExtra, _ := json.Marshal(map[string]any{
+	integralExtraMap := map[string]any{
 		"sign_date":         record.SignDate,
 		"consecutive_days":  record.ConsecutiveDays,
 		"bonus_type":        record.BonusType,
 		"bonus_description": record.BonusDescription,
 		"source":            record.SignInSource,
-	})
+	}
+	if outcome, ok := growthOutcomes[growth.KindIntegral]; ok {
+		integralExtraMap["growth"] = outcome
+	}
+	integralExtra, _ := json.Marshal(integralExtraMap)
 	if _, err = tx.Exec(ctx, `INSERT INTO integral_transactions (transaction_no, user_id, appid, type, category, amount, balance_before, balance_after, status, title, description, source_id, source_type, multiplier, client_ip, user_agent, extra_data, created_at, updated_at) VALUES ($1, $2, $3, 'earn', 'daily_signin', $4, $5, $6, 'completed', $7, $8, $9, 'daily_signin', $10, $11, $12, $13, NOW(), NOW())`,
 		generateTransactionNo("INT"),
 		record.UserID,
@@ -3279,27 +3056,33 @@ ON CONFLICT (month_key, appid, user_id) DO UPDATE SET
 		return nil, err
 	}
 
-	levels, err := r.getActiveLevels(ctx)
+	levelBefore, scheme, err := r.userLevelQ(ctx, tx, appID, userID, record.ExperienceBefore)
 	if err != nil {
 		return nil, err
 	}
-	levelBefore := r.resolveLevelState(levels, record.ExperienceBefore)
 	levelAfterInfo, err := r.syncUserLevelRecord(ctx, tx, userID, appID, record.ExperienceAfter, signDate.UTC())
 	if err != nil {
 		return nil, err
 	}
-	isLevelUp := levelAfterInfo.CurrentLevel > levelBefore.CurrentLevel
-	levelRewards := collectLevelUpRewards(levels, levelBefore.CurrentLevel, levelAfterInfo.CurrentLevel)
-	experienceExtra, _ := json.Marshal(map[string]any{
+	isLevelUp := levelAfterInfo.CurrentLevel > levelBefore
+	levelRewards := []map[string]any{}
+	for _, reward := range scheme.RewardsBetween(levelBefore, levelAfterInfo.CurrentLevel) {
+		levelRewards = append(levelRewards, map[string]any{"level": reward.Level, "label": reward.Label, "claim": reward.Claim})
+	}
+	experienceExtraMap := map[string]any{
 		"sign_date":         record.SignDate,
 		"consecutive_days":  record.ConsecutiveDays,
 		"bonus_type":        record.BonusType,
 		"bonus_description": record.BonusDescription,
 		"source":            record.SignInSource,
-		"level_before":      levelBefore.CurrentLevel,
+		"level_before":      levelBefore,
 		"level_after":       levelAfterInfo.CurrentLevel,
 		"level_rewards":     levelRewards,
-	})
+	}
+	if outcome, ok := growthOutcomes[growth.KindExperience]; ok {
+		experienceExtraMap["growth"] = outcome
+	}
+	experienceExtra, _ := json.Marshal(experienceExtraMap)
 	experienceTitle := "每日签到经验奖励"
 	if isLevelUp {
 		experienceTitle = "每日签到经验奖励（等级提升）"
@@ -3311,12 +3094,12 @@ ON CONFLICT (month_key, appid, user_id) DO UPDATE SET
 		record.ExperienceReward,
 		record.ExperienceBefore,
 		record.ExperienceAfter,
-		levelBefore.CurrentLevel,
+		levelBefore,
 		levelAfterInfo.CurrentLevel,
 		experienceTitle,
 		record.BonusDescription,
 		record.ID,
-		levelBefore.ExpMultiplier,
+		scheme.Multiplier(levelBefore, levels.PrivilegeExpBoost),
 		isLevelUp,
 		nullableString(record.IPAddress),
 		nullableString(record.DeviceInfo),
@@ -3645,8 +3428,6 @@ ORDER BY day ASC`, appID, startDate.UTC(), timezone)
 	return result, nil
 }
 
-
-
 func (r *Repository) GetIntegralRankings(ctx context.Context, appID int64, page int, limit int, currentUserID int64) (*pointdomain.RankingResponse, error) {
 	return r.getUserMetricRankings(ctx, appID, page, limit, currentUserID, "integral")
 }
@@ -3665,51 +3446,23 @@ func (r *Repository) GetLevelRankings(ctx context.Context, appID int64, page int
 	offset := (page - 1) * limit
 
 	var total int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true`, appID).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW())`, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `
-WITH ranked AS (
-    SELECT
-        u.id,
-        u.account,
-        u.experience,
-        COALESCE(p.nickname, '') AS nickname,
-        COALESCE(p.avatar, '') AS avatar,
-        COALESCE(curr.level, 1) AS current_level,
-        COALESCE(curr.level_name, '新手') AS level_name,
-        CASE
-            WHEN next_level.experience_required IS NULL THEN 100.00
-            WHEN next_level.experience_required = COALESCE(curr.experience_required, 0) THEN 0.00
-            ELSE ROUND(
-                ((u.experience - COALESCE(curr.experience_required, 0))::numeric / NULLIF((next_level.experience_required - COALESCE(curr.experience_required, 0)), 0)::numeric) * 100.00,
-                2
-            )
-        END AS level_progress
-    FROM users u
-    LEFT JOIN user_profiles p ON p.user_id = u.id
-    LEFT JOIN LATERAL (
-        SELECT level, level_name, experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    LEFT JOIN LATERAL (
-        SELECT experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required > u.experience
-        ORDER BY level ASC
-        LIMIT 1
-    ) next_level ON true
-    WHERE u.appid = $1 AND u.enabled = true
-)
-SELECT id, account, current_level, level_name, experience, nickname, avatar, level_progress
-FROM ranked
-ORDER BY current_level DESC, experience DESC, id ASC
+SELECT u.id, u.account, COALESCE(lr.current_level, 1), u.experience, COALESCE(p.nickname, ''), COALESCE(p.avatar, '')
+FROM users u
+LEFT JOIN user_profiles p ON p.user_id = u.id
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
+ORDER BY COALESCE(lr.current_level, 1) DESC, u.experience DESC, u.id ASC
 LIMIT $2 OFFSET $3`
 
+	scheme, _, err := r.LevelScheme(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := r.pool.Query(ctx, query, appID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -3719,12 +3472,15 @@ LIMIT $2 OFFSET $3`
 	items := make([]pointdomain.RankingItem, 0, limit)
 	for rows.Next() {
 		var item pointdomain.RankingItem
-		var currentLevel int64
-		if err := rows.Scan(&item.UserID, &item.Account, &currentLevel, &item.LevelName, &item.Experience, &item.Nickname, &item.Avatar, &item.Progress); err != nil {
+		var currentLevel int
+		if err := rows.Scan(&item.UserID, &item.Account, &currentLevel, &item.Experience, &item.Nickname, &item.Avatar); err != nil {
 			return nil, err
 		}
+		state := scheme.StateOf(currentLevel, item.Experience)
+		item.LevelName = state.Config.Name
+		item.Progress = state.Progress
 		item.Type = "level"
-		item.Value = currentLevel
+		item.Value = int64(state.Level)
 		item.Rank = offset + len(items) + 1
 		items = append(items, item)
 	}
@@ -3761,14 +3517,14 @@ func (r *Repository) GetTodaySignRankings(ctx context.Context, appID int64, now 
 	signDate := now.Format("2006-01-02")
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM daily_signins ds JOIN users u ON u.id = ds.user_id WHERE ds.appid = $1 AND ds.sign_date = $2 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM daily_signins ds JOIN users u ON u.id = ds.user_id WHERE ds.appid = $1 AND ds.sign_date = $2 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID, signDate).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ds.signed_at, ds.consecutive_days
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1 AND ds.sign_date = $2
 ORDER BY ds.signed_at ASC, ds.id ASC
@@ -3825,14 +3581,14 @@ func (r *Repository) GetConsecutiveSignRankings(ctx context.Context, appID int64
 	offset := (page - 1) * limit
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM sign_stats ss JOIN users u ON u.id = ss.user_id WHERE ss.appid = $1 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM sign_stats ss JOIN users u ON u.id = ss.user_id WHERE ss.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ss.consecutive_days, ss.total_sign_days, ss.last_sign_date, ss.last_sign_at
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ss.appid = $1
 ORDER BY ss.consecutive_days DESC, ss.total_sign_days DESC, ss.user_id ASC
@@ -3892,14 +3648,14 @@ func (r *Repository) GetMonthlySignRankings(ctx context.Context, appID int64, no
 	period := now.Format("2006-01")
 
 	var total int64
-	countQuery := `SELECT COUNT(*) FROM sign_monthly_stats sms JOIN users u ON u.id = sms.user_id WHERE sms.appid = $1 AND sms.month_key = $2 AND u.enabled = true`
+	countQuery := `SELECT COUNT(*) FROM sign_monthly_stats sms JOIN users u ON u.id = sms.user_id WHERE sms.appid = $1 AND sms.month_key = $2 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())`
 	if err := r.pool.QueryRow(ctx, countQuery, appID, monthKey).Scan(&total); err != nil {
 		return nil, err
 	}
 
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), sms.sign_days, sms.total_integral_reward, sms.total_experience_reward, sms.last_sign_at
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE sms.appid = $1 AND sms.month_key = $2
 ORDER BY sms.sign_days DESC, sms.last_sign_at ASC, sms.user_id ASC
@@ -3971,11 +3727,11 @@ func (r *Repository) getUserMetricRankings(ctx context.Context, appID int64, pag
 	offset := (page - 1) * limit
 
 	var total int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true`, appID).Scan(&total); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW())`, appID).Scan(&total); err != nil {
 		return nil, err
 	}
 
-	query := `SELECT u.id, u.account, ` + metric + `, COALESCE(p.nickname, ''), COALESCE(p.avatar, '') FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.appid = $1 AND u.enabled = true ORDER BY ` + metric + ` DESC, u.id ASC LIMIT $2 OFFSET $3`
+	query := `SELECT u.id, u.account, ` + metric + `, COALESCE(p.nickname, ''), COALESCE(p.avatar, '') FROM users u LEFT JOIN user_profiles p ON p.user_id = u.id WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW()) ORDER BY ` + metric + ` DESC, u.id ASC LIMIT $2 OFFSET $3`
 	rows, err := r.pool.Query(ctx, query, appID, limit, offset)
 	if err != nil {
 		return nil, err
@@ -4025,7 +3781,7 @@ func (r *Repository) getMyMetricRank(ctx context.Context, appID int64, userID in
 		}
 		return nil, err
 	}
-	rankQuery := `SELECT COUNT(*) + 1 FROM users WHERE appid = $1 AND enabled = true AND ` + metric + ` > (SELECT ` + metric + ` FROM users WHERE id = $2 AND appid = $1)`
+	rankQuery := `SELECT COUNT(*) + 1 FROM users WHERE appid = $1 AND enabled = true AND (disabled_end_time IS NULL OR disabled_end_time <= NOW()) AND ` + metric + ` > (SELECT ` + metric + ` FROM users WHERE id = $2 AND appid = $1)`
 	var rank int64
 	if err := r.pool.QueryRow(ctx, rankQuery, appID, userID).Scan(&rank); err != nil {
 		return nil, err
@@ -4036,98 +3792,39 @@ func (r *Repository) getMyMetricRank(ctx context.Context, appID int64, userID in
 }
 
 func (r *Repository) getMyLevelRank(ctx context.Context, appID int64, userID int64) (*pointdomain.RankingItem, error) {
-	query := `
-WITH target AS (
-    SELECT
-        u.id,
-        u.account,
-        u.experience,
-        COALESCE(p.nickname, '') AS nickname,
-        COALESCE(p.avatar, '') AS avatar,
-        COALESCE(curr.level, 1) AS current_level,
-        COALESCE(curr.level_name, '新手') AS level_name,
-        CASE
-            WHEN next_level.experience_required IS NULL THEN 100.00
-            WHEN next_level.experience_required = COALESCE(curr.experience_required, 0) THEN 0.00
-            ELSE ROUND(
-                ((u.experience - COALESCE(curr.experience_required, 0))::numeric / NULLIF((next_level.experience_required - COALESCE(curr.experience_required, 0)), 0)::numeric) * 100.00,
-                2
-            )
-        END AS level_progress
-    FROM users u
-    LEFT JOIN user_profiles p ON p.user_id = u.id
-    LEFT JOIN LATERAL (
-        SELECT level, level_name, experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    LEFT JOIN LATERAL (
-        SELECT experience_required
-        FROM user_levels
-        WHERE is_active = true AND experience_required > u.experience
-        ORDER BY level ASC
-        LIMIT 1
-    ) next_level ON true
-    WHERE u.id = $2 AND u.appid = $1
-    LIMIT 1
-)
-SELECT id, account, current_level, level_name, experience, nickname, avatar, level_progress
-FROM target`
-
+	scheme, _, err := r.LevelScheme(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
 	var item pointdomain.RankingItem
-	var currentLevel int64
-	if err := r.pool.QueryRow(ctx, query, appID, userID).Scan(&item.UserID, &item.Account, &currentLevel, &item.LevelName, &item.Experience, &item.Nickname, &item.Avatar, &item.Progress); err != nil {
+	var currentLevel int
+	if err := r.pool.QueryRow(ctx, `SELECT u.id, u.account, COALESCE(lr.current_level, 1), u.experience, COALESCE(p.nickname, ''), COALESCE(p.avatar, '')
+FROM users u
+LEFT JOIN user_profiles p ON p.user_id = u.id
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.id = $2 AND u.appid = $1`, appID, userID).Scan(&item.UserID, &item.Account, &currentLevel, &item.Experience, &item.Nickname, &item.Avatar); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
 		return nil, err
 	}
 
-	rankQuery := `
-WITH current_user AS (
-    SELECT
-        COALESCE(curr.level, 1) AS current_level,
-        u.experience
-    FROM users u
-    LEFT JOIN LATERAL (
-        SELECT level
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    WHERE u.id = $2 AND u.appid = $1
-    LIMIT 1
-),
-all_users AS (
-    SELECT
-        COALESCE(curr.level, 1) AS current_level,
-        u.experience
-    FROM users u
-    LEFT JOIN LATERAL (
-        SELECT level
-        FROM user_levels
-        WHERE is_active = true AND experience_required <= u.experience
-        ORDER BY level DESC
-        LIMIT 1
-    ) curr ON true
-    WHERE u.appid = $1 AND u.enabled = true
-)
-SELECT COUNT(*) + 1
-FROM all_users au, current_user cu
-WHERE au.current_level > cu.current_level
-   OR (au.current_level = cu.current_level AND au.experience > cu.experience)`
-
 	var rank int64
-	if err := r.pool.QueryRow(ctx, rankQuery, appID, userID).Scan(&rank); err != nil {
+	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*) + 1
+FROM users u
+LEFT JOIN user_level_records lr ON lr.user_id = u.id AND lr.appid = u.appid
+WHERE u.appid = $1 AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
+  AND (COALESCE(lr.current_level, 1) > $2 OR (COALESCE(lr.current_level, 1) = $2 AND u.experience > $3))`,
+		appID, currentLevel, item.Experience).Scan(&rank); err != nil {
 		return nil, err
 	}
 
+	state := scheme.StateOf(currentLevel, item.Experience)
+	item.LevelName = state.Config.Name
+	item.Progress = state.Progress
 	item.Rank = int(rank)
 	item.Type = "level"
-	item.Value = currentLevel
+	item.Value = int64(state.Level)
 	return &item, nil
 }
 
@@ -4135,7 +3832,7 @@ func (r *Repository) GetMyTodaySignRank(ctx context.Context, appID int64, userID
 	signDate := now.Format("2006-01-02")
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ds.signed_at, ds.consecutive_days, ds.id
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ds.appid = $1 AND ds.user_id = $2 AND ds.sign_date = $3
 LIMIT 1`
@@ -4151,7 +3848,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM daily_signins ds
-JOIN users u ON u.id = ds.user_id AND u.enabled = true
+JOIN users u ON u.id = ds.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE ds.appid = $1 AND ds.sign_date = $2
   AND (ds.signed_at < $3 OR (ds.signed_at = $3 AND ds.id < $4))`
 	var rank int64
@@ -4170,7 +3867,7 @@ WHERE ds.appid = $1 AND ds.sign_date = $2
 func (r *Repository) GetMyConsecutiveSignRank(ctx context.Context, appID int64, userID int64) (*pointdomain.RankingItem, error) {
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), ss.consecutive_days, ss.total_sign_days, ss.last_sign_date, ss.last_sign_at
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE ss.appid = $1 AND ss.user_id = $2
 LIMIT 1`
@@ -4184,7 +3881,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM sign_stats ss
-JOIN users u ON u.id = ss.user_id AND u.enabled = true
+JOIN users u ON u.id = ss.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE ss.appid = $1
   AND (ss.consecutive_days > $2 OR (ss.consecutive_days = $2 AND ss.total_sign_days > $3) OR (ss.consecutive_days = $2 AND ss.total_sign_days = $3 AND ss.user_id < $4))`
 	var rank int64
@@ -4205,7 +3902,7 @@ func (r *Repository) GetMyMonthlySignRank(ctx context.Context, appID int64, user
 	period := now.Format("2006-01")
 	query := `SELECT u.id, u.account, COALESCE(p.nickname, ''), COALESCE(p.avatar, ''), sms.sign_days, sms.last_sign_at
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 LEFT JOIN user_profiles p ON p.user_id = u.id
 WHERE sms.appid = $1 AND sms.month_key = $2 AND sms.user_id = $3
 LIMIT 1`
@@ -4218,7 +3915,7 @@ LIMIT 1`
 	}
 	rankQuery := `SELECT COUNT(*) + 1
 FROM sign_monthly_stats sms
-JOIN users u ON u.id = sms.user_id AND u.enabled = true
+JOIN users u ON u.id = sms.user_id AND u.enabled = true AND (u.disabled_end_time IS NULL OR u.disabled_end_time <= NOW())
 WHERE sms.appid = $1 AND sms.month_key = $2
   AND (sms.sign_days > $3 OR (sms.sign_days = $3 AND sms.last_sign_at < $4) OR (sms.sign_days = $3 AND sms.last_sign_at = $4 AND sms.user_id < $5))`
 	var rank int64
@@ -4251,342 +3948,14 @@ func (r *Repository) InsertSessionAudit(ctx context.Context, appID int64, userID
 	return err
 }
 
-func (r *Repository) CreateUserNotification(ctx context.Context, appID int64, userID int64, notificationType string, title string, content string, level string, metadata map[string]any) error {
-	metadataJSON, _ := json.Marshal(metadata)
-	tx, err := r.pool.BeginTx(ctx, pgx.TxOptions{})
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if tx != nil {
-			_ = tx.Rollback(ctx)
-		}
-	}()
-
-	var notificationID int64
-	query := `INSERT INTO notifications (appid, user_id, type, title, content, level, status, metadata, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, 'unread', $7, NOW(), NOW())
-RETURNING id`
-	if err := tx.QueryRow(ctx, query, appID, nullableInt64(userID), notificationType, title, content, level, metadataJSON).Scan(&notificationID); err != nil {
-		return err
-	}
-
-	receiptQuery := `INSERT INTO notification_receipts (notification_id, user_id, status, created_at, updated_at) VALUES ($1, $2, 'delivered', NOW(), NOW())
-ON CONFLICT (notification_id, user_id) DO UPDATE SET status = EXCLUDED.status, updated_at = NOW()`
-	if _, err := tx.Exec(ctx, receiptQuery, notificationID, userID); err != nil {
-		return err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return err
-	}
-	tx = nil
-	return nil
-}
-
-func (r *Repository) ListAppNotifications(ctx context.Context, appID int64, query notificationdomain.AdminListQuery) ([]notificationdomain.AdminItem, int64, error) {
-	page := query.Page
-	if page < 1 {
-		page = 1
-	}
-	limit := query.Limit
-	if limit < 1 {
-		limit = 20
-	}
-	offset := (page - 1) * limit
-	baseQuery, args := buildAdminNotificationFilter(appID, query.Keyword, query.Type, query.Level)
-
-	var total int64
-	if err := r.pool.QueryRow(ctx, `SELECT COUNT(*)`+baseQuery, args...).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	sql := `SELECT
-	n.id,
-	n.appid,
-	n.user_id,
-	COALESCE(u.account, ''),
-	COALESCE(p.nickname, ''),
-	n.type,
-	n.title,
-	n.content,
-	n.level,
-	COALESCE(nr.status, n.status),
-	COALESCE(n.metadata, '{}'::jsonb),
-	nr.read_at,
-	n.created_at,
-	n.updated_at` + baseQuery +
-		fmt.Sprintf(`
-ORDER BY n.created_at DESC, n.id DESC
-LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
-	args = append(args, limit, offset)
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	items := make([]notificationdomain.AdminItem, 0, limit)
-	for rows.Next() {
-		item, err := scanAdminNotification(rows)
-		if err != nil {
-			return nil, 0, err
-		}
-		items = append(items, *item)
-	}
-	return items, total, rows.Err()
-}
-
-func (r *Repository) ListAppNotificationsForExport(ctx context.Context, appID int64, query notificationdomain.AdminExportQuery) ([]notificationdomain.AdminItem, error) {
-	limit := query.Limit
-	if limit < 1 {
-		limit = 5000
-	}
-	baseQuery, args := buildAdminNotificationFilter(appID, query.Keyword, query.Type, query.Level)
-	sql := `SELECT
-	n.id,
-	n.appid,
-	n.user_id,
-	COALESCE(u.account, ''),
-	COALESCE(p.nickname, ''),
-	n.type,
-	n.title,
-	n.content,
-	n.level,
-	COALESCE(nr.status, n.status),
-	COALESCE(n.metadata, '{}'::jsonb),
-	nr.read_at,
-	n.created_at,
-	n.updated_at` + baseQuery +
-		fmt.Sprintf(`
-ORDER BY n.created_at DESC, n.id DESC
-LIMIT $%d`, len(args)+1)
-	args = append(args, limit)
-
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	items := make([]notificationdomain.AdminItem, 0, limit)
-	for rows.Next() {
-		item, err := scanAdminNotification(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, *item)
-	}
-	return items, rows.Err()
-}
-
-func (r *Repository) ResolveAppNotificationIDs(ctx context.Context, appID int64, query notificationdomain.AdminExportQuery) ([]int64, error) {
-	limit := query.Limit
-	if limit < 1 {
-		limit = 5000
-	}
-	baseQuery, args := buildAdminNotificationFilter(appID, query.Keyword, query.Type, query.Level)
-	sql := `SELECT n.id` + baseQuery +
-		fmt.Sprintf(`
-ORDER BY n.created_at DESC, n.id DESC
-LIMIT $%d`, len(args)+1)
-	args = append(args, limit)
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	ids := make([]int64, 0, limit)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
-}
-
-func (r *Repository) DeleteAppNotifications(ctx context.Context, appID int64, ids []int64) (int64, []int64, error) {
-	if len(ids) == 0 {
-		return 0, nil, nil
-	}
-	rows, err := r.pool.Query(ctx, `SELECT DISTINCT user_id FROM notifications WHERE appid = $1 AND id = ANY($2) AND user_id IS NOT NULL ORDER BY user_id ASC`, appID, ids)
-	if err != nil {
-		return 0, nil, err
-	}
-	affectedUsers := make([]int64, 0, len(ids))
-	for rows.Next() {
-		var userID int64
-		if err := rows.Scan(&userID); err != nil {
-			rows.Close()
-			return 0, nil, err
-		}
-		affectedUsers = append(affectedUsers, userID)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, nil, err
-	}
-	rows.Close()
-
-	result, err := r.pool.Exec(ctx, `DELETE FROM notifications WHERE appid = $1 AND id = ANY($2)`, appID, ids)
-	if err != nil {
-		return 0, nil, err
-	}
-	return result.RowsAffected(), affectedUsers, nil
-}
-
-func (r *Repository) ListUserNotifications(ctx context.Context, appID int64, userID int64, query notificationdomain.UserListQuery) ([]notificationdomain.Item, int64, int64, error) {
-	page := query.Page
-	if page < 1 {
-		page = 1
-	}
-	limit := query.Limit
-	if limit < 1 {
-		limit = 20
-	}
-	offset := (page - 1) * limit
-
-	baseQuery, args := buildUserNotificationFilter(appID, userID, query.Status, query.Type, query.Level)
-	countQuery := `SELECT COUNT(*)` + baseQuery
-	var total int64
-	if err := r.pool.QueryRow(ctx, countQuery, args...).Scan(&total); err != nil {
-		return nil, 0, 0, err
-	}
-
-	unreadQuery := `SELECT COUNT(*)
-FROM notifications n
-JOIN notification_receipts nr ON nr.notification_id = n.id AND nr.user_id = $2
-WHERE n.appid = $1 AND nr.status <> 'read'`
-	var unread int64
-	if err := r.pool.QueryRow(ctx, unreadQuery, appID, userID).Scan(&unread); err != nil {
-		return nil, 0, 0, err
-	}
-
-	sql := `SELECT n.id, n.appid, n.user_id, n.type, n.title, n.content, n.level, nr.status, n.metadata, nr.read_at, n.created_at, n.updated_at` + baseQuery +
-		fmt.Sprintf(`
-ORDER BY n.created_at DESC, n.id DESC
-LIMIT $%d OFFSET $%d`, len(args)+1, len(args)+2)
-	args = append(args, limit, offset)
-	rows, err := r.pool.Query(ctx, sql, args...)
-	if err != nil {
-		return nil, 0, 0, err
-	}
-	defer rows.Close()
-	items := make([]notificationdomain.Item, 0, limit)
-	for rows.Next() {
-		item, err := scanNotification(rows)
-		if err != nil {
-			return nil, 0, 0, err
-		}
-		items = append(items, *item)
-	}
-	return items, total, unread, rows.Err()
-}
-
-func (r *Repository) CountUnreadNotifications(ctx context.Context, appID int64, userID int64) (int64, error) {
-	query := `SELECT COUNT(*)
-FROM notifications n
-JOIN notification_receipts nr ON nr.notification_id = n.id AND nr.user_id = $2
-WHERE n.appid = $1 AND nr.status <> 'read'`
-	var unread int64
-	if err := r.pool.QueryRow(ctx, query, appID, userID).Scan(&unread); err != nil {
-		return 0, err
-	}
-	return unread, nil
-}
-
-func (r *Repository) MarkNotificationRead(ctx context.Context, appID int64, userID int64, notificationID int64) error {
-	query := `UPDATE notification_receipts nr
-SET status = 'read', read_at = NOW(), updated_at = NOW()
-FROM notifications n
-WHERE nr.notification_id = n.id
-  AND n.appid = $1
-  AND nr.user_id = $2
-  AND nr.notification_id = $3`
-	_, err := r.pool.Exec(ctx, query, appID, userID, notificationID)
-	return err
-}
-
-func (r *Repository) MarkNotificationsRead(ctx context.Context, appID int64, userID int64, ids []int64) (int64, error) {
-	if len(ids) == 0 {
-		return 0, nil
-	}
-	query := `UPDATE notification_receipts nr
-SET status = 'read', read_at = NOW(), updated_at = NOW()
-FROM notifications n
-WHERE nr.notification_id = n.id
-  AND n.appid = $1
-  AND nr.user_id = $2
-  AND nr.notification_id = ANY($3)
-  AND nr.status <> 'read'`
-	result, err := r.pool.Exec(ctx, query, appID, userID, ids)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-func (r *Repository) MarkAllNotificationsRead(ctx context.Context, appID int64, userID int64) error {
-	query := `UPDATE notification_receipts nr
-SET status = 'read', read_at = NOW(), updated_at = NOW()
-FROM notifications n
-WHERE nr.notification_id = n.id
-  AND n.appid = $1
-  AND nr.user_id = $2
-  AND nr.status <> 'read'`
-	_, err := r.pool.Exec(ctx, query, appID, userID)
-	return err
-}
-
-func (r *Repository) DeleteUserNotification(ctx context.Context, appID int64, userID int64, notificationID int64) (int64, error) {
-	result, err := r.pool.Exec(ctx, `DELETE FROM notifications WHERE appid = $1 AND user_id = $2 AND id = $3`, appID, userID, notificationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-func (r *Repository) DeleteUserNotifications(ctx context.Context, appID int64, userID int64, status string, notificationType string, level string) (int64, error) {
-	status = strings.TrimSpace(status)
-	notificationType = strings.TrimSpace(notificationType)
-	level = strings.TrimSpace(level)
-	args := []any{appID, userID}
-	query := `DELETE FROM notifications n
-USING notification_receipts nr
-WHERE n.id = nr.notification_id
-  AND n.appid = $1
-  AND n.user_id = $2
-  AND nr.user_id = $2`
-	if status != "" && status != "all" {
-		query += fmt.Sprintf(" AND nr.status = $%d", len(args)+1)
-		args = append(args, status)
-	}
-	if notificationType != "" && notificationType != "all" {
-		query += fmt.Sprintf(" AND n.type = $%d", len(args)+1)
-		args = append(args, notificationType)
-	}
-	if level != "" && level != "all" {
-		query += fmt.Sprintf(" AND n.level = $%d", len(args)+1)
-		args = append(args, level)
-	}
-	result, err := r.pool.Exec(ctx, query, args...)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 // userColumns 是 scanUser 读取的列，顺序与 Scan 的参数一一对应。
 // 凡是交给 scanUser 的查询都必须用它拼 SELECT / RETURNING：手写列清单在加列时会漏改，
 // 漏一处就是运行时的「number of field descriptions must equal number of destinations」。
-const userColumns = `id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
+const userColumns = `id, public_id, appid, account, COALESCE(password_hash, ''), integral, experience, enabled, disabled_end_time, vip_expire_at, vip_lifetime_at, created_at, updated_at`
 
 func scanUser(row interface{ Scan(dest ...any) error }) (*userdomain.User, error) {
 	var user userdomain.User
-	if err := row.Scan(&user.ID, &user.AppID, &user.Account, &user.PasswordHash, &user.Integral, &user.Experience, &user.Enabled, &user.DisabledEndTime, &user.VIPExpireAt, &user.VIPLifetimeAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
+	if err := row.Scan(&user.ID, &user.PublicID, &user.AppID, &user.Account, &user.PasswordHash, &user.Integral, &user.Experience, &user.Enabled, &user.DisabledEndTime, &user.VIPExpireAt, &user.VIPLifetimeAt, &user.CreatedAt, &user.UpdatedAt); err != nil {
 		return nil, normalizeNotFound(err)
 	}
 	return &user, nil
@@ -4597,6 +3966,7 @@ func scanAdminUser(row interface{ Scan(dest ...any) error }) (*userdomain.AdminU
 	var extraBytes []byte
 	if err := row.Scan(
 		&item.ID,
+		&item.PublicID,
 		&item.AppID,
 		&item.Account,
 		&item.Integral,
@@ -4786,26 +4156,6 @@ func scanTransaction(row interface{ Scan(dest ...any) error }) (*pointdomain.Tra
 	return &item, nil
 }
 
-func scanNotification(row interface{ Scan(dest ...any) error }) (*notificationdomain.Item, error) {
-	var item notificationdomain.Item
-	var metadata []byte
-	if err := row.Scan(&item.ID, &item.AppID, &item.UserID, &item.Type, &item.Title, &item.Content, &item.Level, &item.Status, &metadata, &item.ReadAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
-		return nil, err
-	}
-	_ = json.Unmarshal(metadata, &item.Metadata)
-	return &item, nil
-}
-
-func scanAdminNotification(row interface{ Scan(dest ...any) error }) (*notificationdomain.AdminItem, error) {
-	var item notificationdomain.AdminItem
-	var metadata []byte
-	if err := row.Scan(&item.ID, &item.AppID, &item.UserID, &item.Account, &item.Nickname, &item.Type, &item.Title, &item.Content, &item.Level, &item.Status, &metadata, &item.ReadAt, &item.CreatedAt, &item.UpdatedAt); err != nil {
-		return nil, err
-	}
-	_ = json.Unmarshal(metadata, &item.Metadata)
-	return &item, nil
-}
-
 func scanLoginAudit(row interface{ Scan(dest ...any) error }) (*appdomain.LoginAuditItem, error) {
 	var item appdomain.LoginAuditItem
 	var userID *int64
@@ -4831,63 +4181,6 @@ func scanLoginAudit(row interface{ Scan(dest ...any) error }) (*appdomain.LoginA
 	item.UserID = userID
 	_ = json.Unmarshal(metadata, &item.Metadata)
 	return &item, nil
-}
-
-func buildAdminNotificationFilter(appID int64, keyword string, notificationType string, level string) (string, []any) {
-	keyword = strings.TrimSpace(keyword)
-	notificationType = strings.TrimSpace(notificationType)
-	level = strings.TrimSpace(level)
-
-	baseQuery := ` FROM notifications n
-LEFT JOIN users u ON u.id = n.user_id
-LEFT JOIN user_profiles p ON p.user_id = n.user_id
-LEFT JOIN notification_receipts nr ON nr.notification_id = n.id AND nr.user_id = n.user_id
-WHERE n.appid = $1`
-	args := []any{appID}
-	if notificationType != "" && notificationType != "all" {
-		baseQuery += fmt.Sprintf(" AND n.type = $%d", len(args)+1)
-		args = append(args, notificationType)
-	}
-	if level != "" && level != "all" {
-		baseQuery += fmt.Sprintf(" AND n.level = $%d", len(args)+1)
-		args = append(args, level)
-	}
-	if keyword != "" {
-		like := "%" + keyword + "%"
-		baseQuery += fmt.Sprintf(`
-  AND (
-    COALESCE(n.title, '') ILIKE $%d
-    OR COALESCE(n.content, '') ILIKE $%d
-    OR COALESCE(u.account, '') ILIKE $%d
-    OR COALESCE(p.nickname, '') ILIKE $%d
-  )`, len(args)+1, len(args)+1, len(args)+1, len(args)+1)
-		args = append(args, like)
-	}
-	return baseQuery, args
-}
-
-func buildUserNotificationFilter(appID int64, userID int64, status string, notificationType string, level string) (string, []any) {
-	status = strings.TrimSpace(status)
-	notificationType = strings.TrimSpace(notificationType)
-	level = strings.TrimSpace(level)
-
-	baseQuery := ` FROM notifications n
-JOIN notification_receipts nr ON nr.notification_id = n.id AND nr.user_id = $2
-WHERE n.appid = $1 AND n.user_id = $2`
-	args := []any{appID, userID}
-	if status != "" && status != "all" {
-		baseQuery += fmt.Sprintf(" AND nr.status = $%d", len(args)+1)
-		args = append(args, status)
-	}
-	if notificationType != "" && notificationType != "all" {
-		baseQuery += fmt.Sprintf(" AND n.type = $%d", len(args)+1)
-		args = append(args, notificationType)
-	}
-	if level != "" && level != "all" {
-		baseQuery += fmt.Sprintf(" AND n.level = $%d", len(args)+1)
-		args = append(args, level)
-	}
-	return baseQuery, args
 }
 
 func scanSessionAudit(row interface{ Scan(dest ...any) error }) (*appdomain.SessionAuditItem, error) {
@@ -4988,6 +4281,28 @@ WHERE l.appid = $1 AND l.user_id = $2`
 	return baseQuery, args
 }
 
+// appendAuditRange 给单用户审计查询追加关键词（在给定列里 ILIKE）与时间区间（左闭右开）。
+func appendAuditRange(baseQuery string, args []any, alias string, keyword string, from, to *time.Time, columns ...string) (string, []any) {
+	if keyword = strings.TrimSpace(keyword); keyword != "" && len(columns) > 0 {
+		args = append(args, "%"+escapeLikePattern(keyword)+"%")
+		placeholder := fmt.Sprintf("$%d", len(args))
+		parts := make([]string, len(columns))
+		for i, column := range columns {
+			parts[i] = column + " ILIKE " + placeholder
+		}
+		baseQuery += " AND (" + strings.Join(parts, " OR ") + ")"
+	}
+	if from != nil {
+		args = append(args, *from)
+		baseQuery += fmt.Sprintf(" AND %s.created_at >= $%d", alias, len(args))
+	}
+	if to != nil {
+		args = append(args, *to)
+		baseQuery += fmt.Sprintf(" AND %s.created_at < $%d", alias, len(args))
+	}
+	return baseQuery, args
+}
+
 func buildUserSessionAuditFilter(appID int64, userID int64, eventType string) (string, []any) {
 	eventType = strings.TrimSpace(eventType)
 
@@ -5016,6 +4331,8 @@ func scanLevelRecord(row interface{ Scan(dest ...any) error }) (*levelRecordRow,
 		&item.HighestLevel,
 		&item.LevelUpCount,
 		&item.LastLevelUpAt,
+		&item.LockedLevel,
+		&item.CappedLevel,
 	); err != nil {
 		return nil, normalizeNotFound(err)
 	}
@@ -5379,37 +4696,31 @@ func unixTimeFromInt64(value int64) *time.Time {
 	return &tm
 }
 
-func generateTransactionNo(prefix string) string {
-	return prefix + time.Now().UTC().Format("20060102150405") + randomDigits(6)
+// transactionSeq 是流水号尾部 6 位的进程内序列，起点随机。
+// 尾部若取随机数，同一秒内几百笔流水就有可观的生日碰撞概率（批量发放曾因此撞
+// uq_integral_transactions_no 整笔回滚）；改为逐次加一后，同一进程每秒一百万笔以内不会重复，
+// 多实例之间靠随机起点错开。
+var transactionSeq atomic.Uint64
+
+func init() {
+	transactionSeq.Store(rand.Uint64N(1_000_000))
 }
 
+// generateTransactionNo 生成「前缀 + 14 位 UTC 时间 + 6 位序号」的流水号，并发安全。
+func generateTransactionNo(prefix string) string {
+	seq := transactionSeq.Add(1) % 1_000_000
+	return prefix + time.Now().UTC().Format("20060102150405") + fmt.Sprintf("%06d", seq)
+}
+
+// randomDigits 返回指定长度的随机数字串。math/rand/v2 的全局源并发安全、由系统熵播种，
+// 不能再像以前那样按纳秒时间新建随机源。
 func randomDigits(length int) string {
 	const digits = "0123456789"
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	buf := make([]byte, length)
 	for i := range buf {
-		buf[i] = digits[rng.Intn(len(digits))]
+		buf[i] = digits[rand.IntN(len(digits))]
 	}
 	return string(buf)
-}
-
-func collectLevelUpRewards(levels []pointdomain.LevelConfig, fromLevel int, toLevel int) []map[string]any {
-	if toLevel <= fromLevel {
-		return nil
-	}
-	items := make([]map[string]any, 0, toLevel-fromLevel)
-	for _, level := range levels {
-		if level.Level <= fromLevel || level.Level > toLevel {
-			continue
-		}
-		items = append(items, map[string]any{
-			"level":      level.Level,
-			"level_name": level.LevelName,
-			"rewards":    level.Rewards,
-			"privileges": level.Privileges,
-		})
-	}
-	return items
 }
 
 func maxInt(a int, b int) int {

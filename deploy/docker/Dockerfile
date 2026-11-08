@@ -52,11 +52,12 @@ ARG WITH_CJK_FONTS=1
 RUN apk add --no-cache ca-certificates tzdata \
     && if [ "${WITH_CJK_FONTS}" = "1" ]; then apk add --no-cache font-noto-cjk; fi \
     && addgroup -S aegis && adduser -S aegis -G aegis \
-    && mkdir -p /app/data \
+    && mkdir -p /app/data /app/.runtime/autocert \
     && chown -R aegis:aegis /app
 WORKDIR /app
 COPY --from=build /usr/local/bin/aegis-server /usr/local/bin/aegis-server
 COPY --chown=aegis:aegis migrations ./migrations
 USER aegis
-EXPOSE 8088
+# 8088 明文 HTTP；8443 只在 TLS_ENABLED 时监听：TCP 是 HTTPS（h2），UDP 是 HTTP/3（QUIC），见 docs/http3.md
+EXPOSE 8088 8443/tcp 8443/udp
 CMD ["/usr/local/bin/aegis-server"]

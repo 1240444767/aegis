@@ -120,16 +120,20 @@ var oauthTemplates = []oauthdomain.Template{
 		Scopes:      []string{"read_user"},
 	},
 	{
-		Key: "google", Kind: oauthdomain.KindGeneric, Name: "Google", Icon: "google",
+		Key: "google", Kind: oauthdomain.KindGoogle, Name: "Google", Icon: "google",
 		Color: "#4285F4", Category: "海外",
-		Description: "Google Identity（OpenID Connect），返回标准 sub / email / picture。",
+		Description: "Google Identity（OpenID Connect）；App 原生登录由服务端核验 ID Token 的签名与受众。",
 		DocsURL:     "https://developers.google.com/identity/protocols/oauth2/web-server",
 		ConsoleURL:  "https://console.cloud.google.com/apis/credentials",
 		AuthURL:     "https://accounts.google.com/o/oauth2/v2/auth",
 		TokenURL:    "https://oauth2.googleapis.com/token",
 		UserInfoURL: "https://openidconnect.googleapis.com/v1/userinfo",
 		Scopes:      []string{"openid", "email", "profile"},
-		Notes:       []string{"需要 refresh_token 时可在附加授权参数中加入 access_type=offline。"},
+		Notes: []string{
+			"ClientID 填「Web 应用」类型的客户端 ID：App 原生登录签出的 ID Token 受众就是它，/config 会把它下发给 App。",
+			"安卓另建「Android」类型客户端登记包名与签名 SHA-1，不必填到这里。",
+			"需要 refresh_token 时可在附加授权参数中加入 access_type=offline。",
+		},
 	},
 	{
 		Key: "microsoft", Kind: oauthdomain.KindMicrosoft, Name: "Microsoft", Icon: "microsoft",

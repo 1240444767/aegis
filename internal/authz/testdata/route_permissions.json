@@ -876,20 +876,6 @@
   },
   {
     "method": "GET",
-    "path": "/api/admin/system/traffic-ramp",
-    "permission": "system:admin:manage",
-    "appScoped": false,
-    "unmapped": false
-  },
-  {
-    "method": "GET",
-    "path": "/api/admin/system/traffic-ramp/stats",
-    "permission": "system:admin:manage",
-    "appScoped": false,
-    "unmapped": false
-  },
-  {
-    "method": "GET",
     "path": "/api/admin/apps",
     "permission": "app:read",
     "appScoped": false,
@@ -1002,6 +988,20 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/reports/engagement",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/reports/overview",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/reports/export",
     "permission": "app:read",
     "appScoped": true,
@@ -1046,6 +1046,34 @@
     "method": "GET",
     "path": "/api/admin/apps/:appkey/users/:userId/wallet/transactions",
     "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/points/:kind/transactions",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/points/:kind/summary",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/users/:userId/points/integral/transactions/:transactionNo/reverse",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/users/:userId/points/experience/transactions/:transactionNo/reverse",
+    "permission": "app:user:write",
     "appScoped": true,
     "unmapped": false
   },
@@ -1331,28 +1359,84 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/catalog",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/settings",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/settings",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/activities",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
   {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/activities",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
     "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/status",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/stats",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
   {
     "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/prizes",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/audit",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
   {
     "method": "GET",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/stats",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/risk",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
@@ -1361,6 +1445,398 @@
     "method": "GET",
     "path": "/api/admin/apps/:appkey/lottery/draws",
     "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/draws/:drawId/fulfill",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/simulate",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/accounts",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/ledger",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/users/:userId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/tickets/users/:userId/adjust",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/catalog",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/overview",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/rules",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/rules",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/rules/:ruleId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/item-grants/rules/:ruleId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/item-grants/rules/:ruleId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/item-grants/rules/:ruleId/status",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/rules/:ruleId/run",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/validate",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/preview",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/runs",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/runs/:runId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/runs/:runId/cancel",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/records",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/item-grants/records/:recordId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/records/:recordId/fulfill",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/item-grants/records/:recordId/retry",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/catalog",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/overview",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/scheme",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/levels/scheme",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/validate",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/publish",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/simulate",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/versions",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/versions/:version",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/versions/:version/restore",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/users",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/users/:userId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/users/adjust",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/users/:userId/adjust",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/events",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/rewards",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/rewards/backfill",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/rewards/:rewardId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/rewards/:rewardId/retry",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/rewards/:rewardId/fulfill",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/jobs",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/jobs",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/levels/jobs/:jobId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/levels/jobs/:jobId/cancel",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/settings",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/users/:userId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/preview",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/lottery/activities/:activityId/fortune/controls/revoke",
+    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },
@@ -1430,6 +1906,13 @@
   {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/vip/plans",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/tiers",
     "permission": "app:read",
     "appScoped": true,
     "unmapped": false
@@ -2150,7 +2633,28 @@
   },
   {
     "method": "GET",
+    "path": "/api/v1/apps/:appkey/vip/features",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/v1/apps/:appkey/vip/feature-ticket",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/apps/:appkey/vip/transactions",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/v1/apps/:appkey/vip/conversions",
     "permission": "",
     "appScoped": false,
     "unmapped": true
@@ -2276,7 +2780,28 @@
   },
   {
     "method": "GET",
+    "path": "/api/vip/features",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/vip/feature-ticket",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/vip/transactions",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/vip/conversions",
     "permission": "",
     "appScoped": false,
     "unmapped": true
@@ -2662,41 +3187,6 @@
   {
     "method": "GET",
     "path": "/api/legal/documents/:docType",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id/prizes",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/activities/:id/verify",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "GET",
-    "path": "/api/lottery/draws",
     "permission": "",
     "appScoped": false,
     "unmapped": true
@@ -3431,8 +3921,43 @@
   },
   {
     "method": "POST",
+    "path": "/api/admin/apps/:appkey/vip/tiers",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
     "path": "/api/admin/apps/:appkey/vip/grant",
     "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/vip/grant/preview",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/conversion-policy",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/vip/conversion-policy",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/vip/conversions",
+    "permission": "app:read",
     "appScoped": true,
     "unmapped": false
   },
@@ -3453,34 +3978,6 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/vip/features",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/seed/commit",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/seed/reveal",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id/prizes",
     "permission": "app:write",
     "appScoped": true,
     "unmapped": false
@@ -4195,13 +4692,6 @@
   {
     "method": "POST",
     "path": "/api/admin/system/egress/probe",
-    "permission": "system:admin:manage",
-    "appScoped": false,
-    "unmapped": false
-  },
-  {
-    "method": "POST",
-    "path": "/api/admin/system/traffic-ramp/reset-stats",
     "permission": "system:admin:manage",
     "appScoped": false,
     "unmapped": false
@@ -5797,20 +6287,6 @@
   },
   {
     "method": "POST",
-    "path": "/api/lottery/join",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "POST",
-    "path": "/api/lottery/draw",
-    "permission": "",
-    "appScoped": false,
-    "unmapped": true
-  },
-  {
-    "method": "POST",
     "path": "/api/storage/upload",
     "permission": "",
     "appScoped": false,
@@ -6119,20 +6595,6 @@
   },
   {
     "method": "DELETE",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "DELETE",
-    "path": "/api/admin/apps/:appkey/lottery/prizes/:id",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "DELETE",
     "path": "/api/admin/apps/:appkey/login-baseline/:userid",
     "permission": "app:write",
     "appScoped": true,
@@ -6197,6 +6659,13 @@
   {
     "method": "DELETE",
     "path": "/api/admin/apps/:appkey/vip/plans/:planId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/vip/tiers/:tierId",
     "permission": "app:write",
     "appScoped": true,
     "unmapped": false
@@ -6581,13 +7050,6 @@
   },
   {
     "method": "PUT",
-    "path": "/api/admin/system/traffic-ramp",
-    "permission": "system:admin:manage",
-    "appScoped": false,
-    "unmapped": false
-  },
-  {
-    "method": "PUT",
     "path": "/api/admin/system/plugins/:id",
     "permission": "system:admin:manage",
     "appScoped": false,
@@ -6786,20 +7248,6 @@
     "method": "PUT",
     "path": "/api/admin/apps/:appkey/banners/:bannerId",
     "permission": "content:banner:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "PUT",
-    "path": "/api/admin/apps/:appkey/lottery/activities/:id",
-    "permission": "app:write",
-    "appScoped": true,
-    "unmapped": false
-  },
-  {
-    "method": "PUT",
-    "path": "/api/admin/apps/:appkey/lottery/prizes/:id",
-    "permission": "app:write",
     "appScoped": true,
     "unmapped": false
   },
@@ -7093,6 +7541,18 @@
     "appScoped": false
   },
   {
+    "method": "POST",
+    "path": "/api/admin/system/ai/draft/models",
+    "permission": "ai:write",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/ai/draft/test",
+    "permission": "ai:write",
+    "appScoped": false
+  },
+  {
     "method": "GET",
     "path": "/api/admin/system/ai/channel",
     "permission": "ai:read",
@@ -7189,6 +7649,18 @@
     "appScoped": true
   },
   {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai/draft/models",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai/draft/test",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
     "method": "GET",
     "path": "/api/admin/apps/:appkey/ai/channel",
     "permission": "app:read",
@@ -7280,6 +7752,144 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/catalog",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/settings",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/settings",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/:modelId",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/:modelId",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/models/sync",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/refresh",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/search",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/model-catalog/match",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/summary",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/live",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/:requestNo",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/requests/:requestNo/refund",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/keys",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/ai-gateway/keys/:keyId/status",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/stats",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/account",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/credits",
+    "permission": "app:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/ai-gateway/users/:userId/credits",
+    "permission": "app:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
     "path": "/api/admin/apps/:appkey/releases",
     "permission": "version:read",
     "appScoped": true,
@@ -7323,6 +7933,13 @@
   {
     "method": "POST",
     "path": "/api/admin/apps/:appkey/releases/simulate",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/releases/notes/preview",
     "permission": "version:read",
     "appScoped": true,
     "unmapped": false
@@ -7392,6 +8009,377 @@
   },
   {
     "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control/settings",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/client-control/settings",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control/keys",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/keys/:kind/rotate",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control/rules",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/rules",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/rules/reorder",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/client-control/rules/:ruleId",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/client-control/rules/:ruleId",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/rules/:ruleId/enable",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/rules/:ruleId/disable",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control/versions",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/client-control/devices",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/client-control/devices/:deviceId",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/simulate",
+    "permission": "version:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/client-control/refresh",
+    "permission": "version:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/policy",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/device-limit/policy",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/simulate",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/events",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides/:userId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/device-limit/overrides/:userId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/remove",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/enforce",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/device-limit/users/:userId/ledger",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/policy",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/register-ip/policy",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/simulate",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/inspect",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/release",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/penalties",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/events",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/registrations",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/lists",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/lists",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/register-ip/lists/:id",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/lists/delete",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/devices/inspect",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/register-ip/device-lists",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/device-lists",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/register-ip/device-lists/:id",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/register-ip/device-lists/delete",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/crash-reports",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/crash-reports/facets",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/crash-reports/resolve",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/crash-reports/delete",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/crash-reports/:crashId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/crash-reports/:crashId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
     "path": "/api/v1/apps/:appkey/releases",
     "permission": "",
     "appScoped": false,
@@ -7449,6 +8437,765 @@
   {
     "method": "GET",
     "path": "/api/admin/system/audit-logs/facets",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/catalog",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/settings",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/account-deletion/settings",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/stats",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/approve",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/reject",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/cancel",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/execute",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/account-deletion/requests/:requestId/reschedule",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-deletion/tombstones",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/account-deletion/tombstones/:tombstoneId",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-deletion",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-deletion",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/scenes",
+    "permission": "",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/policy",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/policy/save",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/preview",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/overview",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/deliveries/detail",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions",
+    "permission": "email:read",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions/create",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/app/email-config/suppressions/delete",
+    "permission": "email:write",
+    "appScoped": true
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/scenes",
+    "permission": "",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/overview",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/policy",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/system/email/policy",
+    "permission": "email:write",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/email/preview",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/deliveries/:deliveryId",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/email/suppressions",
+    "permission": "email:read",
+    "appScoped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/email/suppressions",
+    "permission": "email:write",
+    "appScoped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/system/email/suppressions/:suppressionId",
+    "permission": "email:write",
+    "appScoped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/overview",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/events",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/usage/collect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/pools",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/pools",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/platform/storage/pools/:poolId",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/pools/:poolId/simulate",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/configs/:configId/probe",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/configs/:configId/reset-health",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/configs/:configId/cors",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/platform/storage/configs/:configId/cors",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/platform/storage/configs/:configId/redirect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/migrations",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/platform/storage/migrations/:migrationId",
+    "permission": "platform:storage:read",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/pause",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/resume",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/migrations/:migrationId/cancel",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/app/storage-config/providers",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/connect",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/resources",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/buckets",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/bucket",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/platform/storage/cloudflare/setup",
+    "permission": "platform:storage:write",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/settings",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/leaderboard/settings",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/boards/:key",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/exclusions",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/leaderboard/exclusions",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/leaderboard/exclusions/:userId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/snapshots",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/entries",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/leaderboard/snapshots/:snapshotId/retry",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/leaderboard/settle",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/leaderboard/stats",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/mcp/endpoints",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/mcp/whoami",
+    "permission": "",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/account-setup",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/account-setup",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/users/:userId/account",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-setup",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/users/:userId/account-setup/reset",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/growth/catalog",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/growth/rules",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/growth/rules",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/growth/rules/:ruleId",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/growth/rules/:ruleId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/growth/rules/:ruleId",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/growth/rules/:ruleId/revoke",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/apps/:appkey/growth/preview",
+    "permission": "app:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/growth/events",
+    "permission": "app:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/apps/:appkey/users/:userId/growth",
+    "permission": "app:user:read",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/apps/:appkey/users/:userId/growth/level-cap",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/apps/:appkey/users/:userId/growth/level-cap",
+    "permission": "app:user:write",
+    "appScoped": true,
+    "unmapped": false
+  },
+  {
+    "method": "DELETE",
+    "path": "/api/admin/system/traffic/rules/:ruleId",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/native-plugins",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/config",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/events",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/history",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/overview",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/revisions",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/revisions/:revision",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/rules/:ruleId/stats",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "GET",
+    "path": "/api/admin/system/traffic/templates",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/native-plugins/:pluginId/disable",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/native-plugins/:pluginId/enable",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/native-plugins/:pluginId/restart",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/reset-stats",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/rollback",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/rules",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/rules/:ruleId/toggle",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/rules/reorder",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/simulate",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "POST",
+    "path": "/api/admin/system/traffic/validate",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/system/traffic/rules/:ruleId",
+    "permission": "system:admin:manage",
+    "appScoped": false,
+    "unmapped": false
+  },
+  {
+    "method": "PUT",
+    "path": "/api/admin/system/traffic/settings",
     "permission": "system:admin:manage",
     "appScoped": false,
     "unmapped": false

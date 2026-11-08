@@ -122,6 +122,8 @@ type UserService struct {
 	app       *AppService
 	// autoSign 自动签到设置的清洗与资格校验；为空时 autoSign 分类按普通设置原样存
 	autoSign autoSignSettingsGuard
+	// publicIDs 主键 ↔ 对外用户 ID；全进程共用一份（PublicIDs），各处响应据此把主键换掉
+	publicIDs *UserPublicIDs
 }
 
 // autoSignSettingsGuard 写入自动签到设置前的清洗与资格校验（AutoSignService.PrepareSettings）。
@@ -188,7 +190,15 @@ func (s *UserService) SetAppService(app *AppService) {
 }
 
 func NewUserService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository, publisher *event.Publisher, security *SecurityService) *UserService {
-	return &UserService{log: log, pg: pg, sessions: sessions, publisher: publisher, security: security}
+	return &UserService{log: log, pg: pg, sessions: sessions, publisher: publisher, security: security, publicIDs: newUserPublicIDsFor(pg)}
+}
+
+// PublicIDs 主键 ↔ 对外用户 ID 的换算（docs/user-public-id.md）。nil 接收者返回 nil，换算结果全为 0。
+func (s *UserService) PublicIDs() *UserPublicIDs {
+	if s == nil {
+		return nil
+	}
+	return s.publicIDs
 }
 
 func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*userdomain.MyView, error) {
@@ -207,7 +217,8 @@ func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*
 	s.ensureDefaultSettings(ctx, session, user.ID)
 
 	view := &userdomain.MyView{
-		ID:           user.ID,
+		// 对外只给随机的对外 ID，数据库主键不出服务端（docs/user-public-id.md）
+		ID:           user.PublicID,
 		AppID:        user.AppID,
 		Account:      user.Account,
 		Integral:     user.Integral,
@@ -1686,9 +1697,12 @@ func (s *UserService) ListLoginAudits(ctx context.Context, session *authdomain.S
 func (s *UserService) AdminListUserLoginAudits(ctx context.Context, appID int64, userID int64, query userdomain.LoginAuditQuery) (*userdomain.LoginAuditListResult, error) {
 	page, limit := normalizeAuditPaging(query.Page, query.Limit)
 	items, total, err := s.pg.ListLoginAuditsByUser(ctx, appID, userID, userdomain.LoginAuditQuery{
-		Status: query.Status,
-		Page:   page,
-		Limit:  limit,
+		Status:  query.Status,
+		Keyword: query.Keyword,
+		From:    query.From,
+		To:      query.To,
+		Page:    page,
+		Limit:   limit,
 	})
 	if err != nil {
 		return nil, err
@@ -1707,6 +1721,9 @@ func (s *UserService) AdminListUserSessionAudits(ctx context.Context, appID int6
 	page, limit := normalizeAuditPaging(query.Page, query.Limit)
 	items, total, err := s.pg.ListSessionAuditsByUser(ctx, appID, userID, userdomain.SessionAuditQuery{
 		EventType: query.EventType,
+		Keyword:   query.Keyword,
+		From:      query.From,
+		To:        query.To,
 		Page:      page,
 		Limit:     limit,
 	})
@@ -2207,6 +2224,16 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, appID int64, userID i
 	if user == nil {
 		return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
+	if err := s.PurgeUser(ctx, appID, userID); err != nil {
+		return err
+	}
+	s.log.Warn("管理员删除用户", zap.Int64("appid", appID), zap.Int64("userId", userID))
+	return nil
+}
+
+// PurgeUser 硬删除一个用户：吊销会话、清理安全凭证、删行（CASCADE 清理关联表）、清缓存与搜索索引、
+// 触发 user.onDeleted 钩子。管理员删除与账号注销共用这一条路径。
+func (s *UserService) PurgeUser(ctx context.Context, appID int64, userID int64) error {
 	// 先吊销会话
 	s.revokeAllUserSessions(ctx, appID, userID)
 	// 清理安全凭证
@@ -2220,7 +2247,6 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, appID int64, userID i
 	}
 	s.invalidateAdminUserCaches(ctx, appID, userID)
 	s.deleteAdminUserSearch(appID, userID)
-	s.log.Warn("管理员删除用户", zap.Int64("appid", appID), zap.Int64("userId", userID))
 	if s.plugin != nil {
 		go s.plugin.ExecuteHook(context.Background(), HookUserDeleted, map[string]any{
 			"userId": userID,
@@ -2401,6 +2427,12 @@ func shouldUseAdminUserSearch(query userdomain.AdminUserQuery) bool {
 	}
 	if strings.HasPrefix(strings.TrimSpace(query.Keyword), "#") {
 		return false
+	}
+	// 16 位纯数字是用户报来的对外 ID，同样是 Postgres 侧直达（索引里没有这一列）
+	if keyword := strings.TrimSpace(query.Keyword); len(keyword) == 16 {
+		if id, err := strconv.ParseInt(keyword, 10, 64); err == nil && id >= userPublicIDMin {
+			return false
+		}
 	}
 	return strings.TrimSpace(query.Keyword) != "" ||
 		strings.TrimSpace(query.Account) != "" ||

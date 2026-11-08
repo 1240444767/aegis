@@ -46,6 +46,10 @@ var routeGroups = []routeGroup{
 	{Realm: realmPublic, Title: "公开元数据", Tag: tagAPI, Auth: authPublic,
 		Exact:  []string{"/api/public/branding", "/api/system/announcements/active"},
 		Prefix: "/api/avatar/"},
+	// 应用 Passkey 的 Digital Asset Links：Google 的校验器抓取 RP ID 域名下的
+	// /.well-known/assetlinks.json，网站把它反代到这里，所以同样不能要求任何凭据。
+	{Realm: realmPublic, Title: "公开元数据", Tag: tagAPI, Auth: authPublic,
+		Prefix: "/api/public/apps/"},
 	// 永久头像地址。免登录是这条路由的**前提**而不是疏漏：它出现在 <img src>
 	// 与邮件正文里，那两处都没有机会带上 Authorization 头。防遍历靠地址
 	// 自带的签名，见 internal/service/avatar_link.go。
@@ -134,6 +138,9 @@ var routeGroups = []routeGroup{
 		Prefix: "/api/app/", Fallback: true},
 
 	// ── 用户端 ────────────────────────────────────────────────────────
+	// 用户 AI 中转：凭据是用户的 sk-ag- 密钥或访问令牌，由处理器自己认（docs/ai-gateway.md）
+	{Realm: realmUser, Title: "AI 中转", Tag: tagAPI, Auth: authBearer,
+		Prefix: "/api/ai/"},
 	// 旧明文认证命名空间，由每个应用的 allowLegacy 开关控制
 	{Realm: realmUser, Title: "旧明文认证", Tag: "Auth", Auth: authLegacyAuth,
 		Prefix: "/api/auth/"},
@@ -160,8 +167,6 @@ var routeGroups = []routeGroup{
 		Prefix: "/api/wallet"},
 	{Realm: realmUser, Title: "会员", Tag: tagAPI, Auth: authBearer,
 		Prefix: "/api/vip"},
-	{Realm: realmUser, Title: "抽奖", Tag: tagAPI, Auth: authBearer,
-		Prefix: "/api/lottery"},
 	{Realm: realmUser, Title: "排行榜", Tag: tagAPI, Auth: authBearer,
 		Prefix: "/api/leaderboard"},
 	{Realm: realmUser, Title: "验证码", Tag: tagAPI, Auth: authPublic,
@@ -170,6 +175,9 @@ var routeGroups = []routeGroup{
 	// ── 系统与实时 ────────────────────────────────────────────────────
 	{Realm: realmSystem, Title: "实时通信", Tag: "Realtime", Auth: authWebSocket,
 		Exact: []string{"/api/ws"}},
+	// 一起听票据公钥：一起听微服务（与 JWKS 验签库）免登录拉取，见 docs/listen-together.md
+	{Realm: realmSystem, Title: "一起听-票据公钥", Tag: tagAPI, Auth: authPublic,
+		Exact: []string{"/api/listen-together/jwks.json"}},
 	// 只给 Hydra 调：签发与刷新令牌前问一次账号与应用状态
 	{Realm: realmSystem, Title: "OAuth2 令牌钩子", Tag: tagAPI, Auth: authHydraHook,
 		Prefix: "/api/oauth2/hooks/"},

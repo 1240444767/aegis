@@ -10,14 +10,15 @@
 | React | 19.2.8 |
 | TypeScript | 7.0.2（编译器）+ 6.0.2（工具链 API，见下） |
 | Tailwind CSS | ^4.3.3 |
-| shadcn/ui | new-york-v4，40 个官方组件均为最新版（见下方扩展说明） |
+| shadcn/ui | new-york-v4，41 个官方组件均为最新版（2026-11-06 补 `empty`，概览页空状态用）（见下方扩展说明） |
 | radix-ui | ^1.6.7（**统一包**，已取代 32 个 `@radix-ui/react-*` 独立包） |
 | TanStack React Query | ^5.101.4 |
 | TanStack React Table | ^9.1.2（表格，v9 按需注册功能） |
 | Zustand | ^5.0.14 |
+| zundo | ^2.3.0（zustand 的撤销 / 重做中间件，物品发放画布用） |
 | next-themes | ^0.4.6 |
 | Zod | ^4.4.3（表单校验） |
-| @xyflow/react | ^12.11.2（工作流画布） |
+| @xyflow/react | ^12.11.2（工作流画布、物品发放规则画布） |
 | react-resizable-panels | ^4.12.2（可拖拽分栏，远程函数工作台用；**v4 是新 API**，见下） |
 | Recharts | ^3.10.1（图表） |
 | MapLibre GL | ^6.2.0（地图，无 default export） |
@@ -701,20 +702,34 @@ Shell 挂载 1.5s 后预热一次，面板打开时再兜底触发一次
 | `components/apps/app-detail-header.tsx` | 详情页标识条 + 带区块换应用 + 关联页面入口 |
 | `components/apps/app-section-nav.tsx` | 区块导航（宽屏竖向分组 / 窄屏横向胶囊） |
 | `components/apps/vip/` | 会员区块：套餐 / 功能标识 / 试用 / 会员查询（见下节） |
-| `components/apps/card-key/` | 卡密区块：批次 / 卡密 / 核销记录（权益表单由后端目录驱动） |
+| `components/apps/card-key/` | 卡密区块：概览 / 批次 / 卡密 / 核销记录（见下方「卡密区块」） |
 | `lib/api/card-key.ts` / `lib/card-key-hooks.ts` | 卡密域 API 与 React Query hooks |
 | `components/apps/rewarded-ad/` | 激励广告区块：概览 / 记录 / 配置（见下节） |
 | `lib/api/rewarded-ad.ts` / `lib/rewarded-ad-hooks.ts` | 激励广告域 API 与 React Query hooks |
 | `components/apps/ad-policy/` | 广告服务区块：概览 / 用户 / 开屏 / 策略（见下节） |
 | `lib/api/ad-policy.ts` / `lib/ad-policy-hooks.ts` | 广告服务策略域 API 与 React Query hooks |
+| `components/apps/crash-reports/` | 崩溃报告区块：单页列表 + 筛选 + 详情抽屉（见下节） |
+| `lib/api/crash-reports.ts` / `lib/crash-report-hooks.ts` | 崩溃报告域 API 与 React Query hooks |
 | `components/apps/points-store/` | 积分商城区块：概览 / 商品 / 兑换记录（见下节） |
 | `lib/api/points-store.ts` / `lib/points-store-hooks.ts` | 积分商城与用户功能解锁的 API 与 React Query hooks |
 | `components/apps/invite/` | 邀请区块：概览 / 配置 / 邀请码 / 邀请记录（见下节） |
 | `lib/api/invite.ts` / `lib/invite-hooks.ts` | 邀请域 API 与 React Query hooks |
-| `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品与邀请奖励共用 |
+| `components/apps/leaderboard/` | 排行榜区块：概览 / 设置 / 奖励 / 实时榜 / 移出名单 / 结算记录（见下节） |
+| `lib/api/leaderboard.ts` / `lib/leaderboard-hooks.ts` | 排行榜域 API 与 React Query hooks |
+| `components/apps/lottery/` | 抽奖区块：活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数（见下节） |
+| `lib/api/lottery.ts` / `lib/lottery-hooks.ts` | 抽奖域 API 与 React Query hooks |
+| `components/apps/item-grant/` | 物品发放区块：规则 / 总览 / 发放记录 / 执行记录与画布编辑器（见下节） |
+| `lib/api/item-grant.ts` / `lib/item-grant-hooks.ts` | 物品发放域 API 与 React Query hooks |
+| `components/apps/account-deletion/` | 账号注销区块：概览 / 申请 / 配置 / 重新注册限制（见下节） |
+| `lib/api/account-deletion.ts` / `lib/account-deletion-hooks.ts` | 账号注销域 API 与 React Query hooks |
+| `components/apps/account-setup/` | 账号初始化区块（`?tab=account-setup`，认证与安全分组）：统计 + 策略单页；建号方式文案在 `account-setup-shared.ts`，用户详情也从这里取 |
+| `lib/api/account-setup.ts` / `lib/account-setup-hooks.ts` | 账号初始化域 API 与 React Query hooks：应用策略、单个用户的初始化情况、要求重新设置、改用户名 |
+| `components/apps/rewards/reward-list-editor.tsx` | 目录驱动的权益列表编辑器，积分商城商品、邀请奖励与排行榜奖励共用 |
 | `components/apps/cloud-storage/` | 用户云存储区块：概览 / 用户 / 配置（见下节） |
 | `lib/api/cloud-storage.ts` / `lib/cloud-storage-hooks.ts` | 用户云存储域 API 与 React Query hooks |
 | `lib/api/vip.ts` / `lib/vip-hooks.ts` | 会员域 API 与 React Query hooks |
+| `components/apps/ai-gateway/` | AI 中转区块：概览 / 模型 / 调用记录 / 密钥 / 额度 / 设置（见下方「AI 中转区块」） |
+| `lib/api/ai-gateway.ts` / `lib/ai-gateway-hooks.ts` | AI 中转网关域 API 与 React Query hooks |
 
 四条硬约束：
 
@@ -791,39 +806,51 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 ## 风控中心（/risk-control）
 
-八个页签同步到 URL（`?tab=dashboard|assessments|reviews|rules|actions|simulator|devices|ips`）：
+七个页签同步到 URL（`?tab=dashboard|assessments|reviews|rules|lists|entities|simulator`），
+另有 `section=rules|actions|templates`（规则策略分区）、`entity=account|device|ip`（实体画像类型）、
+`app=<应用 ID>`（应用作用域）。旧值 `tab=actions|templates|devices|ips|accounts` 兼容跳到新位置。
 
 | 文件 | 职责 |
 |---|---|
-| `(console)/risk-control/page.tsx` | 页面骨架、Tab 路由、跨页签的「带着一个实体去看它的记录」 |
-| `components/risk/risk-shared.tsx` | 目录上下文 `RiskCatalogProvider`、徽标、配色、格式化 |
-| `components/risk/risk-dashboard.tsx` | 大盘：趋势 / 分布 / 直方图 / Top 榜（全部 shadcn chart） |
+| `(console)/risk-control/page.tsx` | 页面骨架、Tab / 分区 / 实体类型路由、跨页签导航（`RiskNavProvider`） |
+| `components/risk/risk-shared.tsx` | 目录上下文 `RiskCatalogProvider`、配色（等级 / 动作 / 维度 / 名单 / 判定来源）、徽标、维度条、分页、格式化 |
+| `components/risk/risk-scope.tsx` | 应用作用域（`RiskScopeProvider` / 页头选择器 / `ScopeBadge` / 编辑器里的 `ScopeField`） |
+| `components/risk/risk-nav.tsx` | 跨页签导航上下文：带着对象去评估记录 / 实体画像 / 规则详情 / 模板 / 名单库 |
+| `components/risk/risk-dashboard.tsx` | 大盘：引擎运行态与执行器就绪、KPI、趋势、维度贡献、判定来源、名单、场景矩阵、榜单 |
+| `components/risk/risk-assessments.tsx` | 评估记录（维度条 + 判定来源）、详情抽屉（维度得分 / 名单命中 / 实际处置 / 规则轨迹 / 现行名单 / 重放） |
+| `components/risk/risk-reviews.tsx` | 复核队列（卡片两列） |
+| `components/risk/risk-dispose-dialog.tsx` | **唯一的**处置弹窗与复核弹窗、处置结果列表 `EnforcementList` |
+| `components/risk/risk-policy.tsx` | 规则策略页签：规则 / 处置策略 / 规则模板三个分区 |
+| `components/risk/risk-rules.tsx` | 规则列表（按维度 / 场景分组、生效 / 观察切换）、编辑器（作用域 / 模式 / 强制处置）、规则详情 |
+| `components/risk/risk-actions.tsx` | 处置策略（作用域、全部场景通用、封禁对象、分数覆盖条） |
+| `components/risk/risk-templates.tsx` | 规则模板卡片、逐条预览（已安装标记）、安装选项 |
 | `components/risk/risk-condition-form.tsx` | **schema 驱动**的条件参数表单 + 表达式变量速查 |
-| `components/risk/risk-rules.tsx` | 规则列表、编辑器、启停、规则详情（效果 + 最近命中 + 趋势） |
-| `components/risk/risk-simulator.tsx` | 模拟器：草稿规则试跑 + 环境变量逐项覆写 |
-| `components/risk/risk-assessments.tsx` | 评估记录、详情抽屉（判据 / 快照 / 关联 / 重放）、清理 |
-| `components/risk/risk-reviews.tsx` | 人工复核队列 |
-| `components/risk/risk-entities.tsx` | 设备指纹与 IP 风险库（含详情抽屉与人工处置） |
+| `components/risk/risk-lists.tsx` | 名单库（筛选 / 批量添加 / 编辑 / 批量删除 / 名单检测）、`CurrentListEntries` |
+| `components/risk/risk-entities.tsx` | 实体画像外壳 + 设备 / IP 列表与详情（现行名单、防火墙封禁、处置） |
+| `components/risk/risk-accounts.tsx` | 账号画像列表与详情（维度得分、现行封禁、名单、关联 IP / 设备） |
+| `components/risk/risk-simulator.tsx` | 模拟器：草稿规则（可观察模式）+ 环境覆写 + 用户 ID / 已过验证码 |
 | `lib/api/risk.ts` / `lib/risk-hooks.ts` | 风控域 API 与 React Query hooks |
 
-四条硬约束：
+六条硬约束：
 
 1. **枚举与参数 schema 一律来自 `/risk/metadata`，不在前端硬编码。**
-   场景、等级、动作、条件类型的参数字段都由后端目录下发；
-   在组件里另抄一份，会让「后端新增一种条件类型」变成一次静默的漏项 ——
-   规则存得进去，但表单上没有它的参数字段，配出来的是一条永不命中的规则。
-2. **图表一律用 shadcn `ChartContainer`**，配色走 `ChartConfig` 的 `theme: { light, dark }`
-   （`risk-shared.tsx` 里的 `LEVEL_COLORS` / `ACTION_COLORS`）。
-   等级色与动作色刻意分色系：同一套色系会让「高危但放行」和「低危但拦截」
-   这两种最值得注意的组合在图上看起来一模一样。
-3. **分页信封在 `lib/api/risk.ts` 的 `paged()` 里统一转换**。后端返回 `{ list, total }`，
-   重构前前端直接当 `{ items }` 用 —— 评估记录 / 待复核 / 设备 / IP 四个页签
-   因此无论后端有多少数据都永远显示空列表。
-4. **失效关系集中在 `risk-hooks.ts`**。一次复核会连带影响评估记录、待复核队列、
-   大盘、IP 库与设备库五张表，散在组件里必然漏掉其中几张。
+   场景（含服务、能否弹验证码）、维度、等级、动作、规则模式、名单种类与类型、封禁对象、判定来源、
+   模板摘要、条件类型的参数字段都由后端目录下发。唯一的例外是「全部场景」取值 `*`（`SCENE_ALL`）。
+2. **图表一律用 shadcn `ChartContainer`**，配色走 `risk-shared.tsx` 的色板
+   （`LEVEL_COLORS` / `ACTION_COLORS` / `DIMENSION_COLORS` / `DECISION_COLORS` / `LIST_KIND_COLORS`）。
+   等级、动作、维度三套刻意分色系，同屏出现时不会互相混淆。面积图实色半透明填充，不用渐变。
+3. **分页信封在 `lib/api/risk.ts` 的 `paged()` 里统一转换**（后端 `{ list, total }`）。
+4. **失效关系集中在 `risk-hooks.ts`**。名单、处置、复核三类写操作走同一组 `ENTITY_STATE_KEYS`
+   （名单、账号 / 设备 / IP 画像、评估详情、大盘），复核另加评估列表与待复核队列。
+5. **处置只有一个入口组件**（`risk-dispose-dialog.tsx`）：评估详情、复核、账号 / 设备 / IP 画像都复用它。
+   对象没有对应标识时（没有设备号）该勾选项禁用；防火墙只在「黑名单」下出现。
+   提交后展示逐项的 `enforcement` 结果，失败标红 —— 「判了封禁」与「真的封上了」是两件事。
+6. **应用作用域放页面级**（`?app=`），作用于大盘、评估、复核、规则、策略、名单、账号画像与设备；
+   IP 库是全平台数据，不按应用过滤。编辑器里的作用域默认取当前作用域；规则 PUT 时 `appId: 0` 表示改回全平台。
 
 大盘顶部的**引擎运行态条**不是装饰：「大盘全是 0」有两种截然不同的原因
-（真没风险 / 根本没规则在跑），不显式说出来管理员会把后者当成前者。
+（真没风险 / 根本没规则在跑），零规则或零策略时直接给出「安装规则模板」入口。
+执行器就绪徽标（情报源、GeoIP、Redis、限流、账号封禁、防火墙、验证码）回答「ban 动作能不能真的落地」。
 
 ## 交易中心（/commerce）
 
@@ -982,6 +1009,23 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 `configured: false` 表示应用没保存过策略，客户端此时按自己内置的默认策略处理，界面上如实显示「未配置」。
 判定与接口见 [docs/ad-policy.md](../docs/ad-policy.md)。
 
+## 崩溃报告区块（/apps/{appKey}?tab=crash-reports）
+
+客户端在崩溃屏上经用户逐份同意后上报，规则见 [docs/crash-reports.md](../docs/crash-reports.md)。放在「概览」分组，
+**一页完成、不分标签**（报表类页面不做多标签）。
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/crash-reports/app-crash-reports-panel.tsx` | 摘要（总数 / 未处理 / 近 24 小时）+ 筛选（关键字、类型、版本、状态、时间）+ 列表 + 本页批量标记与删除 |
+| `components/apps/crash-reports/crash-report-detail-sheet.tsx` | 详情抽屉：全部字段、上报账号与对外用户 ID、报告正文（等宽、复制、下载 .txt）、标记与删除 |
+| `components/apps/crash-reports/crash-report-shared.tsx` | 类型与状态徽标、版本 / 设备 / 位置的拼接、下载 |
+
+三条约束：
+
+1. **列表不带正文**，正文只在详情接口里取：一份报告最多 256 KB，一页 20 份全带上就是几 MB。
+2. **版本下拉只列 facets 接口给的版本**（真实出现过的），不让管理员手打版本号。
+3. **选择只作用于当前页**，翻页或改筛选即清空，批量操作不会落到看不见的行上。写操作整组失效（前缀 `admin-crash-reports`）。
+
 ## 积分商城区块（/apps/{appKey}?tab=points-store）
 
 | 文件 | 职责 |
@@ -1045,6 +1089,218 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 能否填写、奖励发放与结算全部在后端，规则见 [docs/invite.md](../docs/invite.md)。
 
+## 排行榜区块（/apps/{appKey}?tab=leaderboard）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/leaderboard/app-leaderboard-panel.tsx` | 骨架 + 六个视图的切换，概览可带榜单跳到实时榜、带失败提示跳到结算记录 |
+| `components/apps/leaderboard/leaderboard-overview-panel.tsx` | 开关状态、待发 / 失败奖励提示、四个数字、各榜本期参与人数与前 3 名（真实账号、匿名 / 移出标记）、上次结算时间 |
+| `components/apps/leaderboard/leaderboard-settings-panel.tsx` | 总开关、榜单启用与标签顺序（上移 / 下移）、展示名次、上榜门槛、展示身份、允许匿名、积分口径（分类表随「计入管理员调整」变化） |
+| `components/apps/leaderboard/leaderboard-rewards-panel.tsx` | 每个周期榜一组名次档位（RewardListEditor），前端按后端同一说法提示范围不合法、超出展示名次、重叠与空档 |
+| `components/apps/leaderboard/leaderboard-board-panel.tsx` | 实时榜：选榜单与期号（本期 / 已结算往期 / 指定期号），完整名次表，行操作移出与恢复 |
+| `components/apps/leaderboard/leaderboard-exclusions-panel.tsx` | 移出名单：搜索、分页、批量移出、恢复 |
+| `components/apps/leaderboard/leaderboard-exclude-dialog.tsx` | 移出弹窗：单人（实时榜行操作）或按用户 ID 批量，原因与人数上限来自 limits |
+| `components/apps/leaderboard/leaderboard-snapshots-panel.tsx` | 结算记录列表、条目明细（按奖励状态筛选）、整期重试失败、手动结算弹窗 |
+| `components/apps/leaderboard/leaderboard-shared.tsx` | 枚举文案、奖励状态徽标、用户单元格、期号格式与上一期期号、共用保存条与载荷 |
+
+三条硬约束：
+
+1. **设置与奖励共用一个 `PUT settings`**：两个视图各自只改自己那一半，另一半按服务端已保存的值带上（`savedPayload`）。
+   已保存的权益要先按草稿往返一次（`normalizeBoardRewards`）再回传，后端出网的权益带着 `money: "0"` 这类零值。
+2. **目录驱动**：榜单、权益、展示身份、奖励状态、积分分类与上下界全部来自 `GET settings`，不另抄一份；
+   档位的前端提示只是提示，校验以后端（40000）为准，原因原样 toast。
+3. **手动结算的默认期号按浏览器时区算**，周期边界以后端应用默认时区为准，跨期那几个小时可能差一期；
+   周期没结束时后端回 40922，弹窗里原样显示。
+
+名次、口径、结算与发放全部在后端，规则见 [docs/leaderboard.md](../docs/leaderboard.md)。
+
+## 抽奖区块（/apps/{appKey}?tab=lottery）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数五个视图的切换，跨视图带活动与「待发放」筛选 |
+| `components/apps/lottery/lottery-activities-panel.tsx` | 活动卡片：状态与形态、抽奖方式、奖品与公示概率、累计 / 今日 / 待发放；上线 / 暂停 / 结束、编辑、删除 |
+| `components/apps/lottery/lottery-activity-editor.tsx` | 活动编辑抽屉：基本信息与时间、三种次数与视频抽奖场景、奖盘、保底、规则；底部列出奖盘的待修正项 |
+| `components/apps/lottery/lottery-prize-board.tsx` | 奖盘：九宫格是 3×3 的盘（外圈顺时针 0–7 从左上角起，中心 GO），转盘是可增删、上下移的列表；右侧改选中的一格 |
+| `components/apps/lottery/lottery-activity-form.ts` | 草稿模型：种子（新活动的默认 8 格）、载荷、与后端 `ValidateInput` 同规则同说法的校验 |
+| `components/apps/lottery/lottery-stats-panel.tsx` | 单活动统计：8 个数字、趋势（次数与中奖为柱、人数为线）、次数来源、奖品抽中数与库存 |
+| `components/apps/lottery/lottery-draws-panel.tsx` | 抽奖记录：活动 / 用户 / 状态 / 来源 / 只看中奖 / 关键词 / 时间筛选；待发放的「标记已发放」写给用户的话 |
+| `components/apps/lottery/lottery-fortune-panel.tsx` | 运气控制：每日运气的差异（σ 滑杆、开关）、今日分布（理论 / 干预前 / 干预后三列）、下干预（指定用户或全站 × 重抽 / 定档 / 偏移 × 时间窗，先预演再执行）、查一个人（干预前后读数与一键重抽 / 定档 / 撤销）、干预记录（状态与方式筛选、逐条撤销、全部恢复自然运气）。规则见 docs/lottery.md「运气控制」 |
+| `components/apps/lottery/lottery-tickets-panel.tsx` | 抽奖次数（bonus 分批账本）：总览（持有人数、赠送 / 兑换两档、今日发放与使用、扣除顺序、各来源累计与剩余）、账户列表、一个人的批次（按使用顺序）与发放 / 扣减（确认后执行）、次数流水（种类 / 来源筛选）。规则见 docs/lottery.md「抽奖次数」 |
+| `components/apps/lottery/lottery-shared.tsx` | 状态 / 形态 / 来源文案、徽标、九宫格位置表、公示概率、奖品摘要与默认名 |
+
+五条硬约束：
+
+1. **活动连同全部奖品一次保存**（POST / PUT 整体），没有单独的奖品接口：九宫格恰好 8 格、保底奖属于本活动、
+   至少一个不限库存的奖品都是整张奖盘的约束。已有奖品必须带 `id` 回传，否则后端当成删了再建，已抽中数量清零。
+2. **保底奖按位置指定**（`pityPosition`），草稿里按行键记（`pityKey`），保存时换算成下标：奖品挪位置时保底跟着奖品走。
+   保底奖改成「谢谢参与」或被删除时草稿里的保底奖随之清空。
+3. **公示概率与后端 `lottery.Probabilities` 同一算法**（有库存奖品的权重合计作分母、四舍五入到 0.01），
+   编辑时按草稿实时算；改了算法两边显示的概率就会对不上，而用户端看到的是后端那一份。
+4. **奖品表单由后端目录驱动**（`/lottery/catalog`）：类型、取值形态、上下界、可选套餐（已去掉试用）与功能、
+   发「抽奖次数」的激励广告场景都来自目录。场景归激励广告区块配置，这里只选；激励广告未开启或没有这类场景时如实提示。
+5. **前端校验只是提示**，保存时第一条问题 toast；后端的 40000 原因原样 toast。删除有记录的活动后端回 40927，
+   toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
+
+旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
+
+## 物品发放区块（/apps/{appKey}?tab=item-grant）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/item-grant/app-item-grant-panel.tsx` | 骨架 + 规则 / 总览 / 发放记录 / 执行记录四个视图，跨视图带规则、执行与状态筛选 |
+| `components/apps/item-grant/item-grant-rules-panel.tsx` | 规则卡片（触发方式、状态、节点构成、统计、执行进度与取消）；新建（空白或后端模板）、复制、上线 / 暂停 / 执行 / 归档 / 删除 |
+| `components/apps/item-grant/item-grant-editor.tsx` | 全屏画布编辑器：节点库（拖放或点击）、React Flow 画布、右侧配置 / 问题 / 预演；⌘S / ⌘Z / ⌘⇧Z / ⌘D |
+| `components/apps/item-grant/item-grant-store.ts` | 画布状态（zustand + **zundo** 撤销重做）：equality 只比配置与结构，连续变化合成一步 |
+| `components/apps/item-grant/item-grant-graph.ts` | 后端画布 ↔ React Flow 往返、默认配置、dagre 自动排版、成环检测 |
+| `components/apps/item-grant/item-grant-canvas-nodes.tsx` | 节点（输入 / 输出端口、摘要、问题角标、预演人数、追踪高亮）与连线（端口语义色、追踪流动、选中删除） |
+| `components/apps/item-grant/item-grant-inspector.tsx` / `item-grant-fields.tsx` | 每种节点的配置表单；物品编辑器（目录驱动，按人计算数量） |
+| `components/apps/item-grant/item-grant-preview-panel.tsx` | 预演：抽样估算（节点 / 端口到达人数、全量推算）与单人追踪（路径与物品） |
+| `components/apps/item-grant/item-grant-records-panel.tsx` / `item-grant-runs-panel.tsx` / `item-grant-overview.tsx` | 发放记录（路径、结果、标记发放、重试）、执行记录（进度轮询）、总览 |
+
+四条硬约束：
+
+1. **目录驱动**：物品、节点与端口、触发方式、事件与事件字段、条件字段与运算符、人群、周期、跳转页面、模板全部来自
+   `/item-grants/catalog`，前端不另抄；`describeItem` / `rulesExpr` 只是展示口径，与后端 `DescribeItem` / `RulesExpr` 同一份规则。
+2. **React Flow 节点的 `data` 就是后端节点配置**，问题、预演、追踪这类叠加信息走 `CanvasOverlayContext`，不进 data、不进撤销历史。
+3. **校验以后端为准**：画布变化 600ms 后调 `/validate`（与上线同一套判据），问题按 `nodeId` / `edgeId` 标在画布上；
+   生效中的规则保存时后端拒绝有错误的画布（40000，原因原样 toast）。
+4. **预演不发放**，与正式执行同一个判定函数；画布一改，旧的预演结果立即清掉。
+
+规则见 [docs/item-grant.md](../docs/item-grant.md)。
+
+## AI 通道编辑（/apps/{appKey}?tab=ai 与 /configuration?tab=ai）
+
+平台级与应用级共用 `components/ai/ai-channel-panel.tsx`，只差 scope。新建 / 编辑走右侧大号 Sheet
+（`ai-channel-editor-sheet.tsx`，`sm:max-w-5xl`）：左栏按目录分类、可搜索的供应商，右栏依次是基本信息、连接、型号、选项、连通性测试，⌘S 保存。
+
+| 文件 | 职责 |
+|---|---|
+| `components/ai/ai-channel-editor-sheet.tsx` | 编辑 Sheet：供应商侧栏、分块表单、草稿测试、删除确认 |
+| `components/ai/ai-model-manager.tsx` | 型号管理器：芯片列表、星标设默认、粘贴多行拆分、一键拉取后搜索勾选（加入 / 只保留选中） |
+| `components/ai/ai-provider-fields.tsx` | 目录驱动的动态字段；`exclude` 让型号管理器接管 `models` / `defaultModel` |
+| `components/ai/ai-sheet-parts.tsx` | 大号 Sheet 的版面零件 `SheetBlock` / `ToggleTile`，与 AI 中转的模型 Sheet 共用 |
+
+三条硬约束：
+
+1. **型号的存储形状不变**：仍是 `settings.models`（换行分隔）+ `settings.defaultModel`。管理器把默认型号排在第一个，
+   与后端「默认型号留空取第一行」一致；不要改成数组，后端与已存配置都按字符串读。
+2. **拉取与测试对草稿生效**（`POST …/ai/draft/models`、`…/ai/draft/test`）：新建不必先保存；编辑时密钥留空沿用已存的，
+   换了供应商则不沿用。上游失败返回 `ok=false` 与上游原话，就地展示，不 toast 成「接口错误」。
+3. **换供应商即重置字段与密钥**：上一家的地址、密钥不能带到下一家去提交。
+
+## AI 中转区块（/apps/{appKey}?tab=ai-gateway）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/ai-gateway/app-ai-gateway-panel.tsx` | 骨架 + 六个视图的切换；从概览 / 密钥 / 额度跳到调用记录时带上筛选 |
+| `components/apps/ai-gateway/ai-gateway-overview-panel.tsx` | Base URL（可复制）、扣费顺序、调用与扣费趋势、按来源与模型汇总、未收与进行中 |
+| `components/apps/ai-gateway/ai-gateway-models-panel.tsx` | 模型列表（点行即编辑）与删除确认 |
+| `components/apps/ai-gateway/ai-gateway-model-sheet.tsx` | 添加 / 编辑模型的大号 Sheet：左栏上游通道（当前链路，含平台共享），右栏从通道型号里挑上游模型（应用自有通道可一键拉取，新建可多选批量添加）、对外信息、种类、价格（含典型用量估价）、选项 |
+| `components/apps/ai-gateway/ai-gateway-requests-panel.tsx` | 调用记录：用户 / 模型 / 状态 / 接口筛选；明细弹窗含暂扣、价格、实扣、扣费来源与整笔退款 |
+| `components/apps/ai-gateway/ai-gateway-keys-panel.tsx` | 用户密钥：启用 / 停用（管理端不新建，明文只给用户本人看一次） |
+| `components/apps/ai-gateway/ai-gateway-credits-panel.tsx` | 某个用户的 AI 账户（与用户端总览同一份）与赠送额度调整、流水 |
+| `components/apps/ai-gateway/ai-gateway-settings-panel.tsx` | 开关、扣费来源勾选与排序、额度、余额折算、倍率、限制 |
+| `components/apps/ai-gateway/ai-gateway-shared.tsx` | 状态 / 接口 / 来源 / 价格项文案、点数与用量格式化 |
+
+五条硬约束：
+
+1. **上游通道不在这里配**：通道在「AI 服务」区块，这里只决定谁能用、怎么收钱。模型 Sheet 的左栏读的是
+   通道链路（`/ai/channel`），型号清单与「一键拉取」复用通道的 `/ai/draft/models`（以已存配置为底、不传密钥）；
+   借用的平台共享通道在应用作用域拉不到，只列它登记的型号。对话以外的种类只能选 OpenAI 协议的通道
+   （后端对这些接口原样转发），其余通道置灰；换种类时已钉的不兼容通道回到「按链路」。
+   批量添加是逐个 POST，失败的留在选择里、成功的去掉。版面零件（分块、开关块）与通道编辑共用 `components/ai/ai-sheet-parts.tsx`。
+2. **价格项由后端目录驱动**（`/ai-gateway/catalog` 的 `kinds[].prices`）：换种类只显示该种类会用到的价格项，
+   保存时其余项一律置 0。单位是「点」，token 类按每百万 token，界面上标在输入框后。
+3. **点数、倍率、单价按字符串往返**（后端 shopspring/decimal），`formatPoints` 只做展示；调用记录里的
+   `holds` / `charges` 是**微点整数**，展示前除以 `MICRO_PER_POINT`。
+4. **扣费来源存「全部来源的顺序 + 哪些启用」**：取消勾选不丢位置，保存时按顺序筛出启用的发给后端。
+   余额是真钱，未勾选时余额折算输入框禁用。
+5. **赠送额度调整用方向 + 正数**，每次提交带 `crypto.randomUUID()` 作请求编号，成功后换新编号：
+   网络重试命中同一编号时后端只生效一次（回 `replayed`）。
+
+规格见 [docs/ai-gateway.md](../docs/ai-gateway.md)。
+
+## 登录设备区块（/apps/{appKey}?tab=device-limit）
+
+规则见 [docs/device-limit.md](../docs/device-limit.md)。六个视图（状态不进 URL）：
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/device-limit/app-device-limit-panel.tsx` | 视图切换；**策略草稿在这一层**（按 appKey 绑定），模拟要能拿未保存的草稿试 |
+| `device-limit-overview-panel.tsx` | 策略摘要条、处置指标、趋势 / 终端分布 / 每人设备数 / 触发维度、撞上限最多的用户 |
+| `device-limit-policy-panel.tsx` | 总数与类别上限、超限处置、同设备、会员档位、新设备频率；右侧「生效上限一览」 |
+| `device-limit-users-panel.tsx` | 单个用户：上限来源、各维度占用、在线设备、台账、处置时间线；下线 / 整理 / 例外 / 清台账 |
+| `device-limit-overrides-panel.tsx` / `device-limit-override-dialog.tsx` | 例外名单与编辑弹窗（两处共用） |
+| `device-limit-events-panel.tsx` | 处置记录 |
+| `device-limit-simulator-panel.tsx` | 模拟：真实用户或虚构场景，服务端用与登录相同的判定 |
+| `device-limit-shared.tsx` | 类别 / 处置 / 事件 / 来源的文案、图标与配色，`DeviceSlots`、`LimitStepper` |
+| `lib/api/device-limit.ts` / `lib/device-limit-hooks.ts` | API 与 hooks，写操作整组失效（前缀 `admin-device-limit`） |
+
+三条约束：
+
+1. **类别色两套写法要同步**：`CLASS_META.color` 给图表（ChartConfig theme），`fill` / `tint` 是 Tailwind 类给槽位与图标底，
+   改一处要改另一处，否则图例和槽位颜色对不上。
+2. **概览的设备分布是台账口径**（窗口内登录过），不是此刻在线；此刻在线要逐个用户看会话，在用户设备视图里。
+3. **「认证与会话」不再提交 `multiDeviceLogin` 两个旧字段**，那里只留一个状态入口。旧表单总带一个默认上限，
+   提交它会让没配过设备数的应用凭空被限制（后端旧接口也已不再写它们）。
+
+## 卡密区块（/apps/{appKey}?tab=card-key）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/card-key/app-card-key-panel.tsx` | 骨架 + 概览 / 批次 / 卡密 / 核销记录四个视图的切换，批次筛选在卡密与核销记录之间共用 |
+| `components/apps/card-key/card-key-overview-panel.tsx` | 8 个数字（总数、可提取、已提取、有效授权、今日 / 累计核销、人数、面值已用 / 发出）、核销趋势（次数为柱、人数为线，按浏览器时区分日）、来源、热门批次（点击跳到这批的卡） |
+| `components/apps/card-key/card-key-batches-panel.tsx` | 批次卡片：类型、停用、待生效、渠道、面值、权益、规则摘要、进度条；启停、查看卡、提卡，更多菜单里编辑 / 补发 / 以此为模板新建 / 三种导出 / 删除（40982 时解释并给「停用批次」） |
+| `components/apps/card-key/card-key-batch-editor.tsx` | 批次编辑抽屉：新建（随机生成或导入卡面，卡面样例与格式容量提示）、以模板新建、修改（只开放之后才生效的项，其余灰显） |
+| `components/apps/card-key/card-key-batch-form.ts` | 草稿模型：种子、从批次起草、卡面归一化与导入解析（与后端 `NormalizeCode` 同口径）、容量（字符集 ^ 位数 / 4）、与后端同规则同说法的校验、载荷 |
+| `components/apps/card-key/card-key-reward-editor.tsx` | 权益行编辑：目录驱动的添加菜单，数量 / 金额 / 套餐 / 功能 + 天数（0 为永久，可多行），需要授权卡的档位给提示 |
+| `components/apps/card-key/card-key-batch-dialogs.tsx` | 补发对话框；提卡对话框（数量 + 备注 → 当场给出卡面，复制全部或下载 TXT） |
+| `components/apps/card-key/card-key-codes-panel.tsx` | 单卡列表：批次 / 状态（含部分使用、已过期）/ 类型 / 提取 / 关键词筛选；多选后复制、标记 / 取消提取、作废、恢复、删除 |
+| `components/apps/card-key/card-key-detail-sheet.tsx` | 单卡抽屉：信息、批次权益、调整（备注、设备数、到期时间延长 / 设为 / 永久）、设备解绑与清空、核销与解绑流水 |
+| `components/apps/card-key/card-key-redemptions-panel.tsx` | 核销记录：批次 / 来源 / 用户 / 关键词 / 时间筛选，展示实际发放；「代兑」对话框 |
+| `components/apps/card-key/card-key-shared.tsx` | 类型 / 状态 / 字符集 / 对象 / 来源文案、规则摘要、权益与结果摘要、进度条、复制 |
+
+五条硬约束：
+
+1. **权益表单由后端目录驱动**（`/card-keys/catalog`）：档位、单位、上下界、能否重复、是否需要授权卡，
+   以及可选的会员套餐与功能都随目录下发，前端不另抄枚举。
+2. **「已过期」「部分使用」是算出来的**（`resolveCardState`）：后端没有这两档状态，到期时间与 `useCount` 才是依据。
+3. **批量操作按选中的 id**，翻页或改筛选即清空选择；导出与提卡按批次，不按当前筛选。
+4. **修改批次只传之后才生效的项**；统一到期时间不改就不传（后端收到空值保留原值），否则过了到期日的批次连名字都改不了。
+5. **前端校验只是提示**，提交时第一条问题 toast；后端的报错原样 toast。删除批次遇到 40982 不当成失败提示，
+   而是解释原因并给「停用批次」。
+
+接口与语义见 [docs/card-key.md](../docs/card-key.md)。「卡密登录」的开关在「接入」的登录方式里，不在这个区块。
+
+## 账号注销区块（/apps/{appKey}?tab=account-deletion）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/account-deletion/app-account-deletion-panel.tsx` | 骨架 + 概览 / 申请 / 配置 / 重新注册限制四个视图的切换，概览带状态筛选跳到申请 |
+| `components/apps/account-deletion/account-deletion-overview-panel.tsx` | 开关与方式摘要、待审核与执行失败提示、四个数字、趋势柱状图（按浏览器时区分日）、状态 / 方式 / 来源环形图与原因条形图 |
+| `components/apps/account-deletion/account-deletion-requests-panel.tsx` | 申请列表：状态 / 方式 / 来源 / 关键词 / 提交时间筛选，点行开详情抽屉 |
+| `components/apps/account-deletion/account-deletion-request-sheet.tsx` | 详情抽屉：进度时间线、申请信息、提交时的账号快照与前置条件结论、设备与网络，底部按状态给处置按钮 |
+| `components/apps/account-deletion/account-deletion-action-dialog.tsx` | 批准 / 驳回 / 撤销 / 立即执行 / 改期五种处置的弹窗；`ExecuteConfirm` 输入账号名确认 |
+| `components/apps/account-deletion/account-deletion-config-panel.tsx` | 开关与全部配置一次保存（目录驱动），七项前置条件逐项 off / warn / block |
+| `components/apps/account-deletion/account-deletion-tombstones-panel.tsx` | 重新注册限制：打码标识、对应账号、到期，逐条解除 |
+| `components/apps/account-deletion/account-deletion-shared.tsx` | 状态 / 方式 / 来源 / 验证方式 / 前置条件的文案与配色、各状态可做的处置、分页条 |
+| `components/users/detail/user-account-deletion-card.tsx` | 用户详情「处置」页签里的注销卡片：进行中的申请与快捷处置、代发起、历史 |
+
+四条硬约束：
+
+1. **可做的处置只看状态**（`availableActions`，与后端各接口允许的起始状态一致）：批准 / 驳回只对 reviewing，
+   撤销对 reviewing / scheduled / failed，立即执行对 scheduled / failed，改期只对 scheduled。
+   按钮另受 `app:user:write` 控制，只读管理员看得到申请但没有任何处置入口。
+2. **立即执行与代发起立即注销必须输入账号名**，逐字一致才放行（后端同样核对 `confirm`）。
+   返回 200 不等于成功：状态为 failed 时原因在 `failure` 里，按状态 toast。
+3. **立即注销成功后用户已不存在**：hooks 刻意不失效 `admin-app-user`，用户详情页拿到 completed 后自己跳回列表，
+   否则会先闪一下「未找到该用户」。
+4. **目录没有下发的上限**（原因标识 / 名称、须知标题、同意文案、客服联系方式）写在配置面板顶部，与
+   `accountdeletion/types.go` 一致，最终以后端校验为准，原因原样 toast。
+
+状态机、前置条件与验证判定全部在后端，规则见 [docs/account-deletion.md](../docs/account-deletion.md)。
+
 ## 用户云存储区块（/apps/{appKey}?tab=cloud-storage）
 
 | 文件 | 职责 |
@@ -1066,6 +1322,34 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    目标存储是公开访问时，概览与配置两处都要提示。
 
 写入、修订、配额与回收站的语义全部由后端决定，见 [docs/cloud-storage.md](../docs/cloud-storage.md)。
+
+## 存储中心（/storage）
+
+后端契约见 [docs/storage.md](../docs/storage.md)。页面按 `?tab=` 切十个面板，**键沿用旧页面**
+（`global` 是「存储源」、`app` 是「应用存储」），已分享的深链不失效；`overview` 是默认页。
+
+| 文件 | 职责 |
+|---|---|
+| `lib/api/storage-center.ts` / `lib/storage-center-hooks.ts` | 存储源、提供商目录、总览、池、事件、检测、CORS、转向、迁移的 API 与 hooks（写操作整组失效） |
+| `components/storage/storage-shared.tsx` | 品牌徽章（Simple Icons，未收录用中性图标）、状态徽标、容量条、策略 / 角色元信息、MB/GB/TB 换算 |
+| `storage-overview-panel.tsx` | 汇总、异常告警、各存储用量图、进行中的迁移、最近事件、池概况 |
+| `storage-sources-panel.tsx` + `storage-source-sheet.tsx` + `storage-source-dialogs.tsx` | 存储源卡片网格（平台级 / 应用级共用）、目录驱动的新建与编辑、深度检测、CORS |
+| `storage-pools-panel.tsx` + `storage-pool-editor.tsx` | 池卡片（成员容量与状态、恢复写入）、模拟写入、编辑器（拖动排序即优先级） |
+| `storage-cloudflare-wizard.tsx` | Cloudflare 快速接入：连接令牌 → 选账户与桶（可新建）→ 凭据 / 访问 / CORS / 池 → 逐步结果；R2 卡片的「更新凭据」复用它 |
+| `storage-migrations-panel.tsx` / `storage-events-panel.tsx` | 迁移任务与读取转向；运行事件时间线（概览复用紧凑版） |
+| `storage-rules-panel.tsx` / `storage-cdn-panel.tsx` / `storage-usage-panel.tsx` | 结构化上传规则、CDN 与防盗链、用量趋势与类型分布 |
+| `file-manager.tsx` 等 | 文件管理（未改动） |
+
+六条硬约束：
+
+1. **表单由后端目录驱动。** 字段、密钥标记、能力、品牌色都来自 `GET /api/admin/app/storage-config/providers`；
+   新增提供商只改后端，这里零改动。不要在前端再抄一份字段表。
+2. **密钥一律留空即不修改。** 存储源的密钥、CDN 签名密钥出网已被抹除（`secrets_set` / `signUrlSecretSet`
+   只告诉你配没配过），编辑表单显示「已配置，留空不修改」，提交原样带空串。
+3. **成员顺序就是优先级。** 编辑器按列表顺序写 `priority = index × 10`，不另给优先级输入框。
+4. **轮询跟着状态走。** 总览在概览 / 存储池页 5 秒一刷、其余 30 秒；迁移列表只在有任务排队或进行中时 2 秒一刷。
+5. **Cloudflare 令牌只放组件状态。** 不进 localStorage、不进查询键（键会出现在开发工具里），关闭向导即丢弃。
+6. **池只收平台级存储源。** 应用存储页不出现池相关的东西；成员下拉只列 `scope = global` 的源。
 
 ## 内容中心（/content）
 
@@ -1151,7 +1435,8 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/users/detail/user-activity-map.tsx` | 活动地图（deck.gl ⋈ MapLibre）：活动点 / 密度热力 / 位移轨迹 |
 | `lib/geo/private-network.ts` | 内网 / 回环 / CGNAT 识别（"服务器地址"的判据） |
 | `lib/geo/server-location.ts` | 服务端端点位置，与攻击飞线图共用一份 |
-| `components/users/detail/user-governance-tab.tsx` | 账号开关 / 新建封禁 / 封禁历史与撤销 / 删除 |
+| `components/users/detail/user-governance-tab.tsx` | 账号开关 / 新建封禁 / 封禁历史与撤销 / 账号注销 / 删除 |
+| `components/users/detail/user-account-setup.tsx` | 改用户名弹窗（资料页签账号字段与安全页签共用，先输入再确认）+ 安全页签「账号初始化」区块（进度、要求重新设置） |
 | `lib/api/app-users.ts` | 单用户维度 API（封禁 / 钱包 / 单用户审计） |
 | `lib/app-user-hooks.ts` | 上述 hooks + 成组失效 `USER_SCOPE_KEYS` |
 

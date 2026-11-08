@@ -63,6 +63,12 @@ func (h *Handler) authenticateAIGateway(c *gin.Context, appID int64) bool {
 
 // writeAIGatewayError 按协议的错误信封回错，SDK 才能解析出 message。
 func writeAIGatewayError(c *gin.Context, protocol string, err error) {
+	status, body := aiGatewayErrorBody(protocol, err)
+	c.JSON(status, body)
+}
+
+// aiGatewayErrorBody 应用函数网关的错误在协议信封里的 HTTP 状态与响应体。
+func aiGatewayErrorBody(protocol string, err error) (int, gin.H) {
 	status := http.StatusBadGateway
 	message := err.Error()
 	var appErr *apperrors.AppError
@@ -71,23 +77,31 @@ func writeAIGatewayError(c *gin.Context, protocol string, err error) {
 		message = appErr.Message
 	}
 	if protocol == aidomain.ProtocolAnthropic {
-		c.JSON(status, gin.H{
+		return status, gin.H{
 			"type":  "error",
 			"error": gin.H{"type": "api_error", "message": message},
-		})
-		return
+		}
 	}
-	c.JSON(status, gin.H{
+	return status, gin.H{
 		"error": gin.H{"message": message, "type": "api_error", "code": nil},
-	})
+	}
+}
+
+// aiGatewayErrorText 错误的对外文案：业务错误取 Message，其余原样。
+func aiGatewayErrorText(err error) string {
+	var appErr *apperrors.AppError
+	if errors.As(err, &appErr) {
+		return appErr.Message
+	}
+	return err.Error()
 }
 
 // ═══════════════════════ OpenAI Chat Completions 入站 ═══════════════════════
 
 type openAIGatewayMessage struct {
-	Role       string          `json:"role"`
-	Content    json.RawMessage `json:"content"`
-	ToolCalls  []struct {
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	ToolCalls []struct {
 		ID       string `json:"id"`
 		Function struct {
 			Name      string `json:"name"`
@@ -95,12 +109,15 @@ type openAIGatewayMessage struct {
 		} `json:"function"`
 	} `json:"tool_calls"`
 	ToolCallID string `json:"tool_call_id"`
+	// ReasoningContent / Reasoning 上一轮的思考（DeepSeek、OpenRouter 一系的扩展字段）。
+	ReasoningContent string `json:"reasoning_content"`
+	Reasoning        string `json:"reasoning"`
 }
 
 type openAIGatewayRequest struct {
-	Model               string                 `json:"model"`
-	Messages            []openAIGatewayMessage `json:"messages"`
-	Tools               []struct {
+	Model    string                 `json:"model"`
+	Messages []openAIGatewayMessage `json:"messages"`
+	Tools    []struct {
 		Type     string `json:"type"`
 		Function struct {
 			Name        string          `json:"name"`
@@ -118,6 +135,67 @@ type openAIGatewayRequest struct {
 	ResponseFormat      *struct {
 		Type string `json:"type"`
 	} `json:"response_format"`
+	// 思考设置的三种写法：OpenAI 的 reasoning_effort、OpenRouter 的 reasoning 对象、
+	// Anthropic 风格的 thinking 对象（不少 OpenAI 兼容客户端也这样写）。
+	ReasoningEffort string                 `json:"reasoning_effort"`
+	Reasoning       *openAIGatewayThinking `json:"reasoning"`
+	Thinking        *openAIGatewayThinking `json:"thinking"`
+}
+
+// openAIGatewayThinking reasoning / thinking 对象：{effort} / {max_tokens} / {enabled} / {type, budget_tokens}。
+type openAIGatewayThinking struct {
+	Effort       string `json:"effort"`
+	MaxTokens    int    `json:"max_tokens"`
+	Enabled      *bool  `json:"enabled"`
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
+}
+
+// gatewayReasoning 把各种写法归一成统一的思考设置；都没写返回 nil（交给上游默认）。
+func gatewayReasoning(effort string, objects ...*openAIGatewayThinking) (*aidomain.ReasoningConfig, error) {
+	var out *aidomain.ReasoningConfig
+	set := func(value string) error {
+		normalized, ok := aidomain.NormalizeReasoningEffort(value)
+		if !ok {
+			return apperrors.New(40223, http.StatusBadRequest,
+				"不支持的思考强度："+value+"（可选 "+strings.Join(aidomain.ReasoningEfforts, " / ")+"）")
+		}
+		if out == nil {
+			out = &aidomain.ReasoningConfig{}
+		}
+		out.Effort = normalized
+		return nil
+	}
+	if strings.TrimSpace(effort) != "" {
+		if err := set(effort); err != nil {
+			return nil, err
+		}
+	}
+	for _, object := range objects {
+		if object == nil {
+			continue
+		}
+		if out == nil {
+			out = &aidomain.ReasoningConfig{}
+		}
+		switch {
+		case object.Enabled != nil && !*object.Enabled, strings.EqualFold(object.Type, "disabled"):
+			out.Effort, out.BudgetTokens = aidomain.ReasoningNone, 0
+			continue
+		}
+		if object.Effort != "" && out.Effort == "" {
+			if err := set(object.Effort); err != nil {
+				return nil, err
+			}
+		}
+		if budget := max(object.BudgetTokens, object.MaxTokens); budget > 0 && out.BudgetTokens == 0 {
+			out.BudgetTokens = budget
+		}
+	}
+	if out != nil && out.BudgetTokens < 0 {
+		return nil, apperrors.New(40223, http.StatusBadRequest, "思考预算不能为负数")
+	}
+	return out, nil
 }
 
 // AppAIChatCompletions POST /api/apps/:appkey/ai/v1/chat/completions
@@ -166,6 +244,11 @@ func openAIGatewayToChatRequest(req openAIGatewayRequest) (aidomain.ChatRequest,
 	if req.ResponseFormat != nil && req.ResponseFormat.Type == "json_object" {
 		out.JSONMode = true
 	}
+	reasoning, err := gatewayReasoning(req.ReasoningEffort, req.Reasoning, req.Thinking)
+	if err != nil {
+		return out, err
+	}
+	out.Reasoning = reasoning
 	if len(req.Stop) > 0 {
 		var single string
 		var many []string
@@ -211,7 +294,10 @@ func openAIGatewayToChatRequest(req openAIGatewayRequest) (aidomain.ChatRequest,
 				Content: []aidomain.ContentPart{{Type: aidomain.PartText, Text: openAIGatewayContentText(message.Content)}},
 			})
 		case "assistant":
-			item := aidomain.ChatMessage{Role: aidomain.RoleAssistant}
+			item := aidomain.ChatMessage{Role: aidomain.RoleAssistant, Reasoning: message.ReasoningContent}
+			if item.Reasoning == "" {
+				item.Reasoning = message.Reasoning
+			}
 			if text := openAIGatewayContentText(message.Content); text != "" {
 				item.Content = []aidomain.ContentPart{{Type: aidomain.PartText, Text: text}}
 			}
@@ -277,17 +363,26 @@ func openAIGatewayContentText(raw json.RawMessage) string {
 	return builder.String()
 }
 
-func openAIGatewayFinish(reason string) string {
-	switch reason {
+// openAIGatewayFinish 对外的 finish_reason。归一不了的结束原因原样转出（没有就是 "other"），
+// 不冒充 stop —— 下游的 Agent 见到 stop 就会收工。
+func openAIGatewayFinish(result *aidomain.ChatResponse) string {
+	switch result.FinishReason {
+	case aidomain.FinishStop:
+		return "stop"
 	case aidomain.FinishLength:
 		return "length"
 	case aidomain.FinishToolCalls:
 		return "tool_calls"
 	case aidomain.FinishFiltered:
 		return "content_filter"
-	default:
-		return "stop"
 	}
+	if len(result.ToolCalls) > 0 {
+		return "tool_calls"
+	}
+	if result.FinishRaw != "" {
+		return result.FinishRaw
+	}
+	return "other"
 }
 
 func openAIGatewayResponse(result *aidomain.ChatResponse) gin.H {
@@ -314,7 +409,7 @@ func openAIGatewayResponse(result *aidomain.ChatResponse) gin.H {
 		"model": result.Model,
 		"choices": []gin.H{{
 			"index": 0, "message": message,
-			"finish_reason": openAIGatewayFinish(result.FinishReason),
+			"finish_reason": openAIGatewayFinish(result),
 		}},
 		"usage": gin.H{
 			"prompt_tokens":     result.Usage.InputTokens,
@@ -325,41 +420,62 @@ func openAIGatewayResponse(result *aidomain.ChatResponse) gin.H {
 }
 
 // streamOpenAIGateway 把统一流事件翻回 Chat Completions 的 SSE chunk。
+// 应用函数网关没有暂扣这一步：第一个增量或第一次心跳时开流。
 func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidomain.ChatRequest) {
-	header := c.Writer.Header()
-	header.Set("Content-Type", "text/event-stream; charset=utf-8")
-	// no-transform：拦住链路上任何压缩/改写中间层的响应缓冲（详见 ai_agent_handlers.go）。
-	header.Set("Cache-Control", "no-cache, no-transform")
-	header.Set("X-Accel-Buffering", "no")
+	streamOpenAIChat(c, request.Model, func(_ func(string), onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+		return h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request, onEvent)
+	}, func(err error) (int, gin.H) { return aiGatewayErrorBody(aidomain.ProtocolOpenAI, err) })
+}
+
+// aiStreamRunner 发起一次流式调用：begin 在确定要开流时调用（用户中转在暂扣成功后，带上调用编号），
+// 增量经 onEvent 交回，返回聚合好的结论。
+type aiStreamRunner func(begin func(requestNo string), onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error)
+
+// aiStreamErrorBody 一个错误在协议信封里的 HTTP 状态与响应体。还没开流时按普通错误响应回；
+// 开流之后响应体原样作为 SSE 错误事件的数据（OpenAI：`data: {"error":…}`；Anthropic：`event: error`）。
+type aiStreamErrorBody func(error) (int, gin.H)
+
+// aiStreamErrorEvent 错误事件的数据：在 error 对象里补上 HTTP 状态，客户端据此判断能不能重试。
+func aiStreamErrorEvent(status int, body gin.H) gin.H {
+	if inner, ok := body["error"].(gin.H); ok {
+		inner["status"] = status
+	}
+	return body
+}
+
+// streamOpenAIChat Chat Completions 的 SSE 写出：应用函数网关与用户中转共用。写出层见 ai_stream_writer.go。
+//
+// 流的契约（docs/ai-gateway.md「流式」）：
+//   - 成功：增量块 → 带 finish_reason 的收尾块 → 用量块 → `data: [DONE]`；
+//   - 开流之后失败：一个 `data: {"error":{…}}` 块，**不再**写 [DONE] —— 见到 [DONE] 的客户端
+//     会把半截结果当成正常结束；
+//   - 等待与停顿期间每 15 秒一行 `: ping` 注释。
+func streamOpenAIChat(c *gin.Context, model string, run aiStreamRunner, errorBody aiStreamErrorBody) {
+	stream := newAISSEStream(c, aiStreamPingOpenAI)
+	defer stream.Close()
 
 	id := "chatcmpl-" + uuid.NewString()
 	created := time.Now().Unix()
-	wrote := false
 	writeChunk := func(payload any) error {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		if _, err := c.Writer.WriteString("data: " + string(encoded) + "\n\n"); err != nil {
-			return err
-		}
-		c.Writer.Flush()
-		wrote = true
-		return nil
+		return stream.write([]byte("data: " + string(encoded) + "\n\n"))
 	}
 	chunk := func(delta gin.H, finish any) gin.H {
 		return gin.H{
 			"id": id, "object": "chat.completion.chunk", "created": created,
-			"model": request.Model,
+			"model":   model,
 			"choices": []gin.H{{"index": 0, "delta": delta, "finish_reason": finish}},
 		}
 	}
 
-	// 工具调用在 OpenAI chunk 里按 index 编号；统一事件里的 ToolIndex
-	// 来自上游，不一定从 0 连续，这里重新编号。
-	toolIndexes := map[string]int{}
+	// 工具调用在 OpenAI chunk 里按 index 编号；统一事件里的 ToolIndex 是适配器给的序号，
+	// 这里按出现顺序重新编成从 0 连续。按序号而不是按调用编号归组：上游不给编号时编号会撞。
+	toolIndexes := map[int]int{}
 	sentRole := false
-	result, err := h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request,
+	result, err := run(stream.Begin,
 		func(event aidomain.StreamEvent) error {
 			if !sentRole {
 				sentRole = true
@@ -374,13 +490,13 @@ func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidom
 				return writeChunk(chunk(gin.H{"reasoning_content": event.Delta}, nil))
 			case aidomain.StreamToolStart:
 				index := len(toolIndexes)
-				toolIndexes[event.ToolID] = index
+				toolIndexes[event.ToolIndex] = index
 				return writeChunk(chunk(gin.H{"tool_calls": []gin.H{{
 					"index": index, "id": event.ToolID, "type": "function",
 					"function": gin.H{"name": event.ToolName, "arguments": ""},
 				}}}, nil))
 			case aidomain.StreamToolDelta:
-				index, ok := toolIndexes[event.ToolID]
+				index, ok := toolIndexes[event.ToolIndex]
 				if !ok {
 					return nil
 				}
@@ -392,36 +508,38 @@ func (h *Handler) streamOpenAIGateway(c *gin.Context, appID int64, request aidom
 			return nil
 		})
 	if err != nil {
-		if !wrote {
-			writeAIGatewayError(c, aidomain.ProtocolOpenAI, err)
+		status, body := errorBody(err)
+		if stream.failBeforeStart(status, body) {
 			return
 		}
-		// 流已经开了只能以数据块收尾，HTTP 状态改不了。
-		_ = writeChunk(gin.H{"error": gin.H{"message": err.Error(), "type": "api_error"}})
-		_, _ = c.Writer.WriteString("data: [DONE]\n\n")
-		c.Writer.Flush()
+		// 流已经开了只能以错误块收尾，HTTP 状态改不了；不写 [DONE]。
+		_ = writeChunk(aiStreamErrorEvent(status, body))
 		return
 	}
-	_ = writeChunk(chunk(gin.H{}, openAIGatewayFinish(result.FinishReason)))
+	_ = writeChunk(chunk(gin.H{}, openAIGatewayFinish(result)))
+	// 请求没指定型号时（走通道默认型号）用量块报上游实际用的型号。
+	finalModel := model
+	if finalModel == "" {
+		finalModel = result.Model
+	}
 	_ = writeChunk(gin.H{
 		"id": id, "object": "chat.completion.chunk", "created": created,
-		"model": result.Model, "choices": []gin.H{},
+		"model": finalModel, "choices": []gin.H{},
 		"usage": gin.H{
 			"prompt_tokens":     result.Usage.InputTokens,
 			"completion_tokens": result.Usage.OutputTokens,
 			"total_tokens":      result.Usage.TotalTokens,
 		},
 	})
-	_, _ = c.Writer.WriteString("data: [DONE]\n\n")
-	c.Writer.Flush()
+	_ = stream.write([]byte("data: [DONE]\n\n"))
 }
 
 // ═══════════════════════ Anthropic Messages 入站 ═══════════════════════
 
 type anthropicGatewayRequest struct {
-	Model     string          `json:"model"`
-	System    json.RawMessage `json:"system"`
-	Messages  []struct {
+	Model    string          `json:"model"`
+	System   json.RawMessage `json:"system"`
+	Messages []struct {
 		Role    string          `json:"role"`
 		Content json.RawMessage `json:"content"`
 	} `json:"messages"`
@@ -438,6 +556,11 @@ type anthropicGatewayRequest struct {
 	TopP          *float64 `json:"top_p"`
 	StopSequences []string `json:"stop_sequences"`
 	Stream        bool     `json:"stream"`
+	// Thinking {type: enabled|disabled|adaptive, budget_tokens}；OutputConfig.Effort 是新版的强度写法。
+	Thinking     *openAIGatewayThinking `json:"thinking"`
+	OutputConfig *struct {
+		Effort string `json:"effort"`
+	} `json:"output_config"`
 }
 
 // AppAIMessages POST /api/apps/:appkey/ai/v1/messages
@@ -518,10 +641,22 @@ func anthropicGatewayToChatRequest(req anthropicGatewayRequest) (aidomain.ChatRe
 	if len(req.Messages) == 0 {
 		return out, apperrors.New(40000, http.StatusBadRequest, "messages 不能为空")
 	}
+	effort := ""
+	if req.OutputConfig != nil {
+		effort = req.OutputConfig.Effort
+	}
+	reasoning, err := gatewayReasoning(effort, req.Thinking)
+	if err != nil {
+		return out, err
+	}
+	out.Reasoning = reasoning
 
 	type anthropicBlock struct {
 		Type      string          `json:"type"`
 		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Signature string          `json:"signature"`
+		Data      string          `json:"data"`
 		ID        string          `json:"id"`
 		Name      string          `json:"name"`
 		Input     json.RawMessage `json:"input"`
@@ -577,6 +712,16 @@ func anthropicGatewayToChatRequest(req anthropicGatewayRequest) (aidomain.ChatRe
 					item.ToolCalls = append(item.ToolCalls, aidomain.ToolCall{
 						ID: block.ID, Name: block.Name, Arguments: arguments,
 					})
+				case "thinking":
+					item.Reasoning += block.Thinking
+					// 没签名的思考块上游不认；留给签名回填去补。
+					if block.Signature != "" {
+						item.Thinking = append(item.Thinking, aidomain.ThinkingBlock{Text: block.Thinking, Signature: block.Signature})
+					}
+				case "redacted_thinking":
+					if block.Data != "" {
+						item.Thinking = append(item.Thinking, aidomain.ThinkingBlock{Redacted: block.Data})
+					}
 				}
 			}
 			out.Messages = append(out.Messages, item)
@@ -611,21 +756,41 @@ func anthropicGatewayToChatRequest(req anthropicGatewayRequest) (aidomain.ChatRe
 	return out, nil
 }
 
-func anthropicGatewayFinish(reason string) string {
-	switch reason {
+// anthropicGatewayFinish 对外的 stop_reason；与 openAIGatewayFinish 同一原则，不把认不出的原因冒充成 end_turn。
+func anthropicGatewayFinish(result *aidomain.ChatResponse) string {
+	switch result.FinishReason {
+	case aidomain.FinishStop:
+		return "end_turn"
 	case aidomain.FinishLength:
 		return "max_tokens"
 	case aidomain.FinishToolCalls:
 		return "tool_use"
 	case aidomain.FinishFiltered:
 		return "refusal"
-	default:
-		return "end_turn"
 	}
+	if len(result.ToolCalls) > 0 {
+		return "tool_use"
+	}
+	if result.FinishRaw != "" {
+		return result.FinishRaw
+	}
+	return "other"
 }
 
 func anthropicGatewayResponse(result *aidomain.ChatResponse) gin.H {
-	content := make([]gin.H, 0, 2)
+	content := make([]gin.H, 0, 2+len(result.Thinking))
+	switch {
+	case len(result.Thinking) > 0:
+		for _, block := range result.Thinking {
+			if block.Redacted != "" {
+				content = append(content, gin.H{"type": "redacted_thinking", "data": block.Redacted})
+			} else {
+				content = append(content, gin.H{"type": "thinking", "thinking": block.Text, "signature": block.Signature})
+			}
+		}
+	case result.Reasoning != "":
+		content = append(content, gin.H{"type": "thinking", "thinking": result.Reasoning, "signature": ""})
+	}
 	if result.Text != "" {
 		content = append(content, gin.H{"type": "text", "text": result.Text})
 	}
@@ -643,7 +808,7 @@ func anthropicGatewayResponse(result *aidomain.ChatResponse) gin.H {
 	return gin.H{
 		"id": id, "type": "message", "role": "assistant",
 		"model": result.Model, "content": content,
-		"stop_reason": anthropicGatewayFinish(result.FinishReason), "stop_sequence": nil,
+		"stop_reason": anthropicGatewayFinish(result), "stop_sequence": nil,
 		"usage": gin.H{
 			"input_tokens":  result.Usage.InputTokens,
 			"output_tokens": result.Usage.OutputTokens,
@@ -653,30 +818,30 @@ func anthropicGatewayResponse(result *aidomain.ChatResponse) gin.H {
 
 // streamAnthropicGateway 把统一流事件翻回 Messages 的 SSE 事件序列。
 func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request aidomain.ChatRequest) {
-	header := c.Writer.Header()
-	header.Set("Content-Type", "text/event-stream; charset=utf-8")
-	// no-transform：拦住链路上任何压缩/改写中间层的响应缓冲（详见 ai_agent_handlers.go）。
-	header.Set("Cache-Control", "no-cache, no-transform")
-	header.Set("X-Accel-Buffering", "no")
+	streamAnthropicChat(c, request.Model, func(_ func(string), onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+		return h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request, onEvent)
+	}, func(err error) (int, gin.H) { return aiGatewayErrorBody(aidomain.ProtocolAnthropic, err) })
+}
+
+// streamAnthropicChat Messages 的 SSE 写出：应用函数网关与用户中转共用。写出层见 ai_stream_writer.go。
+// 开流之后失败以 `event: error` 收尾（不写 message_stop）；等待与停顿期间每 15 秒一个 `event: ping`。
+func streamAnthropicChat(c *gin.Context, model string, run aiStreamRunner, errorBody aiStreamErrorBody) {
+	stream := newAISSEStream(c, aiStreamPingAnthropic)
+	defer stream.Close()
 
 	id := "msg_" + uuid.NewString()
-	wrote := false
 	writeEvent := func(event string, payload any) error {
 		encoded, err := json.Marshal(payload)
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(c.Writer, "event: %s\ndata: %s\n\n", event, encoded); err != nil {
-			return err
-		}
-		c.Writer.Flush()
-		wrote = true
-		return nil
+		return stream.write([]byte(fmt.Sprintf("event: %s\ndata: %s\n\n", event, encoded)))
 	}
 
 	// Anthropic 流是按内容块组织的：进入新块前要关上一块。
 	blockIndex := -1
 	blockOpen := ""
+	openTool := -1 // 当前打开的工具块对应的 ToolIndex
 	closeBlock := func() error {
 		if blockOpen == "" {
 			return nil
@@ -707,14 +872,14 @@ func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request ai
 		return writeEvent("message_start", gin.H{
 			"type": "message_start",
 			"message": gin.H{
-				"id": id, "type": "message", "role": "assistant", "model": request.Model,
+				"id": id, "type": "message", "role": "assistant", "model": model,
 				"content": []gin.H{}, "stop_reason": nil, "stop_sequence": nil,
 				"usage": gin.H{"input_tokens": 0, "output_tokens": 0},
 			},
 		})
 	}
 
-	result, err := h.aiProvider.GatewayChatStream(c.Request.Context(), appID, request,
+	result, err := run(stream.Begin,
 		func(event aidomain.StreamEvent) error {
 			if err := ensureStart(); err != nil {
 				return err
@@ -737,11 +902,13 @@ func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request ai
 					"delta": gin.H{"type": "thinking_delta", "thinking": event.Delta},
 				})
 			case aidomain.StreamToolStart:
+				openTool = event.ToolIndex
 				return openBlock("tool_use", gin.H{
 					"type": "tool_use", "id": event.ToolID, "name": event.ToolName, "input": gin.H{},
 				})
 			case aidomain.StreamToolDelta:
-				if blockOpen != "tool_use" {
+				// 内容块不能交错：只接当前打开的那个工具块的入参。
+				if blockOpen != "tool_use" || event.ToolIndex != openTool {
 					return nil
 				}
 				return writeEvent("content_block_delta", gin.H{
@@ -752,21 +919,18 @@ func (h *Handler) streamAnthropicGateway(c *gin.Context, appID int64, request ai
 			return nil
 		})
 	if err != nil {
-		if !wrote {
-			writeAIGatewayError(c, aidomain.ProtocolAnthropic, err)
+		status, body := errorBody(err)
+		if stream.failBeforeStart(status, body) {
 			return
 		}
-		_ = writeEvent("error", gin.H{
-			"type":  "error",
-			"error": gin.H{"type": "api_error", "message": err.Error()},
-		})
+		_ = writeEvent("error", aiStreamErrorEvent(status, body))
 		return
 	}
 	_ = ensureStart()
 	_ = closeBlock()
 	_ = writeEvent("message_delta", gin.H{
 		"type":  "message_delta",
-		"delta": gin.H{"stop_reason": anthropicGatewayFinish(result.FinishReason), "stop_sequence": nil},
+		"delta": gin.H{"stop_reason": anthropicGatewayFinish(result), "stop_sequence": nil},
 		"usage": gin.H{"output_tokens": result.Usage.OutputTokens},
 	})
 	_ = writeEvent("message_stop", gin.H{"type": "message_stop"})

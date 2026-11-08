@@ -9,7 +9,7 @@ import { apiRequest, buildQuery } from "./client";
  */
 
 /** 协议适配器：决定 token 交换与用户信息解析的差异 */
-export type OAuthKind = "generic" | "qq" | "wechat" | "weibo" | "github" | "microsoft";
+export type OAuthKind = "generic" | "qq" | "wechat" | "weibo" | "github" | "microsoft" | "google";
 
 /** token 端点凭据传递方式 */
 export type TokenAuthStyle = "auto" | "params" | "basic";

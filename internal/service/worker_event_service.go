@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	notificationdomain "aegis/internal/domain/notification"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
 	"go.uber.org/zap"
@@ -13,6 +14,13 @@ type WorkerEventService struct {
 	log      *zap.Logger
 	pg       *pgrepo.Repository
 	sessions *redisrepo.SessionRepository
+	// notifications 站内信出口（签到成功提醒），见 SetNotificationService
+	notifications notificationDeliverer
+}
+
+// SetNotificationService 接上站内信：签到提醒经 NotificationService.Deliver 投递（缓存失效与实时推送都在那里）。
+func (s *WorkerEventService) SetNotificationService(notifications notificationDeliverer) {
+	s.notifications = notifications
 }
 
 func NewWorkerEventService(log *zap.Logger, pg *pgrepo.Repository, sessions *redisrepo.SessionRepository) *WorkerEventService {
@@ -78,7 +86,7 @@ func (s *WorkerEventService) HandleUserSignedIn(ctx context.Context, payload map
 
 	userID := int64FromAny(payload["user_id"])
 	appID := int64FromAny(payload["appid"])
-	if userID == 0 || appID == 0 {
+	if userID == 0 || appID == 0 || s.notifications == nil {
 		return nil
 	}
 
@@ -96,10 +104,13 @@ func (s *WorkerEventService) HandleUserSignedIn(ctx context.Context, payload map
 	if source == "auto" {
 		title = "自动签到成功"
 	}
-	if err := s.pg.CreateUserNotification(ctx, appID, userID, "signin", title, content, "info", metadata); err != nil {
-		return err
+	// 站内信失败只记日志：签到审计已经落库，返回错误会让消息重投、审计重复
+	if _, err := s.notifications.Deliver(ctx, notificationdomain.DeliverInput{
+		AppID: appID, UserID: userID, Type: "signin", Title: title, Content: content, Level: "info", Metadata: metadata,
+		Action: notificationdomain.RouteAction(notificationdomain.RouteSignIn, "查看签到"),
+	}); err != nil {
+		s.log.Warn("signin notification failed", zap.Int64("appid", appID), zap.Int64("user_id", userID), zap.Error(err))
 	}
-	s.invalidateNotificationCaches(ctx, appID, userID)
 	return nil
 }
 
@@ -126,21 +137,6 @@ func sourceLabel(source string) string {
 		return "自动"
 	default:
 		return "手动"
-	}
-}
-
-func (s *WorkerEventService) invalidateNotificationCaches(ctx context.Context, appID int64, userID int64) {
-	if s.sessions == nil {
-		return
-	}
-	if err := s.sessions.DeleteNotificationListCache(ctx, appID, userID); err != nil {
-		s.log.Warn("delete notification list cache failed", zap.Int64("appid", appID), zap.Int64("user_id", userID), zap.Error(err))
-	}
-	if err := s.sessions.DeleteNotificationUnreadCount(ctx, appID, userID); err != nil {
-		s.log.Warn("delete notification unread cache failed", zap.Int64("appid", appID), zap.Int64("user_id", userID), zap.Error(err))
-	}
-	if err := s.sessions.DeleteMyView(ctx, appID, userID); err != nil {
-		s.log.Warn("delete my view cache failed after async notification", zap.Int64("appid", appID), zap.Int64("user_id", userID), zap.Error(err))
 	}
 }
 

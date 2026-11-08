@@ -40,6 +40,7 @@ func (s *AppService) ListAppSignInRecords(ctx context.Context, appID int64, quer
 	}
 
 	items, total, err := s.pg.ListAppSignInRecords(ctx, appID, appdomain.AppSignInRecordQuery{
+		UserID:    query.UserID,
 		Keyword:   query.Keyword,
 		Source:    query.Source,
 		BonusType: query.BonusType,

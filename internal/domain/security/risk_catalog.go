@@ -9,16 +9,41 @@ package security
 //
 // 与支付渠道的 `Provider.Describe()`、通知渠道的 `/notify/catalog` 是同一套约定。
 
-// SceneCatalog 场景目录
-func SceneCatalog() []CatalogEntry {
-	return []CatalogEntry{
-		{Value: SceneLogin, Label: "登录", Description: "用户与管理员登录，命中 block/ban 直接拒绝本次登录"},
-		{Value: SceneRegister, Label: "注册", Description: "新账号注册，命中 block/ban 直接拒绝建号"},
-		{Value: ScenePayment, Label: "支付", Description: "下单与支付前置校验"},
-		{Value: SceneInvite, Label: "邀请", Description: "邀请码兑换 / 拉新奖励"},
-		{Value: SceneLottery, Label: "抽奖", Description: "抽奖与活动参与"},
-		{Value: SceneAPI, Label: "接口", Description: "通用接口调用"},
+// SceneCatalog 场景目录。Service 写的是**真实的接入点**：新增场景时先在业务里接上评估，再进目录。
+func SceneCatalog() []SceneCatalogEntry {
+	return []SceneCatalogEntry{
+		{CatalogEntry: CatalogEntry{Value: SceneLogin, Label: "登录", Description: "应用用户与管理员登录、卡密登录"}, Service: "认证", SupportsCaptcha: true, Subject: "account"},
+		{CatalogEntry: CatalogEntry{Value: SceneRegister, Label: "注册", Description: "新账号注册"}, Service: "认证", SupportsCaptcha: true, Subject: "account"},
+		{CatalogEntry: CatalogEntry{Value: ScenePasswordReset, Label: "找回密码", Description: "未登录发起的找回密码"}, Service: "认证", SupportsCaptcha: true, Subject: "account"},
+		{CatalogEntry: CatalogEntry{Value: SceneVerifyCode, Label: "发送验证码", Description: "短信验证码发送"}, Service: "验证码", SupportsCaptcha: true, Subject: "account"},
+		{CatalogEntry: CatalogEntry{Value: ScenePayment, Label: "支付下单", Description: "用户发起支付订单"}, Service: "支付", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneInvite, Label: "邀请", Description: "填写邀请码"}, Service: "邀请", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneLottery, Label: "抽奖", Description: "抽奖活动"}, Service: "抽奖", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneSignIn, Label: "签到", Description: "每日签到"}, Service: "签到", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneCardKey, Label: "卡密兑换", Description: "兑换卡密"}, Service: "卡密", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: ScenePointsRedeem, Label: "积分兑换", Description: "积分商城兑换"}, Service: "积分商城", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneAdReward, Label: "广告奖励", Description: "激励广告领取奖励"}, Service: "激励广告", Subject: "user"},
+		{CatalogEntry: CatalogEntry{Value: SceneAPI, Label: "接口", Description: "管理端评估接口与通用调用"}, Service: "通用", Subject: "anonymous"},
 	}
+}
+
+// FindScene 按取值找场景目录项
+func FindScene(scene string) (SceneCatalogEntry, bool) {
+	for _, entry := range SceneCatalog() {
+		if entry.Value == scene {
+			return entry, true
+		}
+	}
+	return SceneCatalogEntry{}, false
+}
+
+// ValidRuleScene 规则与策略可用的场景（含「全部场景」）
+func ValidRuleScene(scene string) bool {
+	if scene == SceneAll {
+		return true
+	}
+	_, ok := FindScene(scene)
+	return ok
 }
 
 // SceneValues 场景取值集合，供校验使用
@@ -72,6 +97,94 @@ func ActionValues() []string {
 	return values
 }
 
+// DimensionCatalog 风险维度目录
+func DimensionCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Value: DimNetwork, Label: "网络", Description: "代理、VPN、机房、信誉分、网段与运营商", Tone: "info"},
+		{Value: DimDevice, Label: "设备", Description: "设备新旧、多账号共用、多 IP 漂移", Tone: "warning"},
+		{Value: DimAccount, Label: "账号", Description: "账号年龄、历史风险、异地切换", Tone: "danger"},
+		{Value: DimBehavior, Label: "行为", Description: "频率、限流、扩散速度、时段", Tone: "warning"},
+		{Value: DimGeo, Label: "地理", Description: "归属地与地区名单", Tone: "info"},
+		{Value: DimClient, Label: "客户端", Description: "User-Agent 与客户端类型", Tone: "neutral"},
+		{Value: DimList, Label: "名单", Description: "观察名单命中", Tone: "danger"},
+		{Value: DimCustom, Label: "自定义", Description: "自定义表达式", Tone: "neutral"},
+	}
+}
+
+// DimensionValues 维度取值集合
+func DimensionValues() []string {
+	entries := DimensionCatalog()
+	values := make([]string, 0, len(entries))
+	for _, e := range entries {
+		values = append(values, e.Value)
+	}
+	return values
+}
+
+// RuleModeCatalog 规则模式目录
+func RuleModeCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Value: RuleModeEnforce, Label: "生效", Description: "命中计分，可触发强制处置", Tone: "success"},
+		{Value: RuleModeObserve, Label: "观察", Description: "命中只留痕，不计分", Tone: "info"},
+	}
+}
+
+// ListKindCatalog 名单种类目录
+func ListKindCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Value: ListKindBlock, Label: "黑名单", Description: "命中直接拦截", Tone: "danger"},
+		{Value: ListKindAllow, Label: "白名单", Description: "命中直接放行，跳过规则", Tone: "success"},
+		{Value: ListKindWatch, Label: "观察名单", Description: "命中后由「观察名单」规则加分", Tone: "warning"},
+	}
+}
+
+// ListTypeCatalog 名单类型目录
+func ListTypeCatalogEntries() []ListTypeCatalog {
+	return []ListTypeCatalog{
+		{CatalogEntry: CatalogEntry{Value: ListTypeIP, Label: "IP"}, Placeholder: "1.2.3.4"},
+		{CatalogEntry: CatalogEntry{Value: ListTypeCIDR, Label: "网段"}, Placeholder: "10.0.0.0/8", Pattern: true},
+		{CatalogEntry: CatalogEntry{Value: ListTypeDevice, Label: "设备"}, Placeholder: "设备号"},
+		{CatalogEntry: CatalogEntry{Value: ListTypeAccount, Label: "账号"}, Placeholder: "登录名 / 邮箱 / 手机号"},
+		{CatalogEntry: CatalogEntry{Value: ListTypeUser, Label: "用户 ID"}, Placeholder: "用户主键"},
+		{CatalogEntry: CatalogEntry{Value: ListTypeEmailDomain, Label: "邮箱域名"}, Placeholder: "mailinator.com", Pattern: true},
+		{CatalogEntry: CatalogEntry{Value: ListTypePhonePrefix, Label: "手机号段"}, Placeholder: "170", Pattern: true},
+		{CatalogEntry: CatalogEntry{Value: ListTypeASN, Label: "ASN / 运营商"}, Placeholder: "AS14061", Pattern: true},
+		{CatalogEntry: CatalogEntry{Value: ListTypeCountry, Label: "国家 / 地区"}, Placeholder: "US", Pattern: true},
+		{CatalogEntry: CatalogEntry{Value: ListTypeUAKeyword, Label: "UA 关键词"}, Placeholder: "python-requests", Pattern: true},
+	}
+}
+
+// ListTypeValues 名单类型取值集合
+func ListTypeValues() []string {
+	entries := ListTypeCatalogEntries()
+	values := make([]string, 0, len(entries))
+	for _, e := range entries {
+		values = append(values, e.Value)
+	}
+	return values
+}
+
+// BanTargetCatalog 封禁对象目录
+func BanTargetCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Value: BanTargetAccount, Label: "账号", Description: "账号封禁（撤销全部会话）"},
+		{Value: BanTargetDevice, Label: "设备", Description: "设备加入黑名单"},
+		{Value: BanTargetIP, Label: "IP", Description: "IP 加入黑名单（只挡风控评估点）"},
+		{Value: BanTargetFirewall, Label: "防火墙", Description: "防火墙封禁 IP（挡全部请求）"},
+	}
+}
+
+// DecisionByCatalog 判定来源目录
+func DecisionByCatalog() []CatalogEntry {
+	return []CatalogEntry{
+		{Value: DecisionByAllowlist, Label: "白名单", Tone: "success"},
+		{Value: DecisionByBlocklist, Label: "黑名单", Tone: "danger"},
+		{Value: DecisionByRule, Label: "规则强制", Tone: "warning"},
+		{Value: DecisionByPolicy, Label: "分数策略", Tone: "info"},
+		{Value: DecisionByNone, Label: "无干预", Tone: "neutral"},
+	}
+}
+
 // DeviceTagCatalog 设备风险标签目录
 func DeviceTagCatalog() []CatalogEntry {
 	return []CatalogEntry{
@@ -104,6 +217,8 @@ const (
 	condGroupNetwork   = "网络与情报"
 	condGroupGeo       = "地理"
 	condGroupAdvanced  = "高级"
+	condGroupAccount   = "账号"
+	condGroupList      = "名单"
 )
 
 var rateDimensionOptions = []CatalogEntry{
@@ -120,6 +235,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 	return []ConditionCatalog{
 		{
 			Value:         CondIPFrequency,
+			Dimension:     DimBehavior,
 			Label:         "IP 高频访问",
 			Group:         condGroupFrequency,
 			Description:   "同一 IP 在窗口内的请求数超过阈值即命中。计数来自 Redis 滑动窗口。",
@@ -131,6 +247,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:         CondRateLimited,
+			Dimension:     DimBehavior,
 			Label:         "触发限流",
 			Group:         condGroupFrequency,
 			Description:   "命中平台配置的 GCRA 限流阈值（RISK_RATE_LIMIT_* 环境变量）即命中，无需再配阈值。",
@@ -141,6 +258,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:         CondAccountVelocity,
+			Dimension:     DimBehavior,
 			Label:         "账号扩散速度",
 			Group:         condGroupFrequency,
 			Description:   "同一 IP 或设备在窗口内触达的**不同账号数**超过阈值即命中，用于识别撞库与批量注册。基数统计走 Redis HyperLogLog。",
@@ -152,6 +270,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondDeviceNew,
+			Dimension:   DimDevice,
 			Label:       "新设备",
 			Group:       condGroupDevice,
 			Description: "设备首次出现距今不足指定小时数即命中。设备档案由每次评估自动落库。",
@@ -161,6 +280,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:         CondDeviceShared,
+			Dimension:     DimDevice,
 			Label:         "设备被多账号共用",
 			Group:         condGroupDevice,
 			Description:   "同一设备在窗口内出现过的不同账号数超过阈值即命中，用于识别工作室批量操作。",
@@ -171,12 +291,14 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondUABot,
+			Dimension:   DimClient,
 			Label:       "Bot 客户端",
 			Group:       condGroupClient,
 			Description: "User-Agent 被识别为爬虫 / 机器人即命中，无需额外参数。",
 		},
 		{
 			Value:       CondUAMissing,
+			Dimension:   DimClient,
 			Label:       "缺失或异常 UA",
 			Group:       condGroupClient,
 			Description: "User-Agent 为空或短于指定长度即命中。正常浏览器与 App 都会带完整 UA。",
@@ -186,6 +308,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondUADeviceClass,
+			Dimension:   DimClient,
 			Label:       "客户端类型匹配",
 			Group:       condGroupClient,
 			Description: "命中指定的客户端类型（桌面 / 移动 / 平板 / Bot / 未知）。",
@@ -202,6 +325,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:            CondIPProxy,
+			Dimension:        DimNetwork,
 			Label:            "代理 / VPN",
 			Group:            condGroupNetwork,
 			Description:      "IP 被判定为代理或 VPN 即命中。可勾选是否把 Tor 与机房 IP 一并计入。",
@@ -213,6 +337,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:            CondIPReputation,
+			Dimension:        DimNetwork,
 			Label:            "IP 信誉分",
 			Group:            condGroupNetwork,
 			Description:      "外部情报源给出的 IP 风险分不低于阈值即命中。未配置情报源时该条件永不命中。",
@@ -223,6 +348,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondIPCIDR,
+			Dimension:   DimNetwork,
 			Label:       "IP 网段匹配",
 			Group:       condGroupNetwork,
 			Description: "请求 IP 落在任一网段内即命中，支持 IPv4 / IPv6 CIDR。",
@@ -233,6 +359,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondGeoAnomaly,
+			Dimension:   DimGeo,
 			Label:       "归属地异常",
 			Group:       condGroupGeo,
 			Description: "请求归属国与预期国家不一致即命中。归属地未知时按「不命中」处理，避免情报缺失被当成异常。",
@@ -242,6 +369,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondGeoCountryIn,
+			Dimension:   DimGeo,
 			Label:       "归属地在名单内",
 			Group:       condGroupGeo,
 			Description: "请求归属国在名单内即命中，用于封禁高风险地区。",
@@ -251,6 +379,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondGeoCountryNotIn,
+			Dimension:   DimGeo,
 			Label:       "归属地不在名单内",
 			Group:       condGroupGeo,
 			Description: "请求归属国不在名单内即命中，用于只服务特定地区的业务。",
@@ -260,6 +389,7 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:            CondASNIn,
+			Dimension:        DimNetwork,
 			Label:            "ASN / ISP 匹配",
 			Group:            condGroupNetwork,
 			Description:      "IP 所属自治域或运营商名称包含任一关键词即命中。",
@@ -269,7 +399,86 @@ func ConditionCatalogEntries() []ConditionCatalog {
 			},
 		},
 		{
+			Value:       CondAccountNew,
+			Label:       "新注册账号",
+			Group:       condGroupAccount,
+			Dimension:   DimAccount,
+			Description: "账号注册不足指定小时数即命中。只在能认出用户的场景生效，认不出用户时不命中。",
+			Fields: []FieldSchema{
+				{Key: "max_hours", Label: "账号年龄上限（小时）", Type: "number", Required: true, Default: 24, Min: new(0.0)},
+			},
+		},
+		{
+			Value:         CondAccountIPSpread,
+			Label:         "账号多 IP 漂移",
+			Group:         condGroupAccount,
+			Dimension:     DimAccount,
+			Description:   "同一账号在窗口内使用过的不同 IP 数达到阈值即命中，用于识别共享账号与盗号。",
+			RequiresRedis: true,
+			Fields: []FieldSchema{
+				{Key: "threshold", Label: "不同 IP 数阈值", Type: "number", Required: true, Default: 5, Min: new(2.0)},
+			},
+		},
+		{
+			Value:         CondAccountRiskTrail,
+			Label:         "账号历史高危",
+			Group:         condGroupAccount,
+			Dimension:     DimAccount,
+			Description:   "账号（或已登录用户）近 7 天被判为高危及以上的次数达到阈值即命中。",
+			RequiresRedis: true,
+			Fields: []FieldSchema{
+				{Key: "threshold", Label: "高危次数阈值", Type: "number", Required: true, Default: 3, Min: new(1.0)},
+			},
+		},
+		{
+			Value:         CondGeoJump,
+			Label:         "归属地跳变",
+			Group:         condGroupGeo,
+			Dimension:     DimGeo,
+			Description:   "账号本次归属国与上一次不同即命中。首次出现或归属地未知时不命中。",
+			RequiresRedis: true,
+		},
+		{
+			Value:         CondDeviceIPSpread,
+			Label:         "设备多 IP 漂移",
+			Group:         condGroupDevice,
+			Dimension:     DimDevice,
+			Description:   "同一设备在窗口内出现过的不同 IP 数达到阈值即命中，用于识别代理池轮换。",
+			RequiresRedis: true,
+			Fields: []FieldSchema{
+				{Key: "threshold", Label: "不同 IP 数阈值", Type: "number", Required: true, Default: 8, Min: new(2.0)},
+			},
+		},
+		{
+			Value:         CondSceneVelocity,
+			Label:         "场景小时频次",
+			Group:         condGroupFrequency,
+			Dimension:     DimBehavior,
+			Description:   "同一主体一小时内在本场景的请求次数超过阈值即命中，如一小时抽奖 200 次。",
+			RequiresRedis: true,
+			Fields: []FieldSchema{
+				{Key: "dimension", Label: "统计主体", Type: "select", Default: "subject", Options: []CatalogEntry{
+					{Value: "subject", Label: "按账号或用户"},
+					{Value: "device", Label: "按设备"},
+					{Value: "ip", Label: "按 IP"},
+				}},
+				{Key: "threshold", Label: "每小时最大次数", Type: "number", Required: true, Default: 60, Min: new(1.0)},
+			},
+		},
+		{
+			Value:       CondListWatch,
+			Label:       "观察名单命中",
+			Group:       condGroupList,
+			Dimension:   DimList,
+			Description: "请求的 IP / 设备 / 账号等命中观察名单即命中。可限定名单类型。",
+			Fields: []FieldSchema{
+				{Key: "list_types", Label: "限定名单类型", Type: "list", Placeholder: "ip, device, email_domain",
+					Help: "留空为任意类型"},
+			},
+		},
+		{
 			Value:       CondTimeWindow,
+			Dimension:   DimBehavior,
 			Label:       "时段匹配",
 			Group:       condGroupAdvanced,
 			Description: "请求发生在指定时段内即命中（按平台默认时区计算）。跨零点写法如 23:00–06:00。",
@@ -280,12 +489,14 @@ func ConditionCatalogEntries() []ConditionCatalog {
 		},
 		{
 			Value:       CondCustomExpr,
+			Dimension:   DimCustom,
 			Label:       "自定义表达式",
 			Group:       condGroupAdvanced,
 			Description: "用 expr 表达式自由组合全部环境变量。表达式在保存时即做编译校验，写错的变量名当场报错而不是静默永不命中。",
 			Fields: []FieldSchema{
 				{Key: "expression", Label: "表达式", Type: "textarea", Required: true,
 					Placeholder: "ip_request_count > 100 and device_age_hours < 24"},
+				{Key: "dimension", Label: "归入维度", Type: "select", Default: DimCustom, Options: DimensionCatalog()},
 			},
 		},
 	}
@@ -361,6 +572,24 @@ func VariableCatalogEntries() []VariableCatalog {
 		{Name: "geo_city", Type: "string", Group: "地理", Description: "归属城市"},
 		{Name: "geo_known", Type: "bool", Group: "地理", Description: "归属地是否已解析出来"},
 
+		{Name: "user_known", Type: "bool", Group: "账号", Description: "是否认出了用户"},
+		{Name: "user_age_hours", Type: "float", Group: "账号", Description: "账号注册至今的小时数，认不出用户为 0"},
+		{Name: "account_kind", Type: "string", Group: "账号", Description: "账号形态：email / phone / name / 空"},
+		{Name: "email_domain", Type: "string", Group: "账号", Description: "邮箱账号的域名（小写）", Example: `email_domain endsWith ".ru"`},
+		{Name: "account_risk_trail", Type: "int", Group: "账号", Description: "近 7 天被判为高危及以上的次数"},
+		{Name: "account_last_country", Type: "string", Group: "账号", Description: "账号上一次请求的归属国"},
+		{Name: "geo_changed", Type: "bool", Group: "账号", Description: "本次归属国与上一次不同"},
+
+		{Name: "device_ips_seen", Type: "int", Group: "设备", Description: "窗口内该设备出现过的不同 IP 数"},
+
+		{Name: "scene_subject_hourly", Type: "int", Group: "频率", Description: "同账号或用户一小时内在本场景的次数"},
+		{Name: "scene_device_hourly", Type: "int", Group: "频率", Description: "同设备一小时内在本场景的次数"},
+		{Name: "scene_ip_hourly", Type: "int", Group: "频率", Description: "同 IP 一小时内在本场景的次数"},
+
+		{Name: "list_watch", Type: "bool", Group: "名单", Description: "是否命中任一观察名单"},
+		{Name: "list_watch_types", Type: "[]string", Group: "名单", Description: "命中的观察名单类型", Example: `"device" in list_watch_types`},
+		{Name: "captcha_passed", Type: "bool", Group: "请求", Description: "本次请求已通过图形验证码"},
+
 		{Name: "extra", Type: "map", Group: "扩展", Description: "调用方透传的自定义字段", Example: `extra["channel"] == "h5"`},
 	}
 }
@@ -384,6 +613,8 @@ func ExprSampleEntries() []ExprSample {
 		{Title: "被共用的设备", Expression: "device_accounts_seen >= 5 and not device_blocked", Note: "设备被多账号共用但尚未处置"},
 		{Title: "排除加白 IP 的代理判定", Expression: "(ip_is_proxy or ip_is_vpn) and not ip_trusted"},
 		{Title: "云厂商网段", Expression: `any_cidr(ip, ["13.104.0.0/14", "20.33.0.0/16"])`},
+		{Title: "新账号异地薅羊毛", Expression: `user_age_hours < 24 and geo_changed and scene in ["lottery", "invite", "ad_reward"]`},
+		{Title: "临时邮箱注册", Expression: `scene == "register" and contains_any(email_domain, ["mailinator", "tempmail", "10minutemail"])`},
 	}
 }
 
@@ -391,6 +622,13 @@ func ExprSampleEntries() []ExprSample {
 func BuildRiskMetadata() RiskMetadata {
 	return RiskMetadata{
 		Scenes:         SceneCatalog(),
+		Dimensions:     DimensionCatalog(),
+		RuleModes:      RuleModeCatalog(),
+		ListKinds:      ListKindCatalog(),
+		ListTypes:      ListTypeCatalogEntries(),
+		BanTargets:     BanTargetCatalog(),
+		DecisionBy:     DecisionByCatalog(),
+		Templates:      TemplateSummaries(),
 		Levels:         LevelCatalogEntries(),
 		Actions:        ActionCatalog(),
 		ConditionTypes: ConditionCatalogEntries(),
@@ -400,4 +638,24 @@ func BuildRiskMetadata() RiskMetadata {
 		IPTags:         IPTagCatalog(),
 		Samples:        ExprSampleEntries(),
 	}
+}
+
+// ConditionDimension 条件类型所属维度。自定义表达式可由 conditionData.dimension 指定。
+func ConditionDimension(conditionType string, data map[string]any) string {
+	if conditionType == CondCustomExpr {
+		if dim, ok := data["dimension"].(string); ok {
+			for _, v := range DimensionValues() {
+				if v == dim {
+					return dim
+				}
+			}
+		}
+		return DimCustom
+	}
+	for _, entry := range ConditionCatalogEntries() {
+		if entry.Value == conditionType {
+			return entry.Dimension
+		}
+	}
+	return DimCustom
 }

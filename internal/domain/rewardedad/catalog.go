@@ -34,6 +34,17 @@ var featureMinutesSpec = cardkeydomain.RewardSpec{
 	Max:   MaxFeatureMinutes,
 }
 
+// aiCreditSpec 「AI 额度」的自述。取值形态是点数（Reward.Amount）。
+var aiCreditSpec = cardkeydomain.RewardSpec{
+	Type:  RewardAICredit,
+	Label: "AI 额度",
+	Hint:  "给 AI 中转加赠送额度，1 点按 1 积分定价、不过期；调用时按应用设置的扣费顺序使用",
+	Value: cardkeydomain.ValueAmount,
+	Unit:  "点",
+	Min:   1,
+	Max:   MaxAICreditPoints,
+}
+
 // RewardCatalog 激励广告可配的权益档位：卡密目录的子集（顺序沿用卡密目录），末尾加上广告独有的「功能时长」。
 //
 // 「会员天数」的说明与卡密不同：卡密赠送的天数不带功能，激励广告的按场景的会员权益带。
@@ -51,6 +62,9 @@ func RewardCatalog() []cardkeydomain.RewardSpec {
 func FindRewardSpec(rewardType string) (cardkeydomain.RewardSpec, bool) {
 	if rewardType == RewardFeatureMinutes {
 		return featureMinutesSpec, true
+	}
+	if rewardType == RewardAICredit {
+		return aiCreditSpec, true
 	}
 	if !slices.Contains(allowedRewardTypes, rewardType) {
 		return cardkeydomain.RewardSpec{}, false
@@ -76,7 +90,7 @@ func VerifyModes() []string {
 
 // Providers 已支持的广告平台。
 func Providers() []string {
-	return []string{ProviderHuijing}
+	return []string{ProviderApex}
 }
 
 // ValidVerifyMode 校验模式是否合法。
@@ -97,12 +111,23 @@ func ValidateRewards(rewards []Reward) error {
 	}
 	shared := make([]Reward, 0, len(rewards))
 	featureMinutes := 0
+	aiCredits := 0
 	for _, reward := range rewards {
 		if !slices.Contains(allowedRewardTypes, reward.Type) {
 			if spec, ok := cardkeydomain.FindRewardSpec(reward.Type); ok {
 				return fmt.Errorf("激励广告不能发放「%s」", spec.Label)
 			}
 			return fmt.Errorf("未登记的权益类型：%s", reward.Type)
+		}
+		if reward.Type == RewardAICredit {
+			aiCredits++
+			if aiCredits > 1 {
+				return fmt.Errorf("「%s」重复配置了两次", aiCreditSpec.Label)
+			}
+			if reward.Amount < aiCreditSpec.Min || reward.Amount > aiCreditSpec.Max {
+				return fmt.Errorf("「%s」需要在 %d–%d %s之间", aiCreditSpec.Label, aiCreditSpec.Min, aiCreditSpec.Max, aiCreditSpec.Unit)
+			}
+			continue
 		}
 		if reward.Type != RewardFeatureMinutes {
 			shared = append(shared, reward)
@@ -150,6 +175,12 @@ func NormalizeRewards(rewards []Reward) []Reward {
 		})
 		break
 	}
+	for _, reward := range rewards {
+		if reward.Type == RewardAICredit {
+			out = append(out, Reward{Type: RewardAICredit, Amount: reward.Amount})
+			break
+		}
+	}
 	return out
 }
 
@@ -171,6 +202,7 @@ func NormalizeScene(scene Scene) Scene {
 	scene.PlacementID = strings.TrimSpace(scene.PlacementID)
 	scene.Rewards = NormalizeRewards(scene.Rewards)
 	scene.Membership.Features = vipdomain.NormalizeFeatureTags(scene.Membership.Features)
+	scene.Lifetime = normalizeLifetime(scene.Lifetime)
 	return scene
 }
 
@@ -226,6 +258,9 @@ func ValidateScenes(scenes []Scene) error {
 			return fmt.Errorf("%s：%w", label, err)
 		}
 		if err := validateMembership(scene); err != nil {
+			return fmt.Errorf("%s：%w", label, err)
+		}
+		if err := validateLifetime(scene.Lifetime); err != nil {
 			return fmt.Errorf("%s：%w", label, err)
 		}
 	}
@@ -307,6 +342,9 @@ func DescribeRewards(rewards []Reward, planNames map[int64]string, featureNames 
 		case RewardFeatureMinutes:
 			parts = append(parts, DescribeFeatureMinutes(reward, featureNames[reward.Feature]))
 			continue
+		case RewardAICredit:
+			parts = append(parts, DescribeAICredit(reward))
+			continue
 		}
 		parts = append(parts, cardkeydomain.DescribeReward(reward))
 	}
@@ -319,6 +357,11 @@ func DescribeFeatureMinutes(reward Reward, name string) string {
 		name = reward.Feature
 	}
 	return fmt.Sprintf("%s %d %s", name, reward.Amount, featureMinutesSpec.Unit)
+}
+
+// DescribeAICredit 「AI 额度」一项的说法：「AI 额度 50 点」。
+func DescribeAICredit(reward Reward) string {
+	return fmt.Sprintf("%s %d %s", aiCreditSpec.Label, reward.Amount, aiCreditSpec.Unit)
 }
 
 // ReasonMessage 拒发原因的用户可读文案。
@@ -350,25 +393,25 @@ func ReasonMessage(status, reason string) string {
 	return "未获得奖励"
 }
 
-// HuijingSign 灰鲸服务端回调的签名：sha256(securityKey + ":" + transId) 的十六进制小写。
-func HuijingSign(securityKey, transID string) string {
+// CallbackSign Apex（ToBid）服务端回调的签名：sha256(securityKey + ":" + transId) 的十六进制小写。
+func CallbackSign(securityKey, transID string) string {
 	sum := sha256.Sum256([]byte(securityKey + ":" + transID))
 	return hex.EncodeToString(sum[:])
 }
 
-// VerifyHuijingSign 常数时间比较签名，大小写不敏感。
-func VerifyHuijingSign(securityKey, transID, sign string) bool {
+// VerifyCallbackSign 常数时间比较签名，大小写不敏感。
+func VerifyCallbackSign(securityKey, transID, sign string) bool {
 	if securityKey == "" || transID == "" || sign == "" {
 		return false
 	}
-	expected := HuijingSign(securityKey, transID)
+	expected := CallbackSign(securityKey, transID)
 	got := strings.ToLower(strings.TrimSpace(sign))
 	return subtle.ConstantTimeCompare([]byte(expected), []byte(got)) == 1
 }
 
 // sceneExtraKeys 客户端放进 SDK options 里表示场景的键。
 //
-// 灰鲸把 HJRewardAdRequest 的 options 原样作为 EXTRAINFO 回传，但文档没有约定序列化形态，
+// Apex 把 ApexAdxRewardRequest（展示时为 show 的参数）的 options 原样作为 EXTRAINFO 回传，但文档没有约定序列化形态，
 // 实测既见过 JSON 对象，也可能是 a=b&c=d。两种都认；认不出来就当没有，交给客户端上报。
 var sceneExtraKeys = []string{"aegisScene", "aegis_scene", "scene"}
 

@@ -778,6 +778,11 @@ func extractRouteParams(c *gin.Context) map[string]any {
 	return params
 }
 
+type readCloser struct {
+	io.Reader
+	io.Closer
+}
+
 func captureAuditRequestBody(c *gin.Context) any {
 	if c == nil || c.Request == nil || c.Request.Body == nil {
 		return nil
@@ -791,11 +796,13 @@ func captureAuditRequestBody(c *gin.Context) any {
 		return map[string]any{"content_type": contentType, "omitted": true}
 	}
 
-	raw, err := io.ReadAll(io.LimitReader(c.Request.Body, maxAuditBodyBytes+1))
+	body := c.Request.Body
+	raw, err := io.ReadAll(io.LimitReader(body, maxAuditBodyBytes+1))
+	// 审计只看前 8 KB，但后面的处理函数要读到完整的请求体：把读走的这段接回未读的剩余部分。
+	c.Request.Body = readCloser{Reader: io.MultiReader(bytes.NewReader(raw), body), Closer: body}
 	if err != nil {
 		return map[string]any{"content_type": contentType, "read_error": err.Error()}
 	}
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(raw))
 	c.Set(auditContextBodySizeKey, len(raw))
 	if len(raw) == 0 {
 		return nil

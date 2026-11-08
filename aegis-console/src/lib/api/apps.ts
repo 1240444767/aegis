@@ -289,16 +289,26 @@ export type PointsAdjustResult = {
   levelChanged?: boolean;
   oldLevel?: number;
   newLevel?: number;
+  /** 扣减经验时的等级处理 */
+  levelMode?: ExperienceLevelMode;
 };
+
+/**
+ * 扣减经验后的等级处理：keep 保留现有等级只扣经验；recalc 按扣减后的经验重新判定，可以降级
+ * （不低于锁定的保底，封顶照旧）。两种都不收回已发的等级奖励，再升回去也不重复发。
+ */
+export type ExperienceLevelMode = "keep" | "recalc";
 
 export type PointsAdjustPayload = {
   userId: number;
   appid: number;
-  /** 正数增加、负数扣减（经验只能为正）；单次绝对值不超过 100,000,000 */
+  /** 正数增加、负数扣减；单次绝对值不超过 100,000,000 */
   amount: number;
   reason?: string;
   /** 防重复提交：同一编号只生效一次 */
   requestId?: string;
+  /** 只对扣减经验有意义 */
+  levelMode?: ExperienceLevelMode;
 };
 
 // 后端字段是下划线写法（user_id / request_id）。这里显式转换，不把驼峰对象原样发出去 ——
@@ -309,7 +319,8 @@ function pointsAdjustBody(payload: PointsAdjustPayload) {
     appid: payload.appid,
     amount: payload.amount,
     reason: payload.reason,
-    request_id: payload.requestId
+    request_id: payload.requestId,
+    level_mode: payload.levelMode
   });
 }
 
@@ -360,10 +371,11 @@ export function getAdminAppSessionAudits(
 export function getAdminAppNotifications(
   token: string,
   appKey: string,
-  params?: { keyword?: string; type?: string; level?: string; page?: number; limit?: number }
+  params?: { keyword?: string; category?: string; type?: string; level?: string; page?: number; limit?: number }
 ) {
   const query = buildQuery({
     keyword: params?.keyword,
+    category: params?.category,
     type: params?.type,
     level: params?.level,
     page: params?.page,
@@ -535,8 +547,21 @@ export function getPasswordPolicyTemplates(token: string) {
   return apiRequest<PasswordPolicyTemplateCatalog>("/api/admin/apps/password-policy/templates", { token });
 }
 
+/**
+ * 旧版后端把空的规则 / 里程碑列表序列化成 null（Go 的 nil 切片），而各签到组件都直接当数组用
+ * （`policy.milestones.length`），一份没有里程碑的策略就能让整个页签崩掉。在取数这一层补成空数组。
+ */
+function withSignInPolicyLists<T extends { policy: SignInRewardPolicy }>(view: T): T {
+  return {
+    ...view,
+    policy: { ...view.policy, rules: view.policy.rules ?? [], milestones: view.policy.milestones ?? [] }
+  };
+}
+
 export function getAdminAppSignInReward(token: string, appKey: string) {
-  return apiRequest<SignInRewardPolicyView>(`/api/admin/apps/${appKey}/signin-reward`, { token });
+  return apiRequest<SignInRewardPolicyView>(`/api/admin/apps/${appKey}/signin-reward`, { token }).then(
+    withSignInPolicyLists
+  );
 }
 
 export function getAdminAppSignInStats(token: string, appKey: string, params?: { days?: number }) {
@@ -570,7 +595,7 @@ export function updateAdminAppSignInReward(
     method: "PUT",
     token,
     body: JSON.stringify(payload)
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function getAdminAppAutoSign(token: string, appKey: string) {
@@ -598,7 +623,7 @@ export function testAdminAppSignInReward(
     method: "POST",
     token,
     body: JSON.stringify(payload)
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function resetAdminAppSignInReward(token: string, appKey: string) {
@@ -606,7 +631,7 @@ export function resetAdminAppSignInReward(token: string, appKey: string) {
     method: "POST",
     token,
     body: JSON.stringify({})
-  });
+  }).then(withSignInPolicyLists);
 }
 
 export function getSignInRewardTemplates(token: string) {

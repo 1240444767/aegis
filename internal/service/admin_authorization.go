@@ -63,6 +63,10 @@ func (s *AdminService) Authorize(ctx context.Context, access *admindomain.Access
 	if access == nil {
 		return apperrors.New(40110, http.StatusUnauthorized, "管理员未认证")
 	}
+	// MCP 密钥的范围先判：它是在管理员权限之上的收窄，超管签发的密钥同样受它约束。
+	if err := authorizeMCPScope(access, permission, appID); err != nil {
+		return err
+	}
 	// 超管短路仍留在 Go 里：IsSuperAdmin 是 admin_accounts 上的一列，
 	// 每次请求随会话现查。把它做成策略会让"撤销超管身份"要等策略重载才生效。
 	if access.IsSuperAdmin {
@@ -174,7 +178,11 @@ func (s *AdminService) EffectivePermissions(ctx context.Context, access *admindo
 			s.log.Warn("临时权限读取失败，生效权限快照按角色授权计算", zap.Int64("adminId", access.AdminID), zap.Error(err))
 		}
 	}
-	return s.expandPermissions(access, temp)
+	snapshot := s.expandPermissions(access, temp)
+	if access != nil && access.MCPKey != nil {
+		snapshot = restrictSnapshotToMCPKey(snapshot, access.MCPKey)
+	}
+	return snapshot
 }
 
 // expandPermissions 走**与真实判定完全相同的那段代码**把权限集展开。

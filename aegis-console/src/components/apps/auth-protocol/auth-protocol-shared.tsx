@@ -5,6 +5,7 @@ import {
   AtSign,
   Check,
   Clipboard,
+  Hash,
   KeyRound,
   Link2,
   Lock,
@@ -35,10 +36,14 @@ export function levelMeta(level: SecurityLevel) {
 
 export type MethodOption = { value: string; label: string; icon: LucideIcon };
 
+// 密码登录时账号框按这里勾选的标识认人（后端 resolveLoginCandidates）：账号名永远先认且始终可用，
+// 其后依次是 16 位用户 ID、邮箱、手机号。邮箱或手机号挂在多个账号上时由密码区分。
+// 用户自己设的用户名不许纯数字、不含 @，所以新账号不会和另外几种标识撞在一起（docs/account-setup.md）。
 export const IDENTIFIERS: MethodOption[] = [
   { value: "username", label: "用户名", icon: User },
   { value: "email", label: "邮箱", icon: AtSign },
-  { value: "phone", label: "手机号", icon: Phone }
+  { value: "phone", label: "手机号", icon: Phone },
+  { value: "id", label: "用户 ID", icon: Hash }
 ];
 
 // 登录与注册的可选集合刻意不同：第三方能否自动建号由每个渠道自己的

@@ -254,6 +254,10 @@ func (s *IPBanService) CheckBan(ctx context.Context, ip string) (firewalldomain.
 type BanIPOptions struct {
 	Mode    string // 见 firewall.BanMode* 常量；空 → 使用全局默认（由 middleware 层决定）
 	DelayMs int    // tarpit 模式的延迟毫秒，0 → 使用 config.TarpitDelayMs
+	// Source / TriggerRule 由其它服务代为封禁时说明来源（如风控中心 risk、risk:assessment:123），
+	// 防火墙封禁列表上才分得清「管理员手封的」与「风控判出来的」。空则为 manual / admin:<id>。
+	Source      string
+	TriggerRule string
 }
 
 // BanIP 手动封禁 IP（保留原签名，内部委托给 BanIPWithOptions）。
@@ -283,12 +287,20 @@ func (s *IPBanService) BanIPWithOptions(ctx context.Context, ip string, reason s
 	}
 
 	// GeoIP 解析
+	source := strings.TrimSpace(opts.Source)
+	if source == "" {
+		source = "manual"
+	}
+	triggerRule := opts.TriggerRule
+	if triggerRule == "" {
+		triggerRule = fmt.Sprintf("admin:%d", adminID)
+	}
 	ban := firewalldomain.IPBan{
 		IP:          ip,
 		Reason:      reason,
-		Source:      "manual",
+		Source:      source,
 		Mode:        mode,
-		TriggerRule: fmt.Sprintf("admin:%d", adminID),
+		TriggerRule: triggerRule,
 		Severity:    firewalldomain.SeverityHigh,
 		Duration:    durationSec,
 		ExpiresAt:   expiresAt,
@@ -315,7 +327,7 @@ func (s *IPBanService) BanIPWithOptions(ctx context.Context, ip string, reason s
 	if err := s.redis.SetBan(ctx, ip, redisrepo.BanMeta{
 		BanID:    id,
 		Reason:   reason,
-		Source:   "manual",
+		Source:   source,
 		Mode:     mode,
 		DelayMs:  opts.DelayMs,
 		BannedAt: time.Now().UTC().Format(time.RFC3339),

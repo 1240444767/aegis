@@ -81,6 +81,8 @@ export function QuotaMeter({
 }
 
 export const PROVIDER_LABELS: Record<string, string> = {
+  pool: "存储池",
+  r2: "Cloudflare R2",
   s3: "Amazon S3",
   minio: "MinIO",
   aliyun_oss: "阿里云 OSS",
@@ -100,6 +102,7 @@ export function providerLabel(provider?: string | null) {
 
 export function describeTarget(target?: CloudStorageTarget | null) {
   if (!target || target.error) return "未找到可用存储";
+  if (target.provider === "pool") return `${target.configName} · 存储池`;
   const scope = target.scope === "global" ? "平台级" : "应用级";
   return `${target.configName} · ${providerLabel(target.provider)} · ${scope}`;
 }

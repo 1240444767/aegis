@@ -98,7 +98,16 @@ func buildAnthropicParams(req aidomain.ChatRequest) anthropic.MessageNewParams {
 				},
 			})
 		case aidomain.RoleAssistant:
-			blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(item.ToolCalls))
+			blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(item.Thinking)+len(item.ToolCalls))
+			// 带签名的思考块排在最前（Anthropic 的硬约束）；没签名的思考文本上游不认，丢掉。
+			for _, block := range item.Thinking {
+				switch {
+				case block.Redacted != "":
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(block.Redacted))
+				case block.Signature != "":
+					blocks = append(blocks, anthropic.NewThinkingBlock(block.Signature, block.Text))
+				}
+			}
 			if text := item.PlainText(); text != "" {
 				blocks = append(blocks, anthropic.NewTextBlock(text))
 			}
@@ -169,16 +178,53 @@ func buildAnthropicParams(req aidomain.ChatRequest) anthropic.MessageNewParams {
 			params.ToolChoice = anthropic.ToolChoiceUnionParam{OfAny: &anthropic.ToolChoiceAnyParam{}}
 		}
 	}
-	if req.Temperature != nil {
+	thinking := applyAnthropicThinking(&params, req)
+	// 开着思考时 Anthropic 只接受默认温度，top_p 也只能在 0.95–1 之间。
+	if req.Temperature != nil && !thinking {
 		params.Temperature = anthropic.Float(*req.Temperature)
 	}
-	if req.TopP != nil {
+	if req.TopP != nil && (!thinking || *req.TopP >= 0.95) {
 		params.TopP = anthropic.Float(*req.TopP)
 	}
 	if len(req.Stop) > 0 {
 		params.StopSequences = req.Stop
 	}
 	return params
+}
+
+// anthropicMinThinkingBudget Anthropic 的思考预算下限。
+const anthropicMinThinkingBudget = 1024
+
+// applyAnthropicThinking 思考设置 → thinking 参数，返回这次是否开着思考。
+//
+// 预算必须小于 max_tokens：请求带了上限（含计费压低的上限）就在上限之内让出 1024 给正文，
+// 让不出最低预算就不开；没带上限时上限取「预算 + 8192」。强制调用工具（tool_choice any）与思考互斥；
+// 工具循环的续轮里上一轮缺思考块（签名没能补回）也不能开，否则整次 400。
+func applyAnthropicThinking(params *anthropic.MessageNewParams, req aidomain.ChatRequest) bool {
+	reasoning := req.Reasoning
+	if reasoning == nil {
+		return false
+	}
+	if reasoning.Off() {
+		params.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &anthropic.ThinkingConfigDisabledParam{}}
+		return false
+	}
+	if req.ToolChoice == aidomain.ToolChoiceRequired || toolLoopMissingThinking(req.Messages) {
+		return false
+	}
+	budget := reasoning.Budget()
+	if req.MaxTokens > 0 {
+		if budget > req.MaxTokens-anthropicMinThinkingBudget {
+			budget = req.MaxTokens - anthropicMinThinkingBudget
+		}
+	} else {
+		params.MaxTokens = int64(budget + 8192)
+	}
+	if budget < anthropicMinThinkingBudget {
+		return false
+	}
+	params.Thinking = anthropic.ThinkingConfigParamOfEnabled(int64(budget))
+	return true
 }
 
 // anthropicInputSchema 把任意 JSON Schema 塞进 SDK 的 input_schema 参数。
@@ -246,6 +292,14 @@ func normalizeAnthropicFinish(reason string) string {
 	}
 }
 
+// anthropicFinishRaw 归一不了的 stop_reason（如 pause_turn）原样留下。
+func anthropicFinishRaw(reason string) string {
+	if normalizeAnthropicFinish(reason) == aidomain.FinishOther {
+		return reason
+	}
+	return ""
+}
+
 // mapAnthropicSDKError 把 SDK 返回的错误收敛成 aiUpstreamError。
 // 非 2xx 已被中间件就地包好；SDK 自解析的错误（流内 error 事件）取信封消息；
 // 其余按网络层失败处理，一律可重试。
@@ -300,6 +354,7 @@ func anthropicResponseFromMessage(message *anthropic.Message) *aidomain.ChatResp
 		ID:           message.ID,
 		Model:        string(message.Model),
 		FinishReason: normalizeAnthropicFinish(string(message.StopReason)),
+		FinishRaw:    anthropicFinishRaw(string(message.StopReason)),
 		Usage: aidomain.Usage{
 			InputTokens:  message.Usage.InputTokens,
 			OutputTokens: message.Usage.OutputTokens,
@@ -313,6 +368,9 @@ func anthropicResponseFromMessage(message *anthropic.Message) *aidomain.ChatResp
 			text.WriteString(block.Text)
 		case "thinking":
 			reasoning.WriteString(block.Thinking)
+			result.Thinking = append(result.Thinking, aidomain.ThinkingBlock{Text: block.Thinking, Signature: block.Signature})
+		case "redacted_thinking":
+			result.Thinking = append(result.Thinking, aidomain.ThinkingBlock{Redacted: block.Data})
 		case "tool_use":
 			arguments := json.RawMessage(block.Input)
 			if len(arguments) == 0 {
@@ -330,6 +388,9 @@ func anthropicResponseFromMessage(message *anthropic.Message) *aidomain.ChatResp
 
 // consumeAnthropicStream 逐事件消费 SSE，边转发增量边聚合终态。
 // 流内的 error 事件由 SDK 转成错误从 stream.Err() 冒出来，统一走错误收敛。
+//
+// 完整的流以 message_delta（带 stop_reason）与 message_stop 收尾。两样都没见到就是流被
+// 半路切断：按上游失败处理，不把半截内容当成正常结束。
 func consumeAnthropicStream(stream *anthropicsse.Stream[anthropic.MessageStreamEventUnion], provider string,
 	onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
 	result := &aidomain.ChatResponse{FinishReason: aidomain.FinishOther}
@@ -340,16 +401,30 @@ func consumeAnthropicStream(stream *anthropicsse.Stream[anthropic.MessageStreamE
 	}
 	tools := map[int]*toolBuffer{}
 	order := make([]int, 0, 2)
+	// 思考块按 index 聚合文字与签名，结束时按出现顺序排好。
+	thinking := map[int]*aidomain.ThinkingBlock{}
+	thinkingOrder := make([]int, 0, 1)
+	sawStop, sawMessageStop := false, false
 
 	for stream.Next() {
 		event := stream.Current()
 		index := int(event.Index)
 		switch event.Type {
+		case "message_stop":
+			sawMessageStop = true
 		case "message_start":
 			result.ID = event.Message.ID
 			result.Model = string(event.Message.Model)
 			result.Usage.InputTokens = event.Message.Usage.InputTokens
 		case "content_block_start":
+			switch event.ContentBlock.Type {
+			case "thinking":
+				thinking[index] = &aidomain.ThinkingBlock{Signature: event.ContentBlock.Signature}
+				thinkingOrder = append(thinkingOrder, index)
+			case "redacted_thinking":
+				thinking[index] = &aidomain.ThinkingBlock{Redacted: event.ContentBlock.Data}
+				thinkingOrder = append(thinkingOrder, index)
+			}
 			if event.ContentBlock.Type == "tool_use" {
 				buffer := &toolBuffer{id: event.ContentBlock.ID, name: event.ContentBlock.Name}
 				tools[index] = buffer
@@ -368,7 +443,14 @@ func consumeAnthropicStream(stream *anthropicsse.Stream[anthropic.MessageStreamE
 				if err := onEvent(aidomain.StreamEvent{Type: aidomain.StreamText, Delta: event.Delta.Text}); err != nil {
 					return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
 				}
+			case "signature_delta":
+				if block, ok := thinking[index]; ok {
+					block.Signature += event.Delta.Signature
+				}
 			case "thinking_delta":
+				if block, ok := thinking[index]; ok {
+					block.Text += event.Delta.Thinking
+				}
 				reasoning.WriteString(event.Delta.Thinking)
 				if err := onEvent(aidomain.StreamEvent{Type: aidomain.StreamReasoning, Delta: event.Delta.Thinking}); err != nil {
 					return nil, &aiUpstreamError{Provider: provider, Message: err.Error(), Retryable: true}
@@ -386,7 +468,9 @@ func consumeAnthropicStream(stream *anthropicsse.Stream[anthropic.MessageStreamE
 			}
 		case "message_delta":
 			if event.Delta.StopReason != "" {
+				sawStop = true
 				result.FinishReason = normalizeAnthropicFinish(string(event.Delta.StopReason))
+				result.FinishRaw = anthropicFinishRaw(string(event.Delta.StopReason))
 			}
 			if event.Usage.OutputTokens > 0 {
 				result.Usage.OutputTokens = event.Usage.OutputTokens
@@ -396,9 +480,24 @@ func consumeAnthropicStream(stream *anthropicsse.Stream[anthropic.MessageStreamE
 	if err := stream.Err(); err != nil {
 		return nil, mapAnthropicSDKError(provider, err)
 	}
+	if !sawStop && !sawMessageStop {
+		return nil, &aiUpstreamError{Provider: provider, Retryable: true,
+			Message: "上游的流没有给出结束原因就断开了（被上游或中间代理切断），本次结果不完整"}
+	}
+	if !sawStop {
+		// message_stop 到了却没带 stop_reason 的兼容实现：流是完整的，按正常结束处理。
+		result.FinishReason, result.FinishRaw = aidomain.FinishStop, ""
+	}
+	// 发起了工具调用、结束原因却缺失或认不出：按工具收尾，下游才会去执行工具、接着下一轮。
+	if len(order) > 0 && (result.FinishReason == aidomain.FinishOther || result.FinishReason == aidomain.FinishStop) {
+		result.FinishReason, result.FinishRaw = aidomain.FinishToolCalls, ""
+	}
 
 	result.Text = text.String()
 	result.Reasoning = reasoning.String()
+	for _, index := range thinkingOrder {
+		result.Thinking = append(result.Thinking, *thinking[index])
+	}
 	for _, index := range order {
 		buffer := tools[index]
 		arguments := strings.TrimSpace(buffer.arguments.String())

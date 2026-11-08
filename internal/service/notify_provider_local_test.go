@@ -30,17 +30,20 @@ type fakeUserInboxCall struct {
 	Content  string
 	Level    string
 	Metadata map[string]any
+	Action   *notificationdomain.Action
 }
 
-func (f *fakeUserInbox) NotifyUser(ctx context.Context, appID, userID int64,
-	notificationType, title, content, level string, metadata map[string]any) error {
+func (f *fakeUserInbox) Deliver(ctx context.Context, in notificationdomain.DeliverInput) (*notificationdomain.Item, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeUserInboxCall{
-		AppID: appID, UserID: userID, Type: notificationType,
-		Title: title, Content: content, Level: level, Metadata: metadata,
+		AppID: in.AppID, UserID: in.UserID, Type: in.Type,
+		Title: in.Title, Content: in.Content, Level: in.Level, Metadata: in.Metadata, Action: in.Action,
 	})
-	return f.err
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &notificationdomain.Item{AppID: in.AppID, Type: in.Type, Title: in.Title}, nil
 }
 
 type fakeAdminInbox struct {
@@ -157,6 +160,10 @@ func TestInAppProviderNeverLeaksConsoleLinkToUsers(t *testing.T) {
 	}
 	if strings.Contains(link, "console.example.com") {
 		t.Fatal("用户站内信里出现了控制台深链")
+	}
+	// 工单事件带 App 内跳转动作（指向工单页）
+	if call.Action == nil || call.Action.Type != notificationdomain.ActionRoute || call.Action.Target != notificationdomain.RouteTickets {
+		t.Fatalf("工单站内信应带 tickets 路由动作，实际 %+v", call.Action)
 	}
 	// 文案也要用面向用户的那一份，不能出现"李四回复了工单"这种内部视角
 	if call.Title != event.UserTitle || call.Content != event.UserSummary {

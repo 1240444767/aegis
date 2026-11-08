@@ -1,0 +1,98 @@
+<mjml lang="{{ mail.lang }}">
+  <mj-head>
+    <mj-title>{{ mail.title }}</mj-title>
+    {%- if mail.preheader != blank %}
+    <mj-preview>{{ mail.preheader }}</mj-preview>
+    {%- endif %}
+    <mj-attributes>
+      <mj-all font-family="{{ theme.font }}" />
+      <mj-body background-color="{{ theme.background }}" width="600px" />
+      <mj-wrapper padding="0" />
+      <mj-section padding="0" />
+      <mj-column padding="0" />
+      <mj-text color="{{ theme.text }}" font-size="15px" line-height="1.75" padding="0 0 18px 0" />
+      <mj-button font-family="{{ theme.font }}" />
+      <mj-table font-family="{{ theme.font }}" />
+    </mj-attributes>
+    <mj-raw>
+      <meta name="color-scheme" content="light only" />
+      <meta name="supported-color-schemes" content="light" />
+      <meta name="format-detection" content="telephone=no,date=no,address=no,email=no" />
+    </mj-raw>
+    <mj-style>
+      a { color: {{ theme.accent_strong }}; }
+      .m-card td { word-break: break-word; }
+      @media only screen and (max-width: 480px) {
+        .m-card > table > tbody > tr > td { padding: 32px 22px 12px 22px !important; }
+        .m-hero-title div { font-size: 22px !important; line-height: 30px !important; }
+      }
+    </mj-style>
+  </mj-head>
+  <mj-body>
+    {%- comment %} 页眉：Logo（或品牌首字徽标）+ 品牌名 {% endcomment %}
+    {%- if theme.header == "banner" %}
+    <mj-section background-color="{{ theme.accent }}" padding="22px 24px">
+      <mj-column>
+        <mj-text align="{{ theme.logo_align }}" color="{{ theme.accent_text }}" font-size="16px" font-weight="600" line-height="{{ theme.logo_height }}px" padding="0">
+          {%- if brand.logo_url != blank %}<img src="{{ brand.logo_url }}" alt="{{ brand.name }}" height="{{ theme.logo_height }}" style="height:{{ theme.logo_height }}px;width:auto;border:0;outline:none;vertical-align:middle;" />{% else %}{{ brand.name }}{% endif -%}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    <mj-section padding="0 0 28px 0"><mj-column><mj-spacer height="1px" /></mj-column></mj-section>
+    {%- else %}
+    <mj-section padding="44px 24px 22px 24px">
+      <mj-column>
+        <mj-text align="{{ theme.logo_align }}" padding="0" font-size="16px" font-weight="600" line-height="{{ theme.logo_height }}px" color="{{ theme.text }}">
+          {%- if brand.logo_url != blank -%}
+          <img src="{{ brand.logo_url }}" alt="{{ brand.name }}" height="{{ theme.logo_height }}" style="height:{{ theme.logo_height }}px;width:auto;border:0;outline:none;vertical-align:middle;" />
+          {%- else -%}
+          <span style="display:inline-block;width:{{ theme.logo_height }}px;height:{{ theme.logo_height }}px;line-height:{{ theme.logo_height }}px;border-radius:{{ theme.inner_radius }}px;background-color:{{ theme.accent }};color:{{ theme.accent_text }};text-align:center;font-size:15px;font-weight:700;vertical-align:middle;">{{ brand.initial }}</span><span style="display:inline-block;vertical-align:middle;padding-left:10px;">{{ brand.name }}</span>
+          {%- endif -%}
+        </mj-text>
+      </mj-column>
+    </mj-section>
+    {%- endif %}
+
+    {%- comment %} 信体卡片 {% endcomment %}
+    <mj-wrapper padding="0 16px">
+      <mj-section css-class="m-card" background-color="{{ theme.card }}" border-radius="{{ theme.radius }}px" padding="40px 40px 16px 40px"
+        border-left="1px solid {{ theme.border }}" border-right="1px solid {{ theme.border }}" border-bottom="1px solid {{ theme.border }}"
+        {%- if theme.header == "bar" %} border-top="4px solid {{ theme.accent }}"{% else %} border-top="1px solid {{ theme.border }}"{% endif %}>
+        <mj-column>
+          {%- if mail.eyebrow != blank %}
+          <mj-text padding="0 0 10px 0" font-size="13px" font-weight="600" line-height="20px" letter-spacing="0.02em" color="{{ theme.accent_strong }}">{{ mail.eyebrow }}</mj-text>
+          {%- endif %}
+          <mj-text css-class="m-hero-title" padding="0 0 10px 0" font-size="24px" font-weight="700" line-height="32px" color="{{ theme.text }}">{{ mail.title }}</mj-text>
+          {%- if mail.lead != blank %}
+          <mj-text padding="0 0 28px 0" font-size="15px" line-height="1.7" color="{{ theme.muted }}">{{ mail.lead }}</mj-text>
+          {%- else %}
+          <mj-spacer height="18px" />
+          {%- endif %}
+
+          {% content %}
+
+          {%- if mail.footer_note != blank %}
+          <mj-divider border-color="{{ theme.border }}" border-width="1px" padding="4px 0 18px 0" />
+          <mj-text padding="0 0 22px 0" font-size="13px" line-height="1.7" color="{{ theme.muted }}">{{ mail.footer_note }}</mj-text>
+          {%- endif %}
+        </mj-column>
+      </mj-section>
+    </mj-wrapper>
+
+    {%- comment %} 页脚 {% endcomment %}
+    <mj-section padding="26px 32px 48px 32px">
+      <mj-column>
+        {%- if brand.support_email != blank %}
+        <mj-text align="center" padding="0 0 8px 0" font-size="12px" line-height="20px" color="{{ theme.foot_text }}">
+          {%- if mail.zh %}需要帮助？联系 {% endif %}<a href="mailto:{{ brand.support_email }}" style="color:{{ theme.foot_text }};text-decoration:underline;">{{ brand.support_email }}</a>
+        </mj-text>
+        {%- endif %}
+        <mj-text align="center" padding="0 0 4px 0" font-size="12px" line-height="20px" color="{{ theme.foot_text }}">{{ mail.no_reply }}</mj-text>
+        <mj-text align="center" padding="0" font-size="12px" line-height="20px" font-weight="600" color="{{ theme.foot_text }}">{{ brand.name }}</mj-text>
+        {%- if brand.footer_text != blank %}
+        <mj-text align="center" padding="6px 0 0 0" font-size="11px" line-height="18px" color="{{ theme.foot_text }}">{{ brand.footer_text }}</mj-text>
+        {%- endif %}
+      </mj-column>
+    </mj-section>
+  </mj-body>
+</mjml>

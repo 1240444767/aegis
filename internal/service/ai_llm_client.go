@@ -29,10 +29,17 @@ import (
 // 支付、OAuth 走同一张路由表，不必单独给 AI 配代理。
 type aiLLMClient struct {
 	log *zap.Logger
+	// thinking 工具调用的思考签名，续轮时补回（ai_llm_reasoning.go）。
+	thinking *aiThinkingMemo
+	// idleTimeout 上游响应开始后连续多久收不到一个字节就判卡死、主动断开；0 不限（ai_llm_idle.go）。
+	idleTimeout time.Duration
 }
 
+// aiUpstreamIdleTimeoutDefault 与 config.AIRelayConfig 的缺省一致；bootstrap 会按配置覆盖。
+const aiUpstreamIdleTimeoutDefault = 5 * time.Minute
+
 func newAILLMClient(log *zap.Logger) *aiLLMClient {
-	return &aiLLMClient{log: log}
+	return &aiLLMClient{log: log, thinking: newAIThinkingMemo(), idleTimeout: aiUpstreamIdleTimeoutDefault}
 }
 
 // aiUpstreamError 供应商侧的失败。Retryable 决定链路要不要试下一条通道。
@@ -54,12 +61,18 @@ func (e *aiUpstreamError) Error() string {
 // Timeout 恒为 0：流式响应可以持续几分钟，整体超时交给 ctx 控制；
 // 响应头超时单独给足 —— 推理模型出第一个字前会思考很久。
 func (c *aiLLMClient) httpClient(provider string) *http.Client {
-	return egress.NewClient(egress.Profile{
+	client := egress.NewClient(egress.Profile{
 		Name:                  "ai." + provider,
 		Timeout:               0,
 		DialTimeout:           15 * time.Second,
 		ResponseHeaderTimeout: 5 * time.Minute,
 	})
+	// 上游空闲看门狗：响应开始后长时间一个字节都不来（连接半开、上游卡死）就断开，
+	// 而不是一直挂到前面的代理把客户端切掉（ai_llm_idle.go）。
+	client.Transport = aiIdleTransport{base: client.Transport, provider: provider, idle: c.idleTimeout}
+	// 网关的调用追踪：ctx 里带 aiTrace 时记下每次往返（ai_gateway_trace.go），否则原样透传。
+	client.Transport = aiTraceTransport{base: client.Transport}
+	return client
 }
 
 // Chat 非流式调用。
@@ -68,14 +81,27 @@ func (c *aiLLMClient) Chat(ctx context.Context, cfg aidomain.Config, req aidomai
 	if !ok {
 		return nil, &aiUpstreamError{Provider: cfg.Provider, Message: "未知的供应商"}
 	}
+	return c.dispatch(ctx, cfg, meta, req, nil)
+}
+
+// dispatch 按协议分到适配器；前后补回与记下思考签名。
+func (c *aiLLMClient) dispatch(ctx context.Context, cfg aidomain.Config, meta aidomain.ProviderMeta,
+	req aidomain.ChatRequest, onEvent func(aidomain.StreamEvent) error) (*aidomain.ChatResponse, error) {
+	req = c.thinking.restore(req)
+	var response *aidomain.ChatResponse
+	var err error
 	switch meta.Protocol {
 	case aidomain.ProtocolAnthropic:
-		return c.anthropicChat(ctx, cfg, meta, req, nil)
+		response, err = c.anthropicChat(ctx, cfg, meta, req, onEvent)
 	case aidomain.ProtocolGemini:
-		return c.geminiChat(ctx, cfg, meta, req, nil)
+		response, err = c.geminiChat(ctx, cfg, meta, req, onEvent)
 	default:
-		return c.openAIChat(ctx, cfg, meta, req, nil)
+		response, err = c.openAIChat(ctx, cfg, meta, req, onEvent)
 	}
+	if err == nil {
+		c.thinking.remember(response)
+	}
+	return response, err
 }
 
 // ChatStream 流式调用：增量经 onEvent 回调，返回聚合好的完整结论。
@@ -88,14 +114,7 @@ func (c *aiLLMClient) ChatStream(ctx context.Context, cfg aidomain.Config, req a
 	if onEvent == nil {
 		onEvent = func(aidomain.StreamEvent) error { return nil }
 	}
-	switch meta.Protocol {
-	case aidomain.ProtocolAnthropic:
-		return c.anthropicChat(ctx, cfg, meta, req, onEvent)
-	case aidomain.ProtocolGemini:
-		return c.geminiChat(ctx, cfg, meta, req, onEvent)
-	default:
-		return c.openAIChat(ctx, cfg, meta, req, onEvent)
-	}
+	return c.dispatch(ctx, cfg, meta, req, onEvent)
 }
 
 // ── 公共 ──

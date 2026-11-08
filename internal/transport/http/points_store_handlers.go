@@ -40,16 +40,27 @@ type PointsStoreItemRequest struct {
 	Cost         int64                      `json:"cost"`
 	OriginalCost *int64                     `json:"originalCost"`
 	Rewards      []PointsStoreRewardRequest `json:"rewards"`
-	// Stock 剩余库存，不传或 null 为不限
-	Stock       *int64     `json:"stock"`
-	LimitPeriod string     `json:"limitPeriod"`
-	LimitCount  int        `json:"limitCount"`
-	Audience    string     `json:"audience"`
-	MinLevel    int        `json:"minLevel"`
-	StartsAt    *time.Time `json:"startsAt"`
-	EndsAt      *time.Time `json:"endsAt"`
-	Status      string     `json:"status"`
-	SortOrder   int        `json:"sortOrder"`
+	// Stock 剩余库存，不传或 null 为不限；开了补货周期时是本周期还剩多少（不传则从满货开始）
+	Stock *int64 `json:"stock"`
+	// RestockPeriod 补货周期 none / day / week / month；RestockQuantity 每个周期补到多少
+	RestockPeriod   string `json:"restockPeriod"`
+	RestockQuantity *int64 `json:"restockQuantity"`
+	// GlobalLimitPeriod / GlobalLimitCount 全站名额：所有人合计每个周期最多兑多少份，0 为不限
+	GlobalLimitPeriod string `json:"globalLimitPeriod"`
+	GlobalLimitCount  int    `json:"globalLimitCount"`
+	LimitPeriod       string `json:"limitPeriod"`
+	LimitCount        int    `json:"limitCount"`
+	// UserTotalLimit 每人累计上限，与按周期限兑叠加，0 为不限
+	UserTotalLimit int `json:"userTotalLimit"`
+	// DailyOpenMinute / DailyCloseMinute 每日开放时段（应用默认时区，自零点起的分钟数），都不传为全天
+	DailyOpenMinute  *int       `json:"dailyOpenMinute"`
+	DailyCloseMinute *int       `json:"dailyCloseMinute"`
+	Audience         string     `json:"audience"`
+	MinLevel         int        `json:"minLevel"`
+	StartsAt         *time.Time `json:"startsAt"`
+	EndsAt           *time.Time `json:"endsAt"`
+	Status           string     `json:"status"`
+	SortOrder        int        `json:"sortOrder"`
 }
 
 // PointsStoreSettingsRequest 积分商城开关。
@@ -60,6 +71,11 @@ type PointsStoreSettingsRequest struct {
 // PointsStoreItemStatusRequest 上架 / 下架。
 type PointsStoreItemStatusRequest struct {
 	Active bool `json:"active"`
+}
+
+// PointsStoreItemOrderRequest 商品排序：按数组顺序重写排序值。
+type PointsStoreItemOrderRequest struct {
+	ItemIDs []int64 `json:"itemIds" binding:"required"`
 }
 
 // PointsStoreHandleRequest 处理一笔待发放的兑换；note 会写进给用户的站内信。
@@ -99,25 +115,32 @@ func (req PointsStoreItemRequest) toInput(appID int64, operator string) pointsto
 		rewards = append(rewards, reward)
 	}
 	return pointstore.ItemInput{
-		AppID:        appID,
-		Title:        req.Title,
-		Subtitle:     req.Subtitle,
-		Description:  req.Description,
-		Category:     req.Category,
-		Badge:        req.Badge,
-		Cost:         req.Cost,
-		OriginalCost: req.OriginalCost,
-		Rewards:      rewards,
-		Stock:        req.Stock,
-		LimitPeriod:  req.LimitPeriod,
-		LimitCount:   req.LimitCount,
-		Audience:     req.Audience,
-		MinLevel:     req.MinLevel,
-		StartsAt:     req.StartsAt,
-		EndsAt:       req.EndsAt,
-		Status:       req.Status,
-		SortOrder:    req.SortOrder,
-		Operator:     operator,
+		AppID:             appID,
+		Title:             req.Title,
+		Subtitle:          req.Subtitle,
+		Description:       req.Description,
+		Category:          req.Category,
+		Badge:             req.Badge,
+		Cost:              req.Cost,
+		OriginalCost:      req.OriginalCost,
+		Rewards:           rewards,
+		Stock:             req.Stock,
+		RestockPeriod:     req.RestockPeriod,
+		RestockQuantity:   req.RestockQuantity,
+		GlobalLimitPeriod: req.GlobalLimitPeriod,
+		GlobalLimitCount:  req.GlobalLimitCount,
+		LimitPeriod:       req.LimitPeriod,
+		LimitCount:        req.LimitCount,
+		UserTotalLimit:    req.UserTotalLimit,
+		DailyOpenMinute:   req.DailyOpenMinute,
+		DailyCloseMinute:  req.DailyCloseMinute,
+		Audience:          req.Audience,
+		MinLevel:          req.MinLevel,
+		StartsAt:          req.StartsAt,
+		EndsAt:            req.EndsAt,
+		Status:            req.Status,
+		SortOrder:         req.SortOrder,
+		Operator:          operator,
 	}
 }
 
@@ -235,6 +258,25 @@ func (h *Handler) AdminUpdatePointsStoreItem(c *gin.Context) {
 	response.Success(c, http.StatusOK, "商品已保存", item)
 }
 
+// AdminReorderPointsStoreItems 按给定顺序重排商品（排序值 10、20、30……）。
+func (h *Handler) AdminReorderPointsStoreItems(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	var req PointsStoreItemOrderRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	updated, err := h.pointsStore.ReorderItems(c.Request.Context(), appID, req.ItemIDs)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, http.StatusOK, "排序已保存", gin.H{"updated": updated})
+}
+
 // AdminSetPointsStoreItemStatus 上架 / 下架。
 func (h *Handler) AdminSetPointsStoreItemStatus(c *gin.Context) {
 	appID, ok := resolveAppID(c, h.app)
@@ -295,6 +337,8 @@ func (h *Handler) AdminListPointsStoreRedemptions(c *gin.Context) {
 		ItemID:  itemID,
 		Status:  strings.TrimSpace(c.Query("status")),
 		Keyword: strings.TrimSpace(c.Query("keyword")),
+		From:    cardKeyQueryTime(c.Query("from")),
+		To:      cardKeyQueryTime(c.Query("to")),
 		Page:    parsePositiveInt(c.Query("page"), 1),
 		Limit:   parsePositiveInt(c.Query("limit"), 20),
 	})
@@ -354,7 +398,7 @@ func (h *Handler) AdminPointsStoreStats(c *gin.Context) {
 	if !ok {
 		return
 	}
-	stats, err := h.pointsStore.Stats(c.Request.Context(), appID, parsePositiveInt(c.Query("days"), 14))
+	stats, err := h.pointsStore.Stats(c.Request.Context(), appID, parsePositiveInt(c.Query("days"), 14), c.Query("tz"))
 	if err != nil {
 		h.writeError(c, err)
 		return

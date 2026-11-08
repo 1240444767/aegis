@@ -32,6 +32,11 @@ const (
 	ReleaseUpdateForce       = "force"
 
 	ReleaseAssetUniversal = "universal"
+
+	// 更新说明的撰写格式。html：富文本编辑器的产物；markdown：作者写的 Markdown 原文，
+	// 服务端另渲染出净化后的 HTML 放在 Notes 里给只认 HTML 的客户端。
+	ReleaseNotesHTML     = "html"
+	ReleaseNotesMarkdown = "markdown"
 )
 
 var ValidReleaseStatuses = map[string]struct{}{
@@ -114,6 +119,8 @@ type Release struct {
 	VersionCode      int64  `json:"versionCode"`
 	Title            string `json:"title,omitempty"`
 	Notes            string `json:"notes"`
+	NotesFormat      string `json:"notesFormat"`
+	NotesMarkdown    string `json:"notesMarkdown,omitempty"`
 	Summary          string `json:"summary,omitempty"`
 	Platform         string `json:"platform"`
 	MinOSVersion     string `json:"minOsVersion,omitempty"`
@@ -149,18 +156,20 @@ func (r *Release) IsLive(now time.Time) bool {
 
 // PublicRelease 客户端与官网视图：不含定向条件、内测名单与落库的存储引用。
 type PublicRelease struct {
-	ID           int64              `json:"id"`
-	Version      string             `json:"version"`
-	VersionCode  int64              `json:"versionCode"`
-	Title        string             `json:"title,omitempty"`
-	Notes        string             `json:"notes"`
-	Summary      string             `json:"summary,omitempty"`
-	Platform     string             `json:"platform"`
-	MinOSVersion string             `json:"minOsVersion,omitempty"`
-	UpdateType   string             `json:"updateType"`
-	Channel      *ReleaseChannelRef `json:"channel,omitempty"`
-	Assets       []ReleaseAsset     `json:"assets"`
-	PublishedAt  *time.Time         `json:"publishedAt,omitempty"`
+	ID            int64              `json:"id"`
+	Version       string             `json:"version"`
+	VersionCode   int64              `json:"versionCode"`
+	Title         string             `json:"title,omitempty"`
+	Notes         string             `json:"notes"`
+	NotesFormat   string             `json:"notesFormat"`
+	NotesMarkdown string             `json:"notesMarkdown,omitempty"`
+	Summary       string             `json:"summary,omitempty"`
+	Platform      string             `json:"platform"`
+	MinOSVersion  string             `json:"minOsVersion,omitempty"`
+	UpdateType    string             `json:"updateType"`
+	Channel       *ReleaseChannelRef `json:"channel,omitempty"`
+	Assets        []ReleaseAsset     `json:"assets"`
+	PublishedAt   *time.Time         `json:"publishedAt,omitempty"`
 }
 
 // ReleaseAssetInput 保存版本时提交的安装包。整组替换：提交的就是最终集合。
@@ -183,6 +192,8 @@ type ReleaseMutation struct {
 	VersionCode      *int64
 	Title            *string
 	Notes            *string
+	NotesFormat      *string
+	NotesMarkdown    *string
 	Platform         *string
 	MinOSVersion     *string
 	UpdateType       *string
@@ -228,13 +239,15 @@ type ReleaseClient struct {
 
 // ReleaseChangelogEntry 跨版本更新时，中间每个版本的说明。
 type ReleaseChangelogEntry struct {
-	Version     string     `json:"version"`
-	VersionCode int64      `json:"versionCode"`
-	Title       string     `json:"title,omitempty"`
-	Summary     string     `json:"summary,omitempty"`
-	Notes       string     `json:"notes"`
-	UpdateType  string     `json:"updateType"`
-	PublishedAt *time.Time `json:"publishedAt,omitempty"`
+	Version       string     `json:"version"`
+	VersionCode   int64      `json:"versionCode"`
+	Title         string     `json:"title,omitempty"`
+	Summary       string     `json:"summary,omitempty"`
+	Notes         string     `json:"notes"`
+	NotesFormat   string     `json:"notesFormat"`
+	NotesMarkdown string     `json:"notesMarkdown,omitempty"`
+	UpdateType    string     `json:"updateType"`
+	PublishedAt   *time.Time `json:"publishedAt,omitempty"`
 }
 
 // ReleaseCheckResult 检测结果。没有更新时 HasUpdate=false，其余字段为空。

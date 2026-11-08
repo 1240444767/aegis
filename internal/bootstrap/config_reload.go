@@ -98,7 +98,7 @@ func immutableConfigSections(previous, current config.Config) []string {
 	if previous.AppName != current.AppName || previous.AppEnv != current.AppEnv {
 		changed = append(changed, "app")
 	}
-	if previous.HTTPPort != current.HTTPPort || previous.ReadTimeout != current.ReadTimeout || previous.WriteTimeout != current.WriteTimeout || previous.ShutdownTimeout != current.ShutdownTimeout || !reflect.DeepEqual(previous.CORS, current.CORS) {
+	if previous.HTTPPort != current.HTTPPort || previous.ReadTimeout != current.ReadTimeout || previous.WriteTimeout != current.WriteTimeout || previous.ShutdownTimeout != current.ShutdownTimeout || !reflect.DeepEqual(previous.CORS, current.CORS) || !reflect.DeepEqual(previous.TLSServer, current.TLSServer) {
 		changed = append(changed, "http")
 	}
 	if !reflect.DeepEqual(previous.JWT, current.JWT) || !reflect.DeepEqual(previous.OAuth, current.OAuth) {
@@ -130,9 +130,6 @@ func immutableConfigSections(previous, current config.Config) []string {
 	}
 	if !reflect.DeepEqual(previous.Memory, current.Memory) {
 		changed = append(changed, "memory")
-	}
-	if !reflect.DeepEqual(previous.Lottery, current.Lottery) {
-		changed = append(changed, "lottery")
 	}
 	if !reflect.DeepEqual(previous.CrashLog, current.CrashLog) {
 		changed = append(changed, "crashlog")

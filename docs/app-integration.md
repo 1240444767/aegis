@@ -69,10 +69,10 @@ val profile = client.me.profile()
 | `POST` | `/auth/oauth/bind/url` | 取第三方账号绑定授权地址（Bearer） |
 | `POST` | `/auth/oauth/bind/token` | 用原生 SDK 拿到的 `accessToken` 绑定（Bearer） |
 | `GET` `DELETE` | `/auth/oauth/bindings[/{provider}]` | 查询 / 解绑第三方账号（Bearer） |
-| `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码 |
+| `POST` | `/auth/email/code`、`/auth/email/verify` | 邮箱验证码。位数、有效期、重发冷却（42961）、按邮箱 / IP 的频次上限（42962 / 42963）、错误次数（42964）由应用的邮件策略决定；`expireMinutes` 只能比策略里的短 |
 | `POST` | `/auth/password/recovery/start`、`/status`、`/send`、`/verify`、`/complete` | 找回密码（见 1.10） |
 | `POST` | `/me/password/recovery` | 已登录时找回密码，后续步骤同上（Bearer，见 1.10） |
-| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 旧的邮件链接式重置：只寄信，响应不含令牌；新接入请用上一行 |
+| `POST` | `/auth/password/forgot`、`/auth/password/reset/verify` | 旧的邮件链接式重置：只寄信，响应不含令牌；`resetUrl` 必须落在邮件策略登记的前缀内（否则 42291），不存在的账号同样返回成功但不发信。新接入请用上一行 |
 | `POST` | `/auth/password/verify`、`/auth/password/change` | 校验 / 修改密码（Bearer） |
 | `POST` | `/auth/passkey/options`、`/auth/passkey/login` | Passkey 登录 |
 | `POST` | `/auth/qr/create`、`/auth/qr/poll` | 网页扫码登录：网页申请票据、轮询并领取会话（见 1.8） |
@@ -325,6 +325,8 @@ Content-Type: application/json
 | `GET` | `/version/check` | 版本检查（旧形状，新接入请用 `/releases/check`） |
 | `GET` | `/releases/check`、`/releases/latest`、`/releases` | 发布中心：检测更新、最新版本、版本历史，详见 [releases.md](releases.md) |
 | `POST` | `/releases/events` | 更新漏斗上报 |
+| `POST` | `/client-control/check` | 版本管控：加密上报包名、版本与签名，取回签名裁决，详见 [client-control.md](client-control.md) |
+| `GET` | `/client-control/watch` | 版本管控变更的长轮询（免登录） |
 
 `/notices` 只返回**已发布且处于投放窗口内**的公告（置顶优先，再按发布时间倒序），
 正文是净化过的 HTML，`summary` 是服务端提取的纯文本摘要。结果有 2 分钟缓存，
@@ -501,7 +503,12 @@ POST /api/v1/apps/{appKey}/auth/login
   `providerUserId` 一概不作数。QQ 通过 `graph.qq.com/oauth2.0/me` 反查 openid（开通了权限时带 unionid），
   并核对 `client_id` 等于渠道配置的 APP ID —— 别的应用签出的令牌一律 `40380`。
   资料（昵称、头像）再用 `get_user_info` 拉取，拉不到不影响登录。
-- `openId`：QQ 可不填；微信、微博必填（它们的资料接口按 openid / uid 查）。填了就必须与核实结果一致，否则 `40380`。
+- **Google**：`accessToken` 位置放 Credential Manager（Sign in with Google）给的 **ID Token**。服务端用
+  Google 公钥验签，核对 `iss`、`exp` 与 `aud` 等于渠道的 ClientID（控制台「Web 应用」类型的客户端 ID），
+  身份取 `sub`，邮箱只在 `email_verified` 时收。传 access token 也行：服务端先问 tokeninfo 它签给了谁，
+  受众不是本渠道 ClientID 一律 `40380`。端上要的 `serverClientId` 读 `/config` 里该渠道的 `clientId`
+  （只有 Google 渠道下发，Client ID 不是秘密）。
+- `openId`：QQ、Google 可不填；微信、微博必填（它们的资料接口按 openid / uid 查）。填了就必须与核实结果一致，否则 `40380`。
 - 老字段 `providerUserId` 仍被接受，含义同 `openId`。
 
 **未关联账号时：快速注册或绑定已有账号**
@@ -580,6 +587,7 @@ POST /api/v1/apps/{appKey}/auth/login
 | 字段 | 请求体 | 请求头 | 说明 |
 |---|---|---|---|
 | 设备唯一码 | `deviceId` | `X-Device-Id` | 开启「登录设备检查」时必填 |
+| 旧设备码 | — | `X-Device-Id-Previous` | 可选。客户端换了设备码生成方式时带上本机以前的设备码，见下文 |
 | 原始型号 | `device` | `X-Device-Name` | **报原始型号而不是营销名**：Android 用 `Build.MODEL`（如 `SM-G998B`），iOS 用机器标识（如 `iPhone14,3`） |
 | 平台 | — | `X-Device-Platform` | `android` / `ios` / `harmonyos` / `windows` / `macos` / `linux` / `web`；不报时按 UA 推断 |
 | 厂商 | — | `X-Device-Manufacturer` | Android `Build.MANUFACTURER`；字典未命中时展示名为「厂商 型号」 |
@@ -588,6 +596,16 @@ POST /api/v1/apps/{appKey}/auth/login
 | 系统 | — | `X-Device-OS` | 如 `Android`、`iOS`、`HarmonyOS`、`Windows` |
 | 系统版本 | — | `X-Device-OS-Version` | Android `Build.VERSION.RELEASE`，iOS `UIDevice.systemVersion` |
 | 应用版本 | — | `X-App-Version` | 客户端自己的版本号 |
+
+设备唯一码要是本机自己的值。全零（关闭广告追踪后的 OAID，64 位、32 位、UUID 形式都有）、`9774d56d682e549c`、
+`unknown`、`null` 这类占位值所有设备都一样，服务端一律按**没有上报**处理：设备登录数退回按 UA 区分，
+开启「登录设备检查」时返回 `40024`（提示设备标识无效）；之前已绑定成占位值的用户，下次带上真实标识登录时直接重新绑定，
+不触发换绑冷却。客户端拿到占位值时应改用 ANDROID_ID 或本机生成并持久化的随机 ID。
+
+设备码要在卸载重装后保持不变（只在恢复出厂设置后变化）：Android 8 起的 ANDROID_ID 按签名密钥区分、重装不变，
+是首选；MediaDRM（Widevine）设备码可作备选。换设备码生成方式时，客户端在 `X-Device-Id-Previous` 带上以前的码，
+服务端在当前用户自己的数据里把旧码迁到新码：刷新令牌的设备绑定放行（否则返回 `40104` 并撤销该登录）、
+登录设备检查的基线改记新码、设备登录数把旧码下的会话与新登录算作同一台、卡密的设备绑定改记新码。
 
 后六项都可选、只用于展示，单项超过 64 字节截断，不参与任何安全判定。HTTP 头只能放 ASCII：
 带中文等字符的值（部分国产机型的型号与品牌）按 UTF-8 百分号编码后发送，服务端会解码。它们默认在 CORS 允许的请求头里，

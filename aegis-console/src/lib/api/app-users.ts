@@ -20,6 +20,7 @@ import type {
   UserWalletTransactionList,
   WalletAdjustResult
 } from "./types";
+import type { UserNotificationAction } from "@/lib/user-notification-meta";
 
 const app = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}`;
 const base = (appKey: string, userId: number | string) => `${app(appKey)}/users/${userId}`;
@@ -169,17 +170,22 @@ export function batchCreateAdminAppUserBan(
   });
 }
 
-export function bulkNotifyAdminAppUsers(
-  token: string,
-  appKey: string,
-  payload: {
-    userIds: number[];
-    type: string;
-    title: string;
-    content: string;
-    level?: string;
-  }
-) {
+export type BulkNotifyPayload = {
+  userIds: number[];
+  type: string;
+  title: string;
+  content: string;
+  level?: string;
+  /** 分类 key，不传即公告活动 */
+  category?: string;
+  action?: UserNotificationAction;
+  /** 配图地址（https） */
+  image?: string;
+  /** 过期时间（RFC 3339），过期后不出现在用户的消息列表里 */
+  expiresAt?: string;
+};
+
+export function bulkNotifyAdminAppUsers(token: string, appKey: string, payload: BulkNotifyPayload) {
   return apiRequest<BatchResult>(`${app(appKey)}/notifications/bulk`, {
     method: "POST",
     token,

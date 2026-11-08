@@ -35,6 +35,19 @@ type Feature struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
+// FeatureView 用户侧看到的一个权益：只有展示需要的几项。
+type FeatureView struct {
+	Tag         string `json:"tag"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+// View 压成用户侧的展示形状。
+func (f Feature) View() FeatureView {
+	return FeatureView{Tag: f.Tag, Name: f.Name, Description: f.Description, SortOrder: f.SortOrder}
+}
+
 // FeatureMutation 功能标识的创建 / 更新（指针为空表示不变更）。
 //
 // Tag 是定位键，创建后不可改：它已经被写进接入方的代码、以及每一条历史开通记录的

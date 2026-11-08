@@ -1,91 +1,99 @@
 "use client";
 
-import { useMemo, useState, type ComponentType, type ReactNode } from "react";
+/**
+ * 活动：这个账号最近发生了什么。
+ *
+ *   顶部指标   近 30 天登录、失败、不同 IP、不同设备
+ *   每日分布   近 30 天每天的成功 / 失败 / 拦截，以及最近一次成功与失败
+ *   活动地图   同一批数据的空间投影
+ *   登录记录   结果筛选、关键词、时间区间、详情抽屉、导出
+ *   会话事件   令牌的签发、刷新、撤销轨迹，同样可筛选与导出
+ *   风控评估   引擎给这个账号打的分
+ *
+ * 指标、每日分布与地图共用同一份不带筛选的「最近 100 条登录」样本（同一个查询键，只请求一次），
+ * 不随下方表格的筛选变化。样本覆盖不到 30 天时界面会写明。
+ *
+ * 登录记录与会话事件的结果 / 事件类型、关键词、时间区间都在服务端筛选（lib/user-activity-hooks），
+ * 导出按同样的参数逐页拉取。
+ */
+
+import { useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import Link from "next/link";
 import {
   ArrowUpRight,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Clock3,
+  Download,
   FileClock,
-  Fingerprint,
   Globe2,
   KeyRound,
   KeySquare,
+  Loader2,
   LogIn,
   LogOut,
   Map as MapIcon,
-  MapPin,
   MonitorSmartphone,
+  Network,
   Radar,
   RefreshCw,
   ShieldAlert,
   ShieldCheck,
   ShieldX,
-  TimerOff,
-  Wifi
+  TimerOff
 } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import { CountryFlag } from "@/components/ui/country-flag";
-import { useNow } from "@/components/users/ban-form";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ActionBadge, LEVEL_COLORS, LevelBadge, RiskCatalogProvider, SceneBadge } from "@/components/risk/risk-shared";
-import { useAdminUserSessionsQuery } from "@/lib/admin-hooks";
-import { useAdminUserLoginAuditsQuery, useAdminUserSessionAuditsQuery } from "@/lib/app-user-hooks";
-import type { AdminAppUserDetail, UserLoginAuditRecord, UserSessionAuditRecord } from "@/lib/api/types";
-import { formatClock, formatWith, localDateKey } from "@/lib/datetime";
+import { useNow } from "@/components/users/ban-form";
+import { useAdminToken, useAdminUserSessionsQuery } from "@/lib/admin-hooks";
+import { useAdminUserLoginAuditsQuery } from "@/lib/app-user-hooks";
+import type { AdminAppUserDetail, RiskAssessment, UserLoginAuditRecord, UserSessionAuditRecord } from "@/lib/api/types";
+import { formatDateTime, formatRelative, formatShortDateTime, formatWith, localDateKey } from "@/lib/datetime";
 import { useRiskAssessmentsQuery } from "@/lib/risk-hooks";
+import {
+  listUserLoginAudits,
+  listUserSessionAudits,
+  useUserLoginAuditListQuery,
+  useUserSessionAuditListQuery
+} from "@/lib/user-activity-hooks";
 import { cn } from "@/lib/utils";
-import { DeviceInfoChip } from "../device-info-chip";
-import { UserSessionsPanel } from "../user-sessions-panel";
+import { DeviceInfoCard, DeviceInfoChip } from "../device-info-chip";
 import { UserActivityMap } from "./user-activity-map";
 import {
-  LOGIN_STATUS_LABEL,
-  Panel,
-  SESSION_EVENT_LABEL,
-  ValueTree,
-  describeUserAgent,
-  formatTime,
-  relativeTime,
-  textValue
-} from "./user-detail-shared";
-
-/**
- * 活动：这个账号最近发生了什么。
- *
- * 自上而下是「先看结论、再看明细」：
- *
- *   活动概览   最近登录、成功与失败、去过几个地方、近 30 天每天的登录情况
- *   活动地图   同一批数据的空间投影
- *   活跃会话   现在谁拿着这个账号的令牌（可撤销）
- *   登录记录   按天分组的时间线，可按结果筛选，展开看设备与原始信息
- *   会话事件   令牌的签发、刷新、撤销轨迹
- *   风控评估   引擎给这个账号打的分
- *
- * 四条流刻意不合并成一条「统一时间线」：合并之后就没法按「只看失败登录」这种
- * 真实的排查意图筛选了。概览与地图共用同一份不带筛选的 100 条登录样本
- * （同一个查询键，只请求一次），不会随下方的筛选变化。
- */
+  FilterBar,
+  FilterSelect,
+  MetricCard,
+  Pager,
+  RecordSheet,
+  RecordTable,
+  ResetButton,
+  SearchField,
+  Section,
+  StateBlock,
+  TimeRangePicker,
+  ToneIcon,
+  downloadCsv,
+  errorMessage,
+  collectPages,
+  rangeToParams,
+  useDebouncedValue,
+  type Column,
+  type CsvColumn,
+  type InfoItem,
+  type TimeRange,
+  type Tone
+} from "./kit";
+import { LOGIN_STATUS_LABEL, SESSION_EVENT_LABEL, describeUserAgent, textValue } from "./user-detail-shared";
 
 /** 与 UserActivityMap 的样本量一致：同一个查询键命中同一份缓存 */
 const LOGIN_SAMPLE = 100;
-const LOGIN_PAGE_SIZE = 15;
-const EVENT_PAGE_SIZE = 15;
 const STRIP_DAYS = 30;
+const EXPORT_MAX = 5000;
+const ALL_TIME: TimeRange = { preset: "all" };
 
-type LoginFilter = "all" | "success" | "failed" | "blocked";
-
-const LOGIN_FILTERS: Array<{ value: LoginFilter; label: string }> = [
-  { value: "all", label: "全部" },
-  { value: "success", label: "成功" },
-  { value: "failed", label: "失败" },
-  { value: "blocked", label: "被拦截" }
-];
+// ── 文案映射 ──────────────────────────
 
 const LOGIN_TYPE_LABEL: Record<string, string> = {
   password: "密码登录",
@@ -135,9 +143,12 @@ const FAILURE_REASON_LABEL: Record<string, string> = {
   captcha_failed: "人机验证未通过"
 };
 
+const LOGIN_STATUS_OPTIONS = Object.entries(LOGIN_STATUS_LABEL).map(([value, label]) => ({ value, label }));
+const EVENT_OPTIONS = Object.entries(SESSION_EVENT_LABEL).map(([value, label]) => ({ value, label }));
+
 function loginTypeLabel(item: UserLoginAuditRecord) {
   const type = LOGIN_TYPE_LABEL[item.loginType] ?? textValue(item.loginType, "登录");
-  const provider = item.provider ? PROVIDER_LABEL[item.provider.toLowerCase()] ?? item.provider : "";
+  const provider = item.provider ? (PROVIDER_LABEL[item.provider.toLowerCase()] ?? item.provider) : "";
   if (!provider || type.includes(provider) || provider === "密码") return type;
   return `${type}（${provider}）`;
 }
@@ -157,58 +168,68 @@ function failureReason(item: UserLoginAuditRecord) {
   return FAILURE_REASON_LABEL[reason] ?? reason;
 }
 
+function loginDevice(item: UserLoginAuditRecord) {
+  return item.deviceInfo?.name || describeUserAgent(item.userAgent).label;
+}
+
 function ts(value?: string | null) {
   const t = value ? new Date(value).getTime() : NaN;
   return Number.isNaN(t) ? 0 : t;
 }
 
-/** 「今天」「昨天」「10月12日 周日」 */
-function dayLabel(key: string, todayKey: string, yesterdayKey: string, sample: string) {
-  if (key === todayKey) return "今天";
-  if (key === yesterdayKey) return "昨天";
-  return formatWith(sample, { month: "numeric", day: "numeric", weekday: "short" }, key);
+function statusVariant(status: string): "success" | "warning" | "danger" | "info" {
+  if (status === "success") return "success";
+  if (status === "blocked") return "danger";
+  if (status === "challenge") return "info";
+  return "warning";
 }
 
-export function UserActivityTab({
-  appKey,
-  userId,
-  user
-}: {
-  appKey: string;
-  userId: number;
-  user: AdminAppUserDetail;
-}) {
+function stamp() {
+  return localDateKey().replace(/-/g, "");
+}
+
+// ── 页签 ──────────────────────────
+
+export function UserActivityTab({ appKey, userId, user }: { appKey: string; userId: number; user: AdminAppUserDetail }) {
+  // 指标卡点「失败」时把登录记录切到失败并滚过去
+  const [loginStatus, setLoginStatus] = useState("");
+  const loginsRef = useRef<HTMLDivElement>(null);
+
   return (
     <TooltipProvider delayDuration={150}>
-      <div className="space-y-5">
-        <ActivitySummary appKey={appKey} userId={userId} />
+      <div className="flex flex-col gap-5">
+        <ActivityOverview
+          appKey={appKey}
+          userId={userId}
+          onShowFailures={() => {
+            setLoginStatus("failed");
+            loginsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}
+        />
 
-        <Panel title="活动地图" icon={<MapIcon className="size-4" />}>
+        <Section title="活动地图" description="活跃会话与最近 100 条登录的地理分布，相邻两次活动按时间连线" icon={MapIcon} tone="info">
           <UserActivityMap appKey={appKey} userId={userId} />
-        </Panel>
+        </Section>
 
-        <Panel title="活跃会话" icon={<MonitorSmartphone className="size-4" />}>
-          <UserSessionsPanel appKey={appKey} userId={userId} />
-        </Panel>
-
-        <LoginRecords appKey={appKey} userId={userId} />
-
-        <div className="grid gap-5 xl:grid-cols-2">
-          <SessionEvents appKey={appKey} userId={userId} />
-          <RiskCatalogProvider>
-            <UserRiskPanel account={user.account} />
-          </RiskCatalogProvider>
+        <div ref={loginsRef} className="scroll-mt-4">
+          <LoginRecords appKey={appKey} userId={userId} status={loginStatus} onStatusChange={setLoginStatus} />
         </div>
+
+        <SessionEvents appKey={appKey} userId={userId} />
+
+        <RiskCatalogProvider>
+          <UserRiskPanel account={user.account} />
+        </RiskCatalogProvider>
       </div>
     </TooltipProvider>
   );
 }
 
-// ── 活动概览 ──────────────────────────
+// ── 指标与每日分布 ──────────────────────────
 
 type DayBucket = { key: string; date: Date; success: number; failed: number; blocked: number };
 
-function ActivitySummary({ appKey, userId }: { appKey: string; userId: number }) {
+function ActivityOverview({ appKey, userId, onShowFailures }: { appKey: string; userId: number; onShowFailures: () => void }) {
   const loginsQuery = useAdminUserLoginAuditsQuery(appKey, userId, { limit: LOGIN_SAMPLE });
   const sessionsQuery = useAdminUserSessionsQuery(appKey, userId);
   const loading = loginsQuery.isLoading || sessionsQuery.isLoading;
@@ -220,24 +241,23 @@ function ActivitySummary({ appKey, userId }: { appKey: string; userId: number })
     const sessions = sessionsQuery.data?.items ?? [];
     const since = now - STRIP_DAYS * 86_400_000;
 
-    const lastSuccess = logins.find((l) => l.status === "success");
-    const lastFailure = logins.find((l) => l.status === "failed" || l.status === "blocked");
     const recent = logins.filter((l) => ts(l.createdAt) >= since);
     const success = recent.filter((l) => l.status === "success").length;
     const failed = recent.filter((l) => l.status === "failed").length;
     const blocked = recent.filter((l) => l.status === "blocked").length;
+    const challenge = recent.filter((l) => l.status === "challenge").length;
 
-    const places = new Map<string, number>();
     const ips = new Set<string>();
-    for (const l of logins) {
+    const devices = new Set<string>();
+    const places = new Map<string, number>();
+    for (const l of recent) {
       if (l.loginIp) ips.add(l.loginIp);
+      devices.add(l.deviceId || loginDevice(l));
       const place = loginLocation(l);
       if (place) places.set(place, (places.get(place) ?? 0) + 1);
     }
     const topPlace = [...places.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
-    const devices = new Set(sessions.map((s) => s.deviceId || s.userAgent).filter(Boolean));
 
-    // 近 30 天每天一格，从最早一天到今天
     const days: DayBucket[] = [];
     const index = new Map<string, DayBucket>();
     for (let i = STRIP_DAYS - 1; i >= 0; i--) {
@@ -251,169 +271,167 @@ function ActivitySummary({ appKey, userId }: { appKey: string; userId: number })
       if (!bucket) continue;
       if (l.status === "success") bucket.success++;
       else if (l.status === "blocked") bucket.blocked++;
-      else bucket.failed++;
+      else if (l.status === "failed") bucket.failed++;
     }
     const oldest = logins[logins.length - 1];
     // 样本是最近 100 条：若第 100 条仍在 30 天内，说明这 30 天里还有更早的记录没取到
     const truncated = (loginsQuery.data?.total ?? 0) > logins.length && Boolean(oldest) && ts(oldest?.createdAt) >= since;
 
     return {
-      sessions: sessions.length,
-      devices: devices.size,
-      lastSuccess,
-      lastFailure,
+      attempts: recent.length,
       success,
       failed,
       blocked,
+      challenge,
+      ips: ips.size,
+      devices: devices.size,
       places: places.size,
       topPlace,
-      ips: ips.size,
+      sessions: sessions.length,
+      sessionDevices: new Set(sessions.map((s) => s.deviceId || s.userAgent).filter(Boolean)).size,
+      lastSuccess: logins.find((l) => l.status === "success"),
+      lastFailure: logins.find((l) => l.status === "failed" || l.status === "blocked"),
       days,
-      truncated,
-      empty: logins.length === 0
+      truncated
     };
   }, [loginsQuery.data, sessionsQuery.data, now]);
 
-  const risky = summary.failed + summary.blocked;
+  const failures = summary.failed + summary.blocked;
+  const dailyTotals = summary.days.map((d) => d.success + d.failed + d.blocked);
+  const dailyFailures = summary.days.map((d) => d.failed + d.blocked);
 
   return (
-    <Card className="gap-0 overflow-hidden py-0">
-      <div className="grid grid-cols-2 lg:grid-cols-4">
-        <SummaryTile
-          icon={Wifi}
-          label="活跃会话"
-          loading={loading}
-          value={`${summary.sessions}`}
-          unit="个"
-          hint={summary.sessions ? `${summary.devices} 台设备` : "当前没有有效会话"}
-          tone={summary.sessions ? "success" : "muted"}
-          index={0}
-        />
-        <SummaryTile
-          icon={Clock3}
-          label="最近登录"
-          loading={loading}
-          value={summary.lastSuccess ? relativeTime(summary.lastSuccess.createdAt) : "暂无"}
-          hint={
-            summary.lastSuccess
-              ? [loginLocation(summary.lastSuccess), loginTypeLabel(summary.lastSuccess)].filter(Boolean).join("，")
-              : "没有成功的登录记录"
-          }
-          title={summary.lastSuccess ? formatTime(summary.lastSuccess.createdAt) : undefined}
-          index={1}
-        />
-        <SummaryTile
-          icon={risky ? ShieldAlert : ShieldCheck}
+    <>
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        <MetricCard
           label={`近 ${STRIP_DAYS} 天登录`}
+          icon={LogIn}
+          tone="primary"
           loading={loading}
-          value={`${summary.success}`}
-          unit="次成功"
-          hint={risky ? `失败 ${summary.failed} 次，拦截 ${summary.blocked} 次` : "没有失败或被拦截的登录"}
-          tone={summary.blocked ? "danger" : summary.failed ? "warning" : "default"}
-          index={2}
+          value={summary.success.toLocaleString("zh-CN")}
+          sub={`成功次数，共 ${summary.attempts} 次尝试`}
+          spark={dailyTotals}
         />
-        <SummaryTile
-          icon={MapPin}
-          label="登录地点"
+        <MetricCard
+          label="失败与拦截"
+          icon={failures ? ShieldAlert : ShieldCheck}
+          tone={summary.blocked ? "danger" : summary.failed ? "warning" : "success"}
           loading={loading}
-          value={`${summary.places}`}
-          unit="处"
-          hint={summary.places ? `常用 ${summary.topPlace}，${summary.ips} 个 IP` : "未解析出地点"}
-          index={3}
+          value={failures.toLocaleString("zh-CN")}
+          sub={failures ? `失败 ${summary.failed}，拦截 ${summary.blocked}` : "没有失败或被拦截的登录"}
+          spark={failures ? dailyFailures : undefined}
+          onClick={failures ? onShowFailures : undefined}
+        />
+        <MetricCard
+          label="不同 IP"
+          icon={Network}
+          tone="info"
+          loading={loading}
+          value={summary.ips.toLocaleString("zh-CN")}
+          sub={summary.places ? `${summary.places} 个地点，常用 ${summary.topPlace}` : "未解析出地点"}
+        />
+        <MetricCard
+          label="不同设备"
+          icon={MonitorSmartphone}
+          tone="violet"
+          loading={loading}
+          value={summary.devices.toLocaleString("zh-CN")}
+          sub={summary.sessions ? `活跃会话 ${summary.sessions} 个，${summary.sessionDevices} 台设备` : "当前没有活跃会话"}
         />
       </div>
 
-      <div className="border-t px-4 py-3.5 sm:px-5">
-        <div className="mb-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-          <span>
-            近 {STRIP_DAYS} 天每日登录{summary.truncated ? `（按最近 ${LOGIN_SAMPLE} 条统计）` : ""}
-          </span>
-          <span className="flex items-center gap-3">
+      <Section
+        title={`近 ${STRIP_DAYS} 天每日登录`}
+        description={
+          <>
+            统计口径：最近 {LOGIN_SAMPLE} 条登录记录中落在近 {STRIP_DAYS} 天内的部分；设备按设备标识区分，无标识时按设备名或 UA
+            {summary.truncated ? "。样本未覆盖完整 30 天，实际次数更多" : ""}
+          </>
+        }
+        icon={FileClock}
+        tone="primary"
+        actions={
+          <span className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
             <Legend className="bg-blue-600 dark:bg-blue-500" label="成功" />
             <Legend className="bg-amber-500" label="失败" />
             <Legend className="bg-red-500" label="被拦截" />
           </span>
-        </div>
-        {loading ? (
-          <Skeleton className="h-12 w-full rounded-lg" />
+        }
+      >
+        {loginsQuery.isError ? (
+          <StateBlock compact kind="error" description={errorMessage(loginsQuery.error)} onRetry={() => void loginsQuery.refetch()} />
         ) : (
-          <DayStrip days={summary.days} />
-        )}
-        {summary.lastFailure && !loading ? (
-          <div className="mt-2.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-            <ShieldAlert className="size-3 text-amber-500" />
-            最近一次失败 {relativeTime(summary.lastFailure.createdAt)}
-            {failureReason(summary.lastFailure) ? `，${failureReason(summary.lastFailure)}` : ""}
-            {summary.lastFailure.loginIp ? (
-              <span className="font-mono">{summary.lastFailure.loginIp}</span>
-            ) : null}
+          <div className="flex flex-col gap-4">
+            {loading ? <Skeleton className="h-14 w-full" /> : <DayStrip days={summary.days} />}
+            <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
+              <RecentFact
+                loading={loading}
+                icon={ShieldCheck}
+                tone="success"
+                label="最近成功登录"
+                empty="没有成功的登录记录"
+                at={summary.lastSuccess?.createdAt}
+                detail={summary.lastSuccess ? [loginLocation(summary.lastSuccess), loginTypeLabel(summary.lastSuccess), summary.lastSuccess.loginIp].filter(Boolean).join("，") : ""}
+              />
+              <RecentFact
+                loading={loading}
+                icon={ShieldAlert}
+                tone={summary.lastFailure?.status === "blocked" ? "danger" : "warning"}
+                label="最近失败或拦截"
+                empty="没有失败或被拦截的登录"
+                at={summary.lastFailure?.createdAt}
+                detail={
+                  summary.lastFailure
+                    ? [LOGIN_STATUS_LABEL[summary.lastFailure.status] ?? summary.lastFailure.status, failureReason(summary.lastFailure), summary.lastFailure.loginIp]
+                        .filter(Boolean)
+                        .join("，")
+                    : ""
+                }
+              />
+            </div>
           </div>
-        ) : null}
-      </div>
-    </Card>
+        )}
+      </Section>
+    </>
   );
 }
 
-function SummaryTile({
-  icon: Icon,
-  label,
-  value,
-  unit,
-  hint,
-  title,
-  tone = "default",
+function RecentFact({
   loading,
-  index
+  icon,
+  tone,
+  label,
+  empty,
+  at,
+  detail
 }: {
-  icon: ComponentType<{ className?: string }>;
-  label: string;
-  value: string;
-  unit?: string;
-  hint: string;
-  title?: string;
-  tone?: "default" | "success" | "warning" | "danger" | "muted";
   loading: boolean;
-  index: number;
+  icon: ComponentType<{ className?: string }>;
+  tone: Tone;
+  label: string;
+  empty: string;
+  at?: string;
+  detail: string;
 }) {
   return (
-    <div
-      className={cn(
-        "min-w-0 px-4 py-4 sm:px-5",
-        index % 2 === 1 && "border-l",
-        index >= 2 && "border-t lg:border-t-0",
-        index >= 1 && "lg:border-l"
-      )}
-    >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <span
-          className={cn(
-            "grid size-6 place-items-center rounded-md",
-            tone === "success" && "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
-            tone === "warning" && "bg-amber-500/10 text-amber-600 dark:text-amber-400",
-            tone === "danger" && "bg-red-500/10 text-red-600 dark:text-red-400",
-            (tone === "default" || tone === "muted") && "bg-muted text-muted-foreground"
-          )}
-        >
-          <Icon className="size-3.5" />
-        </span>
-        {label}
+    <div className="flex min-w-0 items-start gap-3">
+      <ToneIcon icon={icon} tone={at ? tone : "neutral"} size="sm" />
+      <div className="flex min-w-0 flex-col gap-0.5">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        {loading ? (
+          <Skeleton className="mt-1 h-4 w-40" />
+        ) : at ? (
+          <>
+            <span className="text-sm" title={formatDateTime(at)}>
+              {formatRelative(at)}
+              <span className="ml-2 text-xs text-muted-foreground tabular-nums">{formatDateTime(at)}</span>
+            </span>
+            {detail ? <span className="truncate text-xs text-muted-foreground" title={detail}>{detail}</span> : null}
+          </>
+        ) : (
+          <span className="text-sm text-muted-foreground">{empty}</span>
+        )}
       </div>
-      {loading ? (
-        <>
-          <Skeleton className="mt-2.5 h-6 w-20" />
-          <Skeleton className="mt-1.5 h-3 w-28" />
-        </>
-      ) : (
-        <>
-          <div className="mt-2 flex items-baseline gap-1 truncate" title={title}>
-            <span className="text-xl font-semibold tracking-tight tabular-nums">{value}</span>
-            {unit ? <span className="text-xs text-muted-foreground">{unit}</span> : null}
-          </div>
-          <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={hint}>
-            {hint}
-          </div>
-        </>
-      )}
     </div>
   );
 }
@@ -431,7 +449,7 @@ function Legend({ className, label }: { className: string; label: string }) {
 function DayStrip({ days }: { days: DayBucket[] }) {
   const peak = Math.max(1, ...days.map((d) => d.success + d.failed + d.blocked));
   return (
-    <div className="flex h-12 items-end gap-[3px]">
+    <div className="flex h-14 items-end gap-[3px]">
       {days.map((day) => {
         const total = day.success + day.failed + day.blocked;
         return (
@@ -468,214 +486,285 @@ function DayStrip({ days }: { days: DayBucket[] }) {
 
 // ── 登录记录 ──────────────────────────
 
-const LOGIN_TONE: Record<string, { icon: ComponentType<{ className?: string }>; className: string }> = {
-  success: { icon: LogIn, className: "bg-emerald-500/10 text-emerald-600 ring-emerald-500/20 dark:text-emerald-400" },
-  failed: { icon: ShieldAlert, className: "bg-amber-500/10 text-amber-600 ring-amber-500/20 dark:text-amber-400" },
-  blocked: { icon: ShieldX, className: "bg-red-500/10 text-red-600 ring-red-500/20 dark:text-red-400" },
-  challenge: { icon: Fingerprint, className: "bg-sky-500/10 text-sky-600 ring-sky-500/20 dark:text-sky-400" }
-};
+const LOGIN_CSV: Array<CsvColumn<UserLoginAuditRecord>> = [
+  { header: "时间", value: (r) => formatDateTime(r.createdAt) },
+  { header: "结果", value: (r) => LOGIN_STATUS_LABEL[r.status] ?? r.status },
+  { header: "失败原因", value: (r) => failureReason(r) },
+  { header: "方式", value: (r) => loginTypeLabel(r) },
+  { header: "渠道", value: (r) => r.provider },
+  { header: "IP", value: (r) => r.loginIp },
+  { header: "位置", value: (r) => loginLocation(r) },
+  { header: "运营商", value: (r) => r.isp },
+  { header: "设备", value: (r) => loginDevice(r) },
+  { header: "设备标识", value: (r) => r.deviceId },
+  { header: "令牌", value: (r) => r.tokenJti },
+  { header: "User-Agent", value: (r) => r.userAgent },
+  { header: "记录 ID", value: (r) => r.id }
+];
 
-function LoginRecords({ appKey, userId }: { appKey: string; userId: number }) {
-  const [filter, setFilter] = useState<LoginFilter>("all");
+function LoginLocationCell({ item }: { item: UserLoginAuditRecord }) {
+  const location = loginLocation(item);
+  return (
+    <span className="inline-flex max-w-[200px] min-w-0 items-center gap-1.5 text-xs">
+      {item.countryCode && !item.isPrivate ? (
+        <CountryFlag code={item.countryCode} size={14} className="shrink-0 rounded-[2px]" />
+      ) : (
+        <Globe2 className="size-3.5 shrink-0 text-muted-foreground" />
+      )}
+      <span className="truncate">{location || "未知地点"}</span>
+    </span>
+  );
+}
+
+function LoginRecords({
+  appKey,
+  userId,
+  status,
+  onStatusChange
+}: {
+  appKey: string;
+  userId: number;
+  status: string;
+  onStatusChange: (status: string) => void;
+}) {
+  const token = useAdminToken();
+  const [keyword, setKeyword] = useState("");
+  const [range, setRange] = useState<TimeRange>(ALL_TIME);
   const [page, setPage] = useState(1);
-  const [expanded, setExpanded] = useState<number | null>(null);
-  const query = useAdminUserLoginAuditsQuery(appKey, userId, {
-    status: filter === "all" ? undefined : filter,
-    page,
-    limit: LOGIN_PAGE_SIZE
-  });
-  const items = useMemo(() => query.data?.items ?? [], [query.data]);
-  const totalPages = Math.max(1, query.data?.totalPages ?? 1);
-  const now = useNow(60_000);
+  const [limit, setLimit] = useState(20);
+  const [detail, setDetail] = useState<UserLoginAuditRecord | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const debounced = useDebouncedValue(keyword.trim().toLowerCase());
+  // 筛选变化时回到第一页：在 setter 里一起做，避免 effect 级联渲染
+  const resetPage = () => setPage(1);
 
-  const groups = useMemo(() => {
-    const todayKey = localDateKey(now);
-    const yesterdayKey = localDateKey(now - 86_400_000);
-    const out: Array<{ key: string; label: string; items: UserLoginAuditRecord[] }> = [];
-    for (const item of items) {
-      const key = localDateKey(item.createdAt) || "unknown";
-      let group = out[out.length - 1];
-      if (!group || group.key !== key) {
-        group = { key, label: dayLabel(key, todayKey, yesterdayKey, item.createdAt), items: [] };
-        out.push(group);
+  const filter = useMemo(() => ({ status: status || undefined, keyword: debounced || undefined, ...rangeToParams(range) }), [status, debounced, range]);
+  const query = useUserLoginAuditListQuery(appKey, userId, { ...filter, page, limit });
+  const rows = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const filtersActive = Boolean(keyword) || Boolean(status) || range.preset !== "all";
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const { rows: list, total: all, truncated } = await collectPages(
+        async (p, l) => {
+          const data = await listUserLoginAudits(token as string, appKey, userId, { ...filter, page: p, limit: l });
+          return { items: data.items ?? [], total: data.total };
+        },
+        { limit: 100, maxRows: EXPORT_MAX }
+      );
+      if (truncated) toast.warning(`符合条件的记录共 ${all} 条，只导出最近 ${EXPORT_MAX} 条`);
+      if (!list.length) {
+        toast.info("没有可导出的记录");
+        return;
       }
-      group.items.push(item);
+      downloadCsv(`user-${userId}-logins-${stamp()}`, LOGIN_CSV, list);
+      toast.success(`已导出 ${list.length} 条登录记录`);
+    } catch (error) {
+      toast.error(errorMessage(error, "导出失败"));
+    } finally {
+      setExporting(false);
     }
-    return out;
-  }, [items, now]);
+  }
+
+  const columns: Array<Column<UserLoginAuditRecord>> = [
+    {
+      id: "time",
+      header: "时间",
+      cell: (r) => (
+        <span className="text-xs whitespace-nowrap tabular-nums" title={formatDateTime(r.createdAt)}>
+          {formatShortDateTime(r.createdAt)}
+        </span>
+      )
+    },
+    {
+      id: "status",
+      header: "结果",
+      cell: (r) => {
+        const reason = r.status !== "success" ? failureReason(r) : "";
+        return (
+          <span className="flex flex-col items-start gap-0.5">
+            <Badge variant={statusVariant(r.status)} size="sm">
+              {LOGIN_STATUS_LABEL[r.status] ?? r.status}
+            </Badge>
+            {reason ? <span className="max-w-[140px] truncate text-xs text-muted-foreground">{reason}</span> : null}
+          </span>
+        );
+      }
+    },
+    { id: "type", header: "方式", cell: (r) => <span className="text-sm whitespace-nowrap">{loginTypeLabel(r)}</span> },
+    { id: "location", header: "位置", cell: (r) => <LoginLocationCell item={r} /> },
+    {
+      id: "ip",
+      header: "IP",
+      hideBelow: "md",
+      cell: (r) => <span className="font-mono text-xs text-muted-foreground">{r.loginIp || "—"}</span>
+    },
+    {
+      id: "device",
+      header: "设备",
+      hideBelow: "lg",
+      cell: (r) => (
+        <div className="max-w-[220px] min-w-0" onClick={(event) => event.stopPropagation()}>
+          <DeviceInfoChip info={r.deviceInfo} fallback={describeUserAgent(r.userAgent).label} />
+        </div>
+      )
+    }
+  ];
+
+  const detailFields: InfoItem[] | undefined = detail
+    ? [
+        { label: "时间", value: formatDateTime(detail.createdAt), hint: formatRelative(detail.createdAt) },
+        { label: "方式", value: loginTypeLabel(detail) },
+        { label: "登录类型", value: detail.loginType, mono: true },
+        { label: "渠道", value: detail.provider, mono: true },
+        { label: "来源 IP", value: detail.loginIp, mono: true, copy: detail.loginIp },
+        { label: "归属地", value: loginLocation(detail) },
+        { label: "运营商", value: detail.isp },
+        { label: "设备", value: loginDevice(detail) },
+        { label: "设备标识", value: detail.deviceId, mono: true, copy: detail.deviceId, wide: true },
+        { label: "令牌", value: detail.tokenJti, mono: true, copy: detail.tokenJti, wide: true },
+        { label: "User-Agent", value: detail.userAgent, mono: true, copy: detail.userAgent, wide: true }
+      ]
+    : undefined;
 
   return (
-    <Panel
-      title="登录记录"
-      icon={<LogIn className="size-4" />}
-      action={
-        <div className="flex items-center gap-2">
-          <span className="hidden text-xs text-muted-foreground tabular-nums sm:inline">
-            {query.data ? `共 ${query.data.total.toLocaleString("zh-CN")} 条` : ""}
-          </span>
-          <FilterGroup
-            value={filter}
-            options={LOGIN_FILTERS}
-            onChange={(value) => {
-              setFilter(value);
-              setPage(1);
-              setExpanded(null);
+    <>
+      <Section
+        title="登录记录"
+        description="每一次登录尝试，含成功、失败、被拦截与需二次验证"
+        icon={LogIn}
+        tone="primary"
+        flush
+        actions={
+          <>
+            <Button size="sm" variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
+              <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
+              刷新
+            </Button>
+            <Button size="sm" variant="outline" disabled={exporting || !total} onClick={() => void handleExport()}>
+              {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+              导出 CSV
+            </Button>
+          </>
+        }
+        toolbar={
+          <FilterBar>
+            <SearchField
+              value={keyword}
+              onChange={(value) => {
+                setKeyword(value);
+                resetPage();
+              }}
+              placeholder="IP、设备标识、UA、登录方式"
+            />
+            <FilterSelect
+              label="结果"
+              value={status}
+              options={LOGIN_STATUS_OPTIONS}
+              onChange={(value) => {
+                onStatusChange(value);
+                resetPage();
+              }}
+            />
+            <TimeRangePicker
+              value={range}
+              onChange={(value) => {
+                setRange(value);
+                resetPage();
+              }}
+            />
+            <ResetButton
+              visible={filtersActive}
+              onClick={() => {
+                setKeyword("");
+                setRange(ALL_TIME);
+                onStatusChange("");
+                resetPage();
+              }}
+            />
+          </FilterBar>
+        }
+        footer={
+          <Pager
+            page={page}
+            limit={limit}
+            total={total}
+            onPage={setPage}
+            onLimit={(next) => {
+              setLimit(next);
+              resetPage();
             }}
           />
-        </div>
-      }
-      bodyClassName="p-0 sm:px-0"
-    >
-      {query.isLoading ? (
-        <ListSkeleton rows={5} />
-      ) : items.length === 0 ? (
-        <EmptyState icon={LogIn} text={filter === "all" ? "暂无登录记录" : `没有${LOGIN_STATUS_LABEL[filter]}的登录`} />
-      ) : (
-        <div className={cn(query.isFetching && "opacity-70 transition-opacity")}>
-          {groups.map((group) => (
-            <section key={group.key}>
-              <div className="flex items-center gap-2 border-b bg-muted/40 px-4 py-1.5 text-[11px] font-medium text-muted-foreground sm:px-5">
-                {group.label}
-                <span className="font-normal tabular-nums">{group.items.length} 条</span>
-              </div>
-              <ul className="divide-y">
-                {group.items.map((item) => (
-                  <LoginRow
-                    key={item.id}
-                    item={item}
-                    open={expanded === item.id}
-                    onToggle={() => setExpanded(expanded === item.id ? null : item.id)}
-                  />
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      )}
-      {totalPages > 1 ? (
-        <Pager page={page} totalPages={totalPages} fetching={query.isFetching} onChange={(next) => { setPage(next); setExpanded(null); }} />
-      ) : null}
-    </Panel>
-  );
-}
-
-function LoginRow({ item, open, onToggle }: { item: UserLoginAuditRecord; open: boolean; onToggle: () => void }) {
-  const tone = LOGIN_TONE[item.status] ?? LOGIN_TONE.failed;
-  const Icon = tone.icon;
-  const ua = describeUserAgent(item.userAgent);
-  const location = loginLocation(item);
-  const reason = item.status !== "success" ? failureReason(item) : "";
-
-  return (
-    <li>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30 sm:px-5"
+        }
       >
-        <span className={cn("mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg ring-1 ring-inset", tone.className)}>
-          <Icon className="size-4" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="text-sm font-medium">{loginTypeLabel(item)}</span>
-            {item.status !== "success" ? (
-              <Badge variant={item.status === "blocked" ? "danger" : item.status === "challenge" ? "info" : "warning"} size="sm">
-                {LOGIN_STATUS_LABEL[item.status] ?? item.status}
-                {reason ? `，${reason}` : ""}
-              </Badge>
-            ) : null}
-          </div>
-          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-            <span className="inline-flex min-w-0 items-center gap-1.5">
-              {item.countryCode && !item.isPrivate ? (
-                <CountryFlag code={item.countryCode} size={14} className="shrink-0 rounded-[2px]" />
-              ) : (
-                <Globe2 className="size-3 shrink-0" />
-              )}
-              <span className="truncate">{location || "未知地点"}</span>
-            </span>
-            <span className="font-mono text-[11px]">{textValue(item.loginIp, "无 IP")}</span>
-            {item.isp ? <span className="hidden truncate md:inline">{item.isp}</span> : null}
-          </div>
-        </div>
-        <div className="hidden w-48 shrink-0 pt-0.5 lg:block">
-          {item.deviceInfo ? (
-            <DeviceInfoChip info={item.deviceInfo} fallback={ua.label} />
-          ) : (
-            <span className="block truncate text-xs text-muted-foreground" title={item.userAgent}>
-              {ua.label}
-            </span>
-          )}
-        </div>
-        <div className="flex shrink-0 items-center gap-2 pt-0.5">
-          <span className="text-xs tabular-nums text-muted-foreground" title={formatTime(item.createdAt)}>
-            {formatClock(item.createdAt)}
-          </span>
-          <ChevronDown className={cn("size-4 text-muted-foreground transition-transform", open && "rotate-180")} />
-        </div>
-      </button>
-      {open ? (
-        <div className="border-t bg-muted/20 px-4 py-3.5 sm:px-5 sm:pl-16">
-          <dl className="grid gap-x-6 gap-y-2.5 text-xs sm:grid-cols-2 xl:grid-cols-3">
-            <Detail label="时间" value={formatTime(item.createdAt)} />
-            <Detail label="来源 IP" value={item.loginIp} mono />
-            <Detail label="归属地" value={[location, item.isp].filter(Boolean).join(" ")} />
-            <Detail label="设备" value={item.deviceInfo ? <DeviceInfoChip info={item.deviceInfo} fallback={ua.label} /> : ua.label} />
-            <Detail label="设备标识" value={item.deviceId} mono />
-            <Detail label="令牌" value={item.tokenJti} mono />
-            <Detail label="User-Agent" value={item.userAgent} mono wide />
-          </dl>
-          {item.metadata && Object.keys(item.metadata).length ? (
-            <details className="group mt-3 rounded-lg border bg-background">
-              <summary className="cursor-pointer list-none px-3 py-2 text-xs text-muted-foreground select-none hover:text-foreground">
-                原始信息
-              </summary>
-              <div className="border-t px-3 py-2">
-                <ValueTree value={item.metadata} />
-              </div>
-            </details>
-          ) : null}
-        </div>
-      ) : null}
-    </li>
-  );
-}
+        <RecordTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          loading={query.isLoading}
+          fetching={query.isFetching}
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          onRowClick={setDetail}
+          minWidth={760}
+          empty={
+            <StateBlock
+              icon={LogIn}
+              title={filtersActive ? "没有符合条件的登录" : "暂无登录记录"}
+              description={filtersActive ? "调整筛选条件后再试" : undefined}
+            />
+          }
+        />
+      </Section>
 
-function Detail({ label, value, mono, wide }: { label: string; value?: ReactNode; mono?: boolean; wide?: boolean }) {
-  const empty = value === undefined || value === null || value === "";
-  return (
-    <div className={cn("min-w-0", wide && "sm:col-span-2 xl:col-span-3")}>
-      <dt className="text-[11px] text-muted-foreground">{label}</dt>
-      <dd className={cn("mt-0.5 break-all", mono && !empty && "font-mono text-[11px]", empty && "text-muted-foreground")}>
-        {empty ? "未记录" : value}
-      </dd>
-    </div>
+      <RecordSheet
+        open={Boolean(detail)}
+        onOpenChange={(open) => !open && setDetail(null)}
+        title={detail ? loginTypeLabel(detail) : ""}
+        description={detail ? `记录 #${detail.id}` : undefined}
+        hero={
+          detail ? (
+            <div className="flex flex-col gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant={statusVariant(detail.status)}>{LOGIN_STATUS_LABEL[detail.status] ?? detail.status}</Badge>
+                {failureReason(detail) ? <span className="text-sm text-muted-foreground">{failureReason(detail)}</span> : null}
+              </div>
+              {detail.deviceInfo ? (
+                <div className="overflow-hidden rounded-xl border">
+                  <DeviceInfoCard info={detail.deviceInfo} />
+                </div>
+              ) : null}
+            </div>
+          ) : undefined
+        }
+        fields={detailFields}
+        raw={detail}
+      />
+    </>
   );
 }
 
 // ── 会话事件 ──────────────────────────
 
-type EventTone = { icon: ComponentType<{ className?: string }>; className: string };
+type EventMeta = { icon: ComponentType<{ className?: string }>; tone: Tone };
 
-const EVENT_TONE: Record<string, EventTone> = {
-  issued: { icon: KeyRound, className: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" },
-  refreshed: { icon: RefreshCw, className: "bg-sky-500/10 text-sky-600 dark:text-sky-400" },
-  logout: { icon: LogOut, className: "bg-muted text-muted-foreground" },
-  expired: { icon: TimerOff, className: "bg-muted text-muted-foreground" },
-  replaced: { icon: RefreshCw, className: "bg-muted text-muted-foreground" },
-  password_changed: { icon: KeySquare, className: "bg-amber-500/10 text-amber-600 dark:text-amber-400" },
-  password_reset: { icon: KeySquare, className: "bg-amber-500/10 text-amber-600 dark:text-amber-400" }
+const EVENT_META: Record<string, EventMeta> = {
+  issued: { icon: KeyRound, tone: "success" },
+  refreshed: { icon: RefreshCw, tone: "info" },
+  logout: { icon: LogOut, tone: "neutral" },
+  expired: { icon: TimerOff, tone: "neutral" },
+  replaced: { icon: RefreshCw, tone: "neutral" },
+  password_changed: { icon: KeySquare, tone: "warning" },
+  password_reset: { icon: KeySquare, tone: "warning" }
 };
 
-const REVOKE_TONE: EventTone = { icon: ShieldX, className: "bg-red-500/10 text-red-600 dark:text-red-400" };
-
-function eventTone(type: string): EventTone {
-  return EVENT_TONE[type] ?? (type.startsWith("revoked") ? REVOKE_TONE : { icon: FileClock, className: "bg-muted text-muted-foreground" });
+function eventMeta(type: string): EventMeta {
+  return EVENT_META[type] ?? (type.startsWith("revoked") ? { icon: ShieldX, tone: "danger" } : { icon: FileClock, tone: "neutral" });
 }
 
-/** 元数据里值得直接显示的几项，其余放进「详情」 */
+/** 元数据里值得直接显示的几项 */
 const EVENT_HIGHLIGHTS: Array<{ key: string; label: string; mono?: boolean }> = [
   { key: "ip", label: "IP", mono: true },
   { key: "provider", label: "方式" },
@@ -684,110 +773,269 @@ const EVENT_HIGHLIGHTS: Array<{ key: string; label: string; mono?: boolean }> = 
   { key: "operator", label: "操作人" }
 ];
 
-const EVENT_FILTERS = [{ value: "all", label: "全部事件" }, ...Object.entries(SESSION_EVENT_LABEL).map(([value, label]) => ({ value, label }))];
-
-function SessionEvents({ appKey, userId }: { appKey: string; userId: number }) {
-  const [eventType, setEventType] = useState("all");
-  const [page, setPage] = useState(1);
-  const query = useAdminUserSessionAuditsQuery(appKey, userId, {
-    eventType: eventType === "all" ? undefined : eventType,
-    page,
-    limit: EVENT_PAGE_SIZE
-  });
-  const items = query.data?.items ?? [];
-  const totalPages = Math.max(1, query.data?.totalPages ?? 1);
-
-  return (
-    <Panel
-      title="会话事件"
-      icon={<FileClock className="size-4" />}
-      action={
-        <Select
-          value={eventType}
-          onValueChange={(value) => {
-            setEventType(value);
-            setPage(1);
-          }}
-        >
-          <SelectTrigger size="sm" className="h-8 w-[132px] text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {EVENT_FILTERS.map((option) => (
-              <SelectItem key={option.value} value={option.value} className="text-xs">
-                {option.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      }
-      bodyClassName="p-0 sm:px-0"
-    >
-      {query.isLoading ? (
-        <ListSkeleton rows={4} />
-      ) : items.length === 0 ? (
-        <EmptyState icon={FileClock} text={eventType === "all" ? "暂无会话事件" : "没有这类事件"} />
-      ) : (
-        <ol className={cn("px-4 py-4 sm:px-5", query.isFetching && "opacity-70 transition-opacity")}>
-          {items.map((event, i) => (
-            <EventItem key={event.id} event={event} last={i === items.length - 1} />
-          ))}
-        </ol>
-      )}
-      {totalPages > 1 ? <Pager page={page} totalPages={totalPages} fetching={query.isFetching} onChange={setPage} /> : null}
-    </Panel>
-  );
+function metaText(event: UserSessionAuditRecord, key: string) {
+  const value = event.metadata?.[key];
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
 }
 
-function EventItem({ event, last }: { event: UserSessionAuditRecord; last: boolean }) {
-  const tone = eventTone(event.eventType);
-  const Icon = tone.icon;
-  const metadata = event.metadata ?? {};
-  const highlights = EVENT_HIGHLIGHTS.flatMap(({ key, label, mono }) => {
-    const value = metadata[key];
-    return typeof value === "string" && value.trim() ? [{ key, label, mono, value: value.trim() }] : [];
-  });
-  const rest = Object.fromEntries(Object.entries(metadata).filter(([key]) => !EVENT_HIGHLIGHTS.some((h) => h.key === key)));
+function eventLabel(type: string) {
+  return SESSION_EVENT_LABEL[type] ?? type;
+}
+
+const EVENT_CSV: Array<CsvColumn<UserSessionAuditRecord>> = [
+  { header: "时间", value: (r) => formatDateTime(r.createdAt) },
+  { header: "事件", value: (r) => eventLabel(r.eventType) },
+  { header: "事件类型", value: (r) => r.eventType },
+  { header: "令牌", value: (r) => r.tokenJti },
+  ...EVENT_HIGHLIGHTS.map(({ key, label }) => ({ header: label, value: (r: UserSessionAuditRecord) => metaText(r, key) })),
+  {
+    header: "元数据",
+    value: (r) => {
+      try {
+        return r.metadata && Object.keys(r.metadata).length ? JSON.stringify(r.metadata) : "";
+      } catch {
+        return "";
+      }
+    }
+  },
+  { header: "记录 ID", value: (r) => r.id }
+];
+
+function SessionEvents({ appKey, userId }: { appKey: string; userId: number }) {
+  const token = useAdminToken();
+  const [keyword, setKeyword] = useState("");
+  const [eventType, setEventType] = useState("");
+  const [range, setRange] = useState<TimeRange>(ALL_TIME);
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(20);
+  const [detail, setDetail] = useState<UserSessionAuditRecord | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const debounced = useDebouncedValue(keyword.trim().toLowerCase());
+  const filter = useMemo(() => ({ eventType: eventType || undefined, keyword: debounced || undefined, ...rangeToParams(range) }), [eventType, debounced, range]);
+  const query = useUserSessionAuditListQuery(appKey, userId, { ...filter, page, limit });
+  const rows = query.data?.items ?? [];
+  const total = query.data?.total ?? 0;
+  const filtersActive = Boolean(keyword) || Boolean(eventType) || range.preset !== "all";
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const { rows: list, total: all, truncated } = await collectPages(
+        async (p, l) => {
+          const data = await listUserSessionAudits(token as string, appKey, userId, { ...filter, page: p, limit: l });
+          return { items: data.items ?? [], total: data.total };
+        },
+        { limit: 100, maxRows: EXPORT_MAX }
+      );
+      if (truncated) toast.warning(`符合条件的事件共 ${all} 条，只导出最近 ${EXPORT_MAX} 条`);
+      if (!list.length) {
+        toast.info("没有可导出的事件");
+        return;
+      }
+      downloadCsv(`user-${userId}-session-events-${stamp()}`, EVENT_CSV, list);
+      toast.success(`已导出 ${list.length} 条会话事件`);
+    } catch (error) {
+      toast.error(errorMessage(error, "导出失败"));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  const columns: Array<Column<UserSessionAuditRecord>> = [
+    {
+      id: "time",
+      header: "时间",
+      cell: (r) => (
+        <span className="text-xs whitespace-nowrap tabular-nums" title={formatDateTime(r.createdAt)}>
+          {formatShortDateTime(r.createdAt)}
+        </span>
+      )
+    },
+    {
+      id: "event",
+      header: "事件",
+      cell: (r) => {
+        const meta = eventMeta(r.eventType);
+        return (
+          <span className="inline-flex items-center gap-2 whitespace-nowrap">
+            <ToneIcon icon={meta.icon} tone={meta.tone} size="sm" />
+            <span className="text-sm">{eventLabel(r.eventType)}</span>
+          </span>
+        );
+      }
+    },
+    {
+      id: "token",
+      header: "令牌",
+      hideBelow: "sm",
+      cell: (r) =>
+        r.tokenJti ? (
+          <span className="font-mono text-xs text-muted-foreground" title={r.tokenJti}>
+            {r.tokenJti.slice(0, 12)}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        )
+    },
+    {
+      id: "ip",
+      header: "IP",
+      hideBelow: "md",
+      cell: (r) => <span className="font-mono text-xs text-muted-foreground">{metaText(r, "ip") || "—"}</span>
+    },
+    {
+      id: "info",
+      header: "说明",
+      hideBelow: "lg",
+      cell: (r) => {
+        const parts = EVENT_HIGHLIGHTS.filter((h) => h.key !== "ip")
+          .map((h) => {
+            const value = metaText(r, h.key);
+            return value ? `${h.label} ${value}` : "";
+          })
+          .filter(Boolean);
+        return parts.length ? (
+          <span className="block max-w-[320px] truncate text-xs text-muted-foreground" title={parts.join("，")}>
+            {parts.join("，")}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">—</span>
+        );
+      }
+    }
+  ];
+
+  const detailMeta = detail ? eventMeta(detail.eventType) : null;
 
   return (
-    <li className="relative flex gap-3 pb-4 last:pb-0">
-      {!last ? <span className="absolute top-8 bottom-0 left-[13px] w-px bg-border" aria-hidden /> : null}
-      <span className={cn("relative grid size-7 shrink-0 place-items-center rounded-full ring-4 ring-card", tone.className)}>
-        <Icon className="size-3.5" />
-      </span>
-      <div className="min-w-0 flex-1 pt-0.5">
-        <div className="flex items-baseline justify-between gap-3">
-          <span className="text-sm font-medium">{SESSION_EVENT_LABEL[event.eventType] ?? event.eventType}</span>
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground" title={formatTime(event.createdAt)}>
-            {relativeTime(event.createdAt)}
-          </span>
-        </div>
-        {highlights.length || event.tokenJti ? (
-          <div className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-            {highlights.map((h) => (
-              <span key={h.key} className="min-w-0 truncate">
-                {h.label} <span className={cn("text-foreground/80", h.mono && "font-mono")}>{h.value}</span>
-              </span>
-            ))}
-            {event.tokenJti ? (
-              <span className="truncate font-mono" title={event.tokenJti}>
-                令牌 {event.tokenJti.slice(0, 8)}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {Object.keys(rest).length ? (
-          <details className="mt-1.5">
-            <summary className="cursor-pointer list-none text-[11px] text-muted-foreground select-none hover:text-foreground">
-              详情
-            </summary>
-            <div className="mt-1 rounded-lg bg-muted/40 px-2.5 py-1.5">
-              <ValueTree value={rest} />
+    <>
+      <Section
+        title="会话事件"
+        description="令牌的签发、刷新、下线与过期轨迹"
+        icon={FileClock}
+        tone="info"
+        flush
+        actions={
+          <>
+            <Button size="sm" variant="outline" disabled={query.isFetching} onClick={() => void query.refetch()}>
+              <RefreshCw className={query.isFetching ? "animate-spin" : undefined} />
+              刷新
+            </Button>
+            <Button size="sm" variant="outline" disabled={exporting || !total} onClick={() => void handleExport()}>
+              {exporting ? <Loader2 className="animate-spin" /> : <Download />}
+              导出 CSV
+            </Button>
+          </>
+        }
+        toolbar={
+          <FilterBar>
+            <SearchField
+              value={keyword}
+              onChange={(value) => {
+                setKeyword(value);
+                setPage(1);
+              }}
+              placeholder="令牌 ID、IP、原因等"
+            />
+            <FilterSelect
+              label="事件"
+              value={eventType}
+              options={EVENT_OPTIONS}
+              allLabel="全部事件"
+              onChange={(value) => {
+                setEventType(value);
+                setPage(1);
+              }}
+            />
+            <TimeRangePicker
+              value={range}
+              onChange={(value) => {
+                setRange(value);
+                setPage(1);
+              }}
+            />
+            <ResetButton
+              visible={filtersActive}
+              onClick={() => {
+                setKeyword("");
+                setEventType("");
+                setRange(ALL_TIME);
+                setPage(1);
+              }}
+            />
+          </FilterBar>
+        }
+        footer={
+          <Pager
+            page={page}
+            limit={limit}
+            total={total}
+            onPage={setPage}
+            onLimit={(next) => {
+              setLimit(next);
+              setPage(1);
+            }}
+          />
+        }
+      >
+        <RecordTable
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => r.id}
+          loading={query.isLoading}
+          fetching={query.isFetching}
+          error={query.error}
+          onRetry={() => void query.refetch()}
+          onRowClick={setDetail}
+          minWidth={680}
+          empty={
+            <StateBlock
+              icon={FileClock}
+              title={filtersActive ? "没有符合条件的事件" : "暂无会话事件"}
+              description={filtersActive ? "调整筛选条件后再试" : undefined}
+            />
+          }
+        />
+      </Section>
+
+      <RecordSheet
+        open={Boolean(detail)}
+        onOpenChange={(open) => !open && setDetail(null)}
+        title={detail ? eventLabel(detail.eventType) : ""}
+        description={detail ? `记录 #${detail.id}` : undefined}
+        hero={
+          detail && detailMeta ? (
+            <div className="flex items-center gap-3 rounded-xl border px-4 py-3">
+              <ToneIcon icon={detailMeta.icon} tone={detailMeta.tone} size="lg" />
+              <div className="flex min-w-0 flex-col">
+                <span className="text-sm font-medium">{eventLabel(detail.eventType)}</span>
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {formatDateTime(detail.createdAt)}，{formatRelative(detail.createdAt)}
+                </span>
+              </div>
             </div>
-          </details>
-        ) : null}
-      </div>
-    </li>
+          ) : undefined
+        }
+        fields={
+          detail
+            ? [
+                { label: "事件类型", value: detail.eventType, mono: true },
+                { label: "时间", value: formatDateTime(detail.createdAt) },
+                { label: "令牌", value: detail.tokenJti, mono: true, copy: detail.tokenJti, wide: true },
+                ...EVENT_HIGHLIGHTS.map(({ key, label, mono }) => ({
+                  label,
+                  value: metaText(detail, key) || undefined,
+                  mono,
+                  copy: mono ? metaText(detail, key) || undefined : undefined
+                }))
+              ]
+            : undefined
+        }
+        raw={detail}
+      />
+    </>
   );
 }
 
@@ -798,77 +1046,191 @@ function EventItem({ event, last }: { event: UserSessionAuditRecord; last: boole
  * 那时还没有 userId，account 才是贯穿始终的那个标识。
  */
 function UserRiskPanel({ account }: { account?: string }) {
-  const query = useRiskAssessmentsQuery(account ? { account, pageSize: 10 } : undefined);
-  const items = query.data?.items ?? [];
+  const [page, setPage] = useState(1);
+  const [limit, setLimit] = useState(10);
+  const [detail, setDetail] = useState<RiskAssessment | null>(null);
+  const query = useRiskAssessmentsQuery(account ? { account, page, pageSize: limit } : undefined);
+  const items = account ? (query.data?.items ?? []) : [];
+  const total = account ? (query.data?.total ?? 0) : 0;
+
+  const columns: Array<Column<RiskAssessment>> = [
+    {
+      id: "score",
+      header: "分数",
+      width: "64px",
+      cell: (r) => <ScoreRing score={r.totalScore} ratio={Math.max(0, Math.min(100, r.totalScore)) / 100} color={LEVEL_COLORS[r.riskLevel]?.light ?? "#a1a1aa"} />
+    },
+    {
+      id: "verdict",
+      header: "结论",
+      cell: (r) => (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <SceneBadge scene={r.scene} />
+          <LevelBadge level={r.riskLevel} />
+          <ActionBadge action={r.action} />
+          {r.reviewed ? (
+            <Badge variant="outline" size="sm">
+              已复核
+            </Badge>
+          ) : null}
+        </span>
+      )
+    },
+    {
+      id: "rules",
+      header: "命中规则",
+      hideBelow: "lg",
+      cell: (r) =>
+        r.matchedRules?.length ? (
+          <span className="block max-w-[260px] truncate text-xs text-muted-foreground" title={r.matchedRules.map((m) => m.reason || m.ruleName).join("，")}>
+            {r.matchedRules
+              .slice(0, 2)
+              .map((m) => m.reason || m.ruleName)
+              .join("，")}
+            {r.matchedRules.length > 2 ? `，另 ${r.matchedRules.length - 2} 条` : ""}
+          </span>
+        ) : (
+          <span className="text-xs text-muted-foreground">无</span>
+        )
+    },
+    {
+      id: "ip",
+      header: "IP",
+      hideBelow: "md",
+      cell: (r) => (
+        <span className="flex flex-col">
+          <span className="font-mono text-xs">{textValue(r.ip)}</span>
+          {r.country ? <span className="text-xs text-muted-foreground">{r.country}</span> : null}
+        </span>
+      )
+    },
+    {
+      id: "time",
+      header: "时间",
+      cell: (r) => (
+        <span className="text-xs whitespace-nowrap text-muted-foreground tabular-nums" title={formatDateTime(r.createdAt)}>
+          {formatRelative(r.createdAt)}
+        </span>
+      )
+    }
+  ];
 
   return (
-    <Panel
-      title="风控评估"
-      icon={<Radar className="size-4" />}
-      action={
-        <Button asChild size="sm" variant="ghost" className="h-7 text-xs">
-          <Link href="/risk-control?tab=assessments">
-            风控中心
-            <ArrowUpRight className="size-3" />
-          </Link>
-        </Button>
-      }
-      bodyClassName="p-0 sm:px-0"
-    >
-      {!account ? (
-        <EmptyState icon={Radar} text="无账号标识" />
-      ) : query.isLoading ? (
-        <ListSkeleton rows={4} />
-      ) : items.length === 0 ? (
-        <EmptyState icon={ShieldCheck} text="暂无评估记录" />
-      ) : (
-        <ul className="divide-y">
-          {items.map((item) => {
-            const score = Math.max(0, Math.min(100, item.totalScore));
-            const color = LEVEL_COLORS[item.riskLevel]?.light ?? "#a1a1aa";
-            return (
-              <li key={item.id} className="flex gap-3 px-4 py-3 sm:px-5">
-                <ScoreRing score={item.totalScore} ratio={score / 100} color={color} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <SceneBadge scene={item.scene} />
-                    <LevelBadge level={item.riskLevel} />
-                    <ActionBadge action={item.action} />
-                    {item.reviewed ? (
-                      <Badge variant="outline" size="sm">
-                        已复核
+    <>
+      <Section
+        title="风控评估"
+        description="风控引擎按账号对登录、注册等场景的评分记录"
+        icon={Radar}
+        tone="warning"
+        flush
+        actions={
+          <Button asChild size="sm" variant="ghost">
+            <Link href="/risk-control?tab=assessments">
+              风控中心
+              <ArrowUpRight />
+            </Link>
+          </Button>
+        }
+        footer={account && total > 0 ? <Pager page={page} limit={limit} total={total} onPage={setPage} limits={[10, 20, 50]} onLimit={(next) => { setLimit(next); setPage(1); }} /> : undefined}
+      >
+        {!account ? (
+          <StateBlock compact icon={Radar} title="无账号标识" description="风控评估按账号查询，该用户没有账号字段" />
+        ) : (
+          <RecordTable
+            columns={columns}
+            rows={items}
+            rowKey={(r) => r.id}
+            loading={query.isLoading}
+            fetching={query.isFetching}
+            error={query.error}
+            onRetry={() => void query.refetch()}
+            onRowClick={setDetail}
+            skeletonRows={4}
+            minWidth={680}
+            empty={<StateBlock compact icon={ShieldCheck} title="暂无评估记录" />}
+          />
+        )}
+      </Section>
+
+      <RecordSheet
+        open={Boolean(detail)}
+        onOpenChange={(open) => !open && setDetail(null)}
+        title="风控评估"
+        description={detail ? `评估 #${detail.id}，${formatDateTime(detail.createdAt)}` : undefined}
+        hero={
+          detail ? (
+            <div className="flex items-center gap-4 rounded-xl border px-4 py-3">
+              <ScoreRing score={detail.totalScore} ratio={Math.max(0, Math.min(100, detail.totalScore)) / 100} color={LEVEL_COLORS[detail.riskLevel]?.light ?? "#a1a1aa"} />
+              <div className="flex flex-wrap items-center gap-1.5">
+                <SceneBadge scene={detail.scene} />
+                <LevelBadge level={detail.riskLevel} />
+                <ActionBadge action={detail.action} />
+                {detail.reviewed ? (
+                  <Badge variant="outline" size="sm">
+                    已复核
+                  </Badge>
+                ) : null}
+              </div>
+            </div>
+          ) : undefined
+        }
+        fields={
+          detail
+            ? [
+                { label: "账号", value: detail.account },
+                { label: "IP", value: detail.ip, mono: true, copy: detail.ip },
+                { label: "国家或地区", value: detail.country },
+                { label: "决策来源", value: detail.decisionBy },
+                { label: "动作说明", value: detail.actionDetail, wide: true },
+                { label: "设备标识", value: detail.deviceId, mono: true, copy: detail.deviceId, wide: true },
+                { label: "耗时", value: `${detail.latencyMs} ms` },
+                { label: "复核人", value: detail.reviewerName },
+                { label: "复核结论", value: detail.reviewResult },
+                { label: "复核意见", value: detail.reviewComment, wide: true },
+                { label: "User-Agent", value: detail.userAgent, mono: true, wide: true }
+              ]
+            : undefined
+        }
+        raw={detail}
+        actions={
+          <Button asChild size="sm" variant="outline">
+            <Link href="/risk-control?tab=assessments">
+              在风控中心查看
+              <ArrowUpRight />
+            </Link>
+          </Button>
+        }
+      >
+        {detail?.matchedRules?.length ? (
+          <div className="flex flex-col gap-2">
+            <div className="text-xs font-medium text-muted-foreground">命中规则</div>
+            <ul className="flex flex-col divide-y rounded-lg border">
+              {detail.matchedRules.map((rule, i) => (
+                <li key={`${rule.ruleId}-${i}`} className="flex items-start justify-between gap-3 px-3 py-2">
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-sm">{rule.ruleName}</span>
+                    {rule.reason ? <span className="text-xs text-muted-foreground">{rule.reason}</span> : null}
+                  </div>
+                  <span className="flex shrink-0 items-center gap-1.5">
+                    {rule.observe ? (
+                      <Badge variant="secondary" size="sm">
+                        观察
                       </Badge>
                     ) : null}
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                    <span className="font-mono">{textValue(item.ip)}</span>
-                    {item.country ? <span>{item.country}</span> : null}
-                    <span title={formatTime(item.createdAt)}>{relativeTime(item.createdAt)}</span>
-                  </div>
-                  {item.matchedRules?.length ? (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {item.matchedRules.slice(0, 4).map((rule, i) => (
-                        <span key={`${rule.ruleName}-${i}`} className="max-w-full truncate rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
-                          {rule.reason || rule.ruleName}
-                        </span>
-                      ))}
-                      {item.matchedRules.length > 4 ? (
-                        <span className="px-1 py-0.5 text-[11px] text-muted-foreground">另 {item.matchedRules.length - 4} 条</span>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </Panel>
+                    <span className="text-sm font-medium tabular-nums">+{rule.score}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </RecordSheet>
+    </>
   );
 }
 
 /** 风险分环：分值写在中间，弧长按 0-100 分归一，颜色取风险等级色。 */
-function ScoreRing({ score, ratio, color }: { score: number; ratio: number; color: string }) {
+function ScoreRing({ score, ratio, color }: { score: number; ratio: number; color: string }): ReactNode {
   const r = 15;
   const c = 2 * Math.PI * r;
   return (
@@ -882,97 +1244,3 @@ function ScoreRing({ score, ratio, color }: { score: number; ratio: number; colo
   );
 }
 
-// ── 公共小件 ──────────────────────────
-
-function FilterGroup<T extends string>({
-  value,
-  options,
-  onChange
-}: {
-  value: T;
-  options: Array<{ value: T; label: string }>;
-  onChange: (value: T) => void;
-}) {
-  return (
-    <div role="radiogroup" className="inline-flex rounded-lg border bg-muted/40 p-0.5">
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "h-7 rounded-md px-2.5 text-xs transition-colors",
-            value === option.value ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"
-          )}
-        >
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Pager({
-  page,
-  totalPages,
-  fetching,
-  onChange
-}: {
-  page: number;
-  totalPages: number;
-  fetching: boolean;
-  onChange: (page: number) => void;
-}) {
-  return (
-    <div className="flex items-center justify-between gap-3 border-t px-4 py-2.5 text-xs text-muted-foreground sm:px-5">
-      <span className="tabular-nums">
-        第 {page} / {totalPages} 页
-      </span>
-      <div className="flex gap-1.5">
-        <Button size="icon" variant="outline" className="size-7" aria-label="上一页" disabled={page <= 1 || fetching} onClick={() => onChange(page - 1)}>
-          <ChevronLeft className="size-3.5" />
-        </Button>
-        <Button
-          size="icon"
-          variant="outline"
-          className="size-7"
-          aria-label="下一页"
-          disabled={page >= totalPages || fetching}
-          onClick={() => onChange(page + 1)}
-        >
-          <ChevronRight className="size-3.5" />
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function ListSkeleton({ rows }: { rows: number }) {
-  return (
-    <div className="divide-y">
-      {Array.from({ length: rows }).map((_, i) => (
-        <div key={i} className="flex items-center gap-3 px-4 py-3 sm:px-5">
-          <Skeleton className="size-8 rounded-lg" />
-          <div className="flex-1 space-y-1.5">
-            <Skeleton className="h-3.5 w-32" />
-            <Skeleton className="h-3 w-56 max-w-full" />
-          </div>
-          <Skeleton className="h-3 w-10" />
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function EmptyState({ icon: Icon, text }: { icon: ComponentType<{ className?: string }>; text: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
-      <span className="grid size-10 place-items-center rounded-full bg-muted">
-        <Icon className="size-4" />
-      </span>
-      {text}
-    </div>
-  );
-}

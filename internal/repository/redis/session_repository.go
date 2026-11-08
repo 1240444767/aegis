@@ -314,6 +314,20 @@ func (r *SessionRepository) DeleteNotificationListCache(ctx context.Context, app
 	return r.deleteByPattern(ctx, fmt.Sprintf("%s:notification:list:%d:%d:*", r.keyPrefix, appID, userID))
 }
 
+// GetNotificationCountsCache 站内信的分类未读计数缓存。键挂在列表缓存的前缀下，
+// DeleteNotificationListCache 会连它一起清掉。
+func (r *SessionRepository) GetNotificationCountsCache(ctx context.Context, appID int64, userID int64, target any) (bool, error) {
+	return r.getJSON(ctx, r.notificationCountsKey(appID, userID), target)
+}
+
+func (r *SessionRepository) SetNotificationCountsCache(ctx context.Context, appID int64, userID int64, value any, ttl time.Duration) error {
+	return r.setJSON(ctx, r.notificationCountsKey(appID, userID), value, ttl)
+}
+
+func (r *SessionRepository) notificationCountsKey(appID int64, userID int64) string {
+	return fmt.Sprintf("%s:notification:list:%d:%d:counts", r.keyPrefix, appID, userID)
+}
+
 func (r *SessionRepository) GetNotificationUnreadCount(ctx context.Context, appID int64, userID int64) (int64, bool, error) {
 	value, err := r.client.Get(ctx, r.notificationUnreadKey(appID, userID)).Result()
 	if err != nil {
@@ -362,6 +376,29 @@ func (r *SessionRepository) ListUserSessions(ctx context.Context, appID int64, u
 		_ = r.client.ZRem(ctx, r.userSessionsKey(appID, userID), stale...).Err()
 	}
 	return items, nil
+}
+
+// RenameSessionAccount 账号改名后同步已签发会话里的账号名，剩余有效期不变。
+// 令牌本身的 account 声明改不了，以会话里的为准；下次刷新签发的新令牌自然是新名字。
+func (r *SessionRepository) RenameSessionAccount(ctx context.Context, appID int64, userID int64, account string) error {
+	items, err := r.ListUserSessions(ctx, appID, userID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		session := item.Session
+		session.Account = account
+		data, err := json.Marshal(session)
+		if err != nil {
+			return err
+		}
+		// XX：会话恰好在这期间过期就不再写回来
+		if err := r.client.SetArgs(ctx, r.sessionKeyByHash(item.TokenHash), data,
+			redislib.SetArgs{KeepTTL: true, Mode: "XX"}).Err(); err != nil && err != redislib.Nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *SessionRepository) setJSON(ctx context.Context, key string, value any, ttl time.Duration) error {
@@ -455,8 +492,9 @@ func (r *SessionRepository) noticeKey(appID int64) string {
 	return fmt.Sprintf("%s:app:notice:v2:%d", r.keyPrefix, appID)
 }
 
+// myKey 带版本号：v2 起视图里的 id 是对外 ID，换键让上线前缓存的旧视图（id 为主键）自然作废。
 func (r *SessionRepository) myKey(appID int64, userID int64) string {
-	return fmt.Sprintf("%s:user:my:%d:%d", r.keyPrefix, appID, userID)
+	return fmt.Sprintf("%s:user:my:v2:%d:%d", r.keyPrefix, appID, userID)
 }
 
 func (r *SessionRepository) profileKey(appID int64, userID int64) string {

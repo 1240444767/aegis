@@ -44,6 +44,21 @@ type adminAIConfigTestRequest struct {
 	Model string `json:"model"`
 }
 
+// adminAIDraftRequest 对一份通道草稿拉型号或测试。configId 非 0 时以已存配置为底，
+// secrets 只覆盖填了的键（编辑态不必重新粘贴密钥）。
+type adminAIDraftRequest struct {
+	ConfigID int64             `json:"configId"`
+	Provider string            `json:"provider"`
+	Settings map[string]string `json:"settings"`
+	Secrets  map[string]string `json:"secrets"`
+	// Model 测试用的型号；拉型号时忽略。
+	Model string `json:"model"`
+}
+
+func (req adminAIDraftRequest) draft() aidomain.ConfigDraft {
+	return aidomain.ConfigDraft{ConfigID: req.ConfigID, Provider: req.Provider, Settings: req.Settings, Secrets: req.Secrets}
+}
+
 type adminAISkillSaveRequest struct {
 	Key         *string `json:"key"`
 	Name        *string `json:"name"`
@@ -139,6 +154,34 @@ func (h *Handler) adminAIConfigTest(c *gin.Context, appID int64) {
 		return
 	}
 	result, err := h.aiProvider.TestConfig(c.Request.Context(), appID, id, req.Model)
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "测试完成", result)
+}
+
+func (h *Handler) adminAIDraftModels(c *gin.Context, appID int64) {
+	var req adminAIDraftRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.aiProvider.FetchModels(c.Request.Context(), appID, req.draft())
+	if err != nil {
+		h.writeError(c, err)
+		return
+	}
+	response.Success(c, 200, "获取成功", result)
+}
+
+func (h *Handler) adminAIDraftTest(c *gin.Context, appID int64) {
+	var req adminAIDraftRequest
+	if err := bind(c, &req); err != nil {
+		response.Error(c, http.StatusBadRequest, 40000, err.Error())
+		return
+	}
+	result, err := h.aiProvider.TestDraft(c.Request.Context(), appID, req.draft(), req.Model)
 	if err != nil {
 		h.writeError(c, err)
 		return
@@ -293,6 +336,16 @@ func (h *Handler) AdminPlatformAIConfigTest(c *gin.Context) {
 	h.adminAIConfigTest(c, aidomain.PlatformAppID)
 }
 
+// AdminPlatformAIDraftModels POST /api/admin/system/ai/draft/models
+func (h *Handler) AdminPlatformAIDraftModels(c *gin.Context) {
+	h.adminAIDraftModels(c, aidomain.PlatformAppID)
+}
+
+// AdminPlatformAIDraftTest POST /api/admin/system/ai/draft/test
+func (h *Handler) AdminPlatformAIDraftTest(c *gin.Context) {
+	h.adminAIDraftTest(c, aidomain.PlatformAppID)
+}
+
 func (h *Handler) AdminPlatformAIChannel(c *gin.Context) {
 	h.adminAIChannel(c, aidomain.PlatformAppID)
 }
@@ -385,6 +438,24 @@ func (h *Handler) AdminAppAIConfigTest(c *gin.Context) {
 		return
 	}
 	h.adminAIConfigTest(c, appID)
+}
+
+// AdminAppAIDraftModels POST /api/admin/apps/:appkey/ai/draft/models
+func (h *Handler) AdminAppAIDraftModels(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	h.adminAIDraftModels(c, appID)
+}
+
+// AdminAppAIDraftTest POST /api/admin/apps/:appkey/ai/draft/test
+func (h *Handler) AdminAppAIDraftTest(c *gin.Context) {
+	appID, ok := resolveAppID(c, h.app)
+	if !ok {
+		return
+	}
+	h.adminAIDraftTest(c, appID)
 }
 
 func (h *Handler) AdminAppAIChannel(c *gin.Context) {

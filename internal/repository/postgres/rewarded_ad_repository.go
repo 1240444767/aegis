@@ -95,16 +95,16 @@ ON CONFLICT (appid) DO UPDATE SET
 const rewardedAdViewColumns = `v.id, v.appid, COALESCE(v.user_id, 0), v.trans_id, v.scene, v.placement_id,
 v.status, v.reason, v.server_verified_at, v.reward_name, v.reward_amount, v.network_id, v.extra,
 v.client_reported_at, v.client_verified, v.client_error, v.device_id, v.client_ip, v.rewards,
-v.granted_at, v.operator, v.created_at, v.updated_at`
+v.granted_at, v.operator, v.created_at, v.updated_at, v.conversion`
 
 func scanRewardedAdView(row interface{ Scan(dest ...any) error }, extra ...any) (*rewardedad.View, error) {
 	var view rewardedad.View
-	var rewards []byte
+	var rewards, conversion []byte
 	dest := []any{&view.ID, &view.AppID, &view.UserID, &view.TransID, &view.Scene, &view.PlacementID,
 		&view.Status, &view.Reason, &view.ServerVerifiedAt, &view.RewardName, &view.RewardAmount,
 		&view.NetworkID, &view.Extra, &view.ClientReportedAt, &view.ClientVerified, &view.ClientError,
 		&view.DeviceID, &view.ClientIP, &rewards, &view.GrantedAt, &view.Operator, &view.CreatedAt,
-		&view.UpdatedAt}
+		&view.UpdatedAt, &conversion}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrRewardedAdViewNotFound
@@ -116,6 +116,12 @@ func scanRewardedAdView(row interface{ Scan(dest ...any) error }, extra ...any) 
 	}
 	if view.Results == nil {
 		view.Results = []rewardedad.RewardResult{}
+	}
+	if len(conversion) > 0 {
+		var c rewardedad.Conversion
+		if err := json.Unmarshal(conversion, &c); err == nil && c.Policy != "" {
+			view.Conversion = &c
+		}
 	}
 	return &view, nil
 }
@@ -252,7 +258,8 @@ func (r *Repository) RewardedAdStats(ctx context.Context, appID int64, since tim
        COUNT(*),
        COUNT(*) FILTER (WHERE status = 'granted'),
        COUNT(*) FILTER (WHERE status = 'rejected'),
-       COUNT(DISTINCT user_id) FILTER (WHERE status = 'granted')
+       COUNT(DISTINCT user_id) FILTER (WHERE status = 'granted'),
+       COUNT(*) FILTER (WHERE status = 'granted' AND conversion IS NOT NULL)
 FROM app_rewarded_ad_views
 WHERE appid = $1 AND created_at >= $2
 GROUP BY day ORDER BY day`, appID, since, timezone)
@@ -261,7 +268,7 @@ GROUP BY day ORDER BY day`, appID, since, timezone)
 	}
 	for rows.Next() {
 		var day rewardedad.StatsDay
-		if err := rows.Scan(&day.Date, &day.Views, &day.Granted, &day.Rejected, &day.Users); err != nil {
+		if err := rows.Scan(&day.Date, &day.Views, &day.Granted, &day.Rejected, &day.Users, &day.Converted); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -272,7 +279,8 @@ GROUP BY day ORDER BY day`, appID, since, timezone)
 		return nil, err
 	}
 
-	sceneRows, err := r.pool.Query(ctx, `SELECT scene, COUNT(*), COUNT(*) FILTER (WHERE status = 'granted')
+	sceneRows, err := r.pool.Query(ctx, `SELECT scene, COUNT(*), COUNT(*) FILTER (WHERE status = 'granted'),
+       COUNT(*) FILTER (WHERE status = 'granted' AND conversion IS NOT NULL)
 FROM app_rewarded_ad_views
 WHERE appid = $1 AND created_at >= $2
 GROUP BY scene ORDER BY COUNT(*) DESC`, appID, since)
@@ -281,7 +289,7 @@ GROUP BY scene ORDER BY COUNT(*) DESC`, appID, since)
 	}
 	for sceneRows.Next() {
 		var item rewardedad.StatsScene
-		if err := sceneRows.Scan(&item.Scene, &item.Views, &item.Granted); err != nil {
+		if err := sceneRows.Scan(&item.Scene, &item.Views, &item.Granted, &item.Converted); err != nil {
 			sceneRows.Close()
 			return nil, err
 		}
@@ -294,9 +302,18 @@ GROUP BY scene ORDER BY COUNT(*) DESC`, appID, since)
 
 	if err := r.pool.QueryRow(ctx, `SELECT
   COUNT(*) FILTER (WHERE status = 'pending'),
-  COUNT(*) FILTER (WHERE status = 'granted')
-FROM app_rewarded_ad_views WHERE appid = $1`, appID).Scan(
-		&stats.Summary.Pending, &stats.Summary.TotalGranted); err != nil {
+  COUNT(*) FILTER (WHERE status = 'granted'),
+  COUNT(*) FILTER (WHERE status = 'granted' AND conversion IS NOT NULL),
+  COALESCE(SUM(r.amount) FILTER (WHERE status = 'granted'), 0)
+FROM app_rewarded_ad_views v
+LEFT JOIN LATERAL (
+  SELECT SUM((item->>'amount')::BIGINT) AS amount
+  FROM jsonb_array_elements(COALESCE(v.conversion->'rewards', '[]'::jsonb)) item
+  WHERE item->>'type' = 'integral'
+) r ON TRUE
+WHERE v.appid = $1`, appID).Scan(
+		&stats.Summary.Pending, &stats.Summary.TotalGranted, &stats.Summary.TotalConverted,
+		&stats.Summary.ConvertedIntegral); err != nil {
 		return nil, err
 	}
 	return stats, nil

@@ -36,6 +36,26 @@ const (
 	errCodeFeatureDuplicated = 40905 // 409：功能标识重复
 )
 
+// ── 功能标识目录（用户侧）──
+
+// ListVisibleFeatures 当前应用启用中的权益目录（用户侧展示用）。
+//
+// 只给展示需要的几项：编号、启停与时间戳是管理端的事，用户侧看到的一定是启用中的。
+func (s *VipService) ListVisibleFeatures(ctx context.Context, session *authdomain.Session) ([]vipdomain.FeatureView, error) {
+	if session == nil {
+		return nil, apperrors.New(40170, http.StatusUnauthorized, "未认证")
+	}
+	features, err := s.pg.ListVipFeatures(ctx, session.AppID, true)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]vipdomain.FeatureView, 0, len(features))
+	for _, feature := range features {
+		views = append(views, feature.View())
+	}
+	return views, nil
+}
+
 // ── 功能标识目录（管理端）──
 
 // AdminListFeatures 应用的功能标识目录。
@@ -154,8 +174,11 @@ func (s *VipService) verifyMembership(ctx context.Context, appID int64, query vi
 		return nil, err
 	}
 	// 把账号补上：调用方多半要把它写进自己的日志，而令牌里只有 userId
+	// userId 回给接入方的后端，它对得上的是客户端从 /me 拿到的对外 ID（docs/user-public-id.md）
+	var publicID int64
 	if user, err := s.pg.GetUserByID(ctx, userID); err == nil && user != nil {
 		account = user.Account
+		publicID = user.PublicID
 	}
 
 	// 未指定功能标识 ⇒ 通用档，结论就是"是不是会员"；
@@ -169,7 +192,7 @@ func (s *VipService) verifyMembership(ctx context.Context, appID int64, query vi
 	return &vipdomain.Verification{
 		Granted:    granted,
 		Matched:    true,
-		UserID:     userID,
+		UserID:     publicID,
 		Account:    account,
 		Membership: entitlement.View(),
 		Feature:    verdict,

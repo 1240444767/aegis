@@ -99,6 +99,12 @@ func TestPointsStoreIntegration(t *testing.T) {
 			{Type: pointstore.RewardBalance, Money: decimal.RequireFromString("1.50")},
 			{Type: pointstore.RewardLotteryDraws, Amount: 2},
 		}})
+	// 仅永久会员（000134 放开了库里的取值约束）
+	if exclusive := mustCreate(pointstore.ItemInput{Title: "至尊礼包", Category: "永久会员", Cost: 20,
+		Audience: pointstore.AudienceLifetime, Status: pointstore.StatusInactive,
+		Rewards: []pointstore.Reward{{Type: pointstore.RewardLotteryDraws, Amount: 1}}}); exclusive.Audience != pointstore.AudienceLifetime {
+		t.Fatalf("应能保存仅永久会员的商品，得到 %+v", exclusive)
+	}
 
 	// ── 开关 ──
 	page, err := store.Store(ctx, appID, alice)
@@ -306,7 +312,7 @@ func TestPointsStoreIntegration(t *testing.T) {
 	}
 
 	// ── 统计与管理端列表 ──
-	stats, err := store.Stats(ctx, appID, 7)
+	stats, err := store.Stats(ctx, appID, 7, "")
 	if err != nil {
 		t.Fatal(err)
 	}
