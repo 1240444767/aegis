@@ -569,6 +569,11 @@ func (s *PaymentService) payOrderWithBalance(ctx context.Context, order *payment
 	}
 	s.log.Info("payment order paid with balance",
 		zap.String("orderNo", order.OrderNo), zap.String("walletTxn", walletTxn.TransactionNo))
+	// 余额支付订单的履约在仓储事务内完成，不走 ensureOrderFulfilled —— 通知在这里补
+	// （余额买会员也要在「会员与订单」里留一条，和回调/查单履约的路径对齐）
+	if hasInstr {
+		s.notifyFulfilled(ctx, order, instr)
+	}
 	return &paymentdomain.PaymentPayload{
 		Success:      true,
 		OrderNo:      order.OrderNo,
