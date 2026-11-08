@@ -265,8 +265,6 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 开启自动签到前按应用的开放策略校验资格
 	userService.SetAutoSignGuard(autoSignService)
 	pointsService := service.NewPointsService(log, pg, sessions)
-	// 管理端手动调整积分/经验给用户留一条「积分与奖励」站内信（见 points_notify.go）
-	pointsService.SetNotifier(notificationService)
 	pointsService.SetPublicIDs(userService.PublicIDs())
 	realtimeService, err := service.NewRealtimeService(log, authService, realtimeRepo, natsConn, cfg.CORS.AllowOrigins)
 	if err != nil {
@@ -286,6 +284,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	authService.SetNotificationService(notificationService)
 	// 自动签到的成功、失败与暂停走站内信
 	autoSignService.SetNotifier(notificationService)
+	// 管理端手动调整积分/经验给用户留一条「积分与奖励」站内信（见 points_notify.go）
+	pointsService.SetNotifier(notificationService)
 	siteService := service.NewSiteService(pg)
 	versionService := service.NewVersionService(pg)
 	releaseService := service.NewReleaseService(log, pg, redisClient, nil)
