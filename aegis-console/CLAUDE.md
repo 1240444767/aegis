@@ -32,6 +32,9 @@
 | pinyin-pro | ^3.28.2（命令面板的拼音检索，**动态 import 按需加载**，见下方侧边栏一节） |
 | screenfull | ^6.0.2（顶栏全屏开关；跨浏览器前缀差异交给它，见下方顶栏一节） |
 | auto-skeleton-react | ^1.0.5（自动骨架屏，按子树真实 DOM 量出骨架；**只经 `components/ui/auto-skeleton.tsx` 使用**，见下方骨架屏一节） |
+| nuqs | 2.10.3（地址栏状态；**只有 `/feedback` 用**，`NuqsAdapter` 包在那一页里，见下方「意见反馈」一节） |
+| use-stick-to-bottom | 1.1.6（会话流贴底跟随，反馈详情用） |
+| @tiptap/markdown | 3.31.4（Tiptap 的 Markdown 读写；**版本必须与 `@tiptap/core` 完全一致**，它的 peer 是精确版本号） |
 | ESLint | ^9.39.5 |
 | bun | 1.4.1（包管理与脚本运行；运行时仍是 Node，见下方「包管理：bun」） |
 
@@ -973,14 +976,20 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/apps/rewarded-ad/app-rewarded-ad-panel.tsx` | 骨架 + 概览 / 记录 / 配置三个视图的内部切换 |
 | `components/apps/rewarded-ad/rewarded-ad-overview-panel.tsx` | 今日观看 / 发放 / 人数 / 待确认 + 趋势图 + 各场景的窗口内表现 |
 | `components/apps/rewarded-ad/rewarded-ad-views-panel.tsx` | 观看记录：两方（回调 / 上报）各自到没到、原因、补发 |
-| `components/apps/rewarded-ad/rewarded-ad-config-panel.tsx` | 接入（平台、应用 ID、Security Key、回调地址）+ 校验模式与总限额 + 奖励场景（含会员权益：会员天数带的功能、会员期间是否免广告） |
+| `components/apps/rewarded-ad/rewarded-ad-config-panel.tsx` | 配置页骨架：上线检查 + 接入（平台、应用 ID、回调地址）+ 校验与限额，串起下面两块，底部常驻保存栏 |
+| `components/apps/rewarded-ad/rewarded-ad-placements-section.tsx` | 广告位与 Security Key：每个广告位的 Key 状态、使用场景、近 7 天回调，默认 Key，批量粘贴 |
+| `components/apps/rewarded-ad/rewarded-ad-scenes-section.tsx` | 奖励场景：可折叠卡片，广告位从登记列表里选 |
+| `components/apps/rewarded-ad/rewarded-ad-scene-fields.tsx` | 场景字段：奖励选择、功能时长、会员功能、已拥有权益 |
+| `components/apps/rewarded-ad/rewarded-ad-config-draft.ts` | 草稿：播种、保存载荷、保存前检查（上线检查与标红同源）、粘贴解析 |
 | `components/apps/rewarded-ad/rewarded-ad-shared.tsx` | 状态徽标、拒发原因、校验模式文案、权益摘要 |
 
 四条硬约束：
 
 1. **权益表单由后端目录驱动**（配置接口随附 `catalog`，是卡密目录的子集）。前端另抄一份，
    就会出现「控制台能勾、保存时报激励广告不能发放该权益」。
-2. **Security Key 留空即不修改**，与其它密钥字段一致；后端只回 `hasSecurityKey` 与末 4 位提示。
+2. **Security Key 按广告位存，留空即不修改**，与其它密钥字段一致；后端只回 `hasSecurityKey` 与末 4 位提示。
+   顶层的是默认 Key（给没单独配 Key 的广告位兜底）。改广告位 ID 时载荷带 `previousId`，否则已存的 Key 会丢；
+   场景只能从登记的广告位里选，手填的 ID 对不上登记的广告位就找不到验签用的 Key。
 3. **会员权益跟随场景当前配置**：改了对已领到的会员同样生效（后端在判定时实时取，见 docs/rewarded-ads.md）。
    功能只对「会员天数」生效，保存时没勾会员天数就把功能清空，否则后端拒收；「免广告」不填时后端按免广告，
    草稿里没设置过的场景同样按开着展示。
@@ -1418,6 +1427,81 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 渠道配置表单由 `/api/admin/notify/catalog` 返回的元数据动态渲染，
 后端新增一种 IM 时前端零改动 —— 不要把渠道字段硬编码回组件里。
+
+## 管理员与权限（/users）
+
+后端设计见 `docs/admin-permissions.md`。页签（`?tab=`，各挂权限，看不到的页签不渲染）：
+管理员 `admins` · 角色 `roles` · 权限目录 `permissions` · 权限诊断 `diagnose` · 临时权限 `temp` · 在线会话 `online`。
+`/roles` 只做跳转（旧书签）。
+
+| 文件 | 职责 |
+|---|---|
+| `lib/api/access.ts` | 类型与接口：档位、权限树、角色详情、管理员详情、个人授权、诊断 |
+| `lib/access-hooks.ts` | React Query 封装；写操作成功后统一刷新角色 / 管理员 / 会话快照 |
+| `lib/permissions.tsx` | 权限上下文：**只读 `/auth/me` 的生效权限快照**（global / apps / anyApp / all） |
+| `components/access/tree-model.ts` | 权限树索引、通配与旧代码展开（与后端 `authz.Implies` 同口径）、搜索、三态统计 |
+| `components/access/permission-tree-editor.tsx` | 勾选树：edit（允许 / 禁止两种落笔）/ view / pick 三种用法 |
+| `components/access/role-*.tsx` | 角色工作台：列表 + 功能权限 / 数据权限 / 成员 / 基本信息 + 新建、复制、删除 |
+| `components/access/admin-*.tsx` | 管理员工作台：身份分布、列表、详情抽屉（授权、个人授权、临时权限、生效权限、会话） |
+| `components/access/permission-catalog-view.tsx` | 权限目录（树形表格 + 接口与持有角色） |
+| `components/access/diagnose-view.tsx` | 判定解释 + 角色覆盖热力图 |
+
+硬约束：
+
+1. **判权限一律用细分代码**（`system:egress:read`、`app:lottery:write` …，全表在后端 `internal/authz/tree.go`）。
+   `usePermissionChecker()` 不带应用、任意作用域持有即算；按应用判定用 `useAppPermissionChecker(appId)`。
+   旧的合并代码（`app:read`、`system:admin:manage`）还能传，等于「名下任意一个细分项」，新代码不要再用。
+2. **不在前端推导角色 → 权限**。旧实现靠 `/profile/roles/permissions` 里 `description === "granted"` 拼，
+   已删；需要「谁有什么」时读 `/auth/me` 或管理员详情的 `permissions`。
+3. **按钮显隐看后端下发的 `capabilities`**（`canStatus` / `canAccess` / `canGrant` / `canSession` / `canTier`
+   与 `manageReason`），不要自己用档位比大小：档位守卫与「不能改自己」都在后端，前端复刻迟早漂移。
+4. 编辑器只和细分代码打交道：载入时把通配 / 旧代码展开（`expandPatterns`），保存时提交细分代码。
+   内置角色的代码定义经 `locked` 锁定，额外允许与禁止写进 override。
+5. 角色列表走 `/api/admin/profile/roles`（任意已登录管理员可读）：授权编辑者不必另持「角色权限：查看」。
+
+## 意见反馈（/feedback）
+
+反馈就是 `kind=feedback` 的工单，接口与 hooks 全部复用工单那套（`lib/api/tickets.ts`、`lib/ticket-hooks.ts`），
+界面是独立的一套「反馈台」：左边收件箱、中间会话、右边反馈人资料。工单中心仍用 `components/tickets/workspace/`。
+
+| 文件 | 职责 |
+|---|---|
+| `(console)/feedback/page.tsx` | 只挂 `NuqsAdapter` 与边界 |
+| `components/feedback/feedback-workspace.tsx` | 装配：三栏、快捷键、资料面板的并排 / 浮层切换 |
+| `components/feedback/feedback-state.ts` | 地址栏状态（nuqs）与「状态 → 列表接口参数」 |
+| `components/feedback/feedback-inbox.tsx` | 收件箱：搜索、视图页签、筛选菜单（cmdk）、虚拟列表行 |
+| `components/feedback/feedback-thread.tsx` | 页头（人 → 标题 → 属性胶囊）与会话流 |
+| `components/feedback/feedback-composer.tsx` | 回复框（Tiptap，产出 Markdown） |
+| `components/feedback/feedback-context-panel.tsx` | 右栏：「用户」资料卡与「详情」（时效、标签、关注人、附件、操作记录） |
+| `components/feedback/feedback-action-menu.tsx` | 操作菜单（cmdk），页头「⋯」与快捷键 `.` 共用 |
+| `components/feedback/feedback-overview.tsx` | 页头一行摘要、没选中时的概览、快捷键清单 |
+| `components/feedback/use-feedback-actions.ts` | 对一条反馈的全部写操作，胶囊 / 菜单 / 快捷键三处入口共用 |
+| `components/feedback/feedback-kit.tsx` | `PropertyMenu`（属性胶囊）、`Facts`/`Fact`、分类色点 |
+
+七条硬约束：
+
+1. **页面状态全在地址栏**（`id` / `view` / `q` / `sort` / `app` / `category` / `priority` / `assignee`）。
+   不要再加本地 state 存筛选：刷新会丢，链接发给同事对不上，站内信的 `/feedback?id=` 深链也会和页面内点击走成两条路径。
+   默认值不写进地址栏（`clearOnDefault`），更新用 `replace`，不占历史记录。
+2. **「待处理」视图显式传四个未结状态。** 后端不传 `status` 时只排除已关闭与已撤销，已解决的会混进来，
+   列表条数就和页签上的计数对不上（旧版的「未结单 127」对着「共 134 条」就是这么来的）。
+3. **头像与正文摘要由列表接口直接带出**（`requesterAvatar` / `assigneeAvatar` / `preview`，详情里还有每条消息的
+   `authorAvatar`）。不要为了头像逐行去调用户接口。头像地址恒可用：没传头像时是按账号生成的默认图。
+4. **反馈人资料走 `GET /api/admin/tickets/:id/requester`，不走 `/apps/:appkey/users/:userId`。**
+   处理组成员可能只凭「被指派」看得到这条反馈，却没有该应用的用户查看权限：前者按「能看到这条工单」放行，
+   返回里的 `user` / `lastLogin`（邮箱、手机号、登录地址）只在 `canViewUser` 为真时下发。
+   界面按 `canViewUser` 与 `removed` 分情况展示，不要自己拿角色推断。
+5. **回复框发出去的是 Markdown，不是 HTML。** `editor.getMarkdown()` 取值，`contentType: "markdown"` 提交；
+   App 端按 Markdown 渲染客服回复。下划线没有对应的 Markdown 写法，所以在 StarterKit 里关掉了，不要加回来。
+   编辑器的按键 / 粘贴回调只在创建时绑定一次，最新状态经 `live` ref 递进去；占位文字经 `ReplyHint` 扩展的
+   `setReplyHint` 命令更新（直接改 `editor.storage` 过不了 `react-hooks/immutability`）。
+6. **属性改动一处实现。** 状态、分类、优先级、受理人、锁定、删除都在 `use-feedback-actions.ts`；
+   新增入口（比如再加一个快捷键）调它，不要在组件里再写一遍 mutation 与提示文案。
+7. **资料面板的并排 / 浮层靠量详情区宽度决定**（`WIDE_DETAIL`），不是视口断点：
+   列表栏可拖宽，侧边栏可折叠，同一个视口宽度下详情区可以差出三四百像素。
+
+快捷键：`J`/`K` 上下一条，`/` 搜索，`R` 回复，`N` 备注，`E` 解决，`A` 指派给我，`I` 资料面板，`.` 操作菜单，
+`Ctrl/⌘ + Enter` 发送，空回复框里敲 `/` 出快捷回复。
 
 ## 应用用户详情（/users/app-users/[appKey]/[userId]）
 

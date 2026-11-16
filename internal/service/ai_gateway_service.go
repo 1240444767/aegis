@@ -69,6 +69,22 @@ func aiGatewayError(code int, status int, message string) *apperrors.AppError {
 	return apperrors.New(code, status, message)
 }
 
+// AIGatewayIdempotencyConflict 40213 随错误带回的占用方：同一个 Idempotency-Key 已有的那次调用。
+type AIGatewayIdempotencyConflict struct {
+	RequestNo string `json:"request_no"`
+	Status    string `json:"status"`
+}
+
+// AIGatewayIdempotencyConflictOf 从 40213 里取出占用方；不是 40213 或没带编号时 ok 为假。
+func AIGatewayIdempotencyConflictOf(err error) (AIGatewayIdempotencyConflict, bool) {
+	var appErr *apperrors.AppError
+	if !errors.As(err, &appErr) || appErr.Code != 40213 {
+		return AIGatewayIdempotencyConflict{}, false
+	}
+	conflict, ok := appErr.Data.(AIGatewayIdempotencyConflict)
+	return conflict, ok && conflict.RequestNo != ""
+}
+
 // mapAIGatewayError 仓储层的哨兵错误 → 对外错误码（402xx 段）。
 func mapAIGatewayError(err error) error {
 	if err == nil {
@@ -86,7 +102,12 @@ func mapAIGatewayError(err error) error {
 		if idempotency.RequestNo != "" {
 			message += "（" + idempotency.RequestNo + "）"
 		}
-		return aiGatewayError(40213, http.StatusConflict, message)
+		appErr := aiGatewayError(40213, http.StatusConflict, message)
+		if idempotency.RequestNo != "" {
+			// 结构化给出占用这个键的调用：客户端拿它当任务编号接着取结果，而不是再提交一次。
+			appErr.Data = AIGatewayIdempotencyConflict{RequestNo: idempotency.RequestNo, Status: idempotency.Status}
+		}
+		return appErr
 	case errors.As(err, &validation):
 		return aiGatewayError(40219, http.StatusBadRequest, validation.Message)
 	case errors.Is(err, pgrepo.ErrAIGatewayAudience):
@@ -605,6 +626,21 @@ func (s *AIGatewayService) ListMyRequests(ctx context.Context, session *authdoma
 		redactAIGatewayRequestForUser(&page.Items[i])
 	}
 	return page, nil
+}
+
+// MyUsage 我的用量统计：rangeName 为 today / 24h / 7d / 30d / 90d，日界按应用设置的时区。
+// keyID 为空统计全部，0 表示登录令牌发起的调用；model 为空统计全部模型。
+func (s *AIGatewayService) MyUsage(ctx context.Context, session *authdomain.Session, rangeName string, keyID *int64, model string) (*aigateway.Usage, error) {
+	settings, err := s.pg.GetAIGatewaySettings(ctx, session.AppID)
+	if err != nil {
+		return nil, err
+	}
+	loc := settings.Location()
+	name, from, to, bucket := aigateway.ResolveUsageRange(rangeName, s.now(), loc)
+	return s.pg.AIGatewayUserUsage(ctx, aigateway.UsageQuery{
+		AppID: session.AppID, UserID: session.UserID, Range: name, From: from, To: to, Bucket: bucket,
+		Location: loc, KeyID: keyID, Model: strings.TrimSpace(model),
+	})
 }
 
 // GetMyRequest 我的一条调用记录。

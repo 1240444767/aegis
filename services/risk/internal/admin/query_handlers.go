@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,7 +160,22 @@ func (s *Server) dashboard(ctx context.Context, c *app.RequestContext) (any, err
 	if app != nil {
 		appCond, appArgs = " AND app_id = ?", []any{*app}
 	}
+	// 告警表没有 scene 列，告警只按应用过滤
+	alertCond, alertArgs := appCond, append([]any{from, to}, appArgs...)
+	// scene：两张表都有这一列；user：只有明细表有，按用户看时分布与趋势改走明细表
+	if sc := strings.TrimSpace(string(c.Query("scene"))); sc != "" {
+		appCond += " AND scene = ?"
+		appArgs = append(appArgs, sc)
+	}
+	userID := qint64(c, "user")
+	userCond, userArgs := "", []any{}
+	if userID > 0 {
+		userCond, userArgs = " AND user_id = ?", []any{userID}
+	}
 	args := func(extra ...any) []any { return append(append([]any{from, to}, appArgs...), extra...) }
+	dargs := func(extra ...any) []any {
+		return append(append(append([]any{from, to}, appArgs...), userArgs...), extra...)
+	}
 	bucket := "toStartOfHour(minute)"
 	if to.Sub(from) > 7*24*time.Hour {
 		bucket = "toStartOfDay(minute)"
@@ -189,6 +205,10 @@ func (s *Server) dashboard(ctx context.Context, c *app.RequestContext) (any, err
 	conn := s.CH.Conn()
 	run("byAction", func() (any, error) {
 		var r []kv
+		if userID > 0 {
+			err := conn.Select(ctx, &r, "SELECT action AS k, count() AS n FROM decisions WHERE ts >= ? AND ts < ? AND shadow = 0"+appCond+userCond+" GROUP BY k ORDER BY n DESC", dargs()...)
+			return r, err
+		}
 		err := conn.Select(ctx, &r, "SELECT action AS k, sum(n) AS n FROM decisions_minute WHERE minute >= ? AND minute < ? AND shadow = 0"+appCond+" GROUP BY k ORDER BY n DESC", args()...)
 		return r, err
 	})
@@ -198,11 +218,19 @@ func (s *Server) dashboard(ctx context.Context, c *app.RequestContext) (any, err
 			Action string `ch:"action" json:"action"`
 			Count  uint64 `ch:"n" json:"count"`
 		}
+		if userID > 0 {
+			err := conn.Select(ctx, &r, "SELECT scene, action, count() AS n FROM decisions WHERE ts >= ? AND ts < ? AND shadow = 0"+appCond+userCond+" GROUP BY scene, action ORDER BY n DESC", dargs()...)
+			return r, err
+		}
 		err := conn.Select(ctx, &r, "SELECT scene, action, sum(n) AS n FROM decisions_minute WHERE minute >= ? AND minute < ? AND shadow = 0"+appCond+" GROUP BY scene, action ORDER BY n DESC", args()...)
 		return r, err
 	})
 	run("series", func() (any, error) {
 		var r []series
+		if userID > 0 {
+			err := conn.Select(ctx, &r, "SELECT "+strings.ReplaceAll(bucket, "minute", "ts")+" AS t, action, count() AS n FROM decisions WHERE ts >= ? AND ts < ? AND shadow = 0"+appCond+userCond+" GROUP BY t, action ORDER BY t", dargs()...)
+			return r, err
+		}
 		err := conn.Select(ctx, &r, "SELECT "+bucket+" AS t, action, sum(n) AS n FROM decisions_minute WHERE minute >= ? AND minute < ? AND shadow = 0"+appCond+" GROUP BY t, action ORDER BY t", args()...)
 		return r, err
 	})
@@ -235,7 +263,7 @@ func (s *Server) dashboard(ctx context.Context, c *app.RequestContext) (any, err
 	})
 	run("alerts", func() (any, error) {
 		var r []kv
-		err := conn.Select(ctx, &r, "SELECT pattern AS k, count() AS n FROM alerts WHERE ts >= ? AND ts < ?"+appCond+" GROUP BY k ORDER BY n DESC LIMIT 10", args()...)
+		err := conn.Select(ctx, &r, "SELECT pattern AS k, count() AS n FROM alerts WHERE ts >= ? AND ts < ?"+alertCond+" GROUP BY k ORDER BY n DESC LIMIT 10", alertArgs...)
 		return r, err
 	})
 	run("pendingCases", func() (any, error) {
@@ -337,6 +365,11 @@ func (s *Server) listAlerts(ctx context.Context, c *app.RequestContext) (any, er
 
 // ── 复核 ──
 
+// caseStats 复核单全局统计：待复核按风险分段、最早一张待复核的创建时间、近 30 天结案结论
+func (s *Server) caseStats(ctx context.Context, c *app.RequestContext) (any, error) {
+	return s.Store.CaseStats(ctx, qapp(c))
+}
+
 func (s *Server) listCases(ctx context.Context, c *app.RequestContext) (any, error) {
 	q := store.CaseQuery{Status: string(c.Query("status")), AppID: qapp(c), UserID: qint64(c, "user"), Scene: string(c.Query("scene")),
 		Page: qint(c, "page", 1), Limit: qint(c, "limit", 50)}
@@ -360,6 +393,10 @@ type disposeInput struct {
 	Targets         []string `json:"targets"` // device / ip / account / user / ban_account / firewall
 	DurationSeconds int64    `json:"durationSeconds"`
 	Reason          string   `json:"reason"`
+	// Level 封号范围 app / platform（只对 ban_account 有效）；PublicReason 给用户看的说明；ReasonCode 原因类别
+	Level        string `json:"level"`
+	PublicReason string `json:"publicReason"`
+	ReasonCode   string `json:"reasonCode"`
 }
 
 // applyDispose 人工处置：名单类直接落库 + 索引；封号与防火墙发命令给主服务
@@ -398,6 +435,9 @@ func (s *Server) applyDispose(ctx context.Context, in disposeInput, source, by, 
 			}
 			cmd := events.Command{ID: events.NewID(), Kind: kind, Target: target, Value: val, AppID: in.AppID, DurationSeconds: in.DurationSeconds,
 				Reason: in.Reason, Source: source, DecisionID: decisionID, Operator: by}
+			if kind == "account_ban" {
+				cmd.Level, cmd.PublicReason, cmd.ReasonCode = in.Level, in.PublicReason, in.ReasonCode
+			}
 			if err := s.Bus.PublishCommand(ctx, cmd); err != nil {
 				result[t] = err.Error()
 			} else {
@@ -539,8 +579,37 @@ type entityUse struct {
 	First    time.Time `ch:"first" json:"firstSeen"`
 	Count    uint64    `ch:"n" json:"count"`
 	Country  string    `ch:"country" json:"country"`
+	Province string    `ch:"province" json:"province,omitempty"`
 	City     string    `ch:"city" json:"city"`
+	ISP      string    `ch:"isp" json:"isp,omitempty"`
+	ASN      int64     `ch:"asn" json:"asn,omitempty"`
 	Device   string    `ch:"device" json:"-"`
+}
+
+// sceneUse 用户在某个场景的评估次数与被拦次数
+type sceneUse struct {
+	Key     string `ch:"k" json:"key"`
+	Count   uint64 `ch:"n" json:"count"`
+	Blocked uint64 `ch:"blocked" json:"blocked"`
+	Flagged uint64 `ch:"flagged" json:"flagged"` // 没有直接放行的（复核、验证码、拦截、封禁）
+}
+
+// similarView 相似设备：补上型号与那位用户的名字，控制台能写成「张三的小米 14」
+type similarView struct {
+	vector.Neighbor
+	Model    string `json:"model,omitempty"`
+	UserName string `json:"userName,omitempty"`
+}
+
+// ipFlags 关系图里这个 IP 的判断（机房出口、多人共用、IPv6 线路）
+type ipFlags struct {
+	Users   int64  `json:"users,omitempty"`
+	Hosting bool   `json:"hosting,omitempty"`
+	Shared  bool   `json:"shared,omitempty"`
+	Proxy   bool   `json:"proxy,omitempty"`
+	VPN     bool   `json:"vpn,omitempty"`
+	V6      bool   `json:"v6,omitempty"`
+	Line    string `json:"line,omitempty"` // IPv6 所在的 /64 线路
 }
 
 // profile 用户风险画像：关系图 + 时间线 + 设备与 IP + 名单 + 复核 + 告警 + 相似设备
@@ -609,10 +678,12 @@ func (s *Server) profile(ctx context.Context, c *app.RequestContext) (any, error
 		return r[0], err
 	})
 	run("scenes", func() (any, error) {
-		var r []kv
-		err := conn.Select(ctx, &r, "SELECT scene AS k, count() AS n FROM decisions WHERE "+base+" GROUP BY k ORDER BY n DESC", args...)
+		var r []sceneUse
+		err := conn.Select(ctx, &r, "SELECT scene AS k, count() AS n, countIf(action IN ('block','ban')) AS blocked, countIf(action != 'pass') AS flagged FROM decisions WHERE "+base+" GROUP BY k ORDER BY n DESC", args...)
 		return r, err
 	})
+	run("names", func() (any, error) { return s.configNames(ctx) })
+	run("ruleMeta", func() (any, error) { return s.ruleMeta(ctx) })
 	run("rules", func() (any, error) {
 		var r []kv
 		err := conn.Select(ctx, &r, "SELECT arrayJoin(hits) AS k, count() AS n FROM decisions WHERE "+base+" GROUP BY k ORDER BY n DESC LIMIT 15", args...)
@@ -660,30 +731,108 @@ func (s *Server) profile(ctx context.Context, c *app.RequestContext) (any, error
 
 	// 设备、IP 与它们身上的名单、相似设备（依赖上面的流水，串行做）
 	var devices, ips []entityUse
-	_ = conn.Select(ctx, &devices, "SELECT device_id AS v, max(ts) AS last, min(ts) AS first, count() AS n, any(country) AS country, any(city) AS city, argMax(device, ts) AS device FROM decisions WHERE "+base+" AND device_id != '' GROUP BY v ORDER BY last DESC LIMIT 20", args...)
-	_ = conn.Select(ctx, &ips, "SELECT ip AS v, max(ts) AS last, min(ts) AS first, count() AS n, any(country) AS country, any(city) AS city, '' AS device FROM decisions WHERE "+base+" AND ip != '' GROUP BY v ORDER BY last DESC LIMIT 20", args...)
+	_ = conn.Select(ctx, &devices, "SELECT device_id AS v, max(ts) AS last, min(ts) AS first, count() AS n, any(country) AS country, '' AS province, any(city) AS city, '' AS isp, toInt64(0) AS asn, argMax(device, ts) AS device FROM decisions WHERE "+base+" AND device_id != '' GROUP BY v ORDER BY last DESC LIMIT 20", args...)
+	_ = conn.Select(ctx, &ips, "SELECT ip AS v, max(ts) AS last, min(ts) AS first, count() AS n, any(country) AS country, any(province) AS province, any(city) AS city, any(isp) AS isp, toInt64(any(asn)) AS asn, '' AS device FROM decisions WHERE "+base+" AND ip != '' GROUP BY v ORDER BY last DESC LIMIT 20", args...)
 	type entityView struct {
 		entityUse
 		Lists       []lists.Entry     `json:"lists"`
 		Fingerprint map[string]string `json:"fingerprint,omitempty"`
-		Similar     []vector.Neighbor `json:"similar,omitempty"`
+		Similar     []similarView     `json:"similar,omitempty"`
+		Net         *ipFlags          `json:"net,omitempty"`
 	}
-	var devViews, ipViews []entityView
+	devViews := make([]entityView, len(devices))
+	var swg sync.WaitGroup
+	sem := make(chan struct{}, 4)
 	for i, d := range devices {
 		v := entityView{entityUse: d}
 		v.Lists, _ = s.Store.EntriesFor(ctx, bundle.ListDevice, d.Value)
 		_ = json.Unmarshal([]byte(d.Device), &v.Fingerprint)
-		if s.Vector != nil && i < 3 && len(v.Fingerprint) > 0 {
-			sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			v.Similar, _ = s.Vector.Similar(sctx, appID, d.Value, vector.Embed(v.Fingerprint), 10)
-			cancel()
+		devViews[i] = v
+		if s.Vector == nil || vector.Empty(vector.Embed(d.Value)) {
+			continue
 		}
-		devViews = append(devViews, v)
+		// 每台设备都查相似设备（并发 4 个、各 2 秒上限）
+		swg.Add(1)
+		go func(i int, id string) {
+			defer swg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			sctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			defer cancel()
+			ns, _ := s.Vector.Similar(sctx, appID, id, 10)
+			views := make([]similarView, len(ns))
+			for k, n := range ns {
+				views[k] = similarView{Neighbor: n}
+			}
+			devViews[i].Similar = views
+		}(i, d.Value)
 	}
+	swg.Wait()
+	// 相似设备补型号与用户名：所有相似设备与其用户一次从关系图取
+	if s.Graph != nil {
+		var ids []string
+		seen := map[string]bool{}
+		for _, v := range devViews {
+			for _, n := range v.Similar {
+				for _, id := range []string{graph.DeviceVID(n.DeviceID), graph.UserVID(appID, n.UserID)} {
+					if n.UserID <= 0 && strings.HasPrefix(id, "u:") || seen[id] {
+						continue
+					}
+					seen[id] = true
+					ids = append(ids, id)
+				}
+			}
+		}
+		if len(ids) > 0 {
+			if props, err := s.Graph.Props(ids); err == nil {
+				str := func(p map[string]any, k string) string { v, _ := p[k].(string); return strings.TrimSpace(v) }
+				for i := range devViews {
+					for k := range devViews[i].Similar {
+						n := &devViews[i].Similar[k]
+						if p := props[graph.DeviceVID(n.DeviceID)]; p != nil {
+							n.Model = strings.TrimSpace(str(p, "brand") + " " + str(p, "model"))
+						}
+						if p := props[graph.UserVID(appID, n.UserID)]; p != nil {
+							if n.UserName = str(p, "nickname"); n.UserName == "" {
+								n.UserName = str(p, "name")
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	ipViews := make([]entityView, 0, len(ips))
 	for _, p := range ips {
 		v := entityView{entityUse: p}
 		v.Lists, _ = s.Store.EntriesFor(ctx, bundle.ListIP, p.Value)
 		ipViews = append(ipViews, v)
+	}
+	if s.Graph != nil && len(ipViews) > 0 {
+		ids := make([]string, len(ipViews))
+		for i, v := range ipViews {
+			ids[i] = graph.IPVID(v.Value)
+		}
+		if props, err := s.Graph.Props(ids); err == nil {
+			for i := range ipViews {
+				p := props[ids[i]]
+				if p == nil {
+					continue
+				}
+				f := &ipFlags{Users: num64(p["users"]), Hosting: p["hosting"] == true, Shared: p["shared"] == true,
+					Proxy: p["proxy"] == true, VPN: p["vpn"] == true, V6: p["v6"] == true}
+				if f.V6 {
+					f.Line = graph.IPKey(ipViews[i].Value)
+				}
+				if ipViews[i].ISP == "" {
+					ipViews[i].ISP, _ = p["isp"].(string)
+				}
+				if ipViews[i].Province == "" {
+					ipViews[i].Province, _ = p["province"].(string)
+				}
+				ipViews[i].Net = f
+			}
+		}
 	}
 	out["devices"], out["ips"] = nonNilSlice(devViews), nonNilSlice(ipViews)
 	userLists, _ := s.Store.EntriesFor(ctx, bundle.ListUser, strconv.FormatInt(uid, 10))
@@ -747,7 +896,7 @@ func (s *Server) status(ctx context.Context, _ *app.RequestContext) (any, error)
 		if s.Vector == nil {
 			return errors.New("未连接")
 		}
-		_, err := s.Vector.Similar(c, 0, "", vector.Embed(map[string]string{"brand": "probe"}), 1)
+		_, err := s.Vector.Similar(c, 0, "probe-device", 1)
 		return err
 	})
 	check("risingwave", func(c context.Context) error {
@@ -863,4 +1012,149 @@ func (s *Server) userScore(ctx context.Context, c *app.RequestContext) (any, err
 		return nil, err
 	}
 	return map[string]any{"maxScore": max32}, nil
+}
+
+func num64(v any) int64 {
+	switch n := v.(type) {
+	case int64:
+		return n
+	case int:
+		return int64(n)
+	case float64:
+		return int64(n)
+	}
+	return 0
+}
+
+// configNames 规则、特征、模型的中文名（画像里只有键，控制台据此显示名称，不必再单独请求配置接口）
+func (s *Server) configNames(ctx context.Context) (map[string]map[string]string, error) {
+	out := map[string]map[string]string{"rules": {}, "features": {}, "models": {}}
+	rules, err := s.Store.ListRules(ctx, "")
+	if err != nil {
+		return out, err
+	}
+	for _, r := range rules {
+		if r.Name != "" {
+			out["rules"][r.Key] = r.Name
+		}
+	}
+	if fs, err := s.Store.ListFeatures(ctx); err == nil {
+		for _, f := range fs {
+			if f.Name != "" {
+				out["features"][f.Key] = f.Name
+			}
+		}
+	}
+	if ms, err := s.Store.ListModels(ctx); err == nil {
+		for _, m := range ms {
+			if m.Name != "" {
+				out["models"][m.Key] = m.Name
+			}
+		}
+	}
+	return out, nil
+}
+
+// ruleInfo 规则在控制台上要显示的几项（命中规则旁的维度、分值、是否观察中）
+type ruleInfo struct {
+	Name      string `json:"name"`
+	Dimension string `json:"dimension"`
+	Score     int    `json:"score"`
+	Mode      string `json:"mode"`
+	Decision  string `json:"decision,omitempty"`
+}
+
+// ruleMeta 规则键 → 显示信息（同一个键在多个场景时取最近更新的那条）
+func (s *Server) ruleMeta(ctx context.Context) (map[string]ruleInfo, error) {
+	rules, err := s.Store.ListRules(ctx, "")
+	if err != nil {
+		return map[string]ruleInfo{}, err
+	}
+	out := make(map[string]ruleInfo, len(rules))
+	for _, r := range rules {
+		out[r.Key] = ruleInfo{Name: r.Name, Dimension: r.Dimension, Score: r.Score, Mode: string(r.Mode), Decision: r.Decision}
+	}
+	return out, nil
+}
+
+// RuleHit 一条规则在近 N 天的命中情况
+type RuleHit struct {
+	Rule     string    `json:"rule"`
+	Total    uint64    `json:"total"`
+	LastHour time.Time `json:"lastHour"`
+	Daily    []uint64  `json:"daily"` // 与 Days 一一对应，最早的一天在前
+}
+
+// RuleHitsView 规则命中统计：给规则列表标「近 7 天命中 N 次」和走势，并给出同期评估总量算命中率
+type RuleHitsView struct {
+	Days      []string  `json:"days"` // UTC 日期 yyyy-mm-dd
+	Decisions uint64    `json:"decisions"`
+	Rules     []RuleHit `json:"rules"`
+}
+
+// ruleHits GET /rules/hits?scene=&app=&days=7，只统计正式评估（影子评估不进 rule_hits_hour）
+func (s *Server) ruleHits(ctx context.Context, c *app.RequestContext) (any, error) {
+	days := qint(c, "days", 7)
+	if days < 1 {
+		days = 1
+	} else if days > 90 {
+		days = 90
+	}
+	now := time.Now().UTC()
+	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, -(days - 1))
+	cond, args := "", []any{start}
+	if a := qapp(c); a != nil {
+		cond += " AND app_id = ?"
+		args = append(args, *a)
+	}
+	if sc := strings.TrimSpace(string(c.Query("scene"))); sc != "" {
+		cond += " AND scene = ?"
+		args = append(args, sc)
+	}
+	out := RuleHitsView{Days: make([]string, days), Rules: []RuleHit{}}
+	index := map[string]int{}
+	for i := 0; i < days; i++ {
+		d := start.AddDate(0, 0, i).Format("2006-01-02")
+		out.Days[i] = d
+		index[d] = i
+	}
+	conn := s.CH.Conn()
+	var rows []struct {
+		Rule string    `ch:"rule"`
+		Day  time.Time `ch:"d"`
+		N    uint64    `ch:"n"`
+		Last time.Time `ch:"last"`
+	}
+	if err := conn.Select(ctx, &rows, "SELECT rule, toDate(hour) AS d, sum(n) AS n, max(hour) AS last FROM rule_hits_hour WHERE hour >= ?"+cond+" GROUP BY rule, d", args...); err != nil {
+		return nil, err
+	}
+	byRule := map[string]*RuleHit{}
+	for _, r := range rows {
+		h := byRule[r.Rule]
+		if h == nil {
+			h = &RuleHit{Rule: r.Rule, Daily: make([]uint64, days)}
+			byRule[r.Rule] = h
+		}
+		if i, ok := index[r.Day.UTC().Format("2006-01-02")]; ok {
+			h.Daily[i] += r.N
+		}
+		h.Total += r.N
+		if r.Last.After(h.LastHour) {
+			h.LastHour = r.Last
+		}
+	}
+	for _, h := range byRule {
+		out.Rules = append(out.Rules, *h)
+	}
+	sort.Slice(out.Rules, func(i, j int) bool { return out.Rules[i].Total > out.Rules[j].Total })
+	var total []struct {
+		N uint64 `ch:"n"`
+	}
+	if err := conn.Select(ctx, &total, "SELECT sum(n) AS n FROM decisions_minute WHERE minute >= ? AND shadow = 0"+cond, args...); err != nil {
+		return nil, err
+	}
+	if len(total) > 0 {
+		out.Decisions = total[0].N
+	}
+	return out, nil
 }

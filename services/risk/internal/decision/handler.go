@@ -37,14 +37,14 @@ var _ riskv1.DecisionService = (*Handler)(nil)
 // ToRequest RPC 请求 → 引擎请求
 func ToRequest(in *riskv1.EvaluateRequest) (engine.Request, error) {
 	req := engine.Request{
-		Scene: in.GetScene(), AppID: in.GetAppId(), UserID: in.GetUserId(), IdentityID: in.GetIdentityId(), Account: in.GetAccount(),
+		Scene: in.GetScene(), AppID: in.GetAppId(), UserID: in.GetUserId(), IdentityID: in.GetIdentityId(), Account: in.GetAccount(), AccountUserID: in.GetAccountUserId(),
 		IP: in.GetIp(), UserAgent: in.GetUserAgent(), CaptchaPassed: in.GetCaptchaPassed(), CaptchaUnavailable: in.GetCaptchaUnavailable(), RequestID: in.GetRequestId(),
 		Phone: in.GetPhone(), Email: in.GetEmail(), TargetUserID: in.GetTargetUserId(), Amount: in.GetAmount(),
 		// 在这里定下评估时刻：引擎、事件、流水用同一个时间（引擎里的 Normalize 只改它自己那份副本）
 		Now: time.Now(),
 	}
 	if d := in.GetDevice(); d != nil {
-		req.Device = engine.Device{ID: d.GetId(), Platform: d.GetPlatform(), Brand: d.GetBrand(), Model: d.GetModel(), OSVersion: d.GetOsVersion(),
+		req.Device = engine.Device{ID: events.NormalizeDeviceID(d.GetId()), Platform: d.GetPlatform(), Brand: d.GetBrand(), Model: d.GetModel(), OSVersion: d.GetOsVersion(),
 			AppVersion: d.GetAppVersion(), Screen: d.GetScreen(), Locale: d.GetLocale(), Timezone: d.GetTimezone(), Emulator: d.GetEmulator(),
 			Rooted: d.GetRooted(), Attrs: d.GetAttrs()}
 	}
@@ -221,7 +221,7 @@ func (h *Handler) execute(ctx context.Context, req engine.Request, decisionID st
 	}
 	for _, c := range cmds {
 		cmd := events.Command{ID: c.ID, Kind: c.Kind, Target: c.Target, Value: c.Value, AppID: req.AppID, DurationSeconds: c.DurationSeconds,
-			Reason: c.Reason, Source: "decision", DecisionID: decisionID}
+			Reason: c.Reason, Source: "decision", DecisionID: decisionID, Level: c.Level, PublicReason: c.PublicReason, ReasonCode: c.ReasonCode}
 		if err := h.Bus.PublishCommand(ctx, cmd); err != nil && h.Logf != nil {
 			h.Logf("处置命令发布失败：%v", err)
 		}

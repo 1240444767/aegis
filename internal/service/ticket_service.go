@@ -4,8 +4,8 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
-	"errors"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"aegis/internal/authz"
 	admindomain "aegis/internal/domain/admin"
 	authdomain "aegis/internal/domain/auth"
 	storagedomain "aegis/internal/domain/storage"
@@ -113,6 +114,36 @@ func (s *TicketService) Detail(ctx context.Context, access *admindomain.AccessCo
 	item.Watchers = watchers
 	item.Permissions = actions
 	return item, nil
+}
+
+// permAppUserRead 应用用户查看权限点（细分后的「用户：查看」；旧的 app:user:read 经兼容关系同样满足）。
+const permAppUserRead = authz.PermAppUserInfoRead
+
+// RequesterContext 提单人资料卡的取数前提：能看到这条工单才往下走。
+//
+// canViewUser 表示调用者对工单所属应用有用户查看权限。处理组成员只凭「被指派」
+// 能看到工单，但账号资料（邮箱、手机号、登录地址）属于用户模块，仍按那边的权限点放行。
+func (s *TicketService) RequesterContext(ctx context.Context, access *admindomain.AccessContext, ticketID int64) (
+	item *ticketdomain.Ticket, canViewUser bool, stats ticketdomain.RequesterTicketStats, err error) {
+
+	item, _, _, err = s.requireTicketAccess(ctx, access, ticketID)
+	if err != nil {
+		return nil, false, stats, err
+	}
+	if item.RequesterType == ticketdomain.RequesterUser && item.RequesterUserID != nil {
+		appID := item.AppID
+		canViewUser = s.can(ctx, access, permAppUserRead, &appID)
+		stats, err = s.pg.CountRequesterTickets(ctx, item.AppID, *item.RequesterUserID)
+		if err != nil {
+			return nil, false, stats, err
+		}
+	}
+	return item, canViewUser, stats, nil
+}
+
+// AdminAvatarRefs 一批管理员的头像引用，供 Handler 层解析成出网地址。
+func (s *TicketService) AdminAvatarRefs(ctx context.Context, adminIDs []int64) (map[int64]ticketdomain.AvatarRef, error) {
+	return s.pg.ListAdminAvatarRefs(ctx, adminIDs)
 }
 
 // Stats 工单概览统计。kind 为空表示工单与反馈合计。

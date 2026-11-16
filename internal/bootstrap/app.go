@@ -75,6 +75,8 @@ type APIApp struct {
 	Storage *service.StorageService
 	// AccountDeletion 账号注销：后台循环执行到期的冷静期申请并发到期提醒，退出时必须 Stop
 	AccountDeletion *service.AccountDeletionService
+	// Suspension 封禁申诉与全站封禁：后台每分钟兜底跑没审过的申诉，退出时必须 Stop
+	Suspension *service.SuspensionService
 	// RegisterIP 注册 IP 控制：台账与拦截记录批量写入协程，退出时必须 Stop 把队列写完
 	RegisterIP *service.RegisterIPService
 	// Leaderboard 积分排行榜：后台循环结算到期的周期榜并发放奖励，退出时必须 Stop
@@ -392,6 +394,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	if err := adminService.LoadCustomRoles(ctx); err != nil {
 		log.Warn("加载自定义角色失败", zap.Error(err))
 	}
+	// 其余实例改了角色会广播策略变更，这里跟着刷新角色元数据（数据权限、启停状态）
+	adminService.SetupRoleSync()
 	firewallLogService := service.NewFirewallLogService(log, pg, locationService, ipBanService)
 	monitorService = service.NewMonitorService(cfg, log, postgres, redisClient, natsConn, temporalClient, authService, adminService, userService, signInService, pointsService, notificationService, appService, siteService, versionService, roleApplicationService, emailService, paymentService, workflowService, storageService, avatarService, realtimeService, firewall, systemService, locationService)
 	monitorRepo := redisrepo.NewMonitorRepository(redisClient, cfg.Redis.KeyPrefix)
@@ -581,8 +585,15 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	riskService := service.NewRiskService(cfg.Risk, log, "aegis-api", cfg.NATS.URL, redisClient, cfg.Redis.KeyPrefix)
 	riskService.SetLocationService(locationService)
 	loginGuardService.SetRiskService(riskService)
-	pg.SetRiskScorer(func(ctx context.Context, appID, userID int64) int { return riskService.UserMaxScore(ctx, appID, userID, 30) })
+	pg.SetRiskScorer(func(ctx context.Context, appID, userID int64) int {
+		return riskService.UserMaxScore(ctx, appID, userID, 30)
+	})
 	reportService.SetRiskService(riskService)
+	securityService.SetRiskService(riskService)
+	userService.SetRiskService(riskService)
+	accountDeletionService.SetRiskService(riskService)
+	vipService.SetRiskService(riskService)
+	appOAuthService.SetRiskService(riskService)
 	pluginService.ObserveHooks(riskService.ObserveHook)
 	authService.SetRiskService(riskService)
 	inviteService.SetRiskService(riskService)
@@ -598,12 +609,18 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	riskService.SetAccountBanService(accountBanService)
 	riskService.SetFirewall(ipBanService)
 	riskService.SetSessionRevoker(userService)
+	riskService.SetOps(pg, userService)
+	// 封禁对用户的那一面：被拒时带封禁详情与申诉凭证、全站封禁、申诉复审、多语言封禁通知（docs/account-suspension.md）
+	suspensionService := service.NewSuspensionService(log, pg, cfg.Security.MasterKey)
+	suspensionService.SetDependencies(accountBanService, emailService, notificationService, aiProviderService, riskService)
+	service.InstallSuspensionHooks(suspensionService)
 	riskService.SetCaptchaProbe(func(ctx context.Context, appID int64) bool {
 		cfg, err := appService.GetCaptchaConfig(ctx, appID)
 		return err == nil && service.IsCaptchaRequired(cfg)
 	})
 	// 对外 OAuth2 / OIDC 授权服务器（Ory Hydra 承载协议，Aegis 负责登录与同意页）
 	oauth2ServerService := service.NewOAuth2ServerService(cfg, log, pg, authService, appService, avatarService)
+	oauth2ServerService.SetRiskService(riskService)
 	accountBanService.SetOAuth2Server(oauth2ServerService)
 	userService.SetOAuth2Server(oauth2ServerService)
 
@@ -636,6 +653,10 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	registerIPService := service.NewRegisterIPService(log, pg, redisrepo.NewRegisterIPRepository(redisClient, cfg.Redis.KeyPrefix),
 		appService, locationService)
 	authService.SetRegisterIPService(registerIPService)
+	// 删号、解除风控时主服务里的计数一起更新：注册准入台账与计数、登录防爆破、在线连接、排行榜缓存、风险分缓存
+	accountCounters := service.NewAccountCounters(log, registerIPService, loginGuardService, realtimeRepo, sessions, riskService)
+	userService.AddPurgeHook(accountCounters.PurgeHook)
+	riskService.SetAccountCounters(accountCounters)
 
 	// 平台级 Banner（超级管理员专属 CRUD；Overview 对所有管理员展示；上传经 StorageService）
 	platformBannerService := service.NewPlatformBannerService(log, pg, sessions, storageService)
@@ -758,6 +779,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Promo:            promoService,
 		Leaderboard:      leaderboardService,
 		AccountDeletion:  accountDeletionService,
+		Suspension:       suspensionService,
 		CloudStorage:     cloudStorageService,
 		Site:             siteService,
 		Version:          versionService,
@@ -886,6 +908,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		CloudStorage:       cloudStorageService,
 		Storage:            storageService,
 		AccountDeletion:    accountDeletionService,
+		Suspension:         suspensionService,
 		RegisterIP:         registerIPService,
 		Leaderboard:        leaderboardService,
 		Lottery:            lotteryService,
@@ -929,6 +952,9 @@ func (a *APIApp) Start(ctx context.Context) error {
 	}
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Start(ctx)
+	}
+	if a.Suspension != nil {
+		a.Suspension.Start(ctx)
 	}
 	if a.RegisterIP != nil {
 		a.RegisterIP.Start(ctx)
@@ -1015,6 +1041,9 @@ func (a *APIApp) close(ctx context.Context) {
 	}
 	if a.AccountDeletion != nil {
 		a.AccountDeletion.Stop()
+	}
+	if a.Suspension != nil {
+		a.Suspension.Stop()
 	}
 	if a.RegisterIP != nil {
 		a.RegisterIP.Stop(ctx)

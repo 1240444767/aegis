@@ -683,6 +683,33 @@ class AegisMeApi internal constructor(private val client: AegisClient) {
     @Throws(IOException::class)
     fun cancelAccountDeletion(): JsonElement = client.call("POST", "/me/deletion/cancel", requireAuth = true)
 
+    // ── 账号封禁与申诉（docs/account-suspension.md）──
+    //
+    // 账号被封禁时登录、刷新与业务接口返回 40301 / 40302，AegisException.data 里的 suspension 带原因、期限、范围与
+    // 申诉凭证 appeal.token。下面三个接口的凭证二选一：[token]，或当前会话（会话可能已经因封禁失效，所以是可选登录）。
+
+    /** 封禁详情与申诉记录：`{ suspension, appeals }`，没有封禁时 suspension 为 null。凭证无效 40150。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun suspension(token: String? = null): JsonElement =
+        client.call("POST", "/suspension", buildBody("token" to token), optionalAuth = true)
+
+    /**
+     * 提交申诉，[content] 字数按 suspension.appeal.minLength / maxLength，[contactEmail] 选填（没绑邮箱时用来收结果）。
+     * 返回 `{ appeal, suspension }`。失败码：42220 字数 / 42221 邮箱 / 40422 没有可申诉的封禁 / 40933 已有进行中的申诉 /
+     * 40935 不允许申诉 / 42920 次数用完 / 42921 冷却中 / 42222 未开放。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun submitSuspensionAppeal(content: String, contactEmail: String? = null, token: String? = null): JsonElement =
+        client.call("POST", "/suspension/appeal", buildBody("token" to token, "content" to content, "contactEmail" to contactEmail), optionalAuth = true)
+
+    /** 撤回还没结案的申诉。失败码：40423 申诉不存在 / 40949 已结案。 */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun withdrawSuspensionAppeal(appealId: Long, token: String? = null): JsonElement =
+        client.call("POST", "/suspension/appeal/withdraw", buildBody("token" to token, "appealId" to appealId), optionalAuth = true)
+
     // ── 二次认证 ──
 
     @Throws(IOException::class)
@@ -2230,6 +2257,23 @@ class AegisAIGatewayApi internal constructor(private val client: AegisClient) {
     /** 删除 API 密钥，立即失效；正在进行的调用照常结算。 */
     @Throws(IOException::class)
     fun deleteKey(keyId: Long): JsonElement = client.call("DELETE", "/ai/keys/$keyId", requireAuth = true)
+
+    /**
+     * 我的用量统计：[range] 为 `today` / `24h`（按小时分桶）或 `7d` / `30d` / `90d`（按日分桶），日界按应用设置的时区。
+     * 返回合计（调用数、各状态、输入输出 token、图片、扣费、平均与 P95 延迟、首字延迟）、时间序列，
+     * 以及按模型、密钥（keyId 0 为登录令牌）、接口、扣费来源的分布。[keyId] / [model] 只统计这把密钥 / 这个模型。
+     */
+    @Throws(IOException::class)
+    @JvmOverloads
+    fun usage(range: String = "7d", keyId: Long? = null, model: String? = null): JsonElement = client.call(
+        "GET", "/ai/usage",
+        query = buildQuery(
+            "range" to range,
+            "keyId" to keyId?.toString(),
+            "model" to model,
+        ),
+        requireAuth = true,
+    )
 
     /**
      * 我的调用记录（新的在前）。[status]：`succeeded` / `aborted`（流式中途断开，按已生成的内容计费）/

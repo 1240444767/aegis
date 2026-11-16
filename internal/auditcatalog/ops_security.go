@@ -36,6 +36,16 @@ func init() {
 		Write("PUT /api/admin/system/risk/*path", "修改风控平台配置", "风控平台", SeverityHigh),
 		Write("PATCH /api/admin/system/risk/*path", "修改风控平台配置", "风控平台", SeverityHigh),
 		Write("DELETE /api/admin/system/risk/*path", "删除风控平台配置", "风控平台", SeverityHigh),
+		View("GET /api/admin/system/risk-ops/banned", "查看风控封禁中的账号", ""),
+		View("GET /api/admin/system/risk-ops/candidates", "发现风险账号", ""),
+		View("POST /api/admin/system/risk-ops/inspect", "查看账号的风控处置与关联账号", "用户"),
+		Write("POST /api/admin/system/risk-ops/release", "一键解除风控", "用户", SeverityHigh),
+		Write("POST /api/admin/system/risk-ops/purge", "删除风险账号", "用户", SeverityCritical),
+		View("GET /api/admin/system/platform-bans", "查看全站封禁", ""),
+		View("GET /api/admin/system/platform-bans/:platformBanId", "查看全站封禁详情", "全站封禁"),
+		Write("POST /api/admin/system/platform-bans/:platformBanId/revoke", "解除全站封禁", "全站封禁", SeverityHigh),
+		View("GET /api/admin/system/ban-appeals", "查看全部应用的封禁申诉", ""),
+		View("GET /api/admin/system/ban-appeals/stats", "查看全部应用的封禁申诉统计", ""),
 
 		// 出站代理
 		View("GET /api/admin/system/egress", "查看出站代理设置", ""),

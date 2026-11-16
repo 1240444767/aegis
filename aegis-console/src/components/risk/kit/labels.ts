@@ -51,7 +51,7 @@ export const FEATURE_KIND_HINT: Record<FeatureKind, string> = {
   velocity: "决策服务在 Redis Cluster 里维护的滑窗计数，本次请求算在内",
   stream: "RisingWave 从事件流聚合，适合长窗口与业务结果（失败、支付、退款）",
   graph: "NebulaGraph 关系查询：同设备 / 同 IP 账号、被封邻居、邀请树",
-  vector: "Milvus 设备指纹相似检索：改机与模拟器批量",
+  vector: "Milvus 设备码相似检索：批量生成与改机改出的设备码",
   derived: "用表达式组合请求字段与其它特征",
 };
 
@@ -96,6 +96,9 @@ export const EVENT_LABEL: Record<string, string> = {
   signin: "签到", "lottery.draw": "抽奖", "cardkey.redeem": "卡密兑换", "points.redeem": "积分兑换", "ad.reward": "激励广告发奖",
   "profile.update": "资料变更", "account.ban": "账号封禁", "account.unban": "账号解封", "verify_code.sent": "验证码发送",
   "cep.alert": "行为模式告警", "login.locked": "登录防爆破锁定", "geo.anomaly": "登录地理异常",
+  "oauth.login": "第三方账号登录", "oauth.bind": "绑定第三方账号", "oauth.unbind": "解绑第三方账号", "oauth2.authorize": "授权第三方应用",
+  "passkey.register": "登记通行密钥", "passkey.remove": "删除通行密钥", "qr.confirm": "确认扫码登录", "password.change": "修改密码",
+  "contact.change": "换绑手机号或邮箱", "account.setup": "补设用户名与密码", "account.delete_request": "申请注销账号", "vip.trial": "领取会员试用",
 };
 
 export const SEVERITY_LABEL: Record<string, string> = { low: "低", medium: "中", high: "高", critical: "严重" };

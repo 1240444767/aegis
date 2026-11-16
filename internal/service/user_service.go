@@ -14,14 +14,17 @@ import (
 
 	appdomain "aegis/internal/domain/app"
 	authdomain "aegis/internal/domain/auth"
-	devicedomain "aegis/internal/domain/device"
 	captchadomain "aegis/internal/domain/captcha"
+	devicedomain "aegis/internal/domain/device"
 	plugindomain "aegis/internal/domain/plugin"
+	securitydomain "aegis/internal/domain/security"
 	userdomain "aegis/internal/domain/user"
 	"aegis/internal/event"
 	pgrepo "aegis/internal/repository/postgres"
 	redisrepo "aegis/internal/repository/redis"
+	"aegis/pkg/clientip"
 	apperrors "aegis/pkg/errors"
+	riskevents "aegis/services/risk/events"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -105,7 +108,8 @@ func hashUserPassword(password string) (string, error) {
 }
 
 type UserService struct {
-	oauth2    *OAuth2ServerService
+	riskHook
+	oauth2 *OAuth2ServerService
 	// devices 设备字典：会话与登录记录里的 deviceInfo 读取时现查。为空时只做不查字典的兜底
 	devices   *DeviceMarketingService
 	log       *zap.Logger
@@ -124,6 +128,8 @@ type UserService struct {
 	autoSign autoSignSettingsGuard
 	// publicIDs 主键 ↔ 对外用户 ID；全进程共用一份（PublicIDs），各处响应据此把主键换掉
 	publicIDs *UserPublicIDs
+	// purgeHooks 删号时各模块的计数收尾（AddPurgeHook）
+	purgeHooks []UserPurgeHook
 }
 
 // autoSignSettingsGuard 写入自动签到设置前的清洗与资格校验（AutoSignService.PrepareSettings）。
@@ -254,7 +260,8 @@ func (s *UserService) GetMy(ctx context.Context, session *authdomain.Session) (*
 		"user_id":   user.ID,
 		"appid":     user.AppID,
 		"token_jti": session.TokenID,
-		"ip":        session.IP,
+		// 这一次请求的 IP，不是会话里存的登录时 IP（旧会话里存的可能是 CDN 节点）
+		"ip": clientip.FromContext(ctx, session.IP),
 	})
 	return view, nil
 }
@@ -515,6 +522,15 @@ func (s *UserService) ConfirmSensitiveProfileChange(ctx context.Context, session
 		s.log.Warn("delete pending profile change failed", zap.Int64("appid", session.AppID), zap.Int64("userId", session.UserID), zap.String("field", field), zap.Error(err))
 	}
 	s.notifyProfileChangeCompleted(session.AppID, session.UserID, field, notificationEmail, notificationOldValue, notificationNewValue, secondaryEmail)
+	// 关系图：新的手机号 / 邮箱挂到用户上
+	changed := riskevents.Event{Type: riskevents.TypeContactChange, Scene: securitydomain.SceneContactChange, AppID: session.AppID,
+		UserID: session.UserID, Account: session.Account, Props: map[string]any{"field": field}}
+	if field == profileChangeFieldPhone {
+		changed.Phone = notificationNewValue
+	} else if field == profileChangeFieldEmail {
+		changed.Email = notificationNewValue
+	}
+	s.riskReport(ctx, changed)
 	pendingChanges, err := s.loadPendingProfileChanges(ctx, session.AppID, session.UserID)
 	if err != nil {
 		return nil, err
@@ -527,6 +543,17 @@ func (s *UserService) ConfirmSensitiveProfileChange(ctx context.Context, session
 
 func (s *UserService) queueSensitiveProfileChange(ctx context.Context, session *authdomain.Session, field string, value string) error {
 	value = strings.TrimSpace(value)
+	// 风控：发验证码之前评估（换绑是接管账号的常见一步）
+	req := securitydomain.RiskEvalRequest{Scene: securitydomain.SceneContactChange, AppID: &session.AppID, UserID: &session.UserID,
+		Account: session.Account, Extra: map[string]any{"field": field}}
+	if field == profileChangeFieldPhone {
+		req.Phone = value
+	} else if field == profileChangeFieldEmail {
+		req.Email = value
+	}
+	if err := s.riskGuard(ctx, req, RiskGuardOption{Message: "当前环境存在风险，暂时无法修改绑定信息"}); err != nil {
+		return err
+	}
 	now := time.Now().UTC()
 	change := userdomain.PendingProfileChange{
 		Field:       field,
@@ -607,7 +634,7 @@ func (s *UserService) dispatchSensitiveProfileChangeCode(ctx context.Context, se
 			AppID:    session.AppID,
 			Phone:    change.Value,
 			Purpose:  captchadomain.Purpose(change.Purpose),
-			ClientIP: strings.TrimSpace(session.IP),
+			ClientIP: clientip.FromContext(ctx, session.IP),
 		}, providerCfg)
 		return err
 	default:
@@ -1841,7 +1868,7 @@ func (s *UserService) loadActiveUser(ctx context.Context, session *authdomain.Se
 	if err != nil {
 		return nil, nil, err
 	}
-	profile = s.backfillProfileRegisterIPAsync(user.AppID, user.ID, profile, session.IP)
+	profile = s.backfillProfileRegisterIPAsync(user.AppID, user.ID, profile, clientip.FromContext(ctx, session.IP))
 	s.enrichProfileRegisterLocationAsync(user.AppID, user.ID, profile)
 	return user, profile, nil
 }
@@ -2050,17 +2077,17 @@ func (s *UserService) mapLoginAuditItems(ctx context.Context, items []appdomain.
 	for _, item := range items {
 		result = append(result, userdomain.LoginAuditItem{
 			DeviceInfo: s.devices.describeFromMetadata(ctx, item.Metadata, item.DeviceID, item.UserAgent),
-			ID:        item.ID,
-			AppID:     item.AppID,
-			LoginType: item.LoginType,
-			Provider:  item.Provider,
-			TokenJTI:  item.TokenJTI,
-			LoginIP:   item.LoginIP,
-			DeviceID:  item.DeviceID,
-			UserAgent: item.UserAgent,
-			Status:    item.Status,
-			Metadata:  item.Metadata,
-			CreatedAt: item.CreatedAt,
+			ID:         item.ID,
+			AppID:      item.AppID,
+			LoginType:  item.LoginType,
+			Provider:   item.Provider,
+			TokenJTI:   item.TokenJTI,
+			LoginIP:    item.LoginIP,
+			DeviceID:   item.DeviceID,
+			UserAgent:  item.UserAgent,
+			Status:     item.Status,
+			Metadata:   item.Metadata,
+			CreatedAt:  item.CreatedAt,
 		})
 	}
 	return result
@@ -2231,9 +2258,30 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, appID int64, userID i
 	return nil
 }
 
+// UserPurgeHook 删号前调用（账号还在，能查它的台账、登录名）；返回删号成功后执行的收尾，nil 表示不用收尾。
+// 各模块的计数（注册准入、登录防爆破、在线人数、排行榜缓存、风险分缓存）用它跟着账号删除一起更新。
+type UserPurgeHook func(ctx context.Context, appID, userID int64, account string) func(context.Context)
+
+// AddPurgeHook 登记删号收尾
+func (s *UserService) AddPurgeHook(h UserPurgeHook) {
+	if h != nil {
+		s.purgeHooks = append(s.purgeHooks, h)
+	}
+}
+
 // PurgeUser 硬删除一个用户：吊销会话、清理安全凭证、删行（CASCADE 清理关联表）、清缓存与搜索索引、
-// 触发 user.onDeleted 钩子。管理员删除与账号注销共用这一条路径。
+// 各模块计数收尾（UserPurgeHook）、触发 user.onDeleted 钩子。管理员删除、账号注销、风控关联删除共用这一条路径。
 func (s *UserService) PurgeUser(ctx context.Context, appID int64, userID int64) error {
+	account := ""
+	if u, err := s.pg.GetUserByID(ctx, userID); err == nil && u != nil {
+		account = u.Account
+	}
+	var afters []func(context.Context)
+	for _, h := range s.purgeHooks {
+		if after := h(ctx, appID, userID, account); after != nil {
+			afters = append(afters, after)
+		}
+	}
 	// 先吊销会话
 	s.revokeAllUserSessions(ctx, appID, userID)
 	// 清理安全凭证
@@ -2247,6 +2295,9 @@ func (s *UserService) PurgeUser(ctx context.Context, appID int64, userID int64) 
 	}
 	s.invalidateAdminUserCaches(ctx, appID, userID)
 	s.deleteAdminUserSearch(appID, userID)
+	for _, after := range afters {
+		after(context.WithoutCancel(ctx))
+	}
 	if s.plugin != nil {
 		go s.plugin.ExecuteHook(context.Background(), HookUserDeleted, map[string]any{
 			"userId": userID,

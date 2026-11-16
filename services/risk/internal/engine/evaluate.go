@@ -40,6 +40,9 @@ type Command struct {
 	DurationSeconds int64  `json:"durationSeconds,omitempty"`
 	Reason          string `json:"reason,omitempty"`
 	AppID           int64  `json:"appId,omitempty"`
+	Level           string `json:"level,omitempty"`
+	PublicReason    string `json:"publicReason,omitempty"`
+	ReasonCode      string `json:"reasonCode,omitempty"`
 }
 
 // 命令种类
@@ -380,26 +383,28 @@ func (p *Program) fetch(ctx context.Context, env *Env, req Request, src Sources,
 		graph  []GraphQuery
 		vector []VectorQuery
 	)
+	actors := CounterActors(env)
 	for _, f := range p.Bundle.Features {
 		if f.Kind != bundle.FeatureDerived {
 			env.F[f.Key] = f.Default
 		}
 		switch f.Kind {
 		case bundle.FeatureVelocity:
-			value := EntityValue(env, f.Entity)
+			value := CounterValue(env, f.Entity)
 			if value == "" {
 				continue
 			}
-			q := VelocityQuery{Feature: f.Key, WindowSeconds: f.Velocity.WindowSeconds, Key: p.counterKey(f, env, value)}
+			q := VelocityQuery{Feature: f.Key, WindowSeconds: f.Velocity.WindowSeconds, Key: p.counterKey(f, env, value),
+				Subject: counterSubjectTag(f.Entity, env, value), Actors: actors, ReadOnly: !RecordsVelocity(f, env)}
 			if f.Velocity.Agg == bundle.AggDistinct {
-				q.Distinct = EntityValue(env, f.Velocity.DistinctOf)
+				q.Distinct, q.Member = DistinctMember(f.Velocity.DistinctOf, env)
 				if q.Distinct == "" {
 					continue
 				}
 			}
 			vel = append(vel, q)
 		case bundle.FeatureStream:
-			if value := EntityValue(env, f.Entity); value != "" {
+			if value := CounterValue(env, f.Entity); value != "" {
 				stream = append(stream, LookupQuery{Feature: f.Key, Key: StreamKey(f, env.AppID, value)})
 			}
 		case bundle.FeatureGraph:
@@ -582,7 +587,11 @@ func (p *Program) commands(decisionID string, env *Env, action string, extra []a
 		if value == "" {
 			return
 		}
-		out = append(out, Command{ID: decisionID + ":" + kind + ":" + target, Kind: kind, Target: target, Value: value, DurationSeconds: duration, Reason: reason, AppID: env.AppID})
+		c := Command{ID: decisionID + ":" + kind + ":" + target, Kind: kind, Target: target, Value: value, DurationSeconds: duration, Reason: reason, AppID: env.AppID}
+		if kind == CmdAccountBan {
+			c.Level, c.PublicReason, c.ReasonCode = enf.Level, enf.PublicReason, enf.ReasonCode
+		}
+		out = append(out, c)
 	}
 	if action == bundle.ActionBan {
 		for _, t := range enf.Targets {

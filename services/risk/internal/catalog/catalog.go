@@ -22,6 +22,12 @@ func distinct(key, name, entity, of string, window int, all bool) store.Feature 
 		Velocity: &bundle.VelocityDef{WindowSeconds: window, Agg: bundle.AggDistinct, DistinctOf: of, AllScenes: all}}}
 }
 
+// accounts 「出现的账号数」的说明：只数确认存在的账号，按账号 ID 去重（engine.RecordsVelocity / DistinctMember）
+func accounts(f store.Feature) store.Feature {
+	f.Description = "登录前（登录名对应已有账号）、登录成功、登录失败与已登录请求里出现的不同账号，按账号 ID 去重；不存在的登录名不计"
+	return f
+}
+
 func stream(key, name, entity string, events []string, agg, field string, window int, conds ...bundle.Condition) store.Feature {
 	return store.Feature{Feature: bundle.Feature{Key: key, Name: name, Kind: bundle.FeatureStream, Entity: entity,
 		Stream: &bundle.StreamDef{Events: events, Agg: agg, Field: field, WindowSeconds: window, Conditions: conds}}}
@@ -50,12 +56,12 @@ func Features() []store.Feature {
 		vel("user_scene_1h", "用户 1 小时请求数", bundle.EntityUser, 3600),
 		vel("user_scene_1d", "用户 1 天请求数", bundle.EntityUser, 86400),
 		vel("phone_scene_1h", "手机号 1 小时请求数", bundle.EntityPhone, 3600),
-		distinct("ip_accounts_1h", "IP 1 小时出现的账号数", bundle.EntityIP, bundle.EntityAccount, 3600, true),
+		accounts(distinct("ip_accounts_1h", "IP 1 小时出现的账号数", bundle.EntityIP, bundle.EntityAccount, 3600, true)),
 		distinct("device_accounts_1h", "设备 1 小时出现的账号数", bundle.EntityDevice, bundle.EntityAccount, 3600, true),
 		distinct("device_accounts_1d", "设备 1 天出现的账号数", bundle.EntityDevice, bundle.EntityAccount, 86400, true),
 		distinct("account_devices_1d", "账号 1 天用过的设备数", bundle.EntityAccount, bundle.EntityDevice, 86400, true),
 		distinct("account_ips_1d", "账号 1 天用过的 IP 数", bundle.EntityAccount, bundle.EntityIP, 86400, true),
-		distinct("subnet_accounts_1h", "网段 1 小时出现的账号数", bundle.EntityIPSubnet, bundle.EntityAccount, 3600, true),
+		accounts(distinct("subnet_accounts_1h", "网段 1 小时出现的账号数", bundle.EntityIPSubnet, bundle.EntityAccount, 3600, true)),
 
 		stream("account_login_fail_1h", "账号 1 小时登录失败次数", bundle.EntityAccount, []string{"login.fail"}, bundle.AggCount, "", 3600),
 		stream("ip_login_fail_1h", "IP 1 小时登录失败次数", bundle.EntityIP, []string{"login.fail"}, bundle.AggCount, "", 3600),
@@ -78,9 +84,9 @@ func Features() []store.Feature {
 		graphF("g_device_users", "关系图：设备上的账号数", bundle.EntityDevice, bundle.GraphDeviceUsers, 30),
 		graphF("g_ip_users", "关系图：IP 上的账号数", bundle.EntityIP, bundle.GraphIPUsers, 1),
 
-		{Feature: bundle.Feature{Key: "v_similar_devices", Name: "向量：高度相似的设备数", Kind: bundle.FeatureVector,
+		{Feature: bundle.Feature{Key: "v_similar_devices", Name: "向量：设备码几乎相同的设备数", Kind: bundle.FeatureVector,
 			Vector: &bundle.VectorDef{Collection: "device", TopK: 20, MinScore: 0.97, Output: "similar_count"}}},
-		{Feature: bundle.Feature{Key: "v_similar_banned", Name: "向量：相似设备里已封禁的数量", Kind: bundle.FeatureVector,
+		{Feature: bundle.Feature{Key: "v_similar_banned", Name: "向量：设备码几乎相同的被封设备数", Kind: bundle.FeatureVector,
 			Vector: &bundle.VectorDef{Collection: "device", TopK: 20, MinScore: 0.95, Output: "similar_banned"}}},
 
 		derived("risky_network", "高危网络（代理 / VPN / Tor / 机房）", "net.proxy || net.vpn || net.tor || net.datacenter"),
@@ -113,6 +119,15 @@ func Scenes() []store.Scene {
 		scene("cardkey", "卡密兑换", "兑换卡与授权卡", false, []string{"device", "ip"}, false),
 		scene("points_redeem", "积分兑换", "积分商城兑换", false, []string{"device"}, true),
 		scene("ad_reward", "激励广告发奖", "看完激励视频后发奖", false, []string{"device"}, true),
+		scene("oauth_login", "第三方登录", "QQ、Google 等第三方账号登录，含首次登录建号", false, acct, false),
+		scene("oauth_bind", "绑定第三方账号", "已登录用户绑定 QQ、Google 等第三方账号", false, acct, false),
+		scene("oauth2_authorize", "授权第三方应用", "用户在授权页把账号授权给接入 Aegis 的第三方应用", false, acct, false),
+		scene("passkey_login", "通行密钥登录", "用通行密钥（指纹、面容、安全密钥）登录", false, acct, false),
+		scene("qr_login", "扫码登录", "手机端确认网页或电脑端的扫码登录", false, acct, false),
+		scene("password_change", "修改密码", "登录状态下修改密码", false, acct, false),
+		scene("contact_change", "换绑手机号或邮箱", "修改绑定的手机号、邮箱（发送验证码前评估）", false, acct, false),
+		scene("account_delete", "注销账号", "提交注销申请", false, acct, false),
+		scene("vip_trial", "领取会员试用", "领取免费会员试用", false, []string{"device"}, true),
 	}
 	for i := range out {
 		switch out[i].Key {
@@ -122,6 +137,16 @@ func Scenes() []store.Scene {
 			out[i].Fields = []bundle.Field{{Key: "activityId", Label: "活动 ID", Type: bundle.FieldNumber}, {Key: "times", Label: "抽数", Type: bundle.FieldNumber}}
 		case "invite":
 			out[i].Fields = []bundle.Field{{Key: "code", Label: "邀请码", Type: bundle.FieldString}}
+		case "oauth_login":
+			out[i].Fields = []bundle.Field{{Key: "provider", Label: "第三方平台", Type: bundle.FieldString}, {Key: "newUser", Label: "首次登录建号", Type: bundle.FieldBool}}
+		case "oauth_bind":
+			out[i].Fields = []bundle.Field{{Key: "provider", Label: "第三方平台", Type: bundle.FieldString}}
+		case "oauth2_authorize":
+			out[i].Fields = []bundle.Field{{Key: "clientId", Label: "应用 ID", Type: bundle.FieldString}, {Key: "clientName", Label: "应用名称", Type: bundle.FieldString}, {Key: "scopes", Label: "授权范围数", Type: bundle.FieldNumber}}
+		case "contact_change":
+			out[i].Fields = []bundle.Field{{Key: "field", Label: "修改项（phone / email）", Type: bundle.FieldString}}
+		case "account_delete":
+			out[i].Fields = []bundle.Field{{Key: "channel", Label: "验证方式", Type: bundle.FieldString}}
 		}
 	}
 	return out
@@ -149,10 +174,10 @@ func Templates() []Template {
 			rule("device_tampered", "设备被篡改", bundle.DimDevice, "F.device_tampered == 1", 20, "", "模拟器或已 Root"),
 			rule("watch_list", "观察名单", bundle.DimList, "list.watch", 30, "", "命中观察名单"),
 			rule("banned_neighbors", "关联被封账号", bundle.DimGraph, "F.g_banned_neighbors >= 2", 40, "", "两跳内有 {{F.g_banned_neighbors}} 个被封账号"),
-			rule("similar_banned_devices", "与被封设备高度相似", bundle.DimDevice, "F.v_similar_banned >= 1", 45, "", "与 {{F.v_similar_banned}} 台被封设备指纹几乎一致"),
-			rule("device_farm", "设备农场", bundle.DimDevice, "F.v_similar_devices >= 10", 50, "", "同应用里有 {{F.v_similar_devices}} 台指纹几乎一样的设备"),
+			rule("similar_banned_devices", "设备码与被封设备几乎相同", bundle.DimDevice, "F.v_similar_banned >= 1", 45, "", "设备码与 {{F.v_similar_banned}} 台被封设备只差一两个字符"),
+			rule("device_farm", "设备农场", bundle.DimDevice, "F.v_similar_devices >= 10", 50, "", "有 {{F.v_similar_devices}} 台设备的设备码与它只差一两个字符，像是批量生成"),
 		}},
-		{Key: "account_security", Name: "账号安全", Description: "撞库、爆破、一号多机", Scenes: []string{"login", "password_reset", "admin_login"}, Rules: []store.Rule{
+		{Key: "account_security", Name: "账号安全", Description: "撞库、爆破、一号多机", Scenes: []string{"login", "password_reset", "admin_login", "oauth_login", "passkey_login", "qr_login", "password_change", "contact_change", "account_delete", "oauth_bind", "oauth2_authorize"}, Rules: []store.Rule{
 			rule("ip_burst", "IP 请求突增", bundle.DimBehavior, "F.ip_scene_10m > 30", 40, "", "IP 10 分钟请求 {{F.ip_scene_10m}} 次"),
 			rule("ip_many_accounts", "一 IP 多账号", bundle.DimBehavior, "F.ip_accounts_1h > 10", 50, "", "IP 1 小时出现 {{F.ip_accounts_1h}} 个账号"),
 			rule("account_bruteforce", "账号被爆破", bundle.DimAccount, "F.account_login_fail_1h >= 5", 60, "", "账号 1 小时登录失败 {{F.account_login_fail_1h}} 次"),
@@ -165,11 +190,11 @@ func Templates() []Template {
 			rule("device_reuse", "设备重复注册", bundle.DimDevice, "F.device_register_7d >= 3", 60, "", "设备 7 天注册 {{F.device_register_7d}} 个"),
 			rule("device_many_users", "设备挂多号", bundle.DimGraph, "F.g_device_users >= 8", 80, "block", "设备上已有 {{F.g_device_users}} 个账号"),
 		}},
-		{Key: "marketing", Name: "营销反作弊", Description: "羊毛党、设备农场、邀请裂变", Scenes: []string{"invite", "lottery", "signin", "points_redeem", "ad_reward", "cardkey"}, Rules: []store.Rule{
+		{Key: "marketing", Name: "营销反作弊", Description: "羊毛党、设备农场、邀请裂变", Scenes: []string{"invite", "lottery", "signin", "points_redeem", "ad_reward", "cardkey", "vip_trial"}, Rules: []store.Rule{
 			rule("device_accounts", "一机多号", bundle.DimDevice, "F.device_accounts_1d >= 3", 50, "", "设备 1 天出现 {{F.device_accounts_1d}} 个账号"),
 			rule("graph_device_accounts", "同设备账号团", bundle.DimGraph, "F.g_device_accounts >= 5", 60, "", "与 {{F.g_device_accounts}} 个账号共用设备"),
 			rule("invite_burst", "邀请裂变异常", bundle.DimGraph, "scene == 'invite' && F.g_invite_tree >= 200", 60, "", "三层邀请树 {{F.g_invite_tree}} 人"),
-			rule("farm_ban", "设备农场封禁", bundle.DimDevice, "F.v_similar_banned >= 3 && F.device_tampered == 1", 0, "ban", "改机设备与多台被封设备相同"),
+			rule("farm_ban", "设备农场封禁", bundle.DimDevice, "F.v_similar_banned >= 3 && F.device_tampered == 1", 0, "ban", "改机设备的设备码与多台被封设备几乎相同"),
 			rule("user_blocked_recently", "近期多次被拦", bundle.DimAccount, "F.user_blocked_7d >= 5", 40, "", "7 天被拦截 {{F.user_blocked_7d}} 次"),
 		}},
 		{Key: "payment", Name: "支付风控", Description: "大额、频繁退款、新设备大额", Scenes: []string{"payment"}, Rules: []store.Rule{

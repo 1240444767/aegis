@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,6 +151,7 @@ func decode(msgs []jetstream.Msg) []events.Event {
 		if err := json.Unmarshal(m.Data(), &e); err != nil || e.ID == "" {
 			continue // 坏消息确认掉，不阻塞后面的
 		}
+		e.DeviceID = events.NormalizeDeviceID(e.DeviceID)
 		// 时间戳缺失或离谱（早于 2020 年）时用入流时间，否则 ClickHouse 的 TTL 会当场把它删掉
 		if e.TS < 1577836800000 {
 			if md, err := m.Metadata(); err == nil {
@@ -180,10 +182,10 @@ func (w *Worker) handleDecisions(ctx context.Context, msgs []jetstream.Msg) erro
 	// 设备向量：同一批里同一台设备只留最新一条
 	latest := map[string]vector.Device{}
 	for _, e := range live {
-		if e.DeviceID == "" || len(e.Device) == 0 {
+		if e.DeviceID == "" {
 			continue
 		}
-		vec := vector.Embed(e.Device)
+		vec := vector.Embed(e.DeviceID)
 		if vector.Empty(vec) {
 			continue
 		}
@@ -264,6 +266,7 @@ func (w *Worker) handleAlerts(ctx context.Context, msgs []jetstream.Msg) error {
 	for _, m := range msgs {
 		var a analytics.Alert
 		if err := json.Unmarshal(m.Data(), &a); err == nil && a.ID != "" {
+			a.DeviceID = events.NormalizeDeviceID(a.DeviceID)
 			alerts = append(alerts, a)
 		}
 	}
@@ -297,7 +300,8 @@ func (w *Worker) handleAlerts(ctx context.Context, msgs []jetstream.Msg) error {
 					}
 				case "account":
 					if a.Entity == bundle.EntityAccount {
-						listType, value, appID = bundle.ListAccount, a.Value, a.AppID
+						listType, value = accountListTarget(a.Value)
+						appID = a.AppID
 					}
 				}
 				if value == "" {
@@ -492,4 +496,18 @@ func (w *Worker) sweep(ctx context.Context) error {
 		}
 		w.logf("清理过期名单 %d 条", len(removed))
 	}
+}
+
+// accountListTarget 按登录名分组的告警落名单：#<ID> 是归并后的账号，落用户名单；
+// 其余是登录名（以 # 开头的被补过一个 #，去掉），落登录名名单。两种都按告警的应用落。
+func accountListTarget(value string) (listType, v string) {
+	if rest, ok := strings.CutPrefix(value, bundle.AccountKeyPrefix); ok && !strings.HasPrefix(rest, bundle.AccountKeyPrefix) {
+		if _, err := strconv.ParseInt(rest, 10, 64); err == nil {
+			return bundle.ListUser, rest
+		}
+	}
+	if strings.HasPrefix(value, bundle.AccountKeyPrefix+bundle.AccountKeyPrefix) {
+		value = value[len(bundle.AccountKeyPrefix):]
+	}
+	return bundle.ListAccount, value
 }

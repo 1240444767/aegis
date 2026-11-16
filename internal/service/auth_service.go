@@ -3,6 +3,7 @@ package service
 import (
 	"aegis/internal/domain/accountdeletion"
 	"aegis/pkg/egress"
+	"aegis/pkg/sessiontoken"
 	riskevents "aegis/services/risk/events"
 	"context"
 	"crypto/rand"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"aegis/internal/config"
@@ -33,7 +35,6 @@ import (
 	apperrors "aegis/pkg/errors"
 	"aegis/pkg/timeutil"
 	"github.com/go-webauthn/webauthn/protocol"
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
@@ -76,8 +77,11 @@ type AuthService struct {
 	recoveryCaptcha *CaptchaService
 	recoveryUsers   *UserService
 	registerFlight  singleflight.Group
-	// jwtSecret 预转换的签名密钥字节，避免每次签发/校验重复分配
-	jwtSecret []byte
+	// tokens 终端用户登录令牌（PASETO v4.local）的签发与校验，见 pkg/sessiontoken。
+	// 测试里直接以字面量构造 AuthService 时为空，按 cfg 懒构造一次。
+	tokens     *sessiontoken.Codec
+	tokensOnce sync.Once
+	tokensErr  error
 	// timingDummyHash 时序均衡用哑 bcrypt 哈希：账号不存在或账号无密码时，
 	// 也执行一次等价代价的 bcrypt 比较，使「账号不存在」与「密码错误」耗时不可区分，
 	// 防止通过响应时间差枚举有效账号
@@ -146,6 +150,12 @@ func (s *AuthService) SetAccountDeletion(deletion *AccountDeletionService) {
 
 // checkReregister 注册前核对：刚注销、还在限制期内的标识不能再注册。
 func (s *AuthService) checkReregister(ctx context.Context, appID int64, identifiers ...RegisterIdentifier) error {
+	// 全站封禁：邮箱、手机号、第三方身份撞上了就不让注册
+	if sus := suspensionHooks.Load(); sus != nil {
+		if err := sus.CheckRegistration(ctx, identifiers...); err != nil {
+			return err
+		}
+	}
 	if s.deletion == nil {
 		return nil
 	}
@@ -222,9 +232,38 @@ func NewAuthService(cfg config.Config, log *zap.Logger, pg *pgrepo.Repository, s
 		providers: providers,
 		// OAuth 令牌交换与用户信息拉取几乎都是境外端点，走出海网关
 		http:            egress.NewClient(egress.Profile{Name: "auth.oauth", Timeout: 8 * time.Second}),
-		jwtSecret:       []byte(cfg.JWT.Secret),
+		tokens:          mustSessionTokenCodec(cfg),
 		timingDummyHash: timingDummyHash,
 	}
+}
+
+func sessionTokenOptions(cfg config.Config) sessiontoken.Options {
+	return sessiontoken.Options{
+		Issuer:          cfg.JWT.Issuer,
+		Key:             cfg.JWT.SessionTokenKey,
+		PreviousKeys:    cfg.JWT.SessionTokenPreviousKeys,
+		Secret:          cfg.JWT.Secret,
+		AcceptLegacyJWT: cfg.JWT.AcceptLegacyJWT,
+	}
+}
+
+// mustSessionTokenCodec 配置在 config.Load 里已校验过，这里出错只可能是测试里的半截配置，交给懒构造报错。
+func mustSessionTokenCodec(cfg config.Config) *sessiontoken.Codec {
+	codec, err := sessiontoken.New(sessionTokenOptions(cfg))
+	if err != nil {
+		return nil
+	}
+	return codec
+}
+
+func (s *AuthService) tokenCodec() (*sessiontoken.Codec, error) {
+	if s.tokens != nil {
+		return s.tokens, nil
+	}
+	s.tokensOnce.Do(func() {
+		s.tokens, s.tokensErr = sessiontoken.New(sessionTokenOptions(s.cfg))
+	})
+	return s.tokens, s.tokensErr
 }
 
 // runDetached 在独立 goroutine 中执行非关键路径副作用（审计 / 计数清理 / 插件钩子等）。
@@ -261,7 +300,8 @@ func (s *AuthService) PasswordLogin(ctx context.Context, appID int64, account, p
 func (s *AuthService) afterPasswordLoginSuccess(appID int64, user *userdomain.User, account, ip string) {
 	if s.loginGuard != nil {
 		s.runDetached("login.guard_success", 3*time.Second, func(actx context.Context) {
-			s.loginGuard.RegisterSuccess(actx, appID, account, ip)
+			s.loginGuard.RegisterSuccess(actx, appID, LoginGuardAccountKey(account, 0), ip)
+			s.loginGuard.RegisterSuccess(actx, appID, LoginGuardAccountKey("", user.ID), "")
 		})
 	}
 	if s.plugin != nil {
@@ -281,12 +321,12 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	// 阶段 0 —— 防爆破快速失败：锁定期内直接拒绝，不触发任何下游查询，
 	// 保证爆破攻击下 PG / 风控 / 插件零负载（Redis 故障 fail-open）
 	if s.loginGuard != nil {
-		if err := s.loginGuard.Check(ctx, appID, account, ip); err != nil {
+		if err := s.loginGuard.Check(ctx, appID, LoginGuardAccountKey(account, 0), ip); err != nil {
 			return nil, nil, "", err
 		}
 	}
 
-	// 阶段 1 —— 并行前置检查：风控评估、插件钩子、应用策略、用户查询彼此独立，
+	// 阶段 1 —— 并行前置检查：风控评估（等用户查询给出已有账号）、插件钩子、应用策略、用户查询，
 	// 用 errgroup 并发执行，总耗时从「各 RTT 之和」降为「最慢一项」；
 	// 任一分支失败即取消其余分支（gctx），错误按原串行顺序的优先级返回
 	var (
@@ -298,11 +338,25 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 		userErr error
 	)
 	g, gctx := errgroup.WithContext(ctx)
+	// 风控要知道登录名对应的是不是已有账号（「出现的账号」只数真实账号），所以等用户查询出结果再评估；
+	// 插件与应用策略照旧并行。查询失败时整组已取消，评估跳过，错误按下面的优先级返回用户查询的那个
+	resolved := make(chan struct{})
+	var candidates []*userdomain.User
 	if s.risk != nil {
 		g.Go(func() error {
+			select {
+			case <-resolved:
+			case <-gctx.Done():
+				return nil
+			}
+			var accountUserID int64
+			if len(candidates) > 0 {
+				accountUserID = candidates[0].ID
+			}
 			// 风控内部错误放行（Guard 内部处理）；拦截 / 封禁 → 40398，需要验证码 → 40015
 			if _, err := s.risk.Guard(gctx, securitydomain.RiskEvalRequest{
 				Scene: securitydomain.SceneLogin, AppID: &appID, IP: ip, DeviceID: deviceID, UserAgent: userAgent, Account: account,
+				AccountUserID: accountUserID,
 			}, RiskGuardOption{Message: "当前请求被风控拦截，请稍后重试"}); err != nil {
 				riskErr = err
 				return riskErr
@@ -340,7 +394,6 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 			return nil
 		})
 	}
-	var candidates []*userdomain.User
 	g.Go(func() error {
 		loaded, err := s.resolveLoginCandidates(gctx, appID, account)
 		if err != nil {
@@ -348,6 +401,7 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 			return err
 		}
 		candidates = loaded
+		close(resolved)
 		return nil
 	})
 	_ = g.Wait()
@@ -369,8 +423,9 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 			}
 		}
 		if user == nil {
+			// 分不出是哪个账号：按输入的登录名计
 			if s.loginGuard != nil {
-				s.loginGuard.RegisterFailure(ctx, appID, account, ip)
+				s.loginGuard.RegisterFailure(ctx, appID, LoginGuardAccountKey(account, 0), ip)
 			}
 			return nil, nil, "", apperrors.New(40101, http.StatusUnauthorized, "账号或密码错误")
 		}
@@ -386,9 +441,15 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 		// 时序均衡：账号不存在也执行一次等价 bcrypt 比较，并与密码错误统一计失败（防账号枚举）
 		_ = bcrypt.CompareHashAndPassword(s.timingDummyHash, []byte(password))
 		if s.loginGuard != nil {
-			s.loginGuard.RegisterFailure(ctx, appID, account, ip)
+			s.loginGuard.RegisterFailure(ctx, appID, LoginGuardAccountKey(account, 0), ip)
 		}
 		return nil, nil, "", apperrors.New(40101, http.StatusUnauthorized, "账号或密码错误")
+	}
+	// 账号维度按账号 ID 锁：换用同一账号的邮箱、手机号登录也躲不开。放在核对密码之前，锁定期内不透露密码对错
+	if s.loginGuard != nil {
+		if err := s.loginGuard.Check(ctx, appID, LoginGuardAccountKey("", user.ID), ""); err != nil {
+			return nil, nil, "", err
+		}
 	}
 	if err := s.ensureUserLoginState(ctx, user); err != nil {
 		return nil, nil, "", err
@@ -396,7 +457,7 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 	if !s.verifyCredential(user.PasswordHash, password) {
 		// 失败计数同步执行（保证防爆破窗口准确），审计与插件钩子移出关键路径
 		if s.loginGuard != nil {
-			s.loginGuard.RegisterFailure(ctx, appID, account, ip)
+			s.loginGuard.RegisterFailure(ctx, appID, LoginGuardAccountKey("", user.ID), ip)
 		}
 		userID := user.ID
 		s.runDetached("login.failed_audit", 3*time.Second, func(actx context.Context) {
@@ -404,7 +465,8 @@ func (s *AuthService) authenticatePassword(ctx context.Context, appID int64, acc
 		})
 		if s.plugin != nil {
 			s.runDetached("login.failed_hook", 5*time.Second, func(actx context.Context) {
-				s.plugin.ExecuteHook(actx, HookAuthLoginFailed, map[string]any{"account": account, "appId": appID, "ip": ip}, plugindomain.HookMetadata{IP: ip, AppID: &appID})
+				// 带上账号 ID：风控按「登录失败的已有账号」去重计数（IP / 网段多账号），不存在的登录名不会走到这里
+				s.plugin.ExecuteHook(actx, HookAuthLoginFailed, map[string]any{"account": account, "appId": appID, "ip": ip, "userId": userID}, plugindomain.HookMetadata{IP: ip, AppID: &appID, UserID: &userID})
 			})
 		}
 		return nil, nil, "", apperrors.New(40101, http.StatusUnauthorized, "账号或密码错误")
@@ -840,6 +902,10 @@ func (s *AuthService) bindOAuthProfile(ctx context.Context, appID, userID int64,
 	if user == nil || user.AppID != appID {
 		return nil, apperrors.New(40410, http.StatusNotFound, "账号不存在")
 	}
+	if err := s.riskCheck(ctx, securitydomain.RiskEvalRequest{Scene: securitydomain.SceneOAuthBind, AppID: &appID, UserID: &userID,
+		Account: user.Account, Extra: map[string]any{"provider": profile.Provider}}, "当前环境存在风险，暂时无法绑定第三方账号"); err != nil {
+		return nil, err
+	}
 	boundUserID, err := s.pg.FindOAuthBinding(ctx, appID, profile.Provider, profile.ProviderUserID)
 	if err != nil {
 		return nil, err
@@ -859,6 +925,8 @@ func (s *AuthService) bindOAuthProfile(ctx context.Context, appID, userID int64,
 	if err := s.pg.UpsertOAuthBinding(ctx, appID, userID, profile); err != nil {
 		return nil, err
 	}
+	s.riskEmit(ctx, riskevents.Event{Type: riskevents.TypeOAuthBind, Scene: securitydomain.SceneOAuthBind, AppID: appID, UserID: userID,
+		Account: user.Account, Props: identityProps(profile)})
 	return &oauthdomain.Binding{
 		AppID: appID, UserID: userID, Account: user.Account,
 		Provider: profile.Provider, ProviderUserID: profile.ProviderUserID,
@@ -987,6 +1055,10 @@ func (s *AuthService) ChangePassword(ctx context.Context, session *authdomain.Se
 	if user == nil || user.AppID != session.AppID {
 		return apperrors.New(40401, http.StatusNotFound, "用户不存在")
 	}
+	if err := s.riskCheck(ctx, securitydomain.RiskEvalRequest{Scene: securitydomain.ScenePasswordChange, AppID: &session.AppID, UserID: &session.UserID,
+		Account: user.Account}, "当前环境存在风险，暂时无法修改密码"); err != nil {
+		return err
+	}
 	pctx := s.userPasswordContext(ctx, user)
 	if err := s.validatePasswordPolicyWithContext(ctx, session.AppID, newPassword, pctx); err != nil {
 		return err
@@ -1038,15 +1110,17 @@ func (s *AuthService) ChangePassword(ctx context.Context, session *authdomain.Se
 		"event_type": "password_changed",
 		"changed_at": changedAt.Format(time.RFC3339),
 	})
+	s.riskEmit(ctx, riskevents.Event{Type: riskevents.TypePasswordChange, Scene: securitydomain.ScenePasswordChange, AppID: session.AppID,
+		UserID: session.UserID, Account: user.Account})
 	return nil
 }
 
 func (s *AuthService) ValidateAccessToken(ctx context.Context, token string) (*authdomain.Session, error) {
-	claims, err := s.parseTokenClaims(token, "access")
+	claims, err := s.parseTokenClaims(token, sessiontoken.TypeAccess)
 	if err != nil {
 		return nil, err
 	}
-	tokenID, _ := claims["jti"].(string)
+	tokenID := claims.TokenID
 	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
@@ -1072,11 +1146,11 @@ func (s *AuthService) ValidateAccessToken(ctx context.Context, token string) (*a
 }
 
 func (s *AuthService) validateRefreshToken(ctx context.Context, token string) (*authdomain.RefreshSession, error) {
-	claims, err := s.parseTokenClaims(token, "refresh")
+	claims, err := s.parseTokenClaims(token, sessiontoken.TypeRefresh)
 	if err != nil {
 		return nil, err
 	}
-	tokenID, _ := claims["jti"].(string)
+	tokenID := claims.TokenID
 	reason, blacklisted, err := s.sessions.TokenBlacklistReason(ctx, tokenID)
 	if err != nil {
 		return nil, err
@@ -1116,20 +1190,15 @@ func revokedTokenError(reason, fallback string) error {
 	return apperrors.New(40104, http.StatusUnauthorized, fallback)
 }
 
-func (s *AuthService) parseTokenClaims(token string, expectedType string) (jwt.MapClaims, error) {
-	claims := jwt.MapClaims{}
-	parsed, err := jwt.ParseWithClaims(token, claims, func(t *jwt.Token) (interface{}, error) {
-		return s.signingKey(), nil
-	}, jwt.WithValidMethods([]string{"HS256"}), jwt.WithIssuer(s.cfg.JWT.Issuer))
-	if err != nil || !parsed.Valid {
+// parseTokenClaims 校验令牌（PASETO v4.local；过渡期内也接受旧 HS256 JWT）并要求种类一致。
+func (s *AuthService) parseTokenClaims(token string, expectedType string) (*sessiontoken.Claims, error) {
+	codec, err := s.tokenCodec()
+	if err != nil {
+		return nil, apperrors.New(50000, http.StatusInternalServerError, "登录令牌密钥未配置")
+	}
+	claims, err := codec.Parse(token, expectedType)
+	if err != nil {
 		return nil, apperrors.New(40102, http.StatusUnauthorized, "Token 无效")
-	}
-	tokenType, _ := claims["typ"].(string)
-	if expectedType == "access" && tokenType == "" {
-		return claims, nil
-	}
-	if tokenType != expectedType {
-		return nil, apperrors.New(40102, http.StatusUnauthorized, "Token 类型不匹配")
 	}
 	return claims, nil
 }
@@ -1148,6 +1217,16 @@ func (s *AuthService) loginWithOAuthProfile(ctx context.Context, app *appdomain.
 			return nil, err
 		}
 	}
+	// 风控：第三方账号登录（含首次登录建号）。已绑定时带上那个用户，评估能看到账号自己的历史
+	riskReq := securitydomain.RiskEvalRequest{Scene: securitydomain.SceneOAuthLogin, AppID: &appID, Account: profile.Nickname,
+		IP: ip, DeviceID: deviceID, UserAgent: userAgent, Extra: map[string]any{"provider": profile.Provider, "newUser": user == nil}}
+	if user != nil {
+		uid := user.ID
+		riskReq.UserID, riskReq.Account = &uid, user.Account
+	}
+	if err := s.riskCheck(ctx, riskReq, "当前环境存在风险，暂时无法使用第三方账号登录"); err != nil {
+		return nil, err
+	}
 	if user == nil {
 		if !allowRegister {
 			return nil, apperrors.New(40393, http.StatusForbidden,
@@ -1163,6 +1242,8 @@ func (s *AuthService) loginWithOAuthProfile(ctx context.Context, app *appdomain.
 	if err := s.pg.UpsertOAuthBinding(ctx, appID, user.ID, profile); err != nil {
 		return nil, err
 	}
+	s.riskEmit(ctx, riskevents.Event{Type: riskevents.TypeOAuthLogin, Scene: securitydomain.SceneOAuthLogin, AppID: appID, UserID: user.ID,
+		Account: user.Account, IP: ip, DeviceID: deviceID, UA: userAgent, Props: identityProps(profile)})
 	// 封禁/禁用校验在此执行一次，completeLogin 不再重复（原实现会触发两次 RefreshUserAccountBanState）
 	if err := s.ensureUserLoginState(ctx, user); err != nil {
 		return nil, err
@@ -1217,6 +1298,8 @@ func (s *AuthService) finalizeLogin(ctx context.Context, app *appdomain.App, use
 	if err := s.enforceLoginConsistency(ctx, app, user, deviceID, ip); err != nil {
 		return nil, err
 	}
+	// 记下用户语言：之后的封禁通知、申诉结果按它发
+	rememberLocale(ctx, s.pg, user.ID)
 	record := authdomain.FirstDevice{
 		UserID:      user.ID,
 		AppID:       user.AppID,
@@ -1300,6 +1383,11 @@ func (s *AuthService) VerifyPasskeyLogin(ctx context.Context, appID int64, chall
 		return nil, err
 	}
 	if err := s.ensureUserLoginState(ctx, user); err != nil {
+		return nil, err
+	}
+	uid := user.ID
+	if err := s.riskCheck(ctx, securitydomain.RiskEvalRequest{Scene: securitydomain.ScenePasskeyLogin, AppID: &appID, UserID: &uid,
+		Account: user.Account, IP: ip, DeviceID: deviceID, UserAgent: userAgent}, "当前环境存在风险，暂时无法使用通行密钥登录"); err != nil {
 		return nil, err
 	}
 	// Passkey 属强认证，按既有设计不再叠加二次验证，直接 finalize（并补记首次设备）
@@ -1417,30 +1505,13 @@ func (s *AuthService) ResolveDeviceLimitChallenge(ctx context.Context, appID int
 	return result, nil
 }
 
-// signSessionToken 统一构造并签名访问/刷新令牌（消除两段重复的 claims 组装）。
+// signSessionToken 签发访问/刷新令牌：PASETO v4.local，载荷加密，客户端读不到内容（pkg/sessiontoken）。
 func (s *AuthService) signSessionToken(tokenType string, user *userdomain.User, tokenID, familyID string, issuedAt, expiresAt time.Time) (string, error) {
-	claims := jwt.MapClaims{
-		// 令牌是客户端能解开看的，uid 只放对外 ID。服务端校验只认 jti，从不读这一项
-		"uid":     user.PublicID,
-		"appid":   user.AppID,
-		"account": user.Account,
-		"sv":      1,
-		"jti":     tokenID,
-		"typ":     tokenType,
-		"family":  familyID,
-		"iss":     s.cfg.JWT.Issuer,
-		"iat":     issuedAt.Unix(),
-		"exp":     expiresAt.Unix(),
+	codec, err := s.tokenCodec()
+	if err != nil {
+		return "", err
 	}
-	return jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(s.signingKey())
-}
-
-// signingKey 返回预计算密钥；兼容测试中直接以字面量构造 AuthService 的场景
-func (s *AuthService) signingKey() []byte {
-	if len(s.jwtSecret) > 0 {
-		return s.jwtSecret
-	}
-	return []byte(s.cfg.JWT.Secret)
+	return codec.Issue(tokenType, tokenID, familyID, user.AppID, issuedAt, expiresAt)
 }
 
 type issuedSessionBundle struct {

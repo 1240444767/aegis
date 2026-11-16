@@ -20,6 +20,17 @@ const (
 	SceneCardKey       = "cardkey"
 	ScenePointsRedeem  = "points_redeem"
 	SceneAdReward      = "ad_reward"
+
+	// 身份与账号安全
+	SceneOAuthLogin      = "oauth_login"      // QQ / Google 等第三方账号登录（含首次登录建号）
+	SceneOAuthBind       = "oauth_bind"       // 绑定第三方账号
+	SceneOAuth2Authorize = "oauth2_authorize" // 用户把账号授权给接入 Aegis 的第三方应用（OAuth2 同意页）
+	ScenePasskeyLogin    = "passkey_login"    // 通行密钥登录
+	SceneQRLogin         = "qr_login"         // 扫码登录（手机端确认）
+	ScenePasswordChange  = "password_change"  // 登录状态下修改密码
+	SceneContactChange   = "contact_change"   // 换绑手机号 / 邮箱
+	SceneAccountDelete   = "account_delete"   // 申请注销账号
+	SceneVipTrial        = "vip_trial"        // 领取会员试用
 )
 
 // 处置，从轻到重
@@ -41,10 +52,13 @@ type RiskEvalRequest struct {
 	UserID     *int64 `json:"userId,omitempty"`
 	IdentityID *int64 `json:"identityId,omitempty"`
 	// Account 登录名 / 邮箱 / 手机号。为空时回退读 Extra["account"]（旧调用方）
-	Account   string `json:"account,omitempty"`
-	IP        string `json:"ip"`
-	DeviceID  string `json:"deviceId"`
-	UserAgent string `json:"userAgent"`
+	Account string `json:"account,omitempty"`
+	// AccountUserID 登录名对应的已有账号（登录、找回密码在校验前查到的）。只说明账号存在、不代表是本人，
+	// 风控据此把「出现的账号」数成真实账号；不存在的登录名留 0
+	AccountUserID int64  `json:"accountUserId,omitempty"`
+	IP            string `json:"ip"`
+	DeviceID      string `json:"deviceId"`
+	UserAgent     string `json:"userAgent"`
 	// CaptchaPassed 本次请求已经通过了图形验证码。命中「验证码」处置时据此放行，
 	// 而不是让用户在同一个关卡上无限循环。
 	CaptchaPassed bool `json:"captchaPassed,omitempty"`

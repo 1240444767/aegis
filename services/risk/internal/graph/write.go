@@ -84,8 +84,12 @@ func Statements(e events.Event) string {
 	}
 	// 代理 / CDN / 内网地址不是用户的出口，不进图（否则会把大量无关用户连在一起）
 	if e.IP != "" && !proxyip.IsProxy(e.IP) {
-		iv := IPVID(e.IP)
-		sets := []string{setStr("addr", e.IP)}
+		key := IPKey(e.IP)
+		iv := "ip:" + key
+		sets := []string{setStr("addr", key)}
+		if IsV6Net(key) {
+			sets = append(sets, "v6 = true")
+		}
 		if e.Country != "" {
 			sets = append(sets, setStr("country", e.Country))
 		}
@@ -109,7 +113,7 @@ func Statements(e events.Event) string {
 		if subject != "" {
 			upsertEdge(&b, EdgeUsesIP, subject, iv, ts)
 		}
-		if e.IPSubnet != "" {
+		if e.IPSubnet != "" && !IsV6Net(key) { // IPv6 的点本身就是 /64，不再挂网段
 			sv := SubnetVID(e.IPSubnet)
 			upsertVertex(&b, TagSubnet, sv, ts, setStr("cidr", e.IPSubnet))
 			upsertEdge(&b, EdgeInSubnet, iv, sv, ts)
@@ -124,6 +128,40 @@ func Statements(e events.Event) string {
 		ev := EmailVID(e.Email)
 		upsertVertex(&b, TagEmail, ev, ts, setStr("masked", MaskEmail(e.Email)), setStr("domain", e.EmailDomain))
 		upsertEdge(&b, EdgeHasEmail, subject, ev, ts)
+	}
+	// 第三方账号、授权过的应用、通行密钥：事件里只带摘要（events.Digest），与回灌用同一个点
+	if e.UserID > 0 {
+		prop := func(k string) string {
+			v, _ := e.Props[k].(string)
+			return strings.TrimSpace(v)
+		}
+		if provider, key := prop(events.PropIdentityProvider), prop(events.PropIdentityKey); provider != "" && key != "" && e.Type != events.TypeOAuthUnbind {
+			iv := IdentityVIDFromKey(provider, key)
+			sets := []string{setStr("provider", strings.ToLower(provider))}
+			if n := prop(events.PropIdentityNickname); n != "" {
+				sets = append(sets, setStr("nickname", n))
+			}
+			upsertVertex(&b, TagIdentity, iv, ts, sets...)
+			upsertEdge(&b, EdgeBoundIdentity, subject, iv, ts)
+		}
+		if id := prop(events.PropClientID); id != "" && e.Type == events.TypeOAuth2Authorize {
+			cv := ClientVID(id)
+			sets := []string{setStr("client_id", id)}
+			if n := prop(events.PropClientName); n != "" {
+				sets = append(sets, setStr("name", n))
+			}
+			upsertVertex(&b, TagClient, cv, ts, sets...)
+			upsertEdge(&b, EdgeAuthorized, subject, cv, ts)
+		}
+		if key := prop(events.PropPasskeyKey); key != "" && e.Type == events.TypePasskeyRegister {
+			pv := "pk:" + key
+			var sets []string
+			if n := prop(events.PropPasskeyName); n != "" {
+				sets = append(sets, setStr("name", n))
+			}
+			upsertVertex(&b, TagPasskey, pv, ts, sets...)
+			upsertEdge(&b, EdgeHasPasskey, subject, pv, ts)
+		}
 	}
 	if e.UserID > 0 && e.TargetUserID > 0 && e.TargetUserID != e.UserID {
 		target := UserVID(e.AppID, e.TargetUserID)

@@ -3,6 +3,9 @@ package engine
 import (
 	"context"
 	"strconv"
+	"strings"
+
+	"aegis/services/risk/internal/bundle"
 )
 
 // ListHit 一次名单命中
@@ -27,6 +30,116 @@ type VelocityQuery struct {
 	Key           string // 已拼好主体与作用域的计数键（不含前缀）
 	WindowSeconds int
 	Distinct      string // 非空时数去重的成员
+
+	// 以下三项让计数可以按对象回退（解除风控、删除账号或设备时只减掉它的那一份，见 sources/counters.go）。
+	// 都是 CounterTag 生成的标签；为空表示这一项不可索引。
+	Subject string   // 计数键的主体
+	Actors  []string // 这次事件的贡献者：账号、登录名、设备
+	Member  string   // 去重成员
+
+	// ReadOnly 只读当前值，这次请求不记入。见 RecordsVelocity。
+	ReadOnly bool
+}
+
+// RecordsVelocity 这次请求能不能记进这个滑窗计数。
+//
+// 登录名（account）只有对应着真实存在的账号时才可信：登录、找回密码这些接入点在校验之前就做决策，
+// 那时的登录名只是对方输入的字符串——打错的、根本不存在的都会进来，
+// 拿它当计数的主体或去重成员，一个地址上随手试几个名字就成了「多个账号」。
+// 所以只在账号确认存在时记入：已登录（UserID），或主服务查到了登录名对应的账号（AccountUserID）。
+// 登录前、登录成功、登录失败都会经过带着已有账号的决策，于是都会被数到；不存在的登录名只读。
+func RecordsVelocity(f bundle.Feature, env *Env) bool {
+	if ConfirmedAccount(env) > 0 {
+		return true
+	}
+	if f.Entity == bundle.EntityAccount {
+		return false
+	}
+	return !(f.Velocity != nil && f.Velocity.Agg == bundle.AggDistinct && f.Velocity.DistinctOf == bundle.EntityAccount)
+}
+
+// ConfirmedAccount 这次请求确认存在的账号：已登录的用户优先，其次是登录名对应的已有账号；0 = 没有
+func ConfirmedAccount(env *Env) int64 {
+	if env.UserID > 0 {
+		return env.UserID
+	}
+	return env.AccountUserID
+}
+
+// AccountPrefix 见 bundle.AccountKeyPrefix
+const AccountPrefix = bundle.AccountKeyPrefix
+
+// CounterValue 计数（滑窗、流式特征）里主体的取值。
+// 登录名、邮箱、手机号可能都绑在同一个账号上：账号确认存在时一律按账号 ID 归成一个主体（#<ID>），
+// 否则才用输入的登录名（这时滑窗只读，见 RecordsVelocity）。其余主体同 EntityValue。
+func CounterValue(env *Env, entity string) string {
+	if entity == bundle.EntityAccount {
+		if id := ConfirmedAccount(env); id > 0 {
+			return AccountPrefix + itoa(id)
+		}
+		return bundle.LoginNameKey(env.Account)
+	}
+	return EntityValue(env, entity)
+}
+
+// counterSubjectTag 计数主体的索引标签：确认的账号挂在用户标签下，删号、解除时整条计数一起处理
+func counterSubjectTag(entity string, env *Env, value string) string {
+	if entity == bundle.EntityAccount && strings.HasPrefix(value, AccountPrefix) {
+		return CounterTag(bundle.EntityUser, env.AppID, value[len(AccountPrefix):])
+	}
+	return CounterTag(entity, env.AppID, value)
+}
+
+// DistinctMember 去重计数这次的成员取值与索引标签。
+// 数「账号」时按确认存在的账号 ID 去重：同一个人用登录名、邮箱、手机号登录，或登录前后，都只算一个；
+// 没有确认的账号时退回登录名（这时请求只读，见 RecordsVelocity）。
+func DistinctMember(of string, env *Env) (value, tag string) {
+	if of == bundle.EntityAccount {
+		if id := ConfirmedAccount(env); id > 0 {
+			v := itoa(id)
+			return v, CounterTag(bundle.EntityUser, env.AppID, v)
+		}
+	}
+	v := EntityValue(env, of)
+	return v, CounterTag(of, env.AppID, v)
+}
+
+// CounterTag 计数索引用的对象标签。用户 ID 全平台唯一；登录名按应用区分；设备码、地址、网段、手机号是全局的。
+// 应用、邮箱域名这类不会被单独解除或删除的主体不建索引，返回空。
+func CounterTag(entity string, appID int64, value string) string {
+	if value == "" {
+		return ""
+	}
+	switch entity {
+	case bundle.EntityUser:
+		return "u:" + value
+	case bundle.EntityAccount:
+		return "a:" + itoa(appID) + ":" + strings.ToLower(value)
+	case bundle.EntityDevice:
+		return "d:" + value
+	case bundle.EntityIP:
+		return "i:" + value
+	case bundle.EntityIPSubnet:
+		return "n:" + value
+	case bundle.EntityPhone:
+		return "p:" + value
+	}
+	return ""
+}
+
+// CounterActors 这次请求的贡献者标签：账号（已登录，或登录名对应的已有账号）、登录名、设备。
+// 注册时还没有账号 ID，靠登录名与设备认人。地址是共用的，不算贡献者。
+func CounterActors(env *Env) []string {
+	var out []string
+	if id := ConfirmedAccount(env); id > 0 {
+		out = append(out, CounterTag(bundle.EntityUser, env.AppID, itoa(id)))
+	}
+	for _, e := range []string{bundle.EntityAccount, bundle.EntityDevice} {
+		if t := CounterTag(e, env.AppID, EntityValue(env, e)); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // LookupQuery 流式特征：读 RisingWave 写回的值
