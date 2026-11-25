@@ -10,7 +10,7 @@
 | React | 19.2.8 |
 | TypeScript | 7.0.2（编译器）+ 6.0.2（工具链 API，见下） |
 | Tailwind CSS | ^4.3.3 |
-| shadcn/ui | new-york-v4，41 个官方组件均为最新版（2026-11-06 补 `empty`，概览页空状态用）（见下方扩展说明） |
+| shadcn/ui | new-york-v4，42 个官方组件均为最新版（2026-11-06 补 `empty`，概览页空状态用；2026-11-21 补 `spinner`，交易概览后台刷新用）（见下方扩展说明） |
 | radix-ui | ^1.6.7（**统一包**，已取代 32 个 `@radix-ui/react-*` 独立包） |
 | TanStack React Query | ^5.101.4 |
 | TanStack React Table | ^9.1.2（表格，v9 按需注册功能） |
@@ -32,8 +32,9 @@
 | pinyin-pro | ^3.28.2（命令面板的拼音检索，**动态 import 按需加载**，见下方侧边栏一节） |
 | screenfull | ^6.0.2（顶栏全屏开关；跨浏览器前缀差异交给它，见下方顶栏一节） |
 | auto-skeleton-react | ^1.0.5（自动骨架屏，按子树真实 DOM 量出骨架；**只经 `components/ui/auto-skeleton.tsx` 使用**，见下方骨架屏一节） |
-| nuqs | 2.10.3（地址栏状态；**只有 `/feedback` 用**，`NuqsAdapter` 包在那一页里，见下方「意见反馈」一节） |
-| use-stick-to-bottom | 1.1.6（会话流贴底跟随，反馈详情用） |
+| nuqs | 2.10.3（地址栏状态；`/tickets` 与 `/feedback` 用，`NuqsAdapter` 包在这两页里，见下方「服务台」一节） |
+| use-stick-to-bottom | 1.1.6（会话流贴底跟随，服务台详情用） |
+| react-photo-view | 1.2.7（图片查看器底座，**只经 `components/ui/image-lightbox.tsx` 使用**，见下方「图片查看器」一节） |
 | @tiptap/markdown | 3.31.4（Tiptap 的 Markdown 读写；**版本必须与 `@tiptap/core` 完全一致**，它的 peer 是精确版本号） |
 | ESLint | ^9.39.5 |
 | bun | 1.4.1（包管理与脚本运行；运行时仍是 Node，见下方「包管理：bun」） |
@@ -54,6 +55,10 @@
 `src/components/ui/` 下另有 13 个**项目自有组件**（非 shadcn，CLI 不会碰）：
 `auto-skeleton`、`brand-icon`、`country-flag`、`data-state`、`error-boundary`、`image-dropzone`、`image-lightbox`、
 `json-viewer`、`rich-editor`、`section-heading`、`surface-card`、`toast-detail`、`virtual-list`。
+
+> **CLI 的 `cn` 坑（2026-11-21 装 `spinner` 时遇到）**：CLI 把组件里的 `import { cn } from "@/lib/utils"`
+> 写成了 `from "cn"`，还顺手往 `package.json` 加了一个毫不相干的 npm 包 `cn`。装完先看 `git diff package.json bun.lock`，
+> 有 `cn` 就回退这两个文件、删 `node_modules/cn`，再把导入改回 `@/lib/utils`。
 
 补装组件用 `bunx shadcn@latest add <name>`，**永远不要带 `--overwrite`** ——
 上表四项扩展会被一次性抹掉，而覆盖是静默的。CLI 对已存在且内容一致的文件会自己跳过。
@@ -857,12 +862,20 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 ## 交易中心（/commerce）
 
-五个页签同步到 URL（`?tab=overview|orders|refunds|wallet|vip`）：
+六个页签同步到 URL（`?tab=overview|orders|refunds|wallet|vip|wallet-config`）。
+`wallet-config` 是唯一的配置页签：钱包设置与充值档位只服务于钱包，放在流水旁边比放进应用「支付」更好找（契约见后端 docs/wallet.md）：
 
 | 文件 | 职责 |
 |---|---|
 | `(console)/commerce/page.tsx` | 页面骨架、应用与时间窗选择、Tab 路由 |
-| `components/commerce/commerce-overview-panel.tsx` | 概览：KPI + 趋势 + 三张分布图 + 凭证能力 |
+| `components/commerce/commerce-overview-panel.tsx` | 概览：只做取数、骨架与栅格装配（三行：资金流向 + 订单健康 / 交易趋势 / 钱包资金池 + 渠道与凭证） |
+| `components/commerce/overview/money-flow-card.tsx` | 资金流向：实收净额大数字、付费用户 / 客单价 / 退款率 / 待支付，已支付 → 退款 → 实收的瀑布图 |
+| `components/commerce/overview/order-health-card.tsx` | 订单健康：环图中心是支付成功率，状态按固定顺序列笔数与金额 |
+| `components/commerce/overview/trend-card.tsx` | 交易趋势：四个汇总格即切换器，进项朝上、出项朝下（`stackOffset="sign"`），净额虚线 |
+| `components/commerce/overview/wallet-pool-card.tsx` | 钱包资金池：待兑付余额（时点值）+ 按流水类型左出右进的双向条形 |
+| `components/commerce/overview/channel-card.tsx` | 支付渠道排行：柱尾写金额与占比；配置键用序号（渠道标识可能带点号，进不了 CSS 变量名） |
+| `components/commerce/overview/receipt-card.tsx` | 凭证能力：语言 / 默认语言 / 字体，缺中日韩字体时给 Alert |
+| `components/commerce/overview/overview-shared.tsx` | 金额提示框（读数据行上的 `<key>Raw` 原始字符串）、`ChartColorScope`（用 shadcn `ChartStyle` 让图外色点也能用 `--color-*`）、刷新转圈 |
 | `components/commerce/commerce-charts.tsx` | 图表外壳 `ChartCard` 与**配色目录**（资金 / 订单状态 / 流水类型 / 分类色轮） |
 | `components/commerce/commerce-range-picker.tsx` | 时间窗：预设 + 日历范围，对外只吐 `{start, end}` |
 | `components/commerce/wallet-transactions-panel.tsx` | 钱包流水台：筛选、凭证下载与寄送、调账入口 |
@@ -873,6 +886,10 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 | `components/commerce/receipt-email-dialog.tsx` | 凭证寄送弹窗（订单与流水共用，收件人一键填入） |
 | `components/commerce/vip-transactions-panel.tsx` | 会员开通记录 |
 | `components/commerce/commerce-format.tsx` | 金额 / 方向 / 类型徽标的**统一口径** |
+| `components/commerce/wallet-config-panel.tsx` | 钱包设置页签容器，按 `app:wallet:config` 判只读 |
+| `components/commerce/wallet-settings-section.tsx` | 充值开关与范围、兑换开关与额度、说明文字（兑换比例只读，在「交易设置」改） |
+| `components/commerce/wallet-packages-section.tsx` / `wallet-package-editor.tsx` / `wallet-package-sort-list.tsx` | 充值档位：列表与销售统计、编辑对话框、拖拽排序 |
+| `components/commerce/wallet-config-fields.tsx` | 钱包设置的小表单部件、金额校验、档位状态徽标 |
 | `components/payment/payment-orders-panel.tsx` | 订单台（原本写好却没有任何页面挂载） |
 | `components/payment/payment-refunds-panel.tsx` | 退款台（同上） |
 | `lib/api/commerce.ts` / `lib/commerce-hooks.ts` | 交易域 API 与 React Query hooks |
@@ -926,6 +943,10 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    给它统一贴一个币种符号就是在撒谎。钱包币种来自应用级 `walletCurrency`。
 5. **凭证 PDF 走 `fetch` 拿 blob 再触发下载**（`lib/api/commerce.ts` 的 `downloadPdf`）：
    两条管理端下载都是 **POST + Bearer**，裸 `<a href>` 发出的请求不带任何头，后端会 401。
+
+概览里的求和、客单价、退款率一律经 `commerce-format.tsx` 的 `toCents` / `sumMoney` / `divideMoney` / `moneyRatio`
+按「分」用 BigInt 算，只有喂给图表的坐标值才转 `number`；提示框显示的仍是原始字符串。
+换时间窗时概览沿用上一份数据（`placeholderData` 只在同一应用内生效，换应用不沿用），卡片右上角转圈。
 
 概览刻意用**一个**接口取齐订单 + 钱包 + 趋势 + 凭证能力（`/commerce/overview`）：
 这四段数据在页面上是一起呈现的，分开拉会出现「订单已刷新、退款还是上一个时间窗」
@@ -1127,7 +1148,14 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 
 | 文件 | 职责 |
 |---|---|
-| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 抽奖记录 / 运气控制 / 抽奖次数五个视图的切换，跨视图带活动与「待发放」筛选 |
+| `components/apps/lottery/app-lottery-panel.tsx` | 骨架 + 活动 / 统计 / 计算 / 抽奖记录 / 风控 / 运气控制 / 抽奖次数七个视图的切换，跨视图带活动与「待发放」筛选 |
+| `components/apps/lottery/compute/lottery-compute-panel.tsx` | 「计算」视图（已保存的活动）：精确分析（选人群、切人群）与推演（发起表单、任务列表、查看 / 取消 / 删除、结果） |
+| `components/apps/lottery/compute/lottery-compute-dialogs.tsx` | 活动编辑器底栏的三个弹窗（按未保存的编辑内容算）：分析、配平（目标 → 求解 → 「填入奖盘」）、推演 |
+| `components/apps/lottery/compute/lottery-exact-view.tsx` | 一种人群的精确分析：综合对公示、每抽价值与积分回报、每日运气三档、各奖品期望抽数 / 分位数 / 十连百连概率；积分账警告 |
+| `components/apps/lottery/compute/lottery-compute-runner.tsx` | 推演的发起表单（规模、人群构成与各自每天次数、会员档位、种子）与单个任务的进度 / 取消 / 结果 |
+| `components/apps/lottery/compute/lottery-compute-result.tsx` | 推演结果：带 95% 区间的指标、稳赚与否、人群表、奖品表（Wilson 区间、抽空、每日限量触顶）、按天与库存曲线、三张分布直方图 |
+| `components/apps/lottery/compute/lottery-compute-shared.tsx` | 人群预设、数字写法（概率沿用公示概率的取整）、任务状态徽标、小号指标块与药丸 |
+| `lib/api/lottery-compute.ts`、`lib/lottery-compute-hooks.ts` | 计算引擎的类型与请求；推演任务没结束时每秒轮询、结束即停 |
 | `components/apps/lottery/lottery-activities-panel.tsx` | 活动卡片：状态与形态、抽奖方式、奖品与公示概率、累计 / 今日 / 待发放；上线 / 暂停 / 结束、编辑、删除 |
 | `components/apps/lottery/lottery-activity-editor.tsx` | 活动编辑抽屉：基本信息与时间、三种次数与视频抽奖场景、奖盘、保底、规则；底部列出奖盘的待修正项 |
 | `components/apps/lottery/lottery-prize-board.tsx` | 奖盘：九宫格是 3×3 的盘（外圈顺时针 0–7 从左上角起，中心 GO），转盘是可增删、上下移的列表；右侧改选中的一格 |
@@ -1150,6 +1178,15 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
    发「抽奖次数」的激励广告场景都来自目录。场景归激励广告区块配置，这里只选；激励广告未开启或没有这类场景时如实提示。
 5. **前端校验只是提示**，保存时第一条问题 toast；后端的 40000 原因原样 toast。删除有记录的活动后端回 40927，
    toast 上给「结束活动」的快捷操作。控制台没有试抽入口：结果只在服务端产生，抽一次就是真的发了奖。
+
+计算引擎（docs/lottery.md「计算引擎」）的三条约定：
+
+1. **已保存的在「计算」视图算，未保存的在编辑器底栏算。** 两处用同一批组件；编辑器里的弹窗在打开时取一次编辑内容
+   （弹窗开着时底下的表单改不了），草稿分析的查询不留缓存。
+2. **配平不保存。** 求解接口只返回新权重，「填入奖盘」按位置写回草稿（位置即奖品在草稿里的下标），管理员保存才生效；
+   目标的概率在界面上填百分比、请求里是 0–1。
+3. **推演是落库的异步任务。** 发起后立刻返回，任务没结束时每秒轮询（进度由执行它的实例每 2 秒写一次库），结束即停；
+   规模上限与后端 `lottery.MaxCompute*` 同值写在 runner 里，超了先在前端拦住。区间、Wilson 范围一律按后端给的显示，前端不重算。
 
 旧版（报名、种子承诺 / 揭示、上链校验、`/api/lottery/*`）已整体删除，规则见 [docs/lottery.md](../docs/lottery.md)。
 
@@ -1177,6 +1214,20 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 4. **预演不发放**，与正式执行同一个判定函数；画布一改，旧的预演结果立即清掉。
 
 规则见 [docs/item-grant.md](../docs/item-grant.md)。
+
+## 站内信群发区块（/apps/{appKey}?tab=notification-campaigns）
+
+| 文件 | 职责 |
+|---|---|
+| `components/apps/notification-campaign/app-notification-campaign-panel.tsx` | 任务列表（状态筛选、进度、有未结束任务时每 2 秒轮询）、发起入口、详情抽屉 |
+| `components/apps/notification-campaign/campaign-editor.tsx` | 发起：人群、内容、定时、实时预览（400ms 防抖）、确认（全站要输入「全站发送」） |
+| `components/apps/notification-campaign/campaign-audience.tsx` | 预设、一键全站 / 指定用户 / 条件筛选、账号状态、排除名单、人数上限；预览卡 |
+| `components/apps/notification-campaign/campaign-detail.tsx` | 统计（含已读率）、内容、人群；取消与撤回各一步确认，「查看已发消息」跳审计区块按 campaignId 筛 |
+| `components/apps/notification-campaign/campaign-shared.tsx` | 状态徽标、进度、人群草稿与校验（同后端 NormalizeAudience）、幂等键 |
+| `components/notifications/notification-content-fields.tsx` | 站内信内容字段与校验，用户列表「发通知」与群发编辑器共用 |
+| `lib/api/notification-campaigns.ts` / `lib/notification-campaign-hooks.ts` | 群发任务 API（类型对应 Go `notification.Campaign`）与 hooks |
+
+每打开一次编辑器换 key 重新挂载，生成新的 `requestId`，重复提交返回同一个任务。规则见 [docs/notification-center.md](../docs/notification-center.md)「群发任务」。
 
 ## AI 通道编辑（/apps/{appKey}?tab=ai 与 /configuration?tab=ai）
 
@@ -1402,31 +1453,85 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 只有后者说明素材有问题。点击数依赖客户端调 `POST /api/v1/apps/{appKey}/banners/{id}/click`
 上报，官方 SDK 是 `content.reportBannerClick()`。
 
-## 工单中心（/tickets）
+## 服务台：工单中心（/tickets）与意见反馈（/feedback）
 
-一屏承载服务台与通知出口，Tab 同步到 URL（`?tab=inbox|mine|analytics|settings|notify`）：
+反馈就是 `kind=feedback` 的工单，接口与 hooks 全部复用工单那套（`lib/api/tickets.ts`、`lib/ticket-hooks.ts`）。
+两页共用同一套服务台组件 `components/service-desk/`，差别只在 `DeskProvider` 给的 kind
+（名词「工单 / 反馈」、对方称呼「提单人 / 反馈人」、深链落点由 `desk-context.tsx` 决定，组件里不写死）。
+
+页签（`?tab=`，工作台是默认值不写进地址栏）：工单中心 = 工作台 / 统计分析 `analytics` / 工单配置 `settings` / 通知出口 `notify`；
+意见反馈 = 反馈台 / 统计分析，「分类与快捷回复」直接跳 `/tickets?tab=settings`。旧书签 `?tab=inbox|mine` 落到工作台。
+
+工作台四栏：**应用栏 | 收件箱 | 会话 | 资料栏**。
 
 | 文件 | 职责 |
 |---|---|
-| `(console)/tickets/page.tsx` | 页面骨架、指标卡、工单台列表与筛选、新建工单 |
-| `components/tickets/ticket-detail-sheet.tsx` | 详情抽屉：会话 / 时间线 / 属性 / 底部操作条 |
-| `components/tickets/ticket-settings-panel.tsx` | 分类 / 处理组（含成员授权）/ SLA / 快捷回复 |
-| `components/tickets/notify-center-panel.tsx` | 渠道 / 事件订阅 / 模板 / 投递记录 |
-| `components/tickets/ticket-shared.tsx` | 状态与优先级徽标、相对时间 / 时长 / 到期格式化 |
-| `lib/ticket-hooks.ts` | 工单 + 通知出口的全部 React Query hooks |
+| `(console)/tickets/page.tsx`、`(console)/feedback/page.tsx` | 只挂 `NuqsAdapter`、边界与页签清单 |
+| `service-desk/desk-page.tsx` | 页面外壳：标题、页签胶囊、快捷键、「新建」；工作台页签锁满屏高度 |
+| `service-desk/desk-context.tsx` | `DeskProvider` / `useDesk()` / `deskLink()` |
+| `service-desk/desk-state.ts` | 地址栏状态（nuqs）与「状态 → 列表接口参数」 |
+| `service-desk/desk-workspace.tsx` | 装配：四栏、快捷键、资料栏并排 / 浮层切换、应用栏收起 |
+| `service-desk/desk-app-rail.tsx` | 应用栏、窄屏应用切换器、`AppMark`（应用首字色块）、`useDeskApps()` |
+| `service-desk/desk-inbox.tsx` | 收件箱：视图页签、筛选菜单（cmdk）、虚拟列表行（勾选、应用标记、时限、受理人） |
+| `service-desk/desk-inbox-head.tsx` | 搜索框、排序、批量操作条（指派给我 / 状态 / 优先级 / 关闭 / 删除） |
+| `service-desk/desk-thread.tsx` | 页头（人 → 标题 → 属性胶囊）与会话流 |
+| `service-desk/desk-composer.tsx` | 回复框（Tiptap，产出 Markdown） |
+| `service-desk/desk-context-panel.tsx` | 资料栏：「用户」资料卡与「详情」（受理人与处理组、时效、标签、关注人、附件、操作记录） |
+| `service-desk/desk-inspector.tsx` | 详情里的部件：`HandlingFields`（受理人 / 处理组 / 按组策略分派）、`SlaMeter`、`TagEditor`、`Watchers`、`Timeline` |
+| `service-desk/desk-overview.tsx` | 没选中时的概览（按应用卡片、关键数字、优先级与分类）、快捷键清单 |
+| `service-desk/desk-action-menu.tsx` | 操作菜单（cmdk），页头「⋯」与快捷键 `.` 共用 |
+| `service-desk/use-desk-actions.ts` | 对一条的全部写操作，胶囊 / 菜单 / 快捷键三处入口共用 |
+| `service-desk/desk-create-dialog.tsx` | 新建（应用按「我创建的 → 其他 → 平台内部」分组，分类按 kind 过滤） |
+| `service-desk/desk-kit.tsx` | `PropertyMenu`（属性胶囊）、`Facts`/`Fact`、分类色点 |
+| `tickets/ticket-analytics.tsx` | 统计分析（两页共用，`kind` 必传；趋势与处理人绩效也按 kind 分开） |
+| `tickets/ticket-settings-panel.tsx` + `tickets/settings/` | 工单配置：配置范围（`?scope=`，我创建的应用在前）+ 分类 / 处理组 / SLA / 快捷回复（`?section=`） |
+| `tickets/notify-center-panel.tsx` + `tickets/notify/` | 通知出口：投递健康 + 渠道 / 订阅矩阵 / 模板 / 投递记录（`?section=`） |
+| `tickets/ticket-shared.tsx` | 状态与优先级标记、时间 / 时长 / 到期格式化、`PersonAvatar`、`copyText` |
+| `tickets/ticket-attachments.tsx` | 附件：图片走 `ImageGrid`（查看器），其余为下载条 |
 
-三条硬约束：
+**按应用区分**：`GET /api/admin/tickets/apps?kind=` 返回可见范围内每个应用的计数（`TicketAppSummary`：未结 / 待受理 / 未指派 / 超时 / 我受理 / 今日 / 最近更新，`owned` = `apps.created_by` 是我）。
+后端已排好序：**我创建的应用在前**，其次未结多的、最近有动静的；我创建但还没有任何一条的应用也列出（计数为 0）。
+列表接口配套两个参数：`owned=true` 只看我创建的应用，`ownedFirst=true` 我创建的应用排前面（不改范围只改顺序）。
+工作台不选应用时默认带 `ownedFirst`；应用栏里「我创建的应用」一项对应 `?own=true`。
 
-1. **按钮显隐一律读后端返回的 `permissions`（ActionSet），不要在前端按角色推断**。
-   「组成员能回复自己名下的工单但不能删除」这类规则只在服务端实现一次，
-   前端自己算必然与后端漂移，用户会遇到"点了才 403"。
-2. **详情打开状态由 URL 单一驱动**（`?id=`），不要用 `useEffect` 把 query 同步进本地 state
-   —— 那既触发 `react-hooks/set-state-in-effect`，也会让飞书卡片深链与页面内点击走两条路径。
-3. **导航项不挂 `permission`**：工单可见范围由后端按「权限点 + 应用作用域 + 处理组归属」推导，
-   仅仅是处理组成员的管理员没有任何 `ticket:*` 权限点，但必须能看到入口。
+九条硬约束：
 
-渠道配置表单由 `/api/admin/notify/catalog` 返回的元数据动态渲染，
-后端新增一种 IM 时前端零改动 —— 不要把渠道字段硬编码回组件里。
+1. **页面状态全在地址栏**（`id` / `view` / `q` / `sort` / `app` / `own` / `category` / `priority` / `assignee` / `tab`）。
+   不要再加本地 state 存筛选：刷新会丢，链接发给同事对不上，站内信与飞书卡片的 `?id=` 深链也会和页面内点击走成两条路径。
+   默认值不写进地址栏（`clearOnDefault`），更新用 `replace`。`app` 与统计分析页签共用：工作台选了哪个应用，统计里看到的也是它。
+2. **「待处理」「已超时」视图显式传未结状态。** 后端不传 `status` 时只排除已关闭与已撤销，已解决的会混进来，列表条数就和页签计数对不上。
+   「已超时」的计数取应用汇总的 `overdue`：统计接口的首响超时与解决超时会把同一条算两次。
+3. **按钮显隐一律读后端返回的 `permissions`（ActionSet），不要在前端按角色推断**。批量操作逐条按各自权限走，部分失败时提示失败条数与原因。
+4. **头像与正文摘要由列表接口直接带出**（`requesterAvatar` / `assigneeAvatar` / `preview`，详情里还有每条消息的 `authorAvatar`）。不要逐行调用户接口。
+5. **提单人资料走 `GET /api/admin/tickets/:id/requester`，不走 `/apps/:appkey/users/:userId`。**
+   处理组成员可能只凭「被指派」看得到这一条，却没有该应用的用户查看权限：`user` / `lastLogin` 只在 `canViewUser` 为真时下发。
+6. **回复框发出去的是 Markdown，不是 HTML。** `editor.getMarkdown()` 取值，`contentType: "markdown"` 提交；下划线在 StarterKit 里关掉了，不要加回来。
+   编辑器的按键 / 粘贴回调只在创建时绑定一次，最新状态经 `live` ref 递进去；占位文字经 `ReplyHint` 扩展的 `setReplyHint` 命令更新。
+7. **属性改动一处实现。** 状态、分类、优先级、受理人、处理组、锁定、删除都在 `use-desk-actions.ts`；新增入口调它，不要在组件里再写一遍 mutation 与提示文案。
+8. **资料栏并排 / 浮层靠量详情区宽度决定**（`WIDE_DETAIL`），不是视口断点；应用栏只在 ≥ 1280 常驻，更窄时收件箱顶部出应用切换器。
+9. **导航项不挂 `permission`**：可见范围由后端按「权限点 + 应用作用域 + 处理组归属」推导，仅仅是处理组成员的管理员也必须能看到入口。
+   渠道配置表单由 `/api/admin/notify/catalog` 元数据动态渲染，不要把渠道字段硬编码回组件里。
+
+通知深链：后端 `ticketConsoleLink` 按 kind 拼 `/feedback?id=` 或 `/tickets?id=`。
+
+快捷键：`J`/`K` 上下一条，`/` 搜索，`R` 回复，`N` 备注，`E` 解决，`A` 指派给我，`X` 勾选当前，`I` 资料栏，`.` 操作菜单，
+`Ctrl/⌘ + Enter` 发送，空回复框里敲 `/` 出快捷回复；列表里 `Shift/Ctrl + 点击` 多选，`Esc` 取消勾选。
+
+## 图片查看器（components/ui/image-lightbox.tsx）
+
+底座是 react-photo-view（从缩略图原位放大展开、手势缩放拖动、下拉关闭、旋转），其余全部在 `overlayRender` 里自己画：
+顶栏（序号、文件名、原始尺寸与大小）、工具条（缩放与还原、左右旋转、轮播、复制图片、下载、新窗口、图片信息、全屏、关闭）、
+左右切换、底部缩略图条、轮播进度条；加载是双环转圈，失败给「新窗口打开」。样式在 `globals.css` 的 `.aegis-photo` 一节。
+
+三种用法：`<LightboxOverlay open slides index onClose />`（受控，头像 / 存储文件用）、`<ImageGrid images max />`（缩略图网格，工单附件用）、
+`<ImageLightbox src alt />`（带棋盘格底的单图卡片，品牌设置用）。`slides[].origin` 给一个 ref 就能原位展开。
+
+1. **键盘在 window 捕获阶段自己接，处理过的键 `stopPropagation`。** 查看器常从 Radix 抽屉 / 弹窗里打开，不抢在前面的话 Esc 会连同底下的抽屉一起关掉。
+2. **根节点要 `pointer-events: auto`**（`.aegis-photo`）：Radix 模态打开时给 body 加了 `pointer-events: none`，挂在 body 下的查看器会点不动。
+3. **查看器里禁止 `scrollIntoView`，根节点必须 `overflow: clip`。** `scrollIntoView` 会连带滚动所有可滚祖先，库的根节点 `overflow: hidden` 照样能被脚本滚，
+   一滚整个查看器偏到一侧、另一侧露出底下的页面（2026-11-24 胶片条切图时出过）。胶片条自己算 `scrollTo({ left })`；`.aegis-photo` 已改 `overflow: clip` 兜底。
+4. 版面：顶栏左侧序号 + 文件名 + 尺寸大小、右侧只有关闭；工具全部在底部居中的工具坞（缩放、旋转、轮播、复制、下载、新窗口、信息、全屏），胶片条在工具坞上方。
+5. 复制图片只稳定支持 PNG，其余格式先画到画布上再转；浏览器不允许时退回复制地址。下载先 fetch 成 Blob，跨域或链接失效退回新窗口。
 
 ## 管理员与权限（/users）
 
@@ -1458,50 +1563,6 @@ Excel 导出走 `fetch` 拿 blob 再触发下载：令牌只在 Authorization �
 4. 编辑器只和细分代码打交道：载入时把通配 / 旧代码展开（`expandPatterns`），保存时提交细分代码。
    内置角色的代码定义经 `locked` 锁定，额外允许与禁止写进 override。
 5. 角色列表走 `/api/admin/profile/roles`（任意已登录管理员可读）：授权编辑者不必另持「角色权限：查看」。
-
-## 意见反馈（/feedback）
-
-反馈就是 `kind=feedback` 的工单，接口与 hooks 全部复用工单那套（`lib/api/tickets.ts`、`lib/ticket-hooks.ts`），
-界面是独立的一套「反馈台」：左边收件箱、中间会话、右边反馈人资料。工单中心仍用 `components/tickets/workspace/`。
-
-| 文件 | 职责 |
-|---|---|
-| `(console)/feedback/page.tsx` | 只挂 `NuqsAdapter` 与边界 |
-| `components/feedback/feedback-workspace.tsx` | 装配：三栏、快捷键、资料面板的并排 / 浮层切换 |
-| `components/feedback/feedback-state.ts` | 地址栏状态（nuqs）与「状态 → 列表接口参数」 |
-| `components/feedback/feedback-inbox.tsx` | 收件箱：搜索、视图页签、筛选菜单（cmdk）、虚拟列表行 |
-| `components/feedback/feedback-thread.tsx` | 页头（人 → 标题 → 属性胶囊）与会话流 |
-| `components/feedback/feedback-composer.tsx` | 回复框（Tiptap，产出 Markdown） |
-| `components/feedback/feedback-context-panel.tsx` | 右栏：「用户」资料卡与「详情」（时效、标签、关注人、附件、操作记录） |
-| `components/feedback/feedback-action-menu.tsx` | 操作菜单（cmdk），页头「⋯」与快捷键 `.` 共用 |
-| `components/feedback/feedback-overview.tsx` | 页头一行摘要、没选中时的概览、快捷键清单 |
-| `components/feedback/use-feedback-actions.ts` | 对一条反馈的全部写操作，胶囊 / 菜单 / 快捷键三处入口共用 |
-| `components/feedback/feedback-kit.tsx` | `PropertyMenu`（属性胶囊）、`Facts`/`Fact`、分类色点 |
-
-七条硬约束：
-
-1. **页面状态全在地址栏**（`id` / `view` / `q` / `sort` / `app` / `category` / `priority` / `assignee`）。
-   不要再加本地 state 存筛选：刷新会丢，链接发给同事对不上，站内信的 `/feedback?id=` 深链也会和页面内点击走成两条路径。
-   默认值不写进地址栏（`clearOnDefault`），更新用 `replace`，不占历史记录。
-2. **「待处理」视图显式传四个未结状态。** 后端不传 `status` 时只排除已关闭与已撤销，已解决的会混进来，
-   列表条数就和页签上的计数对不上（旧版的「未结单 127」对着「共 134 条」就是这么来的）。
-3. **头像与正文摘要由列表接口直接带出**（`requesterAvatar` / `assigneeAvatar` / `preview`，详情里还有每条消息的
-   `authorAvatar`）。不要为了头像逐行去调用户接口。头像地址恒可用：没传头像时是按账号生成的默认图。
-4. **反馈人资料走 `GET /api/admin/tickets/:id/requester`，不走 `/apps/:appkey/users/:userId`。**
-   处理组成员可能只凭「被指派」看得到这条反馈，却没有该应用的用户查看权限：前者按「能看到这条工单」放行，
-   返回里的 `user` / `lastLogin`（邮箱、手机号、登录地址）只在 `canViewUser` 为真时下发。
-   界面按 `canViewUser` 与 `removed` 分情况展示，不要自己拿角色推断。
-5. **回复框发出去的是 Markdown，不是 HTML。** `editor.getMarkdown()` 取值，`contentType: "markdown"` 提交；
-   App 端按 Markdown 渲染客服回复。下划线没有对应的 Markdown 写法，所以在 StarterKit 里关掉了，不要加回来。
-   编辑器的按键 / 粘贴回调只在创建时绑定一次，最新状态经 `live` ref 递进去；占位文字经 `ReplyHint` 扩展的
-   `setReplyHint` 命令更新（直接改 `editor.storage` 过不了 `react-hooks/immutability`）。
-6. **属性改动一处实现。** 状态、分类、优先级、受理人、锁定、删除都在 `use-feedback-actions.ts`；
-   新增入口（比如再加一个快捷键）调它，不要在组件里再写一遍 mutation 与提示文案。
-7. **资料面板的并排 / 浮层靠量详情区宽度决定**（`WIDE_DETAIL`），不是视口断点：
-   列表栏可拖宽，侧边栏可折叠，同一个视口宽度下详情区可以差出三四百像素。
-
-快捷键：`J`/`K` 上下一条，`/` 搜索，`R` 回复，`N` 备注，`E` 解决，`A` 指派给我，`I` 资料面板，`.` 操作菜单，
-`Ctrl/⌘ + Enter` 发送，空回复框里敲 `/` 出快捷回复。
 
 ## 应用用户详情（/users/app-users/[appKey]/[userId]）
 
@@ -1629,7 +1690,7 @@ OpenTopoMap / MapTiler✱ / Stadia✱）、**中国大陆**（高德 / 高德卫
 
 ## 远程函数（/functions）
 
-三个页签同步到 URL（`?tab=functions|kv|keys`）：
+四个页签同步到 URL（`?tab=overview|functions|kv|keys`），默认落在 `overview`（应用全景）。全景里点函数 / 点错误带 `fn`、`panel`、`inv` 跳到工作台，`FunctionManager` 按这几个参数挂载一次初始定位（key 带上它们）：
 
 | 文件 | 职责 |
 |---|---|
@@ -1637,12 +1698,16 @@ OpenTopoMap / MapTiler✱ / Stadia✱）、**中国大陆**（高德 / 高德卫
 | `components/functions/function-manager.tsx` | 左侧函数列表（可折叠 / 可搜索）+ 四个面板的装配 |
 | `components/ui/resizable.tsx` | 可拖拽分栏与布局记忆（`usePanelLayout`），本页全部分隔线都出自这里 |
 | `components/functions/function-create-dialog.tsx` | 新建：运行时 / 起始模板 / 能力 |
+| `components/functions/function-app-overview.tsx` | 应用全景（`/function-overview`）：指标条、按小时成败柱图、调用来源环图、系统覆盖（按后端能力分组，格内小方块即能力）、最近错误（点了直达调用详情）、函数健康表（火花线、快捷入口） |
 | `components/functions/function-overview-panel.tsx` | 运行状况：成功率 / 耗时分位 / 趋势 / Top 错误 |
 | `components/functions/function-editor-panel.tsx` | 脚本工作台：写 → 检查 → 试跑 → 发布 → 回滚 |
-| `components/functions/function-invocations-panel.tsx` | 调用审计（筛选 + 分页 + 详情抽屉）与真实调用 |
+| `components/functions/function-invocations-panel.tsx` | 调用审计（状态 / 来源 / 调用方 / 触发器 / 调用方 ID / eventId 筛选）、详情抽屉（入参、返回值、副作用时间线、日志、额度、重放）、真实调用弹窗（可代用户） |
+| `components/functions/function-triggers-panel.tsx` | 触发器卡片（启用开关、下次执行、累计 / 失败、立即触发）与触发任务队列（状态筛选、重试） |
+| `components/functions/function-trigger-dialogs.tsx` | 触发器编辑（事件按后端分组 + ctx.trigger.data 字段表 / cron 预设 + 时区 + 下几次预览 / 固定入参）、立即触发（真实执行，事件需选用户） |
+| `components/functions/function-cron.ts` | cron 人话描述与下几次执行预览（语法同 robfig/cron v3，**只做预览**，nextRunAt 以后端为准） |
 | `components/functions/function-settings-panel.tsx` | 能力、运行闸门、函数配置、删除 |
 | `components/functions/function-kv-panel.tsx` | KV 浏览器（脚本的服务端独占状态） |
-| `components/functions/function-shared.tsx` | 能力勾选树、风险徽标、副作用清单、格式化 |
+| `components/functions/function-shared.tsx` | 能力勾选器（按 `catalog.groups` 分节、搜索、读写 / 风险过滤、组内全选、选中汇总）、来源 / 调用方 / 状态口径、日志、额度、副作用、格式化 |
 | `components/functions/script-editor.tsx` | Monaco：SDK 类型 + 诊断标记 + 差异视图 + 快捷键 |
 | `components/functions/json-editor.tsx` | 带 JSON Schema 的 JSON 编辑器（试跑 input / 函数配置 / 入参契约共用） |
 | `lib/monaco/aegis-language.ts` | 平台语义的 provider：悬浮 / 配置补全 / 快速修复 / Code Lens |

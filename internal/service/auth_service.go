@@ -664,7 +664,7 @@ func (s *AuthService) registerWithPasswordOnce(ctx context.Context, app *appdoma
 	s.syncAdminUserSearch(input.AppID, user.ID)
 	s.sendWelcomeMail(input.AppID, input.Account, registerEmail, input.Nickname)
 	if input.SuppressSession {
-		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account}, nil
+		return &authdomain.LoginResult{UserID: user.ID, PublicUserID: user.PublicID, Number: user.Number, Account: user.Account}, nil
 	}
 	// 新建用户必然未被封禁/禁用，无需 ensureUserLoginState；首次设备已以 register 场景同步写入
 	return s.completeLogin(ctx, app, user, "password", "password", input.DeviceID, input.Device, input.IP, input.UserAgent)
@@ -1438,7 +1438,7 @@ func (s *AuthService) issueSessionChecked(ctx context.Context, app *appdomain.Ap
 		if challenge != nil {
 			// 不签发令牌：客户端凭 ticket 让用户选好要下线的设备，再调 /auth/device-limit/resolve
 			return &authdomain.LoginResult{
-				UserID: user.ID, PublicUserID: user.PublicID, Account: user.Account, Provider: provider,
+				UserID: user.ID, PublicUserID: user.PublicID, Number: user.Number, Account: user.Account, Provider: provider,
 				AuthenticationState: AuthStateDeviceLimitRequired, DeviceLimit: challenge,
 			}, nil
 		}
@@ -1661,6 +1661,7 @@ func (s *AuthService) issueSessionBundle(ctx context.Context, app *appdomain.App
 			TokenType:              "Bearer",
 			UserID:                 user.ID,
 			PublicUserID:           user.PublicID,
+			Number:                 user.Number,
 			Account:                user.Account,
 			Provider:               provider,
 			PasswordChangeRequired: passwordChangeRequired,
@@ -2037,7 +2038,10 @@ func (s *AuthService) resolveLoginCandidates(ctx context.Context, appID int64, i
 	if err != nil {
 		return nil, err
 	}
-	if user != nil {
+	// 像号码的纯数字不在账号名命中时就收手：老系统导入的账号可能是纯数字，与别人的号码、手机号撞上时
+	// 几类候选合在一起由密码决定（docs/user-number.md）
+	numberLike := isUserNumberText(identifier)
+	if user != nil && !numberLike {
 		return []*userdomain.User{user}, nil
 	}
 	identifiers, err := s.loginIdentifiers(ctx, appID)
@@ -2045,6 +2049,9 @@ func (s *AuthService) resolveLoginCandidates(ctx context.Context, appID int64, i
 		return nil, err
 	}
 	var ids []int64
+	if user != nil {
+		ids = append(ids, user.ID)
+	}
 	switch {
 	case strings.Contains(identifier, "@"):
 		if slices.Contains(identifiers, "email") {
@@ -2059,9 +2066,23 @@ func (s *AuthService) resolveLoginCandidates(ctx context.Context, appID int64, i
 				ids = []int64{id}
 			}
 		}
-	case looksLikePhone(identifier):
-		if slices.Contains(identifiers, "phone") {
-			ids, err = s.pg.ListUserIDsByProfilePhone(ctx, appID, normalizePhone(identifier), loginCandidateLimit)
+	default:
+		// 号码按应用唯一：只在本应用里找（别的应用里同一个号是另一个人）
+		if numberLike && (slices.Contains(identifiers, "number") || slices.Contains(identifiers, "id")) {
+			number, _ := strconv.ParseInt(identifier, 10, 64)
+			var id int64
+			if id, err = s.pg.FindUserIDByNumber(ctx, appID, number); err == nil && id > 0 && !slices.Contains(ids, id) {
+				ids = append(ids, id)
+			}
+		}
+		if err == nil && looksLikePhone(identifier) && slices.Contains(identifiers, "phone") {
+			var phoneIDs []int64
+			phoneIDs, err = s.pg.ListUserIDsByProfilePhone(ctx, appID, normalizePhone(identifier), loginCandidateLimit)
+			for _, id := range phoneIDs {
+				if !slices.Contains(ids, id) {
+					ids = append(ids, id)
+				}
+			}
 		}
 	}
 	if err != nil || len(ids) == 0 {
@@ -2092,7 +2113,20 @@ func (s *AuthService) loginIdentifiers(ctx context.Context, appID int64) ([]stri
 	return policy.Identifiers, nil
 }
 
-// isPublicUserIDText 16 位对外用户 ID 的文本形式（[10^15, 2^53−1]，见 docs/user-public-id.md）。
+// isUserNumberText 号码的文本形式：5–12 位、不以 0 开头的纯数字（docs/user-number.md）。
+func isUserNumberText(value string) bool {
+	if len(value) < 5 || len(value) > 12 || value[0] == '0' {
+		return false
+	}
+	for _, r := range value {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// isPublicUserIDText 16 位对外用户 ID 的文本形式// isPublicUserIDText 16 位对外用户 ID 的文本形式（[10^15, 2^53−1]，见 docs/user-public-id.md）。
 func isPublicUserIDText(value string) bool {
 	if len(value) != 16 {
 		return false

@@ -78,18 +78,34 @@ const (
 const (
 	FulfillmentNone = "none" // 未履约（或无需履约的普通商品订单）
 	FulfillmentDone = "done" // 已履约
+	// FulfillmentManual 管理员确认已在别处补发（手工开会员、调余额、物品发放规则……），平台不再发放
+	FulfillmentManual = "manual"
+)
+
+// 订单的履约状况（Order.FulfillmentState，由服务层按订单推导，不落库）
+const (
+	// FulfillmentStateNotRequired 不需要履约：还没付款，或普通商品订单
+	FulfillmentStateNotRequired = "not_required"
+	// FulfillmentStatePending 付了款、写清了用途、还没发放（后台每 2 分钟重试）
+	FulfillmentStatePending = "pending"
+	// FulfillmentStateUnrecognized 付了款、看得出要发东西，但下单时没写规范的用途（老客户端），需要管理员确认
+	FulfillmentStateUnrecognized = "unrecognized"
+	// FulfillmentStateDone 已自动发放
+	FulfillmentStateDone = "done"
+	// FulfillmentStateManual 管理员确认已在别处补发
+	FulfillmentStateManual = "manual"
 )
 
 // metadata 中的字段键
 const (
-	MetaKeyPurpose        = "purpose"
-	MetaKeyVipPlanID      = "vipPlanId"
-	MetaKeyVipPlanName    = "vipPlanName"
-	MetaKeyVipDays = "vipDurationDays"
-	MetaKeyVipBonus       = "vipBonusIntegral"
+	MetaKeyPurpose     = "purpose"
+	MetaKeyVipPlanID   = "vipPlanId"
+	MetaKeyVipPlanName = "vipPlanName"
+	MetaKeyVipDays     = "vipDurationDays"
+	MetaKeyVipBonus    = "vipBonusIntegral"
 	// MetaKeyVipLifetime 下单那一刻套餐是不是永久套餐（此时 vipDurationDays 为 0）。
 	// 与天数一样是快照：用户付的是「永久」这份钱，下单后套餐怎么改都不影响这一单。
-	MetaKeyVipLifetime    = "vipLifetime"
+	MetaKeyVipLifetime = "vipLifetime"
 	// MetaKeyVipFeatures 下单那一刻套餐包含的功能标识。
 	//
 	// 天数与价格是快照（用户付的就是下单时看到的那一份），功能**不是**：
@@ -97,6 +113,11 @@ const (
 	// 只在下单之后套餐被删除的那种订单上才会被用到。
 	MetaKeyVipFeatures    = "vipFeatures"
 	MetaKeyIntegralAmount = "integralAmount"
+	// 充值档位快照（wallet_recharge）：下单时由服务端按档位固化，客户端传入的同名键一律被覆盖或删除。
+	MetaKeyWalletPackageID     = "walletPackageId"
+	MetaKeyWalletPackageTitle  = "walletPackageTitle"
+	MetaKeyWalletBonus         = "walletBonus"
+	MetaKeyWalletBonusIntegral = "walletBonusIntegral"
 )
 
 // FulfillmentInstruction 履约指令：服务层从订单 metadata 快照解析而来，
@@ -111,6 +132,11 @@ type FulfillmentInstruction struct {
 	VipLifetime    bool // 永久开通：VipDays 为 0
 	VipBonus       int64
 	IntegralAmount int64 // integral_purchase：发放积分
+	// wallet_recharge 按档位充值时的附赠（快照）：赠送余额与赠送积分
+	WalletPackageID     int64
+	WalletPackageTitle  string
+	WalletBonus         decimal.Decimal
+	WalletBonusIntegral int64
 }
 
 // ── 提供商元数据 ──
@@ -549,28 +575,35 @@ type Order struct {
 	Amount          decimal.Decimal `json:"amount"`
 	// Currency ISO 4217 币种，下单时按渠道配置固化。历史订单为空串，
 	// 开凭证时按渠道推断 —— 配置随时会改，已发生的交易不能跟着改。
-	Currency      string `json:"currency,omitempty"`
-	PaymentMethod string `json:"payment_method"`
-	ProviderType    string          `json:"provider_type"`
-	Status          string          `json:"status"`
-	NotifyStatus    string          `json:"notify_status"`
-	ClientIP        string          `json:"client_ip,omitempty"`
-	NotifyURL       string          `json:"notify_url,omitempty"`
-	ReturnURL       string          `json:"return_url,omitempty"`
-	Metadata        map[string]any  `json:"metadata,omitempty"`
-	RawCallback     map[string]any  `json:"raw_callback,omitempty"`
-	RefundedAmount  decimal.Decimal `json:"refunded_amount"`
-	RefundStatus    string          `json:"refund_status"`
-	PaidAt          *time.Time      `json:"paid_at,omitempty"`
-	ExpireAt        *time.Time      `json:"expire_at,omitempty"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	Currency       string          `json:"currency,omitempty"`
+	PaymentMethod  string          `json:"payment_method"`
+	ProviderType   string          `json:"provider_type"`
+	Status         string          `json:"status"`
+	NotifyStatus   string          `json:"notify_status"`
+	ClientIP       string          `json:"client_ip,omitempty"`
+	NotifyURL      string          `json:"notify_url,omitempty"`
+	ReturnURL      string          `json:"return_url,omitempty"`
+	Metadata       map[string]any  `json:"metadata,omitempty"`
+	RawCallback    map[string]any  `json:"raw_callback,omitempty"`
+	RefundedAmount decimal.Decimal `json:"refunded_amount"`
+	RefundStatus   string          `json:"refund_status"`
+	PaidAt         *time.Time      `json:"paid_at,omitempty"`
+	ExpireAt       *time.Time      `json:"expire_at,omitempty"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 	// PaidAmount 渠道报的实付金额（结单或标记待人工处理时记下）；与 Amount 不同时就是多付或少付
 	PaidAmount *decimal.Decimal `json:"paid_amount,omitempty"`
 	// ReviewReason 需要人工处理的原因（ReviewAmountMismatch）；有值的订单不再自动查单补单
 	ReviewReason string     `json:"review_reason,omitempty"`
 	ReviewNote   string     `json:"review_note,omitempty"`
 	ReviewAt     *time.Time `json:"review_at,omitempty"`
+	// FulfillmentStatus 落库的履约状态：none / done / manual
+	FulfillmentStatus string     `json:"fulfillment_status"`
+	FulfilledAt       *time.Time `json:"fulfilled_at,omitempty"`
+	// Purpose 规范化后的订单用途（下单写清的，或从老订单推断的）；普通商品订单为空
+	Purpose string `json:"purpose,omitempty"`
+	// FulfillmentState 履约状况（FulfillmentState* 之一），由服务层推导
+	FulfillmentState string `json:"fulfillment_state,omitempty"`
 }
 
 // ReviewAmountMismatch 待人工处理的原因：实付少于订单金额，或者不允许改金额的渠道金额对不上。
@@ -578,6 +611,9 @@ const ReviewAmountMismatch = "amount_mismatch"
 
 // OrderFilterReview 管理端订单列表的筛选值（status=review）：只看待人工处理的订单。
 const OrderFilterReview = "review"
+
+// OrderFilterUnfulfilled 管理端订单列表的筛选值（status=unfulfilled）：已付款、看得出要发东西、还没发的订单。
+const OrderFilterUnfulfilled = "unfulfilled"
 
 // ReturnView 同步跳转结果页能看到的订单信息。
 //

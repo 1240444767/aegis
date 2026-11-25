@@ -344,6 +344,10 @@ func permissionTree() []PermissionNode {
 				act("app:listen:read", "查看", LegacyAppRead, routes(under(mRead, pApp+"/listen-together"))),
 				act("app:listen:manage", "关闭房间与踢人", LegacyAppWrite, routes(under(mWrite, pApp+"/listen-together"))),
 			),
+			menu("app.music", "音乐推荐", "list-music", ScopeAppOnly,
+				act("app:music:read", "查看", LegacyAppRead, routes(under(mRead, pApp+"/music"))),
+				act("app:music:manage", "训练、发布与配置", LegacyAppWrite, routes(under(mWrite, pApp+"/music"))),
+			),
 			menu("service.user_setting", "用户设置", "sliders-horizontal", ScopePlatform,
 				act(PermSystemUserSettingRead, "查看", PermSystemUserSettingRead, routes(
 					rt(mAny, pAdmin+"/user-settings/stats"), rt(mAny, pAdmin+"/user-settings/user"),
@@ -446,13 +450,20 @@ func permissionTree() []PermissionNode {
 				)...,
 			),
 			menu("app.lottery", "抽奖", "dices", ScopeAppOnly,
-				appStd("app:lottery", "/lottery", true,
-					act("app:lottery:fortune", "运势调控", LegacyAppWrite, routes(
-						under(mWrite, pApp+"/lottery/activities/:activityId/fortune"),
-					), danger()),
-					act("app:lottery:fulfill", "奖品发放", LegacyAppWrite, routes(rt(mPost, pApp+"/lottery/draws/:drawId/fulfill"))),
-					act("app:lottery:ticket", "调整抽奖次数", LegacyAppWrite, routes(rt(mPost, pApp+"/lottery/tickets/users/:userId/adjust")), danger()),
-				)...,
+				act("app:lottery:fortune", "运势调控", LegacyAppWrite, routes(
+					under(mWrite, pApp+"/lottery/activities/:activityId/fortune"),
+				), danger()),
+				act("app:lottery:fulfill", "奖品发放", LegacyAppWrite, routes(rt(mPost, pApp+"/lottery/draws/:drawId/fulfill"))),
+				act("app:lottery:ticket", "调整抽奖次数", LegacyAppWrite, routes(rt(mPost, pApp+"/lottery/tickets/users/:userId/adjust")), danger()),
+				// 标准三件套展开来写：精确分析与奖盘求解是 POST（请求体里带未保存的活动），但只算不写、
+				// 也不落任何数据，归在查看里 —— 只读的 MCP 密钥也能调（与发布中心的 releases/simulate 同理）。
+				// 发起推演要落一个任务、占用计算资源，仍归编辑。
+				act("app:lottery:delete", "删除", LegacyAppWrite, routes(under(mDelete, pApp+"/lottery"))),
+				act("app:lottery:read", "查看", LegacyAppRead, routes(
+					under(mRead, pApp+"/lottery"),
+					rt(mPost, pApp+"/lottery/analyze"), rt(mPost, pApp+"/lottery/solve"),
+				)),
+				act("app:lottery:write", "编辑", LegacyAppWrite, routes(under(mWrite, pApp+"/lottery"))),
 			),
 			menu("app.item_grant", "物品发放", "package-plus", ScopeAppOnly,
 				appStd("app:item_grant", "/item-grants", true,
@@ -460,6 +471,20 @@ func permissionTree() []PermissionNode {
 						rt(mPost, pApp+"/item-grants/rules/:ruleId/run"), rt(mPost, pApp+"/item-grants/runs/:runId/cancel"),
 					), danger()),
 					act("app:item_grant:fulfill", "补发与重试", LegacyAppWrite, routes(under(mPost, pApp+"/item-grants/records"))),
+				)...,
+			),
+			menu("app.cosmetic", "个性装扮", "sparkles", ScopeAppOnly,
+				appStd("app:cosmetic", "/cosmetics", true,
+					act("app:cosmetic:publish", "发布与回退", LegacyAppWrite, routes(
+						rt(mPost, pApp+"/cosmetics/items/:itemId/publish"),
+						rt(mPost, pApp+"/cosmetics/items/:itemId/revisions/:revision/restore"),
+					)),
+					act("app:cosmetic:grant", "发放与收回", LegacyAppWrite, routes(under(mPost, pApp+"/cosmetics/users")), danger()),
+				)...,
+			),
+			menu("app.number", "用户号码", "hash", ScopeAppOnly,
+				appStd("app:number", "/numbers", true,
+					act("app:number:grant", "指定、回滚与调整权益", LegacyAppWrite, routes(under(mPost, pApp+"/numbers/users")), danger()),
 				)...,
 			),
 			menu("app.rewarded_ad", "激励广告", "monitor-play", ScopeAppOnly,
@@ -514,7 +539,11 @@ func permissionTree() []PermissionNode {
 				appStd("app:channel", "/channels", true)...,
 			),
 			menu("app.notification", "通知", "bell", ScopeAppOnly,
-				act(PermAppNotificationRead, "查看", PermAppNotificationRead, routes(under(mRead, pApp+"/notifications"))),
+				// 人群预览是 POST（请求体里带人群条件），只数人、不写任何数据，归在查看里
+				act(PermAppNotificationRead, "查看", PermAppNotificationRead, routes(
+					under(mRead, pApp+"/notifications"),
+					rt(mPost, pApp+"/notifications/campaigns/preview"),
+				)),
 				act(PermAppNotifWrite, "发送与删除", PermAppNotifWrite, routes(under(mAny, pApp+"/notifications"))),
 			),
 		),
@@ -573,12 +602,18 @@ func permissionTree() []PermissionNode {
 
 		dir("functions", "远程函数", "code-2", ScopeAppOnly,
 			menu("app.function", "远程函数", "code-2", ScopeAppOnly,
-				act("app:function:invoke", "调用", LegacyAppWrite, routes(rt(mPost, pApp+"/functions/:functionName/invoke"))),
+				act("app:function:invoke", "调用", LegacyAppWrite, routes(
+					rt(mPost, pApp+"/functions/:functionName/invoke"),
+					// 立即触发与重试触发任务都是一次真实调用
+					rt(mPost, pApp+"/functions/:functionName/triggers/:triggerId/fire"),
+					rt(mPost, pApp+"/functions/:functionName/trigger-jobs/:jobId/retry"),
+				)),
 				act("app:function:deploy", "切换生效版本", LegacyAppWrite, routes(rt(mPost, pApp+"/functions/:functionName/versions/:version/activate")), danger()),
 				act("app:function:key", "调用密钥", LegacyAppWrite, routes(under(mWrite, pApp+"/function-keys")), danger()),
 				act("app:function:kv", "清理 KV", LegacyAppWrite, routes(under(mWrite, pApp+"/function-kv")), danger()),
 				act("app:function:read", "查看", LegacyAppRead, routes(
 					under(mRead, pApp+"/functions"), under(mRead, pApp+"/function-catalog"),
+					under(mRead, pApp+"/function-overview"), under(mRead, pApp+"/function-triggers"),
 					under(mRead, pApp+"/function-keys"), under(mRead, pApp+"/function-kv"),
 				)),
 				act("app:function:delete", "删除", LegacyAppWrite, routes(under(mDelete, pApp+"/functions"))),
@@ -595,6 +630,11 @@ func permissionTree() []PermissionNode {
 				act("app:wallet:read", "查看", LegacyAppRead, routes(under(mRead, pApp+"/wallet"))),
 				act("app:wallet:adjust", "调账", LegacyAppWrite, routes(rt(mPost, pApp+"/wallet/adjust")), danger()),
 				act("app:wallet:receipt", "回单", LegacyAppWrite, routes(under(mPost, pApp+"/wallet/receipt"))),
+				act("app:wallet:config", "钱包设置与充值档位", LegacyAppWrite, routes(
+					rt(mPut, pApp+"/wallet/settings"),
+					rt(mPost, pApp+"/wallet/packages"), under(mWrite, pApp+"/wallet/packages"),
+					rt(mPut, pApp+"/wallet/packages-order"),
+				)),
 			),
 		),
 

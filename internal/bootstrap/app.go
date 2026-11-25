@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"aegis/internal/authz"
+	"aegis/internal/cluster"
 	"aegis/internal/config"
 	"aegis/internal/db"
 	"aegis/internal/event"
@@ -85,6 +86,10 @@ type APIApp struct {
 	Lottery *service.LotteryService
 	// ItemGrant 物品发放：后台循环执行到点的定时规则、接管中断的执行，退出时必须 Stop
 	ItemGrant *service.ItemGrantService
+	// AppFunction 远程函数：触发器后台循环（定时触发入队、抢占执行持久队列、清理旧任务），退出时必须 StopTriggers
+	AppFunction *service.AppFunctionService
+	// Notifications 站内信：群发任务执行器（认领、分批发送、撤回、接管中断的任务），退出时必须 StopCampaigns
+	Notifications *service.NotificationService
 	// Level 等级体系：后台循环发放达成奖励、发送升级通知、接管中断的重算任务，退出时必须 Stop
 	Level *service.LevelService
 	// AIGateway AI 中转网关：后台循环放回超时未结算的暂扣，退出时必须 Stop
@@ -99,6 +104,12 @@ type APIApp struct {
 	ShutdownTracing func(context.Context) error
 	// NativePlugins 内置插件宿主（流量管理等）：Start 里跑启停对账，退出时逆序停止
 	NativePlugins *nativeplugin.Host
+	// Cluster 多副本协调：后台任务选主与配置失效广播，见 internal/cluster。
+	Cluster *cluster.Cluster
+	// drain 停止时先让 /readyz 回 503 再关监听，见 drain.go。
+	drain *drainState
+	// autoSignGateFn 自动签到循环的租约判定，由 autoSignGate 惰性登记。
+	autoSignGateFn func() bool
 
 	// closeOnce 保证 Close 只执行一次（信号路径与 fx OnStop 都可能调用）。
 	closeOnce sync.Once
@@ -169,9 +180,14 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	}
 	// 其余代码继续按 *pgxpool.Pool 使用；生命周期治理由 pgHandle 承担
 	postgres := pgHandle.Pool
-	// 自动执行数据库迁移
-	if err := autoMigrate(ctx, postgres, log); err != nil {
-		log.Warn("自动迁移失败", zap.Error(err))
+	// 自动执行数据库迁移。集群部署设 MIGRATE_ON_BOOT=false，由发布前的 migrate 任务负责；
+	// 即便多个副本都开着它也是安全的：迁移在 advisory lock 下排队、按版本表跳过。
+	if cfg.Cluster.MigrateOnBoot {
+		if err := autoMigrate(ctx, postgres, log); err != nil {
+			log.Warn("自动迁移失败", zap.Error(err))
+		}
+	} else {
+		log.Info("已关闭启动时自动迁移（MIGRATE_ON_BOOT=false），由发布流程执行 migrate")
 	}
 	redisClient := db.NewRedis(ctx, cfg.Redis)
 	if err := redisClient.Ping(ctx).Err(); err != nil {
@@ -180,6 +196,13 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	natsConn, js, err := db.NewNATS(ctx, cfg.NATS)
 	if err != nil {
 		return nil, err
+	}
+	nodeID := cluster.NodeID(cfg.Cluster.NodeID)
+	clusterHandle := &cluster.Cluster{
+		NodeID:   nodeID,
+		Instance: cluster.InstanceID(cfg.Cluster.NodeID),
+		Elector:  cluster.NewElector(postgres, nodeID, cfg.Cluster.LeaseTTL, log),
+		Bus:      cluster.NewBus(natsConn, nodeID, log),
 	}
 	// Temporal 为可选依赖：不可达时仅告警并降级（WorkflowService 已做 nil-guard，
 	// 管理后台访问 Workflow 功能会返回 503，但 API / 用户认证 / 应用管理等核心链路继续运行）。
@@ -197,6 +220,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	}
 
 	pg := pgrepo.New(postgres)
+	reserveTransactionNoNode(ctx, pg, log)
 	adminUserSearch, err := service.NewAdminUserSearchService(log, pg, cfg.AdminUserSearch)
 	if err != nil {
 		closeTemporal()
@@ -231,7 +255,13 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 它必须先于 AdminService 起来 —— 后者的每一次判定都要问它。
 	// 内置策略 = 平台角色 + 组织内置角色，两者共用一张策略表、一个模型。
 	builtinPolicies := append(authz.BuiltinPolicies(), service.OrgBuiltinPolicies()...)
-	authzEngine, err := authz.New(ctx, log, pg, builtinPolicies)
+	// 内置策略是「删掉重插」：多个副本同时启动时必须排队，否则会交错出重复或缺失的策略行。
+	var authzEngine *authz.Engine
+	err = cluster.WithAdvisoryLock(ctx, postgres, "aegis.authz.builtin", func(lockCtx context.Context, _ *pgxpool.Conn) error {
+		var buildErr error
+		authzEngine, buildErr = authz.New(lockCtx, log, pg, builtinPolicies)
+		return buildErr
+	})
 	if err != nil {
 		closeTemporal()
 		natsConn.Close()
@@ -505,12 +535,26 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	itemGrantService := service.NewItemGrantService(log, pg)
 	itemGrantService.SetNotifier(notificationService)
 	itemGrantService.SetEventPublisher(realtimeService)
+	// 个性装扮（docs/cosmetics.md）：素材走应用的对象存储；获得装扮走站内信，佩戴变化推 cosmetic.changed。
+	cosmeticService := service.NewCosmeticService(log, pg, storageService)
+	cosmeticService.SetNotifier(notificationService)
+	cosmeticService.SetEventPublisher(realtimeService)
+	// 用户号码（docs/user-number.md）：换号后作废 /me 缓存并刷新管理端搜索索引
+	userNumberService := service.NewUserNumberService(log, pg, sessions)
+	userNumberService.SetAdminUserSearchService(adminUserSearch)
 	levelService := service.NewLevelService(log, pg)
 	levelService.SetNotifier(notificationService)
 	levelService.SetEventPublisher(realtimeService)
 	growthService := service.NewGrowthService(log, pg)
 	growthService.SetEventPublisher(realtimeService)
-	signInService.SetSignInObserver(itemGrantService.OnSignIn)
+	// 签到观察者有两家：物品发放的「每日签到」事件，与远程函数的 user.signin 触发器
+	var appFunctionSignIn func(appID, userID int64, consecutiveDays int)
+	signInService.SetSignInObserver(func(appID, userID int64, consecutiveDays int) {
+		itemGrantService.OnSignIn(appID, userID, consecutiveDays)
+		if appFunctionSignIn != nil {
+			appFunctionSignIn(appID, userID, consecutiveDays)
+		}
+	})
 	authService.SetLoginObserver(itemGrantService.OnLogin)
 	// 用户云存储：内容走 storageService 解析出的存储配置，治理闸门（blockStorage）
 	// 也随之生效 —— 写入经 UploadForApp，那里是所有上传的收口。
@@ -549,12 +593,28 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Redis:         redisClient,
 		KeyPrefix:     cfg.Redis.KeyPrefix,
 		AI:            aiProviderService,
+		// 平台各子系统：脚本代用户走的是这些系统面向终端用户的同一个入口
+		FeatureTime: featureTimeService,
+		SignIn:      signInService,
+		Invite:      inviteService,
+		Leaderboard: leaderboardService,
+		Lottery:     lotteryService,
+		Store:       pointsStoreService,
+		CardKeys:    cardKeyService,
+		Cosmetics:   cosmeticService,
+		Numbers:     userNumberService,
+		Payment:     paymentService,
+		Cloud:       cloudStorageService,
+		Apps:        appService,
 	})
+	appFunctionSignIn = appFunctionService.OnSignIn
 	if err := pluginService.Initialize(ctx); err != nil {
 		log.Warn("插件系统初始化失败（非致命）", zap.Error(err))
 	}
 	adminService.SetPluginService(pluginService)
 	pluginService.ObserveHooks(itemGrantService.ObserveHook)
+	// 远程函数的事件触发器：注册、登录、资料变更、封禁、支付、退款
+	pluginService.ObserveHooks(appFunctionService.OnHook)
 	authService.SetPluginService(pluginService)
 	userService.SetPluginService(pluginService)
 	accountBanService.SetPluginService(pluginService)
@@ -574,6 +634,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 钱包流水与会员直购也要能出凭证：凭证引擎只有 PaymentService 持有，
 	// 这两个服务通过它把自己的资金记录接进同一套排版与寄送链路
 	walletService.SetPaymentService(paymentService)
+	walletService.SetAppService(appService)
+	paymentService.SetWalletService(walletService)
 	vipService.SetPaymentService(paymentService)
 	sessionMgmtService := service.NewSessionMgmtService(log, pg, sessions, realtimeService)
 	storageResourceService := service.NewStorageResourceService(log, pg)
@@ -633,6 +695,17 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	}
 	accountBanService.SetListenTogether(listenTogetherService)
 
+	// 音乐个性化（独立微服务 services/music）：主服务校验并发布行为事件、转发推荐与画像、反代管理端。
+	// 配置错误只让音乐个性化不可用（docs/music-personalization.md）。
+	musicService, err := service.NewMusicService(log, cfg.Music, natsConn, redisClient, cfg.Redis.KeyPrefix)
+	if err != nil {
+		log.Error("音乐个性化配置无效，音乐推荐不可用", zap.Error(err))
+		musicService = nil
+	}
+	if musicService != nil {
+		userService.AddPurgeHook(musicService.PurgeHook)
+	}
+
 	// 设备营销名称字典：启动时幂等种子（表空则解析嵌入的 kt 源并批量写入）
 	deviceMarketingService := service.NewDeviceMarketingService(log, pg)
 	// 设备字典映射到用户接口：会话、登录记录、扫码登录发起端的 deviceInfo 读取时按字典现查
@@ -656,6 +729,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 删号、解除风控时主服务里的计数一起更新：注册准入台账与计数、登录防爆破、在线连接、排行榜缓存、风险分缓存
 	accountCounters := service.NewAccountCounters(log, registerIPService, loginGuardService, realtimeRepo, sessions, riskService)
 	userService.AddPurgeHook(accountCounters.PurgeHook)
+	// 删号后通知风控平台收尾（关系图、计数、复核单）；风控关联删除自己通知，不重复
+	userService.AddPurgeHook(riskService.PurgeHook)
 	riskService.SetAccountCounters(accountCounters)
 
 	// 平台级 Banner（超级管理员专属 CRUD；Overview 对所有管理员展示；上传经 StorageService）
@@ -695,11 +770,18 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 	// 统一通知出口：所有业务事件（工单、SLA 告警…）只发到这里，
 	// 由订阅表决定投给飞书 / 钉钉 / 企微 / Slack / Webhook / 邮件 / 站内信 / 实时推送
 	notifyHub := service.NewNotifyHub(log, pg, cfg, emailService, notificationService, adminInboxService, realtimeService)
+	// 渠道限流按全集群合计（机器人的限额是给整个平台的，不是给每个副本的）
+	notifyHub.SetRedis(redisClient, cfg.Redis.KeyPrefix)
 	if base := strings.TrimSpace(cfg.ConsoleBaseURL); base != "" {
 		notifyHub.SetConsoleBaseURL(base)
 	}
 	// 工单系统：权限判定依赖 AdminService（Casbin），通知统一走 NotifyHub
 	ticketService := service.NewTicketService(log, pg, adminService, notifyHub, storageService)
+	// 工单与设备服务构造得比脚本依赖装配晚，这里补上
+	appFunctionService.ExtendScriptDeps(func(deps *service.ScriptSDKDeps) {
+		deps.Tickets = ticketService
+		deps.Devices = deviceLimitService
+	})
 	go func() {
 		seedCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
@@ -786,6 +868,7 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Release:          releaseService,
 		ClientControl:    clientControlService,
 		ListenTogether:   listenTogetherService,
+		Music:            musicService,
 		DeviceLimit:      deviceLimitService,
 		RegisterIP:       registerIPService,
 		PlatformSettings: systemService,
@@ -809,6 +892,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Points:       pointsService,
 		Lottery:      lotteryService,
 		ItemGrant:    itemGrantService,
+		Cosmetic:     cosmeticService,
+		UserNumber:   userNumberService,
 		Level:        levelService,
 		Growth:       growthService,
 		Wallet:       walletService,
@@ -869,9 +954,25 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		return nil, err
 	}
 
+	// 集群协调：必须在 Elector.Start（APIApp.Start 第一步）之前登记，第一轮就能抢到租约
+	paymentService.SetCluster(clusterHandle)
+	suspensionService.SetCluster(clusterHandle)
+	systemService.SetCluster(clusterHandle)
+	geoBanService.SetCluster(clusterHandle)
+	geoFenceService.SetCluster(clusterHandle)
+	pluginService.SetCluster(clusterHandle)
+	adminUserSearch.SetCluster(clusterHandle)
+	monitorService.SetCluster(clusterHandle)
+	memoryManager.SetCluster(clusterHandle)
+	databaseManager.SetCluster(clusterHandle)
+	storageService.SetCluster(clusterHandle)
+	lotteryService.SetCluster(clusterHandle)
+	notificationService.SetCluster(clusterHandle)
+
+	drain := &drainState{}
 	server := &http.Server{
 		Addr:              fmt.Sprintf(":%d", cfg.HTTPPort),
-		Handler:           router,
+		Handler:           drain.wrap(router),
 		ReadHeaderTimeout: cfg.ReadTimeout,
 		ReadTimeout:       cfg.ReadTimeout,
 		// 缺省 0（不限）：SSE 对话流与流式转发的生存前提，见 config.NormalizeConfig 的说明。
@@ -913,6 +1014,8 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		Leaderboard:        leaderboardService,
 		Lottery:            lotteryService,
 		ItemGrant:          itemGrantService,
+		AppFunction:        appFunctionService,
+		Notifications:      notificationService,
 		Level:              levelService,
 		AIGateway:          aiGatewayService,
 		AuthProviderHealth: authProviderHealthService,
@@ -924,11 +1027,27 @@ func NewAPIAppWithConfigManager(ctx context.Context, cl *crashlog.Logger, manage
 		ClientIP:           clientIPResolver,
 		ShutdownTracing:    shutdownTracing,
 		NativePlugins:      nativePlugins,
+		Cluster:            clusterHandle,
+		drain:              drain,
 	}
+	app.attachCluster()
 	return app, nil
 }
 
 func (a *APIApp) Start(ctx context.Context) error {
+	// 先抢一轮租约：下面要立即跑一次的任务（自动签到补签、存储迁移续跑）据此判断归不归本实例
+	if a.Cluster != nil && a.Cluster.Elector != nil {
+		if err := a.Cluster.Elector.Start(ctx); err != nil {
+			a.Logger.Warn("集群租约初始化失败，后台任务将不会在本实例执行", zap.Error(err))
+		}
+	}
+	// 迁移落后时先同步判一次，保证监听起来后的第一次 /readyz 就是准的
+	if a.drain != nil && a.Postgres != nil && !a.Config.Cluster.MigrateOnBoot {
+		if pending, err := pendingNewMigrations(ctx, a.Postgres); err == nil && len(pending) > 0 {
+			a.drain.schemaBehind.Store(true)
+		}
+		SafeGo(a.Logger, a.CrashLog, "api.schema_watch", true, func() { a.watchSchema(ctx) })
+	}
 	if a.AccountBan != nil {
 		a.AccountBan.Start()
 	}
@@ -973,6 +1092,12 @@ func (a *APIApp) Start(ctx context.Context) error {
 	if a.ItemGrant != nil {
 		a.ItemGrant.Start(ctx)
 	}
+	if a.AppFunction != nil {
+		a.AppFunction.StartTriggers(ctx)
+	}
+	if a.Notifications != nil {
+		a.Notifications.StartCampaigns(ctx)
+	}
 	if a.Level != nil {
 		a.Level.Start(ctx)
 	}
@@ -995,10 +1120,12 @@ func (a *APIApp) Start(ctx context.Context) error {
 	})
 
 	if a.AutoSign != nil {
-		if scheduled, processed, err := a.AutoSign.CatchUpOnStartup(ctx); err != nil {
-			a.Logger.Warn("api auto sign startup catch-up failed", zap.Error(err))
-		} else {
-			a.Logger.Info("api auto sign startup catch-up completed", zap.Int("scheduled", scheduled), zap.Int("processed", processed))
+		if a.autoSignGate() {
+			if scheduled, processed, err := a.AutoSign.CatchUpOnStartup(ctx); err != nil {
+				a.Logger.Warn("api auto sign startup catch-up failed", zap.Error(err))
+			} else {
+				a.Logger.Info("api auto sign startup catch-up completed", zap.Int("scheduled", scheduled), zap.Int("processed", processed))
+			}
 		}
 		SafeGo(a.Logger, a.CrashLog, "api.auto_sign", true, func() {
 			a.runAutoSignLoop(ctx)
@@ -1017,6 +1144,8 @@ func (a *APIApp) Close(ctx context.Context) {
 func (a *APIApp) close(ctx context.Context) {
 	// 流式 AI 对话不会在 Shutdown 的期限内自己结束：先约好宽限后主动取消，让它们带着
 	// 可重试的错误事件收尾、放回暂扣，而不是被进程退出硬切、暂扣挂到过期（ai_gateway_inflight.go）。
+	// 先摘流：/readyz 转 503，等负载均衡把本实例摘掉，再取消流式请求、关监听
+	a.drain.begin(ctx, a.Config.Cluster.DrainDelay)
 	if a.AIGateway != nil {
 		a.AIGateway.CancelInFlightAfter(aiRelayShutdownGrace(ctx))
 	}
@@ -1058,8 +1187,15 @@ func (a *APIApp) close(ctx context.Context) {
 	if a.Leaderboard != nil {
 		a.Leaderboard.Stop()
 	}
+	if a.Notifications != nil {
+		// 手上的群发任务写完当前一批后放回去，别的实例（或重启后的自己）从游标接着发
+		a.Notifications.StopCampaigns()
+	}
 	if a.ItemGrant != nil {
 		a.ItemGrant.Stop()
+	}
+	if a.AppFunction != nil {
+		a.AppFunction.StopTriggers()
 	}
 	if a.Level != nil {
 		a.Level.Stop()
@@ -1102,10 +1238,16 @@ func (a *APIApp) close(ctx context.Context) {
 	if a.OwnsEgress {
 		releaseEgressGateway(a.EgressGateway)
 	}
+	// 后台任务都停了才释放租约，让别的实例立刻接手；广播退订要在 NATS 排空之前
+	if a.Cluster != nil {
+		a.Cluster.Elector.Stop(ctx)
+		a.Cluster.Bus.Close()
+	}
+	// NATS 先排空再关 Redis：排空期间还会投递的消息（自动签到同步等）处理时要用 Redis
+	drainNATS(ctx, a.NATSConn)
 	if a.Redis != nil {
 		_ = a.Redis.Close()
 	}
-	drainNATS(ctx, a.NATSConn)
 	if a.Temporal != nil {
 		a.Temporal.Close()
 	}
@@ -1138,6 +1280,10 @@ func (a *APIApp) runAutoSignLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-tick.C:
+			if !a.autoSignGate() {
+				tick.Reset(a.autoSignTickInterval())
+				continue
+			}
 			processed, err := a.AutoSign.RunDue(ctx)
 			if err != nil {
 				a.Logger.Warn("api auto sign due run failed", zap.Error(err))
@@ -1146,6 +1292,10 @@ func (a *APIApp) runAutoSignLoop(ctx context.Context) {
 			}
 			tick.Reset(a.autoSignTickInterval())
 		case <-rebuild.C:
+			if !a.autoSignGate() {
+				rebuild.Reset(a.autoSignRebuildInterval())
+				continue
+			}
 			scheduled, err := a.AutoSign.RebuildSchedule(ctx)
 			if err != nil {
 				a.Logger.Warn("api auto sign periodic rebuild failed", zap.Error(err))
@@ -1180,7 +1330,11 @@ func (a *APIApp) runAdminSessionCleanupLoop(ctx context.Context) {
 		return
 	}
 
+	gate := a.Cluster.Gate(leaseAdminSessionCleanup)
 	runCleanup := func() {
+		if !gate() {
+			return
+		}
 		cleanupCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 		a.SessionMgmt.Cleanup(cleanupCtx)

@@ -19,7 +19,7 @@
 | **expr-lang/expr** | 规则条件与派生特征表达式（编译一次、零反射求值） | 已在项目里用，表达式语法与旧规则兼容 |
 | **gorules/zen-go** | 决策流（JDM 决策表 / 决策图）：分数段 × 模型分 × 命中 → 处置。控制台用 `@gorules/jdm-editor` 可视化编辑 | 业务同学能看懂的决策表，有官方可视化编辑器 |
 | **open-policy-agent/opa** | 最终裁决策略（Rego）：白名单兜底、会员保护、验证码可用性、哪些场景允许自动封禁……以库的形式嵌在决策服务里 | 护栏与合规规则需要可测试、可审计的策略语言 |
-| **dmitryikh/leaves** | 树模型推理（LightGBM / XGBoost），模型文件在控制台上传、存 MinIO，按特征映射喂入 | 纯 Go 推理，无 CGO、微秒级 |
+| **dmitryikh/leaves** | 树模型推理（LightGBM / XGBoost），模型文件在控制台上传、存对象存储（RustFS），按特征映射喂入 | 纯 Go 推理，无 CGO、微秒级 |
 
 PostgreSQL（独立库 `aegis_risk`）是配置与名单的权威存储；NATS JetStream（与主服务共用）是全部事件的总线。
 
@@ -94,6 +94,15 @@ PostgreSQL（独立库 `aegis_risk`）是配置与名单的权威存储；NATS J
 - 计数与索引不在同一个槽，做不到一起成功或失败：索引写丢的那一次贡献回退不掉，会随窗口过期。
 - 升级：旧的 `rv:` 次数桶由 risk-admin 启动时并进新键（记在「无法归属」名下，主体索引补上）；旧的 `rvd:` 去重桶在切换后的一个窗口内只读兜底，之后自然过期。流式特征的对象名带生成规则版本，升级后全部重建并从事件流回填（保留期 7 天）。
 
+### 删号收尾与已删除账号清扫
+
+关系图、设备向量、图特征缓存与滑窗计数里不能留着已经删除的账号，否则「关联的人」会一直列出它们。
+
+- 主服务每条删号路径（管理员删除、批量删除、账号注销、风控关联删除）都走 `UserService.PurgeUser`。删号后由 `RiskService.PurgeHook` 在后台调 `subjects/forget`（并发上限 4）；风控关联删除自己带着设备拉黑参数调用，通用收尾不重复。
+- `subjects/forget` 的收尾（`finishDeleted`）：待复核单结案；删用户点，只属于它的登录名、手机号、邮箱、第三方身份、付款账号、通行密钥一起删；设备还有人用就把向量挂到最近的使用者名下，没人用且没被拉黑就删，被拉黑的留着；IP 重数用户数，没人用又没被拉黑就删；图特征缓存与滑窗计数回退。
+- 回灌只写主库现有的账号：登录地理、支付订单、业务流水等表在删号后可能还留着这个账号的行，按 `users` 表过滤，被拉黑设备的指纹照常写但不挂人。进度里 `skippedDeleted` 是因此没写入的记录数。
+- 清扫（`SweepDeletedUsers`）：用户 ID 是全局自增，`users` 序列里的空缺（含序列尾部）就是删掉的账号；按应用（主库 `apps` 与风控流水里出现过的应用）到图里核对还有没有用户点或边（悬空边也算），删点前再查一次主库，确认不存在才按上面的收尾处理，审计记为 `subjects.sweep`。risk-admin 启动一分钟后跑一次，每次回灌之后再跑一次，进度里 `deletedUsers` 是收尾的账号数。主服务通知失败、改造前删掉的账号都由它补上。
+
 ## 配置与发布
 
 配置在 `aegis_risk` 库里编辑（草稿），**发布**把一个场景用到的全部东西编成一个不可变的发布包（规则、特征定义、
@@ -127,7 +136,7 @@ JetStream 流 `RISK`（subjects `risk.event.>`、`risk.decision.>`、`risk.cep.a
 
 ## 部署
 
-`deploy/docker/docker-compose.yml` 的 `risk` profile：etcd ×3、Redis Cluster ×6（+ 初始化）、MinIO、Milvus、
+`deploy/docker/docker-compose.yml` 的 `risk` profile：etcd ×3、Redis Cluster ×6（+ 初始化）、RustFS、Milvus、
 NebulaGraph（metad / storaged / graphd）、ClickHouse、RisingWave、Flink（jobmanager 以 application 模式直接带作业 + taskmanager）、
 `risk-migrate`（一次性初始化）、`risk-decision`、`risk-admin`、`risk-ingest`。Go 服务镜像 `deploy/docker/risk.Dockerfile`
 （zen-go 需要 CGO，基于 Debian），Flink 作业镜像 `deploy/docker/risk-cep.Dockerfile`（Maven 构建）。

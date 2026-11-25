@@ -58,6 +58,9 @@ type StorageService struct {
 
 	stopOnce sync.Once
 	stop     chan struct{}
+
+	// clusterState 多副本协调：后台任务判定、迁移控制广播，见 storage_cluster.go
+	clusterState storageClusterState
 }
 
 // SetLinkSigningKey 注入平台主密钥（bootstrap 中调用）。不注入时用进程内随机密钥，
@@ -739,6 +742,11 @@ func (s *StorageService) buildProvider(cfg *storagedomain.Config) (storageProvid
 			return nil, err
 		}
 		provider = newMinIOProvider(s.httpClient)
+	case storagedomain.ProviderRustFS:
+		if _, err := decodeMinIOConfig(cfg.ConfigData); err != nil {
+			return nil, err
+		}
+		provider = newRustFSProvider(s.httpClient)
 	case storagedomain.ProviderAliyunOSS:
 		if _, err := decodeAliyunOSSConfig(cfg.ConfigData); err != nil {
 			return nil, err
@@ -900,7 +908,9 @@ func validateStorageObjectKey(objectKey string) error {
 	if objectKey == "" || strings.ContainsRune(objectKey, '\x00') {
 		return apperrors.New(40083, http.StatusBadRequest, "对象路径无效")
 	}
-	if path.IsAbs(objectKey) || filepath.VolumeName(filepath.FromSlash(objectKey)) != "" {
+	// 盘符按字面判断，不用 filepath.VolumeName：它只在 Windows 上认盘符，服务跑在 Linux 上时
+	// `C:\Windows\win.ini` 会被当成普通相对路径放过去，而这个键之后可能落到 Windows 上的存储节点
+	if path.IsAbs(objectKey) || hasDriveLetter(objectKey) || filepath.VolumeName(filepath.FromSlash(objectKey)) != "" {
 		return apperrors.New(40083, http.StatusBadRequest, "对象路径必须是相对路径")
 	}
 	cleaned := path.Clean(objectKey)
@@ -908,6 +918,15 @@ func validateStorageObjectKey(objectKey string) error {
 		return apperrors.New(40083, http.StatusBadRequest, "对象路径包含非法目录跳转")
 	}
 	return nil
+}
+
+// hasDriveLetter 是否以 Windows 盘符开头（`C:`、`d:/…`）
+func hasDriveLetter(objectKey string) bool {
+	if len(objectKey) < 2 || objectKey[1] != ':' {
+		return false
+	}
+	c := objectKey[0]
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'
 }
 
 func buildUploadedObjectKey(fileName string) string {
@@ -945,7 +964,7 @@ func randomHex(size int) (string, error) {
 
 func isSupportedStorageProvider(value string) bool {
 	switch strings.TrimSpace(value) {
-	case storagedomain.ProviderS3, storagedomain.ProviderR2, storagedomain.ProviderMinIO, storagedomain.ProviderAliyunOSS, storagedomain.ProviderTencentCOS, storagedomain.ProviderQiniuKodo, storagedomain.ProviderWebDAV, storagedomain.ProviderOneDrive, storagedomain.ProviderDropbox, storagedomain.ProviderGoogleDrive, storagedomain.ProviderAzureBlob, storagedomain.ProviderLocal:
+	case storagedomain.ProviderS3, storagedomain.ProviderR2, storagedomain.ProviderMinIO, storagedomain.ProviderRustFS, storagedomain.ProviderAliyunOSS, storagedomain.ProviderTencentCOS, storagedomain.ProviderQiniuKodo, storagedomain.ProviderWebDAV, storagedomain.ProviderOneDrive, storagedomain.ProviderDropbox, storagedomain.ProviderGoogleDrive, storagedomain.ProviderAzureBlob, storagedomain.ProviderLocal:
 		return true
 	default:
 		return false

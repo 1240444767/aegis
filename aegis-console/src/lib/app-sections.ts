@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BellRing,
   Boxes,
   Bug,
   Cloud,
@@ -8,10 +9,12 @@ import {
   Dices,
   Fingerprint,
   Gift,
+  Hash,
   Headphones,
   Info,
   KeyRound,
   LayoutDashboard,
+  ListMusic,
   Mail,
   Megaphone,
   MonitorSmartphone,
@@ -113,6 +116,8 @@ export const appSectionGroups: AppSectionGroup[] = [
       { key: "payment", title: "支付", summary: "收款渠道、订单与交易设置", icon: CreditCard },
       { key: "cloud-storage", title: "云存储", summary: "用户数据云端备份与配额", icon: Cloud },
       { key: "listen-together", title: "一起听", summary: "多人同步收听：服务状态、房间与成员", icon: Headphones },
+      // 完整功能在独立整页 /apps/{appKey}/music，这个区块只放摘要与入口
+      { key: "music", title: "音乐推荐", summary: "个性化推荐、听歌画像与模型训练", icon: ListMusic },
       { key: "settings", title: "用户设置", summary: "资料字段与默认值", icon: SlidersHorizontal }
     ]
   },
@@ -123,8 +128,10 @@ export const appSectionGroups: AppSectionGroup[] = [
     sections: [
       { key: "vip", title: "会员", summary: "套餐、试用与功能权益", icon: Crown },
       { key: "card-key", title: "卡密", summary: "授权卡与兑换卡", icon: Ticket },
+      { key: "numbers", title: "用户号码", summary: "可更换的号码、靓号等级、摇号与保留号", icon: Hash },
       { key: "signin-reward", title: "签到奖励", summary: "连签规则与奖励发放", icon: Gift },
       { key: "points-store", title: "积分商城", summary: "积分兑换会员、功能与福利", icon: ShoppingBag },
+      { key: "cosmetics", title: "个性装扮", summary: "头像框、资料卡、昵称样式与勋章的设计与发放", icon: Sparkles },
       { key: "levels", title: "等级体系", summary: "画布配置等级、晋级条件、达成奖励与权益", icon: Milestone },
       { key: "invite", title: "邀请", summary: "邀请码、双方奖励与邀请记录", icon: UserPlus },
       { key: "promo", title: "推广活动", summary: "限时邀请档位与分享推广，提交审核与统计", icon: Megaphone },
@@ -132,6 +139,7 @@ export const appSectionGroups: AppSectionGroup[] = [
       { key: "account-deletion", title: "账号注销", summary: "注销方式、审核与重新注册限制", icon: UserX },
       { key: "lottery", title: "抽奖", summary: "九宫格与转盘、抽奖次数与保底", icon: Dices },
       { key: "item-grant", title: "物品发放", summary: "画布规则：手动、定时与事件触发发放", icon: PackagePlus },
+      { key: "notification-campaigns", title: "站内信群发", summary: "一键全站、人群筛选、定时发送与撤回", icon: BellRing },
       { key: "rewarded-ad", title: "激励广告", summary: "看广告领奖励、回调验签与限次", icon: MonitorPlay },
       { key: "ad-policy", title: "广告服务", summary: "同意要求、基础服务与开屏广告", icon: ShieldHalf }
     ]

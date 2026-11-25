@@ -1185,7 +1185,26 @@ export type AdminPaymentOrder = {
   review_reason?: string;
   review_note?: string;
   review_at?: string | null;
+  /** 落库的履约状态：none / done / manual（已在别处补发） */
+  fulfillment_status?: string;
+  fulfilled_at?: string | null;
+  /** 规范化后的订单用途（vip_purchase / wallet_recharge / integral_purchase），老订单为推断值；普通商品为空 */
+  purpose?: string;
+  /** 履约状况：not_required / pending（写清用途、待重试）/ unrecognized（老客户端没写用途，需确认）/ done / manual */
+  fulfillment_state?: string;
   [key: string]: unknown;
+};
+
+/** 补履约（POST /orders/fulfill）的结果；dry_run 时 applied 为 false */
+export type AdminPaymentFulfillResult = {
+  orderNo: string;
+  action: "fulfill" | "manual";
+  dryRun: boolean;
+  applied: boolean;
+  purpose?: string;
+  snapshot?: Record<string, unknown>;
+  warnings?: string[];
+  order?: AdminPaymentOrder;
 };
 
 export type AdminPaymentOrderList = {
@@ -2901,6 +2920,8 @@ export type NotificationItem = {
   content?: string;
   level?: string;
   status?: string;
+  /** 群发任务 ID（管理端列表；单条投递为 null） */
+  campaignId?: number | null;
   /** 跳转动作：route 为应用内页面（target 是路由键），url 为 https 链接 */
   action?: { type: "route" | "url"; target: string; label?: string } | null;
   image?: string | null;
@@ -2914,8 +2935,12 @@ export type NotificationItem = {
 
 export type AdminAppUserItem = {
   id: number;
-  /** 对外用户 ID：用户在 App 里看到、报给客服的 16 位号（主键 id 只在后台用） */
+  /** 对外 ID：16 位、终生不变，OAuth2 sub 与客户端本地数据的键（主键 id 只在后台用） */
   publicId?: number;
+  /** 用户号码：5–12 位、按应用唯一、可以更换，用户在 App 里看到、报给客服的就是它（docs/user-number.md） */
+  number?: number;
+  /** 号码等级 0 普通 / 1 精品 / 2 稀有 / 3 传说 / 4 至尊（换号那一刻判定） */
+  numberTier?: number;
   appid?: number;
   account?: string;
   nickname?: string;
@@ -3114,24 +3139,45 @@ export type AdminUserBanCreateInput = {
 // 金额一律是**字符串**（后端 shopspring/decimal 序列化结果）。
 // 转成 number 做展示以外的任何事都会丢精度，禁止在前端做加减。
 
+/**
+ * 钱包分两桶（docs/wallet.md）：充值余额（本金，cash）与赠送余额（bonus）。
+ * balance 是可用总余额 = cashBalance + bonusBalance，两个分项由后端算好下发，
+ * 前端不做减法。只有本金能兑换积分；赠送余额只能消费。
+ * 分桶字段在旧后端上不存在，因此标为可选。
+ */
 export type UserWallet = {
   userId: number;
   appid: number;
   balance: string;
+  /** 充值余额（本金），可兑换积分 */
+  cashBalance?: string;
+  /** 赠送余额，只能消费，不能兑换积分 */
+  bonusBalance?: string;
   frozen: string;
+  /** 冻结中属于赠送余额的部分 */
+  frozenBonus?: string;
   totalRecharged: string;
   totalConsumed: string;
+  /** 累计获赠（不含退回） */
+  totalBonus?: string;
+  /** 累计兑换成积分的本金（不计入累计消费） */
+  totalExchanged?: string;
   createdAt?: string;
   updatedAt?: string;
 };
 
 export type WalletTransactionType =
   | "recharge"
+  | "recharge_bonus"
   | "consume"
   | "refund"
   | "admin_adjust"
   | "vip_purchase"
-  | "order_pay";
+  | "order_pay"
+  | "integral_exchange";
+
+/** 管理员调账落在哪一桶；空串 = 默认（入账进赠送余额，扣减先扣赠送余额） */
+export type WalletAdjustBucket = "" | "cash" | "bonus";
 
 export type UserWalletTransaction = {
   id: number;
@@ -3140,9 +3186,15 @@ export type UserWalletTransaction = {
   appid: number;
   type: WalletTransactionType | string;
   amount: string;
+  /** 这笔变动在本金上的部分（与 amount 同号，cashAmount + bonusAmount = amount） */
+  cashAmount?: string;
+  /** 这笔变动在赠送余额上的部分 */
+  bonusAmount?: string;
   balanceBefore: string;
   balanceAfter: string;
   relatedOrderNo?: string;
+  /** 退回类流水指向被退回的那笔出账 */
+  restoresTransactionNo?: string;
   title: string;
   remark?: string;
   operator?: string;
@@ -3446,13 +3498,19 @@ export type AdminWalletTransaction = {
   transactionNo: string;
   userId: number;
   appid: number;
-  /** recharge / consume / refund / admin_adjust / vip_purchase / order_pay */
+  /** 见 WalletTransactionType；另有 card_key / points_exchange / invite 等奖励入账类型 */
   type: string;
   /** 正数入账、负数出账 */
   amount: string;
+  /** 本金部分（与 amount 同号） */
+  cashAmount?: string;
+  /** 赠送余额部分（与 amount 同号） */
+  bonusAmount?: string;
   balanceBefore: string;
   balanceAfter: string;
   relatedOrderNo?: string;
+  /** 退回类流水指向被退回的那笔出账 */
+  restoresTransactionNo?: string;
   title: string;
   remark?: string;
   operator?: string;
@@ -3492,6 +3550,87 @@ export type WalletStats = {
   userCount: number;
   balance: string;
   byType: WalletTypeStat[];
+};
+
+/**
+ * 应用钱包设置（`/apps/:appkey/wallet/settings`）。金额都是字符串。
+ *
+ * 兑换比例不在这里：余额兑积分与在线直购积分共用「交易设置」的 integralPerCurrency，
+ * GET 附带的 rate、currency 只读，PUT 时不提交。
+ */
+export type WalletSettings = {
+  rechargeEnabled: boolean;
+  /** 关闭时只能按档位充值 */
+  customAmountEnabled: boolean;
+  /** 自定义金额的单笔范围（档位不受此限） */
+  rechargeMin: string;
+  rechargeMax: string;
+  /** 是否开放充值余额（本金）兑换积分 */
+  exchangeEnabled: boolean;
+  /** 单笔最少兑换的本金 */
+  exchangeMin: string;
+  /** 单笔最多兑换的本金，"0" 不限 */
+  exchangeMax: string;
+  /** 每人每天最多兑换的本金，"0" 不限 */
+  exchangeDailyMax: string;
+  /** 钱包页说明文字，最多 500 字 */
+  notice: string;
+};
+
+export type WalletSettingsView = WalletSettings & {
+  /** 1 元可兑多少积分（只读，来自交易设置） */
+  rate: number;
+  /** 钱包币种（只读，来自交易设置） */
+  currency: string;
+};
+
+/** 充值档位：付 amount，本金入账 amount，另赠 bonusAmount 余额与 bonusIntegral 积分。 */
+export type WalletPackage = {
+  id: number;
+  appid: number;
+  /** 最多 60 字 */
+  title: string;
+  amount: string;
+  bonusAmount: string;
+  bonusIntegral: number;
+  /** 角标，最多 20 字 */
+  badge?: string;
+  /** 说明，最多 200 字 */
+  description?: string;
+  /** 每人限购次数，0 不限；退款不让出名额 */
+  perUserLimit: number;
+  isActive: boolean;
+  sortOrder: number;
+  startsAt?: string | null;
+  endsAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** 档位销售统计（已付款订单） */
+export type WalletPackageStat = {
+  orders: number;
+  users: number;
+  amount: string;
+};
+
+/** 控制台档位行：档位本体 + 销售统计 */
+export type AdminWalletPackage = WalletPackage & {
+  stat: WalletPackageStat;
+};
+
+export type WalletPackagePayload = {
+  title: string;
+  amount: string;
+  bonusAmount: string;
+  bonusIntegral: number;
+  badge: string;
+  description: string;
+  perUserLimit: number;
+  isActive: boolean;
+  sortOrder: number;
+  startsAt: string | null;
+  endsAt: string | null;
 };
 
 /** 订单口径的资金面板 */

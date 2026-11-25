@@ -211,6 +211,28 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.GET("/points/store", h.AppPointsStore)
 		appGatewayAuthed.POST("/points/store/redeem", h.AppRedeemPointsStoreItem)
 		appGatewayAuthed.GET("/points/store/redemptions", h.AppPointsStoreRedemptions)
+		// 个性装扮（docs/cosmetics.md）：装扮中心 / 我的佩戴 / 佩戴与摘下 / 我的持有记录 / 批量查别人身上的装扮。
+		// 设计稿与素材地址全部由服务端下发，客户端按设计稿实时绘制。
+		appGatewayAuthed.GET("/cosmetics", h.AppCosmeticCenter)
+		appGatewayAuthed.GET("/cosmetics/me", h.AppMyCosmetics)
+		appGatewayAuthed.PUT("/cosmetics/me", h.AppEquipCosmetic)
+		appGatewayAuthed.GET("/cosmetics/history", h.AppCosmeticHistory)
+		appGatewayAuthed.GET("/cosmetics/users", h.AppLookupCosmetics)
+		// 自定义工坊：额度、零件、起点模板与我的作品 / 新建 / 修改 / 删除（佩戴走 PUT /cosmetics/me）
+		appGatewayAuthed.GET("/cosmetics/workshop", h.AppCosmeticWorkshop)
+		appGatewayAuthed.POST("/cosmetics/workshop/items", h.AppCreateWorkshopItem)
+		appGatewayAuthed.PUT("/cosmetics/workshop/items/:itemId", h.AppUpdateWorkshopItem)
+		appGatewayAuthed.DELETE("/cosmetics/workshop/items/:itemId", h.AppDeleteWorkshopItem)
+		// 用户号码（docs/user-number.md）：我的号码页 / 查号 / 联想 / 摇号与放弃 / 换号 / 换号记录 / 权益流水。
+		// 号码只用于展示与查找，id 仍是终生不变的对外 ID。
+		appGatewayAuthed.GET("/numbers/me", h.AppUserNumber)
+		appGatewayAuthed.GET("/numbers/check", h.AppCheckUserNumber)
+		appGatewayAuthed.GET("/numbers/suggest", h.AppSuggestUserNumbers)
+		appGatewayAuthed.POST("/numbers/draw", h.AppDrawUserNumbers)
+		appGatewayAuthed.POST("/numbers/draws/:drawId/discard", h.AppDiscardUserNumberDraw)
+		appGatewayAuthed.POST("/numbers/change", h.AppChangeUserNumber)
+		appGatewayAuthed.GET("/numbers/history", h.AppUserNumberHistory)
+		appGatewayAuthed.GET("/numbers/ledger", h.AppUserNumberLedger)
 		// 抽奖：活动列表、活动页（奖品与公示概率、我的次数、保底进度）、抽一次、我的记录。
 		// 抽中什么由服务端在一个事务里决定并到账；视频抽奖走激励广告场景，看完发的是抽奖次数。
 		appGatewayAuthed.GET("/lottery", h.AppLotteryActivities)
@@ -264,6 +286,8 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 
 		// 钱包 / 会员 / 支付
 		appGatewayAuthed.GET("/wallet", h.MyWallet)
+		appGatewayAuthed.GET("/wallet/overview", h.MyWalletOverview)
+		appGatewayAuthed.POST("/wallet/exchange", h.WalletExchange)
 		appGatewayAuthed.GET("/wallet/transactions", h.MyWalletTransactions)
 		appGatewayAuthed.POST("/wallet/consume", h.WalletConsume)
 		appGatewayAuthed.GET("/vip/plans", h.VipPlans)
@@ -272,6 +296,24 @@ func registerGatewayRoutes(router *gin.Engine, h *Handler, deps RouterDeps) {
 		appGatewayAuthed.POST("/vip/feature-ticket", h.VipFeatureTicket)
 		// 一起听：签短期票据并给出一起听微服务的连接地址（docs/listen-together.md）
 		appGatewayAuthed.POST("/listen-together/ticket", h.AppListenTogetherTicket)
+		// 音乐个性化：行为上报、推荐、听歌画像（独立微服务，docs/music-personalization.md）
+		appGatewayAuthed.POST("/music/events", h.AppMusicEvents)
+		appGatewayAuthed.GET("/music/recommendations", h.AppMusicRecommendations)
+		appGatewayAuthed.GET("/music/profile", h.AppMusicProfile)
+		appGatewayAuthed.DELETE("/music/profile", h.AppMusicClearProfile)
+		// 第二期（docs/music-personalization-2.md）
+		appGatewayAuthed.POST("/music/recommendations", h.AppMusicRecommendations)
+		appGatewayAuthed.GET("/music/mixes", h.AppMusicMixes)
+		appGatewayAuthed.GET("/music/artists/recommended", h.AppMusicArtists)
+		appGatewayAuthed.GET("/music/onboarding", h.AppMusicOnboarding)
+		appGatewayAuthed.GET("/music/preferences", h.AppMusicPreferences)
+		appGatewayAuthed.PUT("/music/preferences", h.AppMusicSavePreferences)
+		appGatewayAuthed.GET("/music/feedback", h.AppMusicFeedback)
+		appGatewayAuthed.DELETE("/music/feedback", h.AppMusicUndoFeedback)
+		appGatewayAuthed.GET("/music/report", h.AppMusicReport)
+		appGatewayAuthed.GET("/music/search/trending", h.AppMusicTrendingSearches)
+		appGatewayAuthed.POST("/music/search/rerank", h.AppMusicRerank)
+		appGatewayAuthed.GET("/music/export", h.AppMusicExport)
 		appGatewayAuthed.GET("/vip/transactions", h.MyVipTransactions)
 		appGatewayAuthed.GET("/vip/conversions", h.MyVipConversions)
 		appGatewayAuthed.POST("/vip/purchase", h.PurchaseVip)

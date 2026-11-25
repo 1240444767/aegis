@@ -67,6 +67,7 @@ type RouterDeps struct {
 	Release          *service.ReleaseService
 	ClientControl    ClientControlAPI
 	ListenTogether   *service.ListenTogetherService
+	Music            *service.MusicService
 	DeviceLimit      *service.DeviceLimitService
 	RegisterIP       *service.RegisterIPService
 	PlatformSettings *service.PlatformSettingsService
@@ -94,6 +95,8 @@ type RouterDeps struct {
 	Points       *service.PointsService
 	Lottery      *service.LotteryService
 	ItemGrant    *service.ItemGrantService
+	Cosmetic     *service.CosmeticService
+	UserNumber   *service.UserNumberService
 	Level        *service.LevelService
 	Growth       *service.GrowthService
 	Wallet       *service.WalletService
@@ -175,6 +178,7 @@ func (d RouterDeps) newHandler() *Handler {
 		release:            d.Release,
 		clientControl:      d.ClientControl,
 		listenTogether:     d.ListenTogether,
+		music:              d.Music,
 		deviceLimit:        d.DeviceLimit,
 		registerIP:         d.RegisterIP,
 		roleApp:            d.RoleApplication,
@@ -199,6 +203,8 @@ func (d RouterDeps) newHandler() *Handler {
 		location:           d.Location,
 		lottery:            d.Lottery,
 		itemGrant:          d.ItemGrant,
+		cosmetic:           d.Cosmetic,
+		userNumber:         d.UserNumber,
 		level:              d.Level,
 		growth:             d.Growth,
 		announcement:       d.Announcement,

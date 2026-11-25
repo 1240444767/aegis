@@ -24,12 +24,14 @@ import (
 	"aegis/internal/domain/aigateway"
 	"aegis/internal/domain/app"
 	"aegis/internal/domain/authprotocol"
+	"aegis/internal/domain/cosmetic"
 	"aegis/internal/domain/devicelimit"
 	"aegis/internal/domain/egressgraph"
 	"aegis/internal/domain/regip"
 	"aegis/internal/domain/storage"
 	"aegis/internal/domain/suspension"
 	"aegis/internal/domain/system"
+	"aegis/internal/domain/usernumber"
 	"aegis/internal/service"
 )
 
@@ -58,6 +60,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/app/payment-config/epay/init"):                                                        AdminPaymentInitEpayRequest{},            // AdminPaymentEpayInit
 		routeKey("POST", "/api/admin/app/payment-config/list"):                                                             AdminPaymentConfigListRequest{},          // AdminPaymentConfigList
 		routeKey("POST", "/api/admin/app/payment-config/orders/detail"):                                                    AdminPaymentOrderDetailRequest{},         // AdminPaymentOrderDetail
+		routeKey("POST", "/api/admin/app/payment-config/orders/fulfill"):                                                   AdminPaymentOrderFulfillRequest{},        // AdminPaymentOrderFulfill
 		routeKey("POST", "/api/admin/app/payment-config/orders/list"):                                                      AdminPaymentOrderListRequest{},           // AdminPaymentOrderList
 		routeKey("POST", "/api/admin/app/payment-config/orders/receipt"):                                                   AdminPaymentReceiptRequest{},             // AdminPaymentOrderReceipt
 		routeKey("POST", "/api/admin/app/payment-config/orders/receipt/email"):                                             AdminPaymentReceiptEmailRequest{},        // AdminPaymentOrderReceiptEmail
@@ -171,6 +174,20 @@ func generatedRouteModels() map[string]any {
 		routeKey("GET", "/api/admin/apps/{appkey}/cloud-storage/users"):                                                    CloudStorageUserListQuery{},              // AdminCloudStorageUsers
 		routeKey("PUT", "/api/admin/apps/{appkey}/commerce"):                                                               app.CommerceSettings{},                   // UpdateAdminAppCommerceSettings
 		routeKey("GET", "/api/admin/apps/{appkey}/commerce/overview"):                                                      AdminWalletStatsQuery{},                  // AdminAppCommerceOverview
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/item-order"):                                                   CosmeticOrderRequest{},                   // AdminReorderCosmeticItems
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/items"):                                                       CosmeticItemRequest{},                    // AdminCreateCosmeticItem
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/items/{itemId}"):                                               CosmeticItemRequest{},                    // AdminUpdateCosmeticItem
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/items/{itemId}/draft"):                                         CosmeticDraftRequest{},                   // AdminSaveCosmeticDraft
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/items/{itemId}/publish"):                                      CosmeticPublishRequest{},                 // AdminPublishCosmeticItem
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/items/{itemId}/status"):                                        CosmeticStatusRequest{},                  // AdminSetCosmeticStatus
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/settings"):                                                     CosmeticSettingsRequest{},                // AdminSaveCosmeticSettings
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/users/{userId}/grant"):                                        CosmeticGrantRequest{},                   // AdminGrantUserCosmetic
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/users/{userId}/ownerships/{ownershipId}/revoke"):              CosmeticRevokeRequest{},                  // AdminRevokeUserCosmetic
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/users/{userId}/unequip"):                                      CosmeticUnequipRequest{},                 // AdminUnequipUserCosmetic
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/workshop/items/{itemId}/restore"):                             WorkshopTakedownRequest{},                // AdminRestoreWorkshopItem
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/workshop/items/{itemId}/takedown"):                            WorkshopTakedownRequest{},                // AdminTakedownWorkshopItem
+		routeKey("POST", "/api/admin/apps/{appkey}/cosmetics/workshop/parts"):                                              cosmetic.PartInput{},                     // AdminCreateWorkshopPart
+		routeKey("PUT", "/api/admin/apps/{appkey}/cosmetics/workshop/parts/{partId}"):                                      cosmetic.PartInput{},                     // AdminUpdateWorkshopPart
 		routeKey("POST", "/api/admin/apps/{appkey}/crash-reports/delete"):                                                  CrashReportIDsRequest{},                  // AdminDeleteCrashReports
 		routeKey("POST", "/api/admin/apps/{appkey}/crash-reports/resolve"):                                                 CrashReportResolveRequest{},              // AdminResolveCrashReports
 		routeKey("PUT", "/api/admin/apps/{appkey}/device-limit/overrides/{userId}"):                                        devicelimit.OverrideInput{},              // AdminSaveDeviceLimitOverride
@@ -184,6 +201,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/analyze"):                                      analyzeAppFunctionRequest{},              // AdminAnalyzeAppFunction
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/invoke"):                                       invokeAppFunctionRequest{},               // AdminInvokeAppFunction
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/test"):                                         testAppFunctionRequest{},                 // AdminTestAppFunction
+		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/triggers"):                                     appFunctionTriggerRequest{},              // AdminCreateAppFunctionTrigger
+		routeKey("PUT", "/api/admin/apps/{appkey}/functions/{functionName}/triggers/{triggerId}"):                          appFunctionTriggerRequest{},              // AdminUpdateAppFunctionTrigger
+		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/triggers/{triggerId}/fire"):                    fireAppFunctionTriggerRequest{},          // AdminFireAppFunctionTrigger
 		routeKey("POST", "/api/admin/apps/{appkey}/functions/{functionName}/versions"):                                     createAppFunctionVersionRequest{},        // AdminCreateAppFunctionVersion
 		routeKey("POST", "/api/admin/apps/{appkey}/governance/appeals"):                                                    GovernanceAppealRequest{},                // AdminAppSubmitGovernanceAppeal
 		routeKey("POST", "/api/admin/apps/{appkey}/growth/preview"):                                                        GrowthPreviewRequest{},                   // AdminPreviewGrowth
@@ -227,17 +247,29 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/controls/revoke"):               LotteryFortuneRevokeRequest{},            // AdminRevokeLotteryFortuneControls
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/fortune/settings"):                       LotteryFortuneSettingsRequest{},          // AdminSetLotteryFortuneSettings
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/activities/{activityId}/status"):                                 LotteryStatusRequest{},                   // AdminSetLotteryActivityStatus
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/analyze"):                                                       LotteryAnalyzeRequest{},                  // AdminAnalyzeLottery
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/compute/jobs"):                                                  LotteryComputeRequest{},                  // AdminCreateLotteryComputeJob
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/draws/{drawId}/fulfill"):                                        LotteryFulfillRequest{},                  // AdminFulfillLotteryDraw
 		routeKey("PUT", "/api/admin/apps/{appkey}/lottery/settings"):                                                       LotterySettingsRequest{},                 // AdminSaveLotterySettings
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/simulate"):                                                      LotterySimulateRequest{},                 // AdminSimulateLottery
+		routeKey("POST", "/api/admin/apps/{appkey}/lottery/solve"):                                                         LotterySolveRequest{},                    // AdminSolveLottery
 		routeKey("POST", "/api/admin/apps/{appkey}/lottery/tickets/users/{userId}/adjust"):                                 LotteryTicketAdjustRequest{},             // AdminAdjustLotteryTickets
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notices"):                                                             AdminBatchIDsRequest{},                   // DeleteAdminNotices
 		routeKey("GET", "/api/admin/apps/{appkey}/notices"):                                                                AdminNoticeListQuery{},                   // AdminNotices
 		routeKey("DELETE", "/api/admin/apps/{appkey}/notifications"):                                                       AdminNotificationDeleteRequest{},         // DeleteAdminAppNotifications
 		routeKey("GET", "/api/admin/apps/{appkey}/notifications"):                                                          AdminNotificationListQuery{},             // AdminAppNotifications
 		routeKey("POST", "/api/admin/apps/{appkey}/notifications/bulk"):                                                    AdminBulkNotificationRequest{},           // AdminBulkNotifyUsers
+		routeKey("GET", "/api/admin/apps/{appkey}/notifications/campaigns"):                                                AdminNotificationCampaignListQuery{},     // AdminListNotificationCampaigns
+		routeKey("POST", "/api/admin/apps/{appkey}/notifications/campaigns"):                                               AdminNotificationCampaignRequest{},       // AdminCreateNotificationCampaign
+		routeKey("POST", "/api/admin/apps/{appkey}/notifications/campaigns/preview"):                                       AdminNotificationAudienceRequest{},       // AdminPreviewNotificationAudience
 		routeKey("POST", "/api/admin/apps/{appkey}/notifications/delete-by-filter"):                                        AdminNotificationDeleteFilterRequest{},   // DeleteAdminAppNotificationsByFilter
 		routeKey("GET", "/api/admin/apps/{appkey}/notifications/export"):                                                   AdminNotificationListQuery{},             // ExportAdminAppNotifications
+		routeKey("POST", "/api/admin/apps/{appkey}/numbers/holds"):                                                         UserNumberReserveRequest{},               // AdminReserveUserNumbers
+		routeKey("PUT", "/api/admin/apps/{appkey}/numbers/settings"):                                                       usernumber.Settings{},                    // AdminSaveUserNumberSettings
+		routeKey("POST", "/api/admin/apps/{appkey}/numbers/settings/odds"):                                                 UserNumberOddsRequest{},                  // AdminPreviewUserNumberOdds
+		routeKey("POST", "/api/admin/apps/{appkey}/numbers/users/{userId}/assign"):                                         UserNumberAssignRequest{},                // AdminAssignUserNumber
+		routeKey("POST", "/api/admin/apps/{appkey}/numbers/users/{userId}/rights"):                                         UserNumberRightAdjustRequest{},           // AdminAdjustUserNumberRight
+		routeKey("POST", "/api/admin/apps/{appkey}/numbers/users/{userId}/rollback"):                                       UserNumberRollbackRequest{},              // AdminRollbackUserNumber
 		routeKey("DELETE", "/api/admin/apps/{appkey}/oauth-bindings"):                                                      AdminUnbindOAuthRequest{},                // AdminDeleteAppOAuthBinding
 		routeKey("GET", "/api/admin/apps/{appkey}/oauth-bindings"):                                                         AppOAuthBindingQuery{},                   // AdminListAppOAuthBindings
 		routeKey("POST", "/api/admin/apps/{appkey}/oauth-providers"):                                                       AppOAuthProviderRequest{},                // AdminCreateAppOAuthProvider
@@ -344,8 +376,12 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/tiers"):                                                             AdminVipTierRequest{},                    // AdminSaveAppVipTier
 		routeKey("POST", "/api/admin/apps/{appkey}/vip/trial/claims"):                                                      AdminVipTrialClaimRequest{},              // AdminClaimAppVipTrial
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/adjust"):                                                         AdminWalletAdjustRequest{},               // AdminAdjustAppUserWallet
+		routeKey("POST", "/api/admin/apps/{appkey}/wallet/packages"):                                                       AdminWalletPackageRequest{},              // CreateAdminAppWalletPackage
+		routeKey("PUT", "/api/admin/apps/{appkey}/wallet/packages-order"):                                                  AdminWalletPackageOrderRequest{},         // ReorderAdminAppWalletPackages
+		routeKey("PUT", "/api/admin/apps/{appkey}/wallet/packages/{packageId}"):                                            AdminWalletPackageRequest{},              // UpdateAdminAppWalletPackage
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/receipt"):                                                        AdminWalletReceiptRequest{},              // AdminAppWalletReceipt
 		routeKey("POST", "/api/admin/apps/{appkey}/wallet/receipt/email"):                                                  AdminWalletReceiptEmailRequest{},         // AdminAppWalletReceiptEmail
+		routeKey("PUT", "/api/admin/apps/{appkey}/wallet/settings"):                                                        AdminWalletSettingsRequest{},             // UpdateAdminAppWalletSettings
 		routeKey("GET", "/api/admin/apps/{appkey}/wallet/stats"):                                                           AdminWalletStatsQuery{},                  // AdminAppWalletStats
 		routeKey("GET", "/api/admin/apps/{appkey}/wallet/transactions"):                                                    AdminWalletTransactionsQuery{},           // AdminAppWalletTransactions
 		routeKey("POST", "/api/admin/auth/login"):                                                                          AdminLoginRequest{},                      // AdminLogin
@@ -357,6 +393,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/admin/captcha/generate"):                                                                    CaptchaGenerateRequest{},                 // AdminGenerateCaptcha
 		routeKey("POST", "/api/admin/captcha/verify"):                                                                      CaptchaVerifyRequest{},                   // AdminVerifyCaptcha
 		routeKey("POST", "/api/admin/captcha/verify-click"):                                                                CaptchaVerifyClickRequest{},              // VerifyCaptchaClick
+		routeKey("GET", "/api/admin/mcp/endpoints"):                                                                        mcpEndpointQuery{},                       // AdminMCPEndpoints
 		routeKey("POST", "/api/admin/notifications/delete"):                                                                AdminInboxIDsRequest{},                   // DeleteAdminInbox
 		routeKey("POST", "/api/admin/notifications/read"):                                                                  AdminInboxIDsRequest{},                   // MarkAdminInboxRead
 		routeKey("POST", "/api/admin/notify/channels"):                                                                     NotifyChannelRequest{},                   // AdminSaveNotifyChannel
@@ -750,6 +787,9 @@ func generatedRouteModels() map[string]any {
 		routeKey("PUT", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}"):                                             CloudItemPutRequest{},                    // AppPutCloudItem
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/link"):                                       CloudItemLinkRequest{},                   // AppCloudItemLink
 		routeKey("POST", "/api/v1/apps/{appkey}/cloud/items/{namespace}/{key}/rollback"):                                   CloudItemRollbackRequest{},               // AppRollbackCloudItem
+		routeKey("PUT", "/api/v1/apps/{appkey}/cosmetics/me"):                                                              CosmeticEquipRequest{},                   // AppEquipCosmetic
+		routeKey("POST", "/api/v1/apps/{appkey}/cosmetics/workshop/items"):                                                 WorkshopItemRequest{},                    // AppCreateWorkshopItem
+		routeKey("PUT", "/api/v1/apps/{appkey}/cosmetics/workshop/items/{itemId}"):                                         WorkshopItemRequest{},                    // AppUpdateWorkshopItem
 		routeKey("POST", "/api/v1/apps/{appkey}/crash-reports"):                                                            CrashReportRequest{},                     // AppSubmitCrashReport
 		routeKey("POST", "/api/v1/apps/{appkey}/features/time/leases/{leaseNo}/settle"):                                    FeatureTimeSettleRequest{},               // AppSettleFeatureTimeLease
 		routeKey("POST", "/api/v1/apps/{appkey}/features/time/{feature}/leases"):                                           FeatureTimeLeaseRequest{},                // AppLeaseFeatureTime
@@ -797,6 +837,7 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/read-all"):                                                   NotificationReadAllRequest{},             // ReadAllNotifications
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/read-batch"):                                                 NotificationReadBatchRequest{},           // ReadNotificationsBatch
 		routeKey("POST", "/api/v1/apps/{appkey}/notifications/unread"):                                                     NotificationReadRequest{},                // UnreadNotification
+		routeKey("POST", "/api/v1/apps/{appkey}/numbers/change"):                                                           UserNumberChangeRequest{},                // AppChangeUserNumber
 		routeKey("GET", "/api/v1/apps/{appkey}/pay/methods"):                                                               PaymentMethodsQuery{},                    // UserPaymentMethods
 		routeKey("GET", "/api/v1/apps/{appkey}/pay/orders"):                                                                UserPaymentOrdersQuery{},                 // PaymentOrders
 		routeKey("POST", "/api/v1/apps/{appkey}/pay/orders"):                                                               CreatePaymentOrderRequest{},              // CreatePaymentOrder
@@ -820,9 +861,11 @@ func generatedRouteModels() map[string]any {
 		routeKey("POST", "/api/v1/apps/{appkey}/vip/feature-ticket"):                                                       service.FeatureTicketRequest{},           // VipFeatureTicket
 		routeKey("POST", "/api/v1/apps/{appkey}/vip/purchase"):                                                             VipPurchaseRequest{},                     // PurchaseVip
 		routeKey("POST", "/api/v1/apps/{appkey}/wallet/consume"):                                                           WalletConsumeRequest{},                   // WalletConsume
+		routeKey("POST", "/api/v1/apps/{appkey}/wallet/exchange"):                                                          WalletExchangeRequest{},                  // WalletExchange
 		routeKey("GET", "/api/v1/apps/{appkey}/wallet/transactions"):                                                       WalletTransactionsQuery{},                // MyWalletTransactions
 		routeKey("POST", "/api/vip/purchase"):                                                                              VipPurchaseRequest{},                     // PurchaseVip
 		routeKey("POST", "/api/wallet/consume"):                                                                            WalletConsumeRequest{},                   // WalletConsume
+		routeKey("POST", "/api/wallet/exchange"):                                                                           WalletExchangeRequest{},                  // WalletExchange
 		routeKey("GET", "/api/wallet/transactions"):                                                                        WalletTransactionsQuery{},                // MyWalletTransactions
 		routeKey("GET", "/api/wallet/transactions/{transactionNo}"):                                                        PaymentBillExportRequest{},               // MyWalletTransactionDetail
 		routeKey("GET", "/api/wallet/transactions/{transactionNo}/bill"):                                                   PaymentBillExportRequest{},               // ExportWalletBill

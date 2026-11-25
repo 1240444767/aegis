@@ -18,9 +18,11 @@ import type {
   UserSessionAuditList,
   UserWallet,
   UserWalletTransactionList,
+  WalletAdjustBucket,
   WalletAdjustResult
 } from "./types";
 import type { UserNotificationAction } from "@/lib/user-notification-meta";
+import type { NotificationCampaign } from "./notification-campaigns";
 
 const app = (appKey: string) => `/api/admin/apps/${encodeURIComponent(appKey)}`;
 const base = (appKey: string, userId: number | string) => `${app(appKey)}/users/${userId}`;
@@ -89,12 +91,13 @@ export function getAdminUserWalletTransactions(
 
 /**
  * 调整余额。amount 是**字符串**且可为负（"-12.50" 即扣款）。
+ * bucket 指定落在哪一桶（cash / bonus），不传即默认：入账进赠送余额，扣减先扣赠送余额。
  * 走应用维度的路由（调整目标由 body 里的 userId 指定），不是 /users/:userId 下。
  */
 export function adjustAdminUserWallet(
   token: string,
   appKey: string,
-  payload: { userId: number; amount: string; reason?: string }
+  payload: { userId: number; amount: string; reason?: string; bucket?: WalletAdjustBucket }
 ) {
   return apiRequest<WalletAdjustResult>(
     `/api/admin/apps/${encodeURIComponent(appKey)}/wallet/adjust`,
@@ -185,8 +188,21 @@ export type BulkNotifyPayload = {
   expiresAt?: string;
 };
 
+/**
+ * 旧群发接口的响应（Go `AdminBulkSendResult`）。不超过 2000 人时就地发完（`async=false`）；
+ * 更多时转后台群发任务，立刻返回 `async=true`、`delivered=0` 与 `campaign`。
+ */
+export type BulkNotifyResult = {
+  appid: number;
+  requested: number;
+  delivered: number;
+  recipientIds: number[] | null;
+  async: boolean;
+  campaign: NotificationCampaign | null;
+};
+
 export function bulkNotifyAdminAppUsers(token: string, appKey: string, payload: BulkNotifyPayload) {
-  return apiRequest<BatchResult>(`${app(appKey)}/notifications/bulk`, {
+  return apiRequest<BulkNotifyResult>(`${app(appKey)}/notifications/bulk`, {
     method: "POST",
     token,
     body: JSON.stringify(payload)

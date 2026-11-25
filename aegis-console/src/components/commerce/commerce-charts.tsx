@@ -21,7 +21,11 @@ export const MONEY_COLORS = {
   refunded: { light: "#f43f5e", dark: "#fb7185" },
   net: { light: "#6366f1", dark: "#818cf8" },
   walletIn: { light: "#0ea5e9", dark: "#38bdf8" },
-  walletOut: { light: "#f59e0b", dark: "#fbbf24" }
+  walletOut: { light: "#f59e0b", dark: "#fbbf24" },
+  /** 钱包净流入：与实收净额一样是算出来的，画虚线 */
+  walletNet: { light: "#0284c7", dark: "#7dd3fc" },
+  /** 待支付：还没到账，用中性灰，不与任何已发生的资金抢颜色 */
+  pending: { light: "#a1a1aa", dark: "#71717a" }
 } satisfies Record<string, ThemedColor>;
 
 /** 订单状态色：与订单表格里的徽标同色，两处对不上会让人以为是两组数据。 */
@@ -37,11 +41,13 @@ export const ORDER_STATUS_COLORS: Record<string, ThemedColor> = {
 /** 钱包流水类型色：入账走冷色、出账走暖色，一眼能分出资金方向。 */
 export const WALLET_TYPE_COLORS: Record<string, ThemedColor> = {
   recharge: { light: "#10b981", dark: "#34d399" },
+  recharge_bonus: { light: "#14b8a6", dark: "#2dd4bf" },
   refund: { light: "#0ea5e9", dark: "#38bdf8" },
   admin_adjust: { light: "#f59e0b", dark: "#fbbf24" },
   vip_purchase: { light: "#8b5cf6", dark: "#a78bfa" },
   order_pay: { light: "#6366f1", dark: "#818cf8" },
-  consume: { light: "#f43f5e", dark: "#fb7185" }
+  consume: { light: "#f43f5e", dark: "#fb7185" },
+  integral_exchange: { light: "#f97316", dark: "#fb923c" }
 };
 
 /** 分类色轮：给渠道这类没有固有语义的维度用。 */

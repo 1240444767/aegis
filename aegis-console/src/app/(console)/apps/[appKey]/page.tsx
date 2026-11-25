@@ -20,6 +20,7 @@ import { AppCaptchaPanel } from "@/components/apps/app-captcha-panel";
 import { AppInfoPanel } from "@/components/apps/app-info-panel";
 import { AppLotteryPanel } from "@/components/apps/lottery/app-lottery-panel";
 import { AppItemGrantPanel } from "@/components/apps/item-grant/app-item-grant-panel";
+import { AppNotificationCampaignPanel } from "@/components/apps/notification-campaign/app-notification-campaign-panel";
 import { AppLevelsPanel } from "@/components/apps/levels/app-levels-panel";
 import { AppRewardedAdPanel } from "@/components/apps/rewarded-ad/app-rewarded-ad-panel";
 import { AppAdPolicyPanel } from "@/components/apps/ad-policy/app-ad-policy-panel";
@@ -33,7 +34,9 @@ import { AppSignInRewardPanel } from "@/components/apps/app-signin-reward-panel"
 import { AppStatsPanel } from "@/components/apps/app-stats-panel";
 import { AppUserSettingsPanel } from "@/components/apps/app-user-settings-panel";
 import { AppCardKeyPanel } from "@/components/apps/card-key/app-card-key-panel";
+import { AppUserNumberPanel } from "@/components/apps/user-number/app-user-number-panel";
 import { AppPointsStorePanel } from "@/components/apps/points-store/app-points-store-panel";
+import { AppCosmeticsPanel } from "@/components/apps/cosmetics/app-cosmetics-panel";
 import { AppInvitePanel } from "@/components/apps/invite/app-invite-panel";
 import { AppPromoPanel } from "@/components/apps/promo/app-promo-panel";
 import { AppDeviceLimitPanel } from "@/components/apps/device-limit/app-device-limit-panel";
@@ -41,6 +44,7 @@ import { AppRegisterIPPanel } from "@/components/apps/register-ip/app-register-i
 import { AppPasskeyPanel } from "@/components/apps/app-passkey-panel";
 import { AppCrashReportsPanel } from "@/components/apps/crash-reports/app-crash-reports-panel";
 import { AppListenTogetherPanel } from "@/components/apps/listen-together/app-listen-together-panel";
+import { AppMusicSectionPanel } from "@/components/music/music-section-panel";
 import { AppLeaderboardPanel } from "@/components/apps/leaderboard/app-leaderboard-panel";
 import { AppAccountSetupPanel } from "@/components/apps/account-setup/app-account-setup-panel";
 import { AppAccountDeletionPanel } from "@/components/apps/account-deletion/app-account-deletion-panel";
@@ -193,6 +197,8 @@ function AppSectionPanel({ section, app, onDelete }: { section: string; app: App
       return <AppCrashReportsPanel appKey={app.appKey} />;
     case "listen-together":
       return <AppListenTogetherPanel appKey={app.appKey} />;
+    case "music":
+      return <AppMusicSectionPanel appKey={app.appKey} />;
     case "policy":
       return <AppAuthSessionPanel appKey={app.appKey} />;
     case "device-limit":
@@ -229,12 +235,16 @@ function AppSectionPanel({ section, app, onDelete }: { section: string; app: App
       return <AppVipPanel appKey={app.appKey} />;
     case "card-key":
       return <AppCardKeyPanel appKey={app.appKey} />;
+    case "numbers":
+      return <AppUserNumberPanel appKey={app.appKey} />;
     case "signin-reward":
       return <AppSignInRewardPanel appKey={app.appKey} />;
     case "lottery":
       return <AppLotteryPanel appKey={app.appKey} />;
     case "item-grant":
       return <AppItemGrantPanel appKey={app.appKey} />;
+    case "notification-campaigns":
+      return <AppNotificationCampaignPanel appKey={app.appKey} />;
     case "levels":
       return <AppLevelsPanel appKey={app.appKey} />;
     case "rewarded-ad":
@@ -243,6 +253,8 @@ function AppSectionPanel({ section, app, onDelete }: { section: string; app: App
       return <AppAdPolicyPanel appKey={app.appKey} />;
     case "points-store":
       return <AppPointsStorePanel appKey={app.appKey} />;
+    case "cosmetics":
+      return <AppCosmeticsPanel appKey={app.appKey} />;
     case "invite":
       return <AppInvitePanel appKey={app.appKey} />;
     case "promo":

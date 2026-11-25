@@ -15,9 +15,11 @@ import (
 	"github.com/shopspring/decimal"
 	"golang.org/x/sync/errgroup"
 
+	"aegis/internal/domain/cosmetic"
 	"aegis/internal/domain/featuretime"
 	lotterydomain "aegis/internal/domain/lottery"
 	"aegis/internal/domain/pointstore"
+	"aegis/internal/domain/usernumber"
 	vipdomain "aegis/internal/domain/vip"
 )
 
@@ -660,7 +662,7 @@ func pickLotteryPrize(ctx context.Context, tx pgx.Tx, activity lotterydomain.Act
 
 	index, pity := lotterydomain.PityChoice(activity, plan, prizes, state.MissStreak)
 	if !pity {
-		src, err := lotterydomain.NewDrawSource()
+		src, seed, err := lotterydomain.NewSeededDrawSource()
 		if err != nil {
 			return lotterydomain.Prize{}, plan, err
 		}
@@ -668,6 +670,8 @@ func pickLotteryPrize(ctx context.Context, tx pgx.Tx, activity lotterydomain.Act
 		if index, ok = lotterydomain.Sample(plan, src); !ok {
 			return fallback(lotterydomain.FallbackEmpty)
 		}
+		// 种子随方案落库：审计时按它与方案里的权重把这一次原样重抽（lottery.ReplaySample）
+		plan.Seed = seed
 	}
 	chosen := prizes[index]
 	// 限量奖品在事务里从库存分片取一份（lottery_stock_repository.go）：分片按人错开，同一时刻抽中它的人分散在十几行上
@@ -676,6 +680,8 @@ func pickLotteryPrize(ctx context.Context, tx pgx.Tx, activity lotterydomain.Act
 		return chosen, plan, err
 	}
 	if !ok {
+		// 抽样抽到的是它，只是被并发抢光了：记下来，复算核对的是抽样本身
+		plan.Drawn = chosen.ID
 		return fallback(lotterydomain.FallbackContended)
 	}
 	plan.Pity, plan.Picked = pity, chosen.ID
@@ -840,6 +846,40 @@ func (r *Repository) grantLotteryPrizeTx(ctx context.Context, tx pgx.Tx, grant l
 		}
 		// 写明是存进了次数余额：次数交给用户自己抽，不是「再来一次」那样当场又抽了
 		result.Detail += "，已存入抽奖次数（现有 " + strconv.FormatInt(balance, 10) + " 次）"
+
+	case lotterydomain.KindNumberChange:
+		_, note, err := grantNumberRewardTx(ctx, tx, appID, userID, reward.Type, reward.Amount, 0, usernumber.OriginLottery, grant.DrawNo, grant.Source)
+		if err != nil {
+			return nil, err
+		}
+		result.Detail += note
+
+	case lotterydomain.KindNumberTicket:
+		_, note, err := grantNumberRewardTx(ctx, tx, appID, userID, reward.Type, reward.Amount, reward.RefID, usernumber.OriginLottery, grant.DrawNo, grant.Source)
+		if err != nil {
+			return nil, err
+		}
+		result.Detail += note
+
+	case lotterydomain.KindNumberDraw:
+		_, note, err := grantNumberRewardTx(ctx, tx, appID, userID, reward.Type, reward.Amount, 0, usernumber.OriginLottery, grant.DrawNo, grant.Source)
+		if err != nil {
+			return nil, err
+		}
+		result.Detail += note
+
+	case lotterydomain.KindCosmetic:
+		granted, err := grantCosmeticTx(ctx, tx, cosmetic.GrantInput{
+			AppID: appID, UserID: userID, CosmeticID: reward.RefID, Days: int(reward.Amount),
+			Source: cosmetic.SourceLottery, SourceRef: grant.DrawNo,
+		})
+		if err != nil {
+			return nil, err
+		}
+		result.Detail = granted.CosmeticName + " " + cosmetic.TermLabel(int(reward.Amount))
+		if granted.AlreadyPermanent {
+			result.Detail += "（已永久拥有）"
+		}
 
 	case lotterydomain.KindManual:
 		result.Pending = true

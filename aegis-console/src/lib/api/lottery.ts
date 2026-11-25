@@ -16,7 +16,8 @@ export type LotteryDrawStatus = "granted" | "pending" | "fulfilled";
 /** 抽中已拥有的奖品怎么办：折算积分 / 改发抽奖次数 / 不参与抽取 / 照常发放 */
 export type LotteryLifetimePolicy = "points" | "draws" | "exclude" | "grant";
 /** 奖品取值形态：空为不需要取值（谢谢参与） */
-export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "feature_minutes" | "text";
+/** `number_ticket`：靓号券，`amount` 张数 + `refId` 等级 1–4（docs/user-number.md） */
+export type LotteryRewardValue = "" | "amount" | "ref" | "feature" | "feature_minutes" | "text" | "number_ticket" | "cosmetic";
 
 /** 一档奖品的自述，由后端目录下发，前端不另抄一份 */
 export type LotteryRewardSpec = {
@@ -428,6 +429,10 @@ export type LotteryDrawPlan = {
   /** 今天的运气系数（真实奖品权重已乘过）；fortuneBase 为至尊加成之前的 */
   fortune?: number;
   fortuneBase?: number;
+  /** 这一次抽样用的随机种子（64 位十六进制）；硬保底没有抽样，不带 */
+  seed?: string;
+  /** 抽样抽到的奖品；只在它与 picked 不同（限量被抢光、改发了兜底）时带 */
+  drawn?: number;
 };
 
 /** 距首次中奖次数的精确分布（吸收马尔可夫链） */
@@ -462,6 +467,19 @@ export type LotteryAuditResult = {
     pValue: number;
     flagged?: boolean;
   }>;
+  /**
+   * 逐笔复算：每条记录按方案里的权重与随机种子重抽一次，必须抽到记录上的那个奖品。
+   * 统计检验看的是整体分布，复算能指出被改过的某一条。
+   */
+  replay?: {
+    /** 带种子、复算过的次数；matched 其中与记录一致的次数 */
+    checked: number;
+    matched: number;
+    /** 没有种子（功能上线之前的记录）；skipped 没有抽样（硬保底、权重全为 0） */
+    unseeded: number;
+    skipped: number;
+    mismatches: Array<{ drawId: number; drawNo: string; recorded: number; replayed: number }>;
+  };
 };
 
 export type LotteryDistribution = { mean: number; p50: number; p90: number; p99: number; max: number };

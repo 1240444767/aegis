@@ -63,6 +63,8 @@ type LotteryService struct {
 	gate *keyedgate.Gate
 	// profiles 抽奖用的行为画像短时缓存：画像是十几张表的历史聚合，变化以天计，连抽时不必每次重算
 	profiles *expirable.LRU[lotteryProfileKey, lotterydomain.BehaviorProfile]
+	// compute 大规模推演任务的执行器（见 lottery_compute_service.go）
+	compute *lotteryComputeRunner
 }
 
 // 同一个人的抽奖：本实例内同时只跑一个，后面最多排 lotteryGateDepth 个、最多等 lotteryGateWait，
@@ -86,6 +88,7 @@ func NewLotteryService(log *zap.Logger, pg *pgrepo.Repository, rewarded *Rewarde
 	return &LotteryService{log: log, pg: pg, rewarded: rewarded,
 		gate:     keyedgate.New(lotteryGateDepth, lotteryGateWait),
 		profiles: expirable.NewLRU[lotteryProfileKey, lotterydomain.BehaviorProfile](lotteryProfileCap, nil, lotteryProfileTTL),
+		compute:  newLotteryComputeRunner(),
 	}
 }
 
@@ -136,12 +139,31 @@ func (s *LotteryService) Start(ctx context.Context) {
 			}
 		}
 	}()
+	// 推演任务的执行循环：认领排队中的、接手别的实例留下的
+	if s.compute.started.CompareAndSwap(false, true) {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					s.log.Error("lottery compute loop panic", zap.Any("panic", r))
+				}
+			}()
+			s.runComputeLoop(ctx)
+		}()
+	}
 }
 
-// Close 退出前把已提交的全站增量再合并一次（不合并也不丢：增量已随抽奖事务落库，下次启动接着合并）。
+// Close 退出前把已提交的全站增量再合并一次（不合并也不丢：增量已随抽奖事务落库，下次启动接着合并），
+// 并等推演的执行循环把手上的任务放回排队（等不到也不丢：心跳过期后会被重新认领）。
 func (s *LotteryService) Close(ctx context.Context) {
 	if _, err := s.pg.CompactLotteryActivityDeltas(ctx); err != nil {
 		s.log.Warn("lottery: compact deltas failed", zap.Error(err))
+	}
+	if s.compute.started.Load() {
+		select {
+		case <-s.compute.done:
+		case <-ctx.Done():
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -456,6 +478,10 @@ func (s *LotteryService) prepare(ctx context.Context, input lotterydomain.Activi
 				return input, apperrors.New(40000, http.StatusBadRequest,
 					"功能标识 "+prize.Reward.Tag+" 未登记，请先在会员功能目录里创建它")
 			}
+		case lotterydomain.KindCosmetic:
+			if err := checkCosmeticRef(ctx, s.pg, input.AppID, prize.Reward.RefID); err != nil {
+				return input, err
+			}
 		case lotterydomain.KindFeature:
 			feature, ok := features[prize.Reward.Tag]
 			if !ok {
@@ -744,8 +770,13 @@ func (s *LotteryService) clientActivity(ctx context.Context, activity lotterydom
 		Prizes: make([]lotterydomain.ClientPrize, 0, len(prizes)),
 	}
 	for index, prize := range prizes {
+		var refID int64
+		if prize.Kind == lotterydomain.KindCosmetic {
+			refID = prize.Reward.RefID
+		}
 		out.Prizes = append(out.Prizes, lotterydomain.ClientPrize{
-			ID: prize.ID, Name: prize.Name, Kind: lotterydomain.ClientKind(prize.Kind), RewardType: prize.Kind,
+			RefID: refID,
+			ID:    prize.ID, Name: prize.Name, Kind: lotterydomain.ClientKind(prize.Kind), RewardType: prize.Kind,
 			Detail:   lotterydomain.DescribeReward(prize.Reward, plans, features).Detail,
 			ImageURL: prize.ImageURL, Position: prize.Position, Probability: lotterydomain.PublicProbability(probabilities[index]),
 			BaseProbability: lotterydomain.PublicProbability(base[index]),

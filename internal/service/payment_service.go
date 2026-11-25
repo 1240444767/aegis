@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
+	"aegis/internal/cluster"
 	"aegis/internal/config"
 	authdomain "aegis/internal/domain/auth"
 	paymentdomain "aegis/internal/domain/payment"
 	platformdomain "aegis/internal/domain/platform"
 	plugindomain "aegis/internal/domain/plugin"
-	vipdomain "aegis/internal/domain/vip"
 	pgrepo "aegis/internal/repository/postgres"
 	"aegis/pkg/egress"
 	apperrors "aegis/pkg/errors"
@@ -62,6 +62,27 @@ type PaymentService struct {
 	notifier notificationDeliverer
 	// inbox 管理员站内信：订单需要人工处理时通知应用管理员与超级管理员
 	inbox *AdminInboxService
+	// wallets 充值订单的档位与金额校验；nil 时只按 1:1 入账、不做限制（与旧行为一致）
+	wallets *WalletService
+
+	// 多副本下只该由一个实例跑的后台任务（见 SetCluster）。零值放行，即单实例语义。
+	expiryTask       clusterTask // 过期订单关闭
+	refundSyncTask   clusterTask // 未结退款单向上游查询
+	remoteSettleTask clusterTask // 推送会丢的渠道主动核实 + 已付款未履约补偿
+	receiptPurgeTask clusterTask // 数据库里过期凭证的清理
+}
+
+// SetCluster 接上集群协调（bootstrap 在构造完、Elector.Start 之前调用）。
+//
+// 订单过期、退款轮询、上游核实都会去打支付渠道的接口：N 个副本各轮询一遍，轻则被渠道限流，
+// 重则同一笔退款被并发推进。这里给每项任务各登记一个名字，循环照常每个实例都跑，
+// 但每一轮只有持有租约的那个实例真正执行。settleAttempts（查单触发核实的节流）是进程内的，
+// 用户查单打到哪个实例就在哪个实例节流，与这里互不相干。
+func (s *PaymentService) SetCluster(c *cluster.Cluster) {
+	s.expiryTask.bind(c, "payment.order-expiry")
+	s.refundSyncTask.bind(c, "payment.refund-sync")
+	s.remoteSettleTask.bind(c, "payment.remote-settle")
+	s.receiptPurgeTask.bind(c, "payment.receipt-purge")
 }
 
 // SetAdminInbox 接上管理员站内信（订单待人工处理的通知）。
@@ -85,6 +106,9 @@ func (s *PaymentService) SetEmailService(e *EmailService) { s.email = e }
 
 // SetAppService 注入应用服务，用于读取应用级交易设置。
 func (s *PaymentService) SetAppService(a *AppService) { s.apps = a }
+
+// SetWalletService 注入钱包服务：充值订单下单时按钱包设置与充值档位校验。
+func (s *PaymentService) SetWalletService(w *WalletService) { s.wallets = w }
 
 func NewPaymentService(log *zap.Logger, pg *pgrepo.Repository, receiptCfg config.PaymentReceiptConfig) *PaymentService {
 	// 所有 REST 渠道共用这一个 resty 客户端：把它的 transport 换成出海网关，
@@ -413,6 +437,36 @@ const PaymentResultPath = "/pay/result"
 // default 时，只给配置名会落到排序靠前的那一条；用户在 /pay/methods 里选的是哪一项，
 // 就该原样带回它的 method。两者都空时用应用的默认配置。
 func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Session, subject string, body string, amount string, providerType string, paymentMethod string, configName string, notifyURL string, returnURL string, metadata map[string]any, clientIP string) (*paymentdomain.PaymentPayload, *paymentdomain.Order, error) {
+	return s.CreateOrderFromInput(ctx, session, PaymentOrderInput{
+		Subject: subject, Body: body, Amount: amount, Type: providerType,
+		PaymentMethod: paymentMethod, ConfigName: configName,
+		NotifyURL: notifyURL, ReturnURL: returnURL, Metadata: metadata, ClientIP: clientIP,
+	})
+}
+
+// PaymentOrderInput 用户下单请求。
+//
+// Amount 与 Subject 可以不填：带了用途（买会员、按档位充值）时，价格与标题由服务端按套餐 / 档位补上 ——
+// 客户端算价本来就不可信（金额对不上会被拒），让它不必再算一遍。
+type PaymentOrderInput struct {
+	Subject       string
+	Body          string
+	Amount        string
+	Type          string
+	PaymentMethod string
+	ConfigName    string
+	NotifyURL     string
+	ReturnURL     string
+	Metadata      map[string]any
+	ClientIP      string
+	Intent        OrderIntent
+}
+
+// CreateOrderFromInput 创建支付订单（见 CreateOrder）。
+func (s *PaymentService) CreateOrderFromInput(ctx context.Context, session *authdomain.Session, in PaymentOrderInput) (*paymentdomain.PaymentPayload, *paymentdomain.Order, error) {
+	subject, body, amount := in.Subject, in.Body, in.Amount
+	paymentMethod, configName := in.PaymentMethod, in.ConfigName
+	notifyURL, returnURL, clientIP := in.NotifyURL, in.ReturnURL, in.ClientIP
 	if session == nil {
 		return nil, nil, apperrors.New(40170, http.StatusUnauthorized, "未认证")
 	}
@@ -437,12 +491,23 @@ func (s *PaymentService) CreateOrder(ctx context.Context, session *authdomain.Se
 	if err != nil {
 		return nil, nil, err
 	}
+	// 用途归一化在一切校验之前：type 写成 "vip" 这类用途词时，它要先从子类型里挪走，
+	// 否则会被当成付款方式交给上游（或被分子类型的渠道拒成 40116）。
+	metadata, providerType, err := normalizeOrderIntent(in.Type, in.Intent, in.Metadata)
+	if err != nil {
+		return nil, nil, err
+	}
 	// 子类型在落单之前定下来：订单里记的、交给上游的、凭证上印的，都是同一个值。
 	providerType, err = resolveOrderPayType(provider, config, providerType)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 没给金额或标题：按用途由服务端定价、取名
+	amount, subject, err = s.resolveOrderPricing(ctx, session.AppID, metadata, amount, subject)
+	if err != nil {
+		return nil, nil, err
+	}
 	parsedAmount, err := decimal.NewFromString(strings.TrimSpace(amount))
 	if err != nil || !parsedAmount.IsPositive() {
 		return nil, nil, apperrors.New(40072, http.StatusBadRequest, "支付金额无效")
@@ -949,7 +1014,24 @@ func (s *PaymentService) prepareFulfillmentMetadata(ctx context.Context, appID i
 	}
 	switch purpose {
 	case paymentdomain.PurposeWalletRecharge:
-		// 金额 1:1 入账，无附加快照
+		// 本金 1:1 入账；档位附赠（余额、积分）由服务端按档位固化，客户端传入的同名键一律不认
+		delete(out, paymentdomain.MetaKeyWalletPackageTitle)
+		delete(out, paymentdomain.MetaKeyWalletBonus)
+		delete(out, paymentdomain.MetaKeyWalletBonusIntegral)
+		packageID := metaInt64(metadata, paymentdomain.MetaKeyWalletPackageID)
+		delete(out, paymentdomain.MetaKeyWalletPackageID)
+		if s.wallets != nil {
+			snap, err := s.wallets.validateRecharge(ctx, appID, userID, amount, packageID)
+			if err != nil {
+				return nil, err
+			}
+			if snap.PackageID > 0 {
+				out[paymentdomain.MetaKeyWalletPackageID] = snap.PackageID
+				out[paymentdomain.MetaKeyWalletPackageTitle] = snap.PackageTitle
+				out[paymentdomain.MetaKeyWalletBonus] = snap.Bonus.StringFixed(2)
+				out[paymentdomain.MetaKeyWalletBonusIntegral] = snap.BonusIntegral
+			}
+		}
 	case paymentdomain.PurposeVipPurchase:
 		planID := metaInt64(metadata, paymentdomain.MetaKeyVipPlanID)
 		if planID <= 0 {
@@ -980,18 +1062,7 @@ func (s *PaymentService) prepareFulfillmentMetadata(ctx context.Context, appID i
 		if holdings.CoversPlan(*plan) {
 			return nil, errVipLifetimeIncluded()
 		}
-		out[paymentdomain.MetaKeyVipPlanID] = plan.ID
-		out[paymentdomain.MetaKeyVipPlanName] = plan.Name
-		out[paymentdomain.MetaKeyVipDays] = plan.DurationDays
-		// metadata 是客户端传来的：不是永久套餐时必须把这个键删掉，
-		// 否则在月卡订单里塞一个 vipLifetime: true 就能按月卡的价钱开出永久会员。
-		if plan.Lifetime {
-			out[paymentdomain.MetaKeyVipLifetime] = true
-		} else {
-			delete(out, paymentdomain.MetaKeyVipLifetime)
-		}
-		out[paymentdomain.MetaKeyVipBonus] = plan.BonusIntegral
-		out[paymentdomain.MetaKeyVipFeatures] = vipdomain.NormalizeFeatureTags(plan.Features)
+		applyVipPlanSnapshot(out, plan)
 	case paymentdomain.PurposeIntegralPurchase:
 		app, err := s.pg.GetAppByID(ctx, appID)
 		if err != nil {
@@ -1030,6 +1101,14 @@ func (s *PaymentService) buildFulfillmentInstruction(order *paymentdomain.Order)
 	switch purpose {
 	case paymentdomain.PurposeWalletRecharge:
 		instr.WalletAmount = order.Amount
+		if id := metaInt64(order.Metadata, paymentdomain.MetaKeyWalletPackageID); id > 0 {
+			instr.WalletPackageID = id
+			instr.WalletPackageTitle = metaString(order.Metadata, paymentdomain.MetaKeyWalletPackageTitle)
+			if bonus, err := decimal.NewFromString(metaString(order.Metadata, paymentdomain.MetaKeyWalletBonus)); err == nil && bonus.IsPositive() {
+				instr.WalletBonus = bonus
+			}
+			instr.WalletBonusIntegral = metaInt64(order.Metadata, paymentdomain.MetaKeyWalletBonusIntegral)
+		}
 	case paymentdomain.PurposeVipPurchase:
 		planID := metaInt64(order.Metadata, paymentdomain.MetaKeyVipPlanID)
 		instr.VipPlanID = &planID
@@ -1258,13 +1337,25 @@ func (s *PaymentService) startReceiptCleaner() {
 			case <-s.closeCh:
 				return
 			case <-ticker.C:
+				// 本地磁盘上的旧版凭证文件每个节点各有各的，各清各的；数据库里的只由一个实例清
 				s.cleanupExpiredReceipts()
+				if s.receiptPurgeTask.owned() {
+					s.purgeExpiredStoredReceipts()
+				}
 			case <-expireTicker.C:
-				s.expireOverdueOrders()
+				if s.expiryTask.owned() {
+					s.expireOverdueOrders()
+				}
 			case <-refundTicker.C:
-				s.syncPendingRefunds()
+				if s.refundSyncTask.owned() {
+					s.syncPendingRefunds()
+				}
 			case <-settleTicker.C:
-				s.syncUnsettledOrders()
+				if s.remoteSettleTask.owned() {
+					s.syncUnsettledOrders()
+					// 写清了用途却没履约的已付款订单（回调那次履约失败、用户再没查单）
+					s.retryPendingFulfillments()
+				}
 			}
 		}
 	}()

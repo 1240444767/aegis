@@ -30,6 +30,7 @@ type Handler struct {
 	release         *service.ReleaseService
 	clientControl   ClientControlAPI
 	listenTogether  *service.ListenTogetherService
+	music           *service.MusicService
 	deviceLimit     *service.DeviceLimitService
 	registerIP      *service.RegisterIPService
 	roleApp         *service.RoleApplicationService
@@ -54,6 +55,8 @@ type Handler struct {
 	location        *service.LocationService
 	lottery         *service.LotteryService
 	itemGrant       *service.ItemGrantService
+	cosmetic        *service.CosmeticService
+	userNumber      *service.UserNumberService
 	level           *service.LevelService
 	growth          *service.GrowthService
 	announcement    *service.AnnouncementService
